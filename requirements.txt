@@ -4,8 +4,9 @@
 PyQt6>=6.4.0
 
 # Audio Processing
-# PyAudio will be added when implementing audio capture
-# sounddevice alternative for WASAPI
+sounddevice>=0.4.6  # WASAPI via PortAudio
+numpy>=1.24.0       # Frame conversion + mixing
+soxr>=0.3.0         # Resampling
 
 # AI/ML - Whisper
 openai-whisper>=20231117
