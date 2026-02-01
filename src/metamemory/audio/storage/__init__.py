@@ -17,11 +17,41 @@ from metamemory.audio.storage.paths import (
     get_part_metadata_filename,
     get_wav_filename,
 )
+from metamemory.audio.storage.pcm_part import (
+    PcmPartWriter,
+    PcmMetadata,
+    load_metadata,
+)
+from metamemory.audio.storage.wav_finalize import (
+    finalize_part_to_wav,
+    finalize_stem,
+)
+from metamemory.audio.storage.recovery import (
+    find_part_files,
+    recover_part_file,
+    recover_part_files,
+    has_partial_recordings,
+    get_recovery_summary,
+)
 
 __all__ = [
+    # paths
     "get_recordings_dir",
     "new_recording_stem",
     "get_part_filename",
     "get_part_metadata_filename",
     "get_wav_filename",
+    # pcm_part
+    "PcmPartWriter",
+    "PcmMetadata",
+    "load_metadata",
+    # wav_finalize
+    "finalize_part_to_wav",
+    "finalize_stem",
+    # recovery
+    "find_part_files",
+    "recover_part_file",
+    "recover_part_files",
+    "has_partial_recordings",
+    "get_recovery_summary",
 ]
