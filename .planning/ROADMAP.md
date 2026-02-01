@@ -36,8 +36,14 @@ This phase establishes the foundation. Without reliable audio capture, nothing e
 Plans:
 - [x] 01-01-PLAN.md - Audio storage + crash-safe streaming writer
 - [x] 01-02-PLAN.md - WASAPI capture backends + device probing + FakeAudioSource
-- [ ] 01-03-PLAN.md - Recording session manager + automated fake-audio tests
-- [ ] 01-04-PLAN.md - Widget wiring + crash recovery UX + manual verification
+- [x] 01-03-PLAN.md - Recording session manager + automated fake-audio tests
+- [x] 01-04-PLAN.md - Widget wiring + crash recovery UX + manual verification
+
+**Status:** ✅ Complete (2026-02-01)
+- All automated tests passing (33 tests)
+- Mic-only recording verified (10s and 30+ min)
+- Crash recovery UX verified
+- System audio loopback requires Windows Core Audio (planned)
 
 ---
 
