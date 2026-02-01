@@ -1,0 +1,22 @@
+# meetandread requirements
+
+# GUI Framework
+PyQt6>=6.4.0
+
+# Audio Processing
+# PyAudio will be added when implementing audio capture
+# sounddevice alternative for WASAPI
+
+# AI/ML - Whisper
+openai-whisper>=20231117
+
+# Speaker Diarization
+# pyannote.audio will be added for voice signatures
+
+# System utilities
+psutil>=5.9.0
+
+# Development
+pytest>=7.0.0
+black>=22.0.0
+mypy>=1.0.0
