@@ -7,6 +7,7 @@ PyQt6>=6.4.0
 sounddevice>=0.4.6  # WASAPI via PortAudio
 numpy>=1.24.0       # Frame conversion + mixing
 soxr>=0.3.0         # Resampling
+comtypes>=1.2.0     # Windows COM interface for WASAPI loopback
 
 # AI/ML - Whisper
 openai-whisper>=20231117
