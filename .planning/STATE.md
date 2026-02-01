@@ -1,6 +1,6 @@
 # Project State: meetandread
 
-**Status:** Active Development | Widget Foundation Built
+**Status:** Ready for Phase 1 Planning
 **Last Updated:** 2026-02-01
 
 ---
@@ -10,7 +10,7 @@
 See: .planning/PROJECT.md (updated 2026-02-01)
 
 **Core value:** Zero information loss during conversations — Users stay fully present knowing every word is captured for AI agent processing
-**Current focus:** Widget Interface Foundation (Phase 5 partial)
+**Current focus:** Phase 1 - Audio Capture Foundation
 
 ---
 
@@ -22,57 +22,42 @@ See: .planning/PROJECT.md (updated 2026-02-01)
 | 2 | ○ | 0% | 10 |
 | 3 | ○ | 0% | 16 |
 | 4 | ○ | 0% | 8 |
-| 5 | ◆ | 15% | 43 |
+| 5 | ○ | 0% | 43 |
 | 6 | ○ | 0% | 8 |
 
-**Total:** 93 requirements | 0 complete | ~6 in progress | 87 pending
+**Total:** 93 requirements | 0 complete | 0 in progress | 93 pending
 
 ---
 
-## Active Development
+## Note on Widget Foundation
 
-**Widget Foundation Built** ✓
-
-We've started implementation with the foundational widget interface:
-
-**Completed:**
-- ✓ QGraphicsView-based borderless widget structure
-- ✓ Record button with 3 visual states (idle/translucent, recording/pulse, processing/swirl)
-- ✓ Audio input toggle lobes (microphone, system audio)
-- ✓ Settings lobe
-- ✓ Drag and snap-to-edge functionality
-- ✓ Docked state (4/5ths visible)
-- ✓ Animation framework for visual effects
-
-**In Progress:**
-- Project structure and package layout
-- Basic running application
-
-**Remaining for Widget Interface (Phase 5):**
-- Transcript panel slide-out
-- Chat-style transcript display
-- Speaker colors and unknown speaker numbering
-- Auto-scroll with pause logic
-- Confidence color coding on transcript text
-- Bold formatting for enhanced segments
-- Settings dialog implementation
-- System tray integration
-- Multi-monitor support
+A widget foundation was built ahead of schedule as exploration code. This code exists in `src/meetandread/widgets/` but does **not** count toward Phase 5 completion. The widget will be properly planned and executed when Phase 5 begins per the roadmap.
 
 ---
 
-## Parallel Development Strategy
+## Active Phase
 
-**Widget UI** (Phase 5 partial) — **IN PROGRESS**
-Building the foundational widget structure ahead of schedule to establish the interface paradigm.
+**Phase 1: Audio Capture Foundation**
 
-**Audio Capture** (Phase 1) — **NOT STARTED**
-WASAPI integration pending. Widget currently simulates recording functionality.
+**Goal:** Establish reliable audio capture from microphone and system audio using Windows WASAPI
 
-**Real-Time Transcription** (Phase 2) — **NOT STARTED**
-Whisper integration pending.
+**Requirements (8):**
+- [ ] AUD-01: Capture microphone input
+- [ ] AUD-02: Capture system audio output
+- [ ] AUD-03: Capture microphone and system audio simultaneously
+- [ ] AUD-04: Select audio source(s) before recording starts
+- [ ] AUD-05: Start and stop recording with single-click actions
+- [ ] AUD-06: Capture audio using Windows 11 WASAPI endpoints
+- [ ] AUD-07: Stream audio to disk during recording for crash recovery
+- [ ] AUD-08: Test system can inject pre-recorded audio via FakeAudioModule
 
-**Next:** Continue widget refinement OR switch to Phase 1 audio implementation.
+**Success Criteria:**
+1. User can start recording and capture clean audio from selected source(s)
+2. Audio streams to disk simultaneously with transcription processing
+3. Recording can be stopped and audio file is complete and playable
+4. FakeAudioModule successfully injects pre-recorded audio for testing
+5. System captures both microphone and system audio when "both" selected
+6. No audio dropouts or corruption during 30+ minute recordings
 
 ---
 
@@ -84,8 +69,8 @@ Whisper integration pending.
 | 2026-01-31 | Workflow config: YOLO mode | Auto-approve for efficient development | Active |
 | 2026-01-31 | Workflow config: Comprehensive depth | Complex project needs thorough planning | Active |
 | 2026-01-31 | All workflow agents enabled | Research, plan check, verifier recommended | Active |
-| 2026-02-01 | Build widget foundation first | Incremental approach: start with UI shell before audio backend | Active |
-| 2026-02-01 | Use QGraphicsView | Chosen for complex animations and scene-based architecture | Active |
+| 2026-02-01 | Widget foundation explored | Built ahead of schedule as spike code | Acknowledged |
+| 2026-02-01 | Return to GSD workflow | Reset to Phase 1 per roadmap | Active |
 
 ---
 
@@ -97,44 +82,15 @@ None currently.
 
 ## Next Actions
 
-**Immediate - Choose Path:**
+**Immediate:**
+1. Run `/gsd-discuss-phase 1` — gather context for Audio Capture Foundation
+2. Understand WASAPI approach and audio architecture
+3. Clarify FakeAudioModule design for testing
 
-**Option A: Continue Widget Development**
-1. Implement transcript panel slide-out
-2. Add chat-style display structure
-3. Create speaker color system
-4. Build settings dialog
-
-**Option B: Switch to Audio Foundation**
-1. Begin WASAPI audio capture implementation
-2. Create AudioCapture module
-3. Integrate with widget record button
-4. Test with real audio devices
-
-**Option C: Parallel Track**
-1. Continue widget refinement (transcript panel)
-2. Start Phase 1 audio planning in parallel
-3. Use mock audio data to test widget integration points
-
-**Recommendation:** Option C - widget provides visual feedback for audio testing, audio gives widget real functionality to display.
-
----
-
-## Project Structure
-
-```
-meetandread/
-├── .planning/           # Project documentation
-├── src/
-│   └── meetandread/
-│       ├── __init__.py
-│       ├── main.py      # Entry point
-│       └── widgets/
-│           ├── __init__.py
-│           └── main_widget.py  # Widget implementation
-├── requirements.txt
-└── README.md
-```
+**Upcoming:**
+- `/gsd-plan-phase 1` — create detailed execution plan
+- Phase 1 implementation (WASAPI audio capture)
+- Phase 2 planning (Real-Time Transcription Engine)
 
 ---
 
