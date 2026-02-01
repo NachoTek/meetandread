@@ -1,4 +1,4 @@
-"""Widget components for meetandread."""
+"""Widget components for metamemory."""
 
 from .main_widget import MeetAndReadWidget
 

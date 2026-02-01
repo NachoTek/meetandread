@@ -1,4 +1,4 @@
-# Project State: meetandread
+# Project State: metamemory
 
 **Status:** Ready for Phase 1 Planning
 **Last Updated:** 2026-02-01

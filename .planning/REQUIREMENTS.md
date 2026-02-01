@@ -1,4 +1,4 @@
-# Requirements: meetandread
+# Requirements: metamemory
 
 **Defined:** 2026-01-31
 **Core Value:** Zero information loss during conversations — Users stay fully present knowing every word is captured for AI agent processing

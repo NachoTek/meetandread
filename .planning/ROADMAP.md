@@ -1,4 +1,4 @@
-# Roadmap: meetandread
+# Roadmap: metamemory
 
 **Created:** 2026-01-31
 **Requirements:** 93 v1 requirements | 0 v2 requirements

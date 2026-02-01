@@ -1,5 +1,5 @@
 """
-Main meetandread widget implementation using QGraphicsView.
+Main metamemory widget implementation using QGraphicsView.
 
 This widget provides a borderless, always-on-top interface with:
 - Record button as main body

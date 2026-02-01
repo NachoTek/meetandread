@@ -20,7 +20,7 @@ Establish reliable audio capture from microphone and system audio using Windows 
 - **No source selected:** Show error/warning to user, require at least one audio source (mic or system) to be enabled
 
 ### Audio File Management
-- **Save location:** Documents folder (Windows standard Documents/MeetAndRead/)
+- **Save location:** Documents folder (Windows standard Documents/metamemory/)
 - **Naming convention:** Timestamp-based: `recording-YYYY-MM-DD-HHMMSS.wav`
 - **Folder structure:** Flat structure — all recordings in single folder, no subdirectories
 - **File lifecycle:** File safe immediately after user stops recording (streaming to disk during recording for crash recovery)

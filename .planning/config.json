@@ -9,7 +9,7 @@
     "plan_check": true,
     "verifier": true
   },
-  "project_name": "meetandread",
+  "project_name": "metamemory",
   "project_type": "desktop_application",
   "complexity": "medium_high",
   "initialized": "2026-01-31"

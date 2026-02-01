@@ -1,12 +1,12 @@
 """
-meetandread - Windows Desktop Audio Transcription Widget
+metamemory - Windows Desktop Audio Transcription Widget
 Main application entry point.
 """
 
 import sys
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
-from meetandread.widgets.main_widget import MeetAndReadWidget
+from metamemory.widgets.main_widget import MeetAndReadWidget
 
 
 def main():
@@ -17,8 +17,8 @@ def main():
     )
     
     app = QApplication(sys.argv)
-    app.setApplicationName("meetandread")
-    app.setApplicationDisplayName("meetandread")
+    app.setApplicationName("metamemory")
+    app.setApplicationDisplayName("metamemory")
     
     # Create and show the main widget
     widget = MeetAndReadWidget()
