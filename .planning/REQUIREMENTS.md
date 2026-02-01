@@ -60,18 +60,54 @@
 - [ ] **TMT-07**: User can open saved transcript for review
 - [ ] **TMT-08**: Transcript format is optimized for downstream AI agent consumption
 
-### User Interface
+### Widget Interface
 
-- [ ] **UI-01**: User can access Windows 11 Fluent Design user interface
-- [ ] **UI-02**: User can access Record/Stop controls from main window
-- [ ] **UI-03**: User can select audio sources from UI
-- [ ] **UI-04**: User can view real-time transcript display window
-- [ ] **UI-05**: User can view confidence color legend
-- [ ] **UI-06**: User can access system tray integration with recording status indicator
-- [ ] **UI-07**: User can access right-click menu from system tray (Start/Stop, Open, Settings, Exit)
-- [ ] **UI-08**: User can minimize application window to system tray
-- [ ] **UI-09**: User can view recording status (idle, recording, processing)
-- [ ] **UI-10**: User can use multi-monitor support for transcript window placement
+**Core Widget Design:**
+- [ ] **WIDGET-01**: Widget has borderless, compact design with no window chrome
+- [ ] **WIDGET-02**: Widget remains always-on-top of other windows
+- [ ] **WIDGET-03**: Widget is draggable to any position on screen
+- [ ] **WIDGET-04**: Widget snaps to screen edges/corners when within 20px of edge
+- [ ] **WIDGET-05**: Widget shows 4/5ths of body when docked to screen edge
+- [ ] **WIDGET-06**: Widget maintains translucent "glass" visual style when idle
+- [ ] **WIDGET-07**: Widget displays glowing red pulse animation when recording
+- [ ] **WIDGET-08**: Widget displays swirling animation when processing enhancement
+
+**Record Button (Main Widget Body):**
+- [ ] **WIDGET-09**: Record button serves as main widget body
+- [ ] **WIDGET-10**: Record button shows distinct visual states: idle (translucent glass), recording (glowing red pulse), processing (swirling animation)
+- [ ] **WIDGET-11**: User can start recording by clicking record button
+- [ ] **WIDGET-12**: User can stop recording by clicking record button (toggles between states)
+
+**Audio Input Toggles (Lobes):**
+- [ ] **WIDGET-13**: Two lobes positioned on top 1/3rd of record button
+- [ ] **WIDGET-14**: First lobe toggles microphone input on/off with modern icon
+- [ ] **WIDGET-15**: Second lobe toggles system audio input on/off with modern icon
+- [ ] **WIDGET-16**: Toggle states are visually indicated (active/inactive)
+
+**Transcript Panel:**
+- [ ] **WIDGET-17**: Third lobe on side opposite dock acts as transcript expansion button
+- [ ] **WIDGET-18**: Transcript panel flows out from widget as integrated component (not separate window)
+- [ ] **WIDGET-19**: Transcript panel auto-expands when recording starts
+- [ ] **WIDGET-20**: User can manually collapse transcript panel anytime
+- [ ] **WIDGET-21**: Transcript displays in chat-style format with speaker names
+- [ ] **WIDGET-22**: Each speaker has unique color identification in transcript
+- [ ] **WIDGET-23**: Unknown speakers display with sequential numbering (Unknown Speaker 1, Unknown Speaker 2, etc.)
+- [ ] **WIDGET-24**: Unknown speaker numbers persist for cross-recording identification even before naming
+- [ ] **WIDGET-25**: Transcript auto-scrolls to show latest content
+- [ ] **WIDGET-26**: User can scroll back through transcript history
+- [ ] **WIDGET-27**: Manual scroll pauses auto-scroll for 10 seconds then resumes
+- [ ] **WIDGET-28**: Transcript shows confidence color coding on text (green 80-100%, yellow 70-80%, orange 50-70%, red 0-50%)
+- [ ] **WIDGET-29**: Enhanced segments (from dual-mode) display in bold formatting
+
+**Settings Access:**
+- [ ] **WIDGET-30**: Settings lobe/button provides access to configuration
+- [ ] **WIDGET-31**: Right-click on widget opens context menu (Start/Stop, Settings, Exit)
+- [ ] **WIDGET-32**: System tray integration provides secondary access to controls
+
+**System Tray:**
+- [ ] **WIDGET-33**: Application integrates with Windows system tray
+- [ ] **WIDGET-34**: System tray shows recording status indicator
+- [ ] **WIDGET-35**: System tray provides quick access to Start/Stop, Open, Settings, Exit
 
 ### System Monitoring
 
@@ -199,16 +235,41 @@
 | TMT-06 | Phase 1 | Pending |
 | TMT-07 | Phase 1 | Pending |
 | TMT-08 | Phase 1 | Pending |
-| UI-01 | Phase 1 | Pending |
-| UI-02 | Phase 1 | Pending |
-| UI-03 | Phase 1 | Pending |
-| UI-04 | Phase 1 | Pending |
-| UI-05 | Phase 1 | Pending |
-| UI-06 | Phase 1 | Pending |
-| UI-07 | Phase 1 | Pending |
-| UI-08 | Phase 1 | Pending |
-| UI-09 | Phase 1 | Pending |
-| UI-10 | Phase 1 | Pending |
+| WIDGET-01 | Phase 1 | Pending |
+| WIDGET-02 | Phase 1 | Pending |
+| WIDGET-03 | Phase 1 | Pending |
+| WIDGET-04 | Phase 1 | Pending |
+| WIDGET-05 | Phase 1 | Pending |
+| WIDGET-06 | Phase 1 | Pending |
+| WIDGET-07 | Phase 1 | Pending |
+| WIDGET-08 | Phase 1 | Pending |
+| WIDGET-09 | Phase 1 | Pending |
+| WIDGET-10 | Phase 1 | Pending |
+| WIDGET-11 | Phase 1 | Pending |
+| WIDGET-12 | Phase 1 | Pending |
+| WIDGET-13 | Phase 1 | Pending |
+| WIDGET-14 | Phase 1 | Pending |
+| WIDGET-15 | Phase 1 | Pending |
+| WIDGET-16 | Phase 1 | Pending |
+| WIDGET-17 | Phase 1 | Pending |
+| WIDGET-18 | Phase 1 | Pending |
+| WIDGET-19 | Phase 1 | Pending |
+| WIDGET-20 | Phase 1 | Pending |
+| WIDGET-21 | Phase 1 | Pending |
+| WIDGET-22 | Phase 1 | Pending |
+| WIDGET-23 | Phase 1 | Pending |
+| WIDGET-24 | Phase 1 | Pending |
+| WIDGET-25 | Phase 1 | Pending |
+| WIDGET-26 | Phase 1 | Pending |
+| WIDGET-27 | Phase 1 | Pending |
+| WIDGET-28 | Phase 1 | Pending |
+| WIDGET-29 | Phase 1 | Pending |
+| WIDGET-30 | Phase 1 | Pending |
+| WIDGET-31 | Phase 1 | Pending |
+| WIDGET-32 | Phase 1 | Pending |
+| WIDGET-33 | Phase 1 | Pending |
+| WIDGET-34 | Phase 1 | Pending |
+| WIDGET-35 | Phase 1 | Pending |
 | MON-01 | Phase 1 | Pending |
 | MON-02 | Phase 1 | Pending |
 | MON-03 | Phase 1 | Pending |
@@ -235,10 +296,10 @@
 | TST-05 | Phase 1 | Pending |
 
 **Coverage:**
-- v1 requirements: 68 total
-- Mapped to phases: 68
+- v1 requirements: 93 total
+- Mapped to phases: 93
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-01-31*
-*Last updated: 2026-01-31 after project initialization*
+*Last updated: 2026-02-01 after widget UI refinement*
