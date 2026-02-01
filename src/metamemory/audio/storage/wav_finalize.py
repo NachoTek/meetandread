@@ -79,7 +79,7 @@ def finalize_part_to_wav(
 def finalize_stem(
     stem: str,
     recordings_dir: Path,
-    delete_part: bool = False,
+    delete_part: bool = True,
 ) -> Path:
     """Finalize a recording by stem name.
 
@@ -89,8 +89,8 @@ def finalize_stem(
     Args:
         stem: The recording stem (e.g., "recording-2026-02-01-143045").
         recordings_dir: Directory containing the .pcm.part file.
-        delete_part: If True, delete the .pcm.part and .json files after
-            successful finalization.
+        delete_part: If True (default), delete the .pcm.part and .json files
+            after successful finalization. Set to False to preserve for debugging.
 
     Returns:
         Path to the created WAV file.
