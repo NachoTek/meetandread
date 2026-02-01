@@ -1,9 +1,9 @@
 ---
-status: complete
+status: diagnosed
 phase: 01-audio-capture-foundation
 source: 01-05-SUMMARY.md, 01-06-SUMMARY.md, 01-07-SUMMARY.md, 01-08-SUMMARY.md
 started: 2026-02-01
-updated: 2026-02-01T16:30:00Z
+updated: 2026-02-01T22:25:00Z
 ---
 
 ## Current Test
@@ -106,16 +106,37 @@ skipped: 0
   reason: "User reported: Recording was created and plays but it was the full 9 second length of the test file. a full 1 to 1 copy."
   severity: major
   test: 1
-  root_cause: ""
-  artifacts: []
-  missing: []
-  debug_session: ""
+  root_cause: "FakeAudioModule emits WAV blocks as fast as the pipeline can consume them (no real-time pacing), so the full input file can be written before the CLI's wall-clock sleep ends; AudioSession does not cap/truncate output by target duration."
+  artifacts:
+    - path: "src/metamemory/audio/capture/fake_module.py"
+      issue: "_read_loop() emits blocks without pacing, so a 9s file can be fully queued/consumed before stop."
+      suggested_fix: "Add real-time pacing per block based on n_frames_read / sample_rate (optionally behind a realtime/speed flag)."
+    - path: "src/metamemory/audio/cli.py"
+      issue: "--seconds uses time.sleep only; assumes sources are real-time."
+      suggested_fix: "Optional: plumb a max_frames/max_duration cap into AudioSession so output duration is enforced regardless of source speed."
+    - path: "src/metamemory/audio/session.py"
+      issue: "No truncate/cap by target duration; writes whatever frames arrive until stop."
+      suggested_fix: "Add optional max_frames guard in the consumer loop to stop writing once enough frames are recorded."
+  missing:
+    - "Fake source real-time pacing (or explicit max-duration cap) so --seconds produces consistent audio duration"
+    - "Optional session-level max_frames guard to enforce requested duration even if a source runs faster than real-time"
+    - "Regression test: 9s fake input + --seconds 5 outputs ~5s audio"
+  debug_session: ".planning/debug/uat-01-fake-duration.md"
 - truth: "Widget can be dragged from empty/non-interactive areas"
   status: failed
   reason: "User reported: There is no 'empty' area of the widget to try and drag from. everything that is not a button is empty space that clicks through to the applications below it."
   severity: major
   test: 4
-  root_cause: ""
-  artifacts: []
-  missing: []
-  debug_session: ""
+  root_cause: "The widget's non-button pixels are fully transparent with no full-rect hit-testable surface, so empty areas behave as input-transparent/click-through; additionally, dragging cannot start because is_dragging is never set True after the click-vs-drag refactor (mouseMoveEvent only moves when already dragging)."
+  artifacts:
+    - path: "src/metamemory/widgets/main_widget.py"
+      issue: "Fully transparent background + no full-rect background item; only buttons/lobes are hit-testable, so empty areas can click-through."
+      suggested_fix: "Add a near-invisible background/drag-surface QGraphicsItem covering the scene rect (paint alpha ~1) behind controls to capture input and prevent click-through."
+    - path: "src/metamemory/widgets/main_widget.py"
+      issue: "Drag state machine never enters dragging (is_dragging is never set True)."
+      suggested_fix: "Start drag on mouse move when movement exceeds threshold; set is_dragging=True, move window while dragging, end on release and snap."
+  missing:
+    - "Hit-testable drag surface behind interactive items to capture empty-area input"
+    - "Drag-start transition sets is_dragging True once movement exceeds threshold"
+    - "Empty-area clicks are consumed by the widget (no click-through)"
+  debug_session: ".planning/debug/uat-01-widget-drag-surface.md"
