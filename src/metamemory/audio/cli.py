@@ -160,11 +160,14 @@ def cmd_record(args) -> int:
     
     # Create session config
     output_dir = Path(args.output_dir) if args.output_dir else None
+    sample_rate = 16000
+    max_frames = int(round(args.seconds * sample_rate))
     config = SessionConfig(
         sources=sources,
         output_dir=output_dir,
-        sample_rate=16000,
+        sample_rate=sample_rate,
         channels=1,
+        max_frames=max_frames,
     )
     
     # Start recording
