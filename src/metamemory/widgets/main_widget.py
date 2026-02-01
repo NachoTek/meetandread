@@ -186,6 +186,12 @@ class MeetAndReadWidget(QGraphicsView):
             self.drag_start_pos = event.globalPosition().toPoint()
             self.widget_start_pos = self.pos()
             self.press_time = QTime.currentTime()
+            
+            # Determine if press started on the drag surface
+            scene_pos = self.mapToScene(event.position().toPoint())
+            item = self._scene.itemAt(scene_pos, self.transform())
+            self._press_on_drag_surface = (item is self.drag_surface)
+            
             # DON'T accept - let events propagate to child items
             super().mousePressEvent(event)
         else:
@@ -201,6 +207,20 @@ class MeetAndReadWidget(QGraphicsView):
             self.dock_edge = None
             self._update_docked_state()
             event.accept()
+        elif event.buttons() == Qt.MouseButton.LeftButton and self._press_on_drag_surface:
+            # Check if movement exceeds threshold to start dragging
+            current_pos = event.globalPosition().toPoint()
+            movement = (current_pos - self.drag_start_pos).manhattanLength()
+            if movement >= 5:
+                # Start dragging from drag surface
+                self.is_dragging = True
+                delta = current_pos - self.drag_start_pos
+                new_pos = self.widget_start_pos + delta
+                self.move(new_pos)
+                self.is_docked = False
+                self.dock_edge = None
+                self._update_docked_state()
+                event.accept()
         else:
             super().mouseMoveEvent(event)
     
@@ -214,11 +234,15 @@ class MeetAndReadWidget(QGraphicsView):
             movement = (release_pos - self.drag_start_pos).manhattanLength()
             elapsed_ms = self.press_time.msecsTo(release_time)
 
-            # Threshold: less than 5 pixels and less than 300ms = click, not drag
-            if movement < 5 and elapsed_ms < 300:
-                # This is a click - let child items handle it
-                # Don't start dragging, just pass through
-                super().mouseReleaseEvent(event)
+            # Threshold: less than 5 pixels = click, not drag
+            if movement < 5:
+                # This is a click
+                if self._press_on_drag_surface:
+                    # Click on drag surface - consume to prevent click-through
+                    event.accept()
+                else:
+                    # Click on interactive item - let child items handle it
+                    super().mouseReleaseEvent(event)
             else:
                 # This is a drag - finalize drag operation
                 self.is_dragging = False
