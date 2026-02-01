@@ -8,6 +8,7 @@ This widget provides a borderless, always-on-top interface with:
 - Drag and snap-to-edge functionality
 """
 
+from pathlib import Path
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsTextItem,
@@ -15,6 +16,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
+
+from metamemory.recording import RecordingController, ControllerState, ControllerError
 
 
 class MeetAndReadWidget(QGraphicsView):
@@ -45,9 +48,9 @@ class MeetAndReadWidget(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setStyleSheet("background: transparent; border: none;")
         
-        # Create scene
-        self.scene = QGraphicsScene(self)
-        self.setScene(self.scene)
+        # Create scene (use _scene to avoid conflict with scene() method)
+        self._scene = QGraphicsScene(self)
+        self.setScene(self._scene)
         
         # Widget state
         self.is_recording = False
@@ -60,13 +63,19 @@ class MeetAndReadWidget(QGraphicsView):
         self.is_docked = False
         self.dock_edge = None  # 'left', 'right', 'top', 'bottom'
         
+        # Recording controller
+        self._controller = RecordingController()
+        self._controller.on_state_change = self._on_controller_state_change
+        self._controller.on_error = self._on_controller_error
+        self._error_indicator = None  # For showing errors
+        
         # Create widget components
         self._create_components()
         self._layout_components()
         
         # Set initial size
         self.setFixedSize(200, 120)
-        self.scene.setSceneRect(0, 0, 200, 120)
+        self._scene.setSceneRect(0, 0, 200, 120)
         
         # Position on screen
         self._position_initial()
@@ -82,17 +91,22 @@ class MeetAndReadWidget(QGraphicsView):
         """Create all widget components."""
         # Main record button
         self.record_button = RecordButtonItem(self)
-        self.scene.addItem(self.record_button)
+        self._scene.addItem(self.record_button)
         
         # Audio input toggle lobes
         self.mic_lobe = ToggleLobeItem("microphone", self)
         self.system_lobe = ToggleLobeItem("system", self)
-        self.scene.addItem(self.mic_lobe)
-        self.scene.addItem(self.system_lobe)
+        self._scene.addItem(self.mic_lobe)
+        self._scene.addItem(self.system_lobe)
         
         # Settings lobe
         self.settings_lobe = SettingsLobeItem(self)
-        self.scene.addItem(self.settings_lobe)
+        self._scene.addItem(self.settings_lobe)
+        
+        # Error indicator (hidden by default)
+        self._error_indicator = ErrorIndicatorItem(self)
+        self._error_indicator.hide()
+        self._scene.addItem(self._error_indicator)
     
     def _layout_components(self):
         """Position all components."""
@@ -105,6 +119,9 @@ class MeetAndReadWidget(QGraphicsView):
         
         # Settings lobe on side
         self.settings_lobe.setPos(160, 50)
+        
+        # Error indicator at bottom
+        self._error_indicator.setPos(10, 105)
     
     def _position_initial(self):
         """Position widget on screen initially."""
@@ -132,7 +149,7 @@ class MeetAndReadWidget(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             # Check if clicking on record button
             scene_pos = self.mapToScene(event.pos())
-            items = self.scene.items(scene_pos)
+            items = self._scene.items(scene_pos)
             
             if any(isinstance(item, (RecordButtonItem, ToggleLobeItem, SettingsLobeItem)) 
                    for item in items):
@@ -200,36 +217,89 @@ class MeetAndReadWidget(QGraphicsView):
             elif self.dock_edge == 'left':
                 self.move(int(self.width() * -0.2), self.y())
     
+    def _get_selected_sources(self):
+        """Get set of selected audio sources based on lobe states."""
+        sources = set()
+        if self.mic_lobe.is_active:
+            sources.add('mic')
+        if self.system_lobe.is_active:
+            sources.add('system')
+        return sources
+    
+    def _show_error(self, message):
+        """Show error indicator with message."""
+        self._error_indicator.set_text(message)
+        self._error_indicator.show()
+        # Auto-hide after 3 seconds
+        QTimer.singleShot(3000, self._hide_error)
+    
+    def _hide_error(self):
+        """Hide error indicator."""
+        self._error_indicator.hide()
+    
+    def _on_controller_state_change(self, state):
+        """Handle controller state changes."""
+        if state == ControllerState.RECORDING:
+            self.is_recording = True
+            self.is_processing = False
+            self.record_button.set_recording_state(True)
+            self._hide_error()
+        elif state == ControllerState.STOPPING:
+            self.is_recording = False
+            self.is_processing = True
+            self.record_button.set_recording_state(False)
+            self.record_button.set_processing_state(True)
+        elif state == ControllerState.IDLE:
+            self.is_recording = False
+            self.is_processing = False
+            self.record_button.set_recording_state(False)
+            self.record_button.set_processing_state(False)
+        elif state == ControllerState.ERROR:
+            self.is_recording = False
+            self.is_processing = False
+            self.record_button.set_recording_state(False)
+            self.record_button.set_processing_state(False)
+    
+    def _on_controller_error(self, error):
+        """Handle controller errors."""
+        self._show_error(error.message)
+        print(f"Recording error: {error.message}")
+    
+    def _on_recording_complete(self, wav_path):
+        """Handle recording completion."""
+        self.is_processing = False
+        self.record_button.set_processing_state(False)
+        print(f"Recording saved to: {wav_path}")
+    
     def toggle_recording(self):
-        """Toggle recording state."""
-        if not self.is_recording:
+        """Toggle recording state via controller."""
+        if not self._controller.is_recording():
             self.start_recording()
         else:
             self.stop_recording()
     
     def start_recording(self):
-        """Start recording."""
-        self.is_recording = True
-        self.is_processing = False
-        self.record_button.set_recording_state(True)
-        print("Recording started...")
+        """Start recording via controller."""
+        # Check if any source is selected
+        sources = self._get_selected_sources()
+        
+        if not sources:
+            self._show_error("Select mic or system audio first")
+            return
+        
+        # Clear any previous error
+        self._controller.clear_error()
+        
+        # Start recording via controller
+        error = self._controller.start(sources)
+        if error:
+            self._show_error(error.message)
     
     def stop_recording(self):
-        """Stop recording and enter processing state."""
-        self.is_recording = False
-        self.is_processing = True
-        self.record_button.set_recording_state(False)
-        self.record_button.set_processing_state(True)
-        print("Recording stopped, processing...")
-        
-        # Simulate processing completion after 3 seconds
-        QTimer.singleShot(3000, self._processing_complete)
-    
-    def _processing_complete(self):
-        """Called when processing is complete."""
-        self.is_processing = False
-        self.record_button.set_processing_state(False)
-        print("Processing complete")
+        """Stop recording via controller (non-blocking)."""
+        error = self._controller.stop(on_complete=self._on_recording_complete)
+        if error:
+            self._show_error(error.message)
 
 
 class RecordButtonItem(QGraphicsEllipseItem):
@@ -446,3 +516,51 @@ class SettingsLobeItem(QGraphicsEllipseItem):
         if event.button() == Qt.MouseButton.LeftButton:
             print("Settings clicked - dialog to be implemented")
             event.accept()
+
+
+class ErrorIndicatorItem(QGraphicsRectItem):
+    """Error indicator displayed below the record button."""
+    
+    def __init__(self, parent_widget):
+        super().__init__(0, 0, 180, 14)
+        self.parent_widget = parent_widget
+        self._text = ""
+        self._visible = False
+        
+    def set_text(self, text):
+        """Set the error message text."""
+        self._text = text
+        self.update()
+    
+    def show(self):
+        """Show the error indicator."""
+        self._visible = True
+        self.update()
+    
+    def hide(self):
+        """Hide the error indicator."""
+        self._visible = False
+        self.update()
+    
+    def paint(self, painter, option, widget=None):
+        """Paint error indicator."""
+        if not self._visible:
+            return
+        
+        rect = self.rect()
+        
+        # Background - red translucent
+        painter.setBrush(QBrush(QColor(255, 50, 50, 180)))
+        painter.setPen(QPen(QColor(255, 100, 100, 255), 1))
+        painter.drawRoundedRect(rect, 3, 3)
+        
+        # Text
+        if self._text:
+            painter.setPen(QPen(QColor(255, 255, 255, 255), 1))
+            font = QFont("Arial", 8)
+            font.setBold(True)
+            painter.setFont(font)
+            
+            # Center text
+            text_rect = rect.adjusted(2, 1, -2, -1)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, self._text)
