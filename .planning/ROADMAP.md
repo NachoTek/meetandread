@@ -31,6 +31,14 @@ This phase establishes the foundation. Without reliable audio capture, nothing e
 - Streaming audio to disk for crash recovery
 - FakeAudioModule for test audio injection
 
+**Plans:** 4 plans
+
+Plans:
+- [x] 01-01-PLAN.md - Audio storage + crash-safe streaming writer
+- [x] 01-02-PLAN.md - WASAPI capture backends + device probing + FakeAudioSource
+- [ ] 01-03-PLAN.md - Recording session manager + automated fake-audio tests
+- [ ] 01-04-PLAN.md - Widget wiring + crash recovery UX + manual verification
+
 ---
 
 ## Phase 2: Real-Time Transcription Engine
