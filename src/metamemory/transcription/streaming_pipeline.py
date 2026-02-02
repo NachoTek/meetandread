@@ -92,8 +92,11 @@ class RealTimeTranscriptionProcessor:
             min_chunk_size_sec=config.min_chunk_size_sec,
             sample_rate=16000
         )
+        # For streaming, use agreement_threshold=1 to commit immediately
+        # (threshold=2 is for static audio where same text appears multiple times)
+        streaming_threshold = max(1, config.agreement_threshold - 1)
         self._agreement_buffer = LocalAgreementBuffer(
-            agreement_threshold=config.agreement_threshold
+            agreement_threshold=streaming_threshold
         )
         
         # Engine is created but model not loaded yet
