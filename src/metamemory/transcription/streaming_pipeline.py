@@ -95,6 +95,7 @@ class RealTimeTranscriptionProcessor:
         # For streaming, use agreement_threshold=1 to commit immediately
         # (threshold=2 is for static audio where same text appears multiple times)
         streaming_threshold = max(1, config.agreement_threshold - 1)
+        print(f"DEBUG: Using agreement_threshold={streaming_threshold} (config was {config.agreement_threshold})")
         self._agreement_buffer = LocalAgreementBuffer(
             agreement_threshold=streaming_threshold
         )
@@ -310,12 +311,16 @@ class RealTimeTranscriptionProcessor:
         # Get the text from all segments
         full_text = " ".join([seg.text for seg in segments]).strip()
         
+        print(f"DEBUG: Segment texts: {[seg.text for seg in segments]}")
+        print(f"DEBUG: Full text: '{full_text}'")
+        
         if not full_text:
+            print(f"DEBUG: Empty full_text, returning")
             return
         
         # Pass through agreement buffer to prevent flickering
         committed_text = self._agreement_buffer.process_iteration(full_text)
-        print(f"DEBUG: Agreement buffer committed: '{committed_text}'")
+        print(f"DEBUG: Agreement buffer input: '{full_text}' -> committed: '{committed_text}'")
         
         if committed_text:
             # Calculate timing

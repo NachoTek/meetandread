@@ -121,13 +121,16 @@ class LocalAgreementBuffer:
         # 1. Beyond last_commit_len (not yet committed)
         # 2. Within stable_len (has reached agreement threshold)
         committed_now = ""
+        print(f"DEBUG LA: agreement_count={self._agreement_count}, threshold={self.agreement_threshold}, stable_len={self._stable_len}, last_commit={self._last_commit_len}, buffer_len={len(self._buffer)}")
         if self._agreement_count >= self.agreement_threshold:
             # Can commit up to stable_len, but only what hasn't been committed yet
             commit_up_to = min(self._stable_len, len(self._buffer))
+            print(f"DEBUG LA: Can commit up to {commit_up_to}, last committed at {self._last_commit_len}")
             if commit_up_to > self._last_commit_len:
                 committed_now = self._buffer[self._last_commit_len:commit_up_to]
                 self._committed_text = self._buffer[:commit_up_to]
                 self._last_commit_len = commit_up_to
+                print(f"DEBUG LA: Committed: '{committed_now}'")
                 
                 # Reset agreement for next batch
                 self._agreement_count = 0
