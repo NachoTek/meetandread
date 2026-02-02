@@ -11,6 +11,8 @@ from PyQt6.QtCore import Qt
 
 from metamemory.widgets.main_widget import MeetAndReadWidget
 from metamemory.audio import has_partial_recordings, recover_part_files, get_recordings_dir
+from metamemory.config import get_config
+from metamemory.hardware.recommender import ModelRecommender
 
 
 def check_and_offer_recovery(parent=None):
@@ -117,6 +119,22 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("metamemory")
     app.setApplicationDisplayName("metamemory")
+    
+    # Run hardware detection on first startup (if auto-detect enabled)
+    try:
+        settings = get_config()
+        if settings.hardware.auto_detect_on_startup and not settings.hardware.recommended_model:
+            print("Running hardware detection...")
+            recommender = ModelRecommender()
+            recommended = recommender.detect_and_recommend()
+            specs = recommender.get_detected_specs()
+            print(f"  RAM: {specs.total_ram_gb:.1f} GB")
+            print(f"  CPU: {specs.cpu_count_logical} cores")
+            print(f"  Recommended model: {recommended}")
+            print()
+    except Exception as e:
+        # Log error but don't block startup
+        print(f"Hardware detection failed: {e}")
     
     # Check for partial recordings and offer recovery before showing widget
     # This runs synchronously before the main event loop
