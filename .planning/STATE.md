@@ -17,11 +17,11 @@ See: .planning/PROJECT.md (updated 2026-02-01)
 ## Current Position
 
 Phase: 2 of 6 (Real-Time Transcription Engine)
-Plan: 1 of 4 in current phase
-Status: In progress - Core transcription engine complete
-Last activity: 2026-02-02 - Completed 02-01 core transcription engine
+Plan: 3 of 4 in current phase
+Status: In progress - Confidence & hardware detection complete
+Last activity: 2026-02-02 - Completed 02-03 confidence scoring & hardware detection
 
-Progress: ████████░░░░ 17%
+Progress: ████████░░░░ 18%
 
 ---
 
@@ -30,13 +30,13 @@ Progress: ████████░░░░ 17%
 | Phase | Status | Progress | Requirements |
 |-------|--------|----------|--------------|
 | 1 | ✅ | 100% | 8 |
-| 2 | ◐ | 50% | 10 |
+| 2 | ◐ | 75% | 10 |
 | 3 | ○ | 0% | 16 |
 | 4 | ○ | 0% | 8 |
 | 5 | ○ | 0% | 43 |
 | 6 | ○ | 0% | 8 |
 
-**Total:** 93 requirements | 8 complete | 2 in progress | 83 pending
+**Total:** 93 requirements | 8 complete | 5 in progress | 80 pending
 
 ---
 
@@ -55,38 +55,19 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 **Requirements (10):**
 - [✓] TRAN-01: Load Whisper model for real-time transcription (WhisperTranscriptionEngine complete)
 - [✓] TRAN-02: Chunk audio for < 2s transcription latency (VADChunkingProcessor with 1.0s min chunk)
-- [○] TRAN-03: Extract confidence scores from transcription (implemented, needs UI in 02-04)
-- [○] TRAN-04: Color-code transcript by confidence (pending - needs 02-04)
+- [✓] TRAN-03: Extract confidence scores from transcription (confidence.py complete)
+- [○] TRAN-04: Color-code transcript by confidence (pending - needs 02-04 UI wiring)
 - [✓] TRAN-05: Continuous transcription without lag accumulation (AudioRingBuffer with trimming)
 - [○] TRAN-06: Format transcript for AI agent consumption (pending - needs 02-04)
-- [○] CFG-02: Select model size (tiny/base/small/medium/large) (pending - needs 02-02)
-- [○] CFG-05: Display hardware capabilities (pending - needs 02-03)
-- [○] CFG-06: Recommend model size based on hardware (pending - needs 02-03)
-- [○] CFG-07: Settings persist across restarts (pending - needs 02-02)
+- [○] CFG-02: Select model size (tiny/base/small/medium/large) (settings implemented, needs UI)
+- [✓] CFG-05: Display hardware capabilities (HardwareDetector complete)
+- [✓] CFG-06: Recommend model size based on hardware (ModelRecommender complete)
+- [✓] CFG-07: Settings persist across restarts (ConfigManager complete)
 
 **Completed Plans:**
 - [✓] 02-01: Core transcription engine with faster-whisper, VAD chunking, local agreement buffer
-
-**Goal:** Establish reliable audio capture from microphone and system audio using Windows WASAPI
-
-**Requirements (8):**
-- [✓] AUD-01: Capture microphone input (MicSource implemented, gap closures applied)
-- [◐] AUD-02: Capture system audio output (SystemSource interface, needs Core Audio impl - deferred to Phase 4)
-- [✓] AUD-03: Capture microphone and system audio simultaneously (AudioSession supports dual-source)
-- [✓] AUD-04: Select audio source(s) before recording starts (SessionConfig with SourceConfig)
-- [✓] AUD-05: Start and stop recording with single-click actions (AudioSession.start/stop, stop ordering fixed)
-- [◐] AUD-06: Capture audio using Windows 11 WASAPI endpoints (WASAPI detection working)
-- [✓] AUD-07: Stream audio to disk during recording for crash recovery (PCM streaming, false positive fixed)
-- [✓] AUD-08: Test system can inject pre-recorded audio via FakeAudioModule (Complete, duration cap fixed)
-
-**UAT Results (7/7 passed):**
-- [✓] CLI fake recording creates correct duration WAV (fixed in 01-09)
-- [✓] Record button single-click works
-- [✓] Source lobes single-click toggle works
-- [✓] Click vs drag detection works
-- [✓] Settings lobe single-click works
-- [✓] No crash recovery prompt on clean startup
-- [✓] Crash recovery still works for actual crashes
+- [✓] 02-02: Settings persistence with JSON storage, versioning, smart defaults
+- [✓] 02-03: Confidence scoring & hardware detection with model recommendations
 
 **Success Criteria:**
 1. ✅ User can start recording and capture clean audio from selected source(s)
@@ -127,11 +108,14 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 | 2026-02-01 | Gap closure: Crash recovery false positive | finalize_stem defaults to delete_part=True | Complete |
 | 2026-02-01 | Gap closure: CLI fake duration | Session-side max_frames cap enforces --seconds | Complete |
 | 2026-02-01 | Gap closure: Widget drag surface | Alpha=1 invisible surface for drag and click-through prevention | Complete |
-| 2026-02-02 | Settings persistence architecture | Dataclasses with atomic JSON writes, smart defaults, versioning | Planned |
+| 2026-02-02 | Settings persistence architecture | Dataclasses with atomic JSON writes, smart defaults, versioning | Complete |
 | 2026-02-02 | faster-whisper integration | 4x speed improvement over openai-whisper for real-time | Complete |
 | 2026-02-02 | VAD-based chunking | 1.0s minimum chunk size with speech-end detection | Complete |
 | 2026-02-02 | Local agreement policy | Agreement threshold of 2 prevents text flickering | Complete |
 | 2026-02-02 | Confidence normalization | Linear mapping from log_prob [-3.0,-1.0] to score [30,95] | Complete |
+| 2026-02-02 | Visual distortion effect | Linear 0.0-0.7 intensity for confidence 85%-0% | Complete |
+| 2026-02-02 | Model recommendation algorithm | <6GB/<4 cores→tiny, <12GB/<8 cores→base, else small | Complete |
+| 2026-02-02 | Hardware detection caching | 60-second TTL to avoid repeated psutil calls | Complete |
 
 ---
 
@@ -142,19 +126,17 @@ None currently.
 **Notes:**
 - System audio loopback requires Windows Core Audio implementation (planned for future phase)
 - PortAudio WASAPI loopback symbol not exported in sounddevice binary
-- Phase 1 core requirements met: mic capture, disk streaming, crash recovery all verified
+- Phase 2 Plans 1-3 complete, ready for Plan 4 (Integration & UI wiring)
 
 ---
 
 ## Next Actions
 
 **Immediate:**
-1. ✅ Phase 2 Plan 1 Complete - Core transcription engine with faster-whisper
+1. ✅ Phase 2 Plan 3 Complete - Confidence scoring & hardware detection
 
 **Ready to Start:**
-- Phase 2 Plan 2: Settings persistence (JSON storage, model selection)
-- Phase 2 Plan 3: Confidence scoring & hardware detection 
-- Phase 2 Plan 4: Integration & UI wiring (transcription + settings display)
+- Phase 2 Plan 4: Integration & UI wiring (streaming pipeline, widget display, settings panel)
 
 **Upcoming:**
 - Phase 3: Dual-Mode Enhancement Architecture
@@ -168,8 +150,8 @@ None currently.
 
 ## Session Continuity
 
-Last session: 2026-02-02 01:28:15Z
-Stopped at: Completed 02-01-PLAN.md (Core transcription engine)
+Last session: 2026-02-02 01:38:22Z
+Stopped at: Completed 02-03-PLAN.md (Confidence & hardware detection)
 Resume file: None
 
 *State file automatically updated throughout project lifecycle*
