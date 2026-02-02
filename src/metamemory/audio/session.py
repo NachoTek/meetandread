@@ -416,8 +416,10 @@ class AudioSession:
             mixed = self._mix_frames(frames_list)
 
             # Feed to transcription callback (float32 audio before int16 conversion)
+            # Flatten to 1D array as transcription buffer expects (n_samples,)
             if self._config and self._config.on_audio_frame:
-                self._config.on_audio_frame(mixed)
+                audio_for_transcription = mixed.flatten() if mixed.ndim > 1 else mixed
+                self._config.on_audio_frame(audio_for_transcription)
 
             # Check max_frames cap
             if max_frames is not None and not discard_mode:
