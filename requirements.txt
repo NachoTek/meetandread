@@ -10,7 +10,9 @@ soxr>=0.3.0         # Resampling
 comtypes>=1.2.0     # Windows COM interface for WASAPI loopback
 
 # AI/ML - Whisper
-openai-whisper>=20231117
+faster-whisper>=1.1.0  # 4x faster than openai-whisper, CTranslate2 optimized
+torch>=2.0.0           # Required for VAC (Voice Activity Controller)
+torchaudio>=2.0.0      # Audio processing for VAC
 
 # Speaker Diarization
 # pyannote.audio will be added for voice signatures
