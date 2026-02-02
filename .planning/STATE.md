@@ -1,7 +1,7 @@
 # Project State: metamemory
 
-**Status:** Phase 1 In Progress
-**Last Updated:** 2026-02-01
+**Status:** Phase 2 In Progress
+**Last Updated:** 2026-02-02
 
 ---
 
@@ -10,16 +10,16 @@
 See: .planning/PROJECT.md (updated 2026-02-01)
 
 **Core value:** Zero information loss during conversations — Users stay fully present knowing every word is captured for AI agent processing
-**Current focus:** Phase 1 - Audio Capture Foundation
+**Current focus:** Phase 2 - Real-Time Transcription Engine
 
 ---
 
 ## Current Position
 
 Phase: 2 of 6 (Real-Time Transcription Engine)
-Plan: 2 of 4 in current phase
-Status: In progress - Settings persistence complete
-Last activity: 2026-02-02 - Completed 02-02 settings persistence
+Plan: 1 of 4 in current phase
+Status: In progress - Core transcription engine complete
+Last activity: 2026-02-02 - Completed 02-01 core transcription engine
 
 Progress: ████████░░░░ 17%
 
@@ -53,19 +53,19 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 **Goal:** Integrate Whisper models for real-time transcription with < 2s latency
 
 **Requirements (10):**
-- [◐] TRAN-01: Load Whisper model for real-time transcription (pending - needs 02-01)
-- [○] TRAN-02: Chunk audio for < 2s transcription latency (pending)
-- [○] TRAN-03: Extract confidence scores from transcription (pending - needs 02-03)
-- [○] TRAN-04: Color-code transcript by confidence (pending - needs 02-03)
-- [○] TRAN-05: Continuous transcription without lag accumulation (pending)
-- [○] TRAN-06: Format transcript for AI agent consumption (pending)
-- [✓] CFG-02: Select model size (tiny/base/small/medium/large) - **Complete via settings**
+- [✓] TRAN-01: Load Whisper model for real-time transcription (WhisperTranscriptionEngine complete)
+- [✓] TRAN-02: Chunk audio for < 2s transcription latency (VADChunkingProcessor with 1.0s min chunk)
+- [○] TRAN-03: Extract confidence scores from transcription (implemented, needs UI in 02-04)
+- [○] TRAN-04: Color-code transcript by confidence (pending - needs 02-04)
+- [✓] TRAN-05: Continuous transcription without lag accumulation (AudioRingBuffer with trimming)
+- [○] TRAN-06: Format transcript for AI agent consumption (pending - needs 02-04)
+- [○] CFG-02: Select model size (tiny/base/small/medium/large) (pending - needs 02-02)
 - [○] CFG-05: Display hardware capabilities (pending - needs 02-03)
 - [○] CFG-06: Recommend model size based on hardware (pending - needs 02-03)
-- [✓] CFG-07: Settings persist across restarts - **Complete via 02-02**
+- [○] CFG-07: Settings persist across restarts (pending - needs 02-02)
 
 **Completed Plans:**
-- [✓] 02-02: Settings persistence with JSON storage, versioning, and smart defaults
+- [✓] 02-01: Core transcription engine with faster-whisper, VAD chunking, local agreement buffer
 
 **Goal:** Establish reliable audio capture from microphone and system audio using Windows WASAPI
 
@@ -127,7 +127,11 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 | 2026-02-01 | Gap closure: Crash recovery false positive | finalize_stem defaults to delete_part=True | Complete |
 | 2026-02-01 | Gap closure: CLI fake duration | Session-side max_frames cap enforces --seconds | Complete |
 | 2026-02-01 | Gap closure: Widget drag surface | Alpha=1 invisible surface for drag and click-through prevention | Complete |
-| 2026-02-02 | Settings persistence architecture | Dataclasses with atomic JSON writes, smart defaults, versioning | Active |
+| 2026-02-02 | Settings persistence architecture | Dataclasses with atomic JSON writes, smart defaults, versioning | Planned |
+| 2026-02-02 | faster-whisper integration | 4x speed improvement over openai-whisper for real-time | Complete |
+| 2026-02-02 | VAD-based chunking | 1.0s minimum chunk size with speech-end detection | Complete |
+| 2026-02-02 | Local agreement policy | Agreement threshold of 2 prevents text flickering | Complete |
+| 2026-02-02 | Confidence normalization | Linear mapping from log_prob [-3.0,-1.0] to score [30,95] | Complete |
 
 ---
 
@@ -145,14 +149,14 @@ None currently.
 ## Next Actions
 
 **Immediate:**
-1. ✅ Phase 2 Plan 2 Complete - Settings persistence system built and tested
+1. ✅ Phase 2 Plan 1 Complete - Core transcription engine with faster-whisper
 
 **Ready to Start:**
-- Phase 2 Plan 1: Core transcription engine (faster-whisper, VAD chunking)
-- Phase 2 Plan 3: Confidence scoring & hardware detection (02-02 provides settings foundation)
+- Phase 2 Plan 2: Settings persistence (JSON storage, model selection)
+- Phase 2 Plan 3: Confidence scoring & hardware detection 
+- Phase 2 Plan 4: Integration & UI wiring (transcription + settings display)
 
 **Upcoming:**
-- Phase 2 Plan 4: Integration & UI wiring (transcription + settings display)
 - Phase 3: Dual-Mode Enhancement Architecture
 - Phase 4: Speaker Identification (includes Core Audio loopback completion)
 - Phase 5: Widget Interface & System Integration
@@ -164,8 +168,8 @@ None currently.
 
 ## Session Continuity
 
-Last session: 2026-02-02 01:39:00Z
-Stopped at: Completed 02-02-PLAN.md (Settings persistence system)
+Last session: 2026-02-02 01:28:15Z
+Stopped at: Completed 02-01-PLAN.md (Core transcription engine)
 Resume file: None
 
 *State file automatically updated throughout project lifecycle*
