@@ -354,6 +354,7 @@ class RecordingController:
         # Convert PipelineResults to Words
         new_words = []
         for result in results:
+            print(f"DEBUG: Processing result: text='{result.text}', words={len(result.words)}, confidence={result.confidence}")
             # Create Word objects from result
             for word_info in result.words:
                 word = Word(
@@ -371,8 +372,10 @@ class RecordingController:
                     self.on_word_received(word)
         
         # Add to store
+        print(f"DEBUG: Adding {len(new_words)} words to transcript store")
         if new_words:
             self._transcript_store.add_words(new_words)
+            print(f"DEBUG: Transcript store now has {len(self._transcript_store.get_all_words())} words")
             
             # Notify batch update callback
             if self.on_transcript_update:
