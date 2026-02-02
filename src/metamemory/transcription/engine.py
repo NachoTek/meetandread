@@ -17,11 +17,11 @@ import urllib.request
 
 # Import whisper.cpp bindings
 try:
-    from pywhispercpp import Whisper
+    from pywhispercpp.model import Model as WhisperModel
     _WHISPER_AVAILABLE = True
 except ImportError:
     _WHISPER_AVAILABLE = False
-    Whisper = None
+    WhisperModel = None
 
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ class WhisperTranscriptionEngine:
         self.device = device  # whisper.cpp is CPU-only
         self.compute_type = compute_type  # Ignored, whisper.cpp handles internally
         
-        self._model: Optional[Whisper] = None
+        self._model: Optional[Any] = None
         self._model_loaded = False
         
         # Model directory in app data
@@ -199,13 +199,11 @@ class WhisperTranscriptionEngine:
                 self._download_model(model_path)
             
             # Load the model with whisper.cpp
-            # Parameters match faster-whisper defaults where possible
-            self._model = Whisper(
+            # Model takes model path as string, print options disabled
+            self._model = WhisperModel(
                 str(model_path),
-                params={
-                    'language': 'en',
-                    'translate': False,
-                }
+                print_realtime=False,
+                print_progress=False
             )
             self._model_loaded = True
             logger.info(f"Model loaded successfully from {model_path}")
@@ -253,42 +251,52 @@ class WhisperTranscriptionEngine:
         
         return temp_path
     
-    def _parse_whisper_result(self, result) -> Tuple[str, float, List[WordInfo]]:
-        """Parse whisper.cpp output into text, confidence, and word info.
+    def _parse_whisper_result(self, result) -> Tuple[str, float, float, List[WordInfo]]:
+        """Parse whisper.cpp output into text, timestamps, confidence, and word info.
         
-        whisper.cpp returns segments with different structure than faster-whisper.
-        We extract text and estimate confidence from available data.
+        pywhispercpp returns segments with attributes: text, start, end, t0, t1
+        We extract text, timestamps and estimate confidence from available data.
         
         Args:
-            result: Output from whisper.cpp transcription
+            result: Output from whisper.cpp transcription (list of segments)
             
         Returns:
-            Tuple of (text, confidence_score, word_list)
+            Tuple of (text, start_time, end_time, word_list)
         """
         text_parts = []
         words = []
         
+        start_time = 0.0
+        end_time = 0.0
+        
         # Extract text from result
-        # pywhispercpp returns a string or list depending on version
+        # pywhispercpp returns a list of segment objects with text, start, end attributes
         if isinstance(result, str):
-            return result, 50, []  # Default confidence if no data
+            return result, 0.0, 0.0, []  # Default if string result
         
         # Try to extract segments
-        # Different versions of pywhispercpp may have different structures
         try:
-            # Newer versions may return a list of segments
             if hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
                 for segment in result:
                     if hasattr(segment, 'text'):
                         text_parts.append(segment.text)
+                        # Extract timestamps if available
+                        if hasattr(segment, 'start'):
+                            if start_time == 0.0 or segment.start < start_time:
+                                start_time = segment.start
+                        if hasattr(segment, 'end'):
+                            if segment.end > end_time:
+                                end_time = segment.end
                     elif isinstance(segment, dict):
                         text_parts.append(segment.get('text', ''))
+                        start = segment.get('start', 0.0)
+                        end = segment.get('end', 0.0)
+                        if start_time == 0.0 or start < start_time:
+                            start_time = start
+                        if end > end_time:
+                            end_time = end
                     elif isinstance(segment, str):
                         text_parts.append(segment)
-            
-            # Some versions return object with text attribute
-            elif hasattr(result, 'text'):
-                text_parts.append(result.text)
             
             # Try string conversion as fallback
             else:
@@ -303,12 +311,7 @@ class WhisperTranscriptionEngine:
         
         full_text = ' '.join(text_parts).strip()
         
-        # whisper.cpp doesn't expose avg_log_prob like faster-whisper
-        # We'll estimate confidence based on text characteristics
-        # In a full implementation, we'd parse token probabilities if available
-        confidence = self._estimate_confidence(full_text)
-        
-        return full_text, confidence, words
+        return full_text, start_time, end_time, words
     
     def _estimate_confidence(self, text: str) -> int:
         """Estimate confidence score when whisper.cpp doesn't provide probabilities.
@@ -365,18 +368,22 @@ class WhisperTranscriptionEngine:
             # Transcribe with whisper.cpp
             result = self._model.transcribe(temp_path)
             
-            # Parse result
-            text, confidence, words = self._parse_whisper_result(result)
+            # Parse result - pywhispercpp returns segments with text, start, end
+            text, start_time, end_time, words = self._parse_whisper_result(result)
             
-            # Calculate timing based on audio length
-            chunk_duration = len(audio_np) / 16000  # 16kHz sample rate
+            # Estimate confidence based on text characteristics
+            confidence = self._estimate_confidence(text)
+            
+            # Use timestamps from whisper or calculate from audio length
+            if end_time == 0.0:
+                end_time = len(audio_np) / 16000  # 16kHz sample rate
             
             if text:
                 segment = TranscriptionSegment(
                     text=text,
                     confidence=confidence,
-                    start=0.0,  # Relative to chunk start
-                    end=chunk_duration,
+                    start=start_time,
+                    end=end_time,
                     words=words
                 )
                 return [segment]
