@@ -1,7 +1,9 @@
 """Recording controller - UI-friendly wrapper around AudioSession.
 
 Provides non-blocking recording control with proper error handling
-and state management for UI integration. Now includes transcription support.
+and state management for UI integration. Includes hybrid transcription:
+- Real-time: tiny model for immediate display
+- Post-process: stronger model after recording stops
 """
 
 import threading
@@ -22,6 +24,7 @@ from metamemory.audio.capture import AudioSourceError
 from metamemory.transcription.streaming_pipeline import RealTimeTranscriptionProcessor, PipelineResult
 from metamemory.transcription.transcript_store import TranscriptStore, Word
 from metamemory.transcription.engine import WordInfo
+from metamemory.transcription.post_processor import PostProcessingQueue, PostProcessStatus
 from metamemory.config.manager import ConfigManager
 
 
@@ -80,10 +83,12 @@ class RecordingController:
         self._last_wav_path: Optional[Path] = None
         self._last_transcript_path: Optional[Path] = None
         
-        # Transcription support
+        # HYBRID TRANSCRIPTION
         self.enable_transcription = enable_transcription
         self._transcription_processor: Optional[RealTimeTranscriptionProcessor] = None
         self._transcript_store: Optional[TranscriptStore] = None
+        self._post_processor: Optional[PostProcessingQueue] = None
+        self._post_process_job_id: Optional[str] = None
         self._config_manager = ConfigManager()
         
         # Callbacks
@@ -92,6 +97,7 @@ class RecordingController:
         self.on_recording_complete: Optional[Callable[[Path, Optional[Path]], None]] = None
         self.on_transcript_update: Optional[Callable[[List[Word]], None]] = None
         self.on_word_received: Optional[Callable[[Word], None]] = None
+        self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, enhanced_path
         
 
     
@@ -243,19 +249,35 @@ class RecordingController:
             # Stop transcription first to flush results
             if self._transcription_processor:
                 # Get any remaining results
+                print("DEBUG: Flushing final transcription results...")
                 self._poll_transcription_results()
                 self._transcription_processor.stop()
                 self._transcription_processor = None
             
             # Stop audio session
+            print("DEBUG: Stopping audio session...")
             wav_path = self._session.stop()
             self._last_wav_path = wav_path
+            print(f"DEBUG: Audio saved to: {wav_path}")
             
             # Save transcript if available
             transcript_path = None
             if self._transcript_store and self._last_wav_path:
+                print(f"DEBUG: Saving transcript ({self._transcript_store.get_word_count()} words)...")
                 transcript_path = self._save_transcript()
                 self._last_transcript_path = transcript_path
+                print(f"DEBUG: Transcript saved to: {transcript_path}")
+            
+            # Schedule post-processing with stronger model
+            if self._post_processor and self._last_wav_path and self._transcript_store:
+                print("DEBUG: Scheduling post-processing job...")
+                job = self._post_processor.schedule_post_process(
+                    audio_file=self._last_wav_path,
+                    realtime_transcript=self._transcript_store,
+                    output_dir=self._last_wav_path.parent
+                )
+                self._post_process_job_id = job.job_id
+                print(f"DEBUG: Post-processing job scheduled: {job.job_id}")
             
             self._set_state(ControllerState.IDLE)
             
@@ -269,6 +291,10 @@ class RecordingController:
     def _init_transcription(self) -> Optional[ControllerError]:
         """Initialize transcription components.
         
+        HYBRID TRANSCRIPTION:
+        - Uses tiny model for real-time transcription (fast, responsive)
+        - Post-processing uses stronger model (scheduled on stop)
+        
         Returns:
             ControllerError if initialization failed, None on success
         """
@@ -276,31 +302,38 @@ class RecordingController:
             # Get transcription settings from config
             settings = self._config_manager.get_settings()
             
-            # Determine model size
-            model_size = settings.model.realtime_model_size
-            if model_size == "auto":
-                # Use hardware recommendation
-                model_size = settings.hardware.recommended_model or "base"
+            # HYBRID: Always use tiny for real-time (fastest)
+            # Post-processing will use stronger model
+            realtime_model = settings.transcription.realtime_model_size
+            print(f"DEBUG: Initializing real-time transcription with {realtime_model} model")
             
             # Create transcript store
             self._transcript_store = TranscriptStore()
             self._transcript_store.start_recording()
             
-            # Create transcription processor
+            # Create transcription processor with tiny model
             self._transcription_processor = RealTimeTranscriptionProcessor(
-                config=settings.transcription
-            )
-            self._transcription_processor.set_model_config(
-                model_size=model_size,
-                device="cpu",
-                compute_type="int8"
+                config=settings.transcription,
+                model_size=realtime_model
             )
             
-            # Load model (may take 5-10 seconds)
+            # Load model (tiny takes 1-2 seconds)
             if not self._transcription_processor.is_model_loaded():
+                print(f"DEBUG: Loading {realtime_model} model for real-time transcription...")
                 self._transcription_processor.load_model(
-                    progress_callback=lambda p: print(f"Loading model: {p}%")
+                    progress_callback=lambda p: print(f"Loading {realtime_model} model: {p}%")
                 )
+                print(f"DEBUG: {realtime_model} model loaded successfully")
+            
+            # Initialize post-processing queue (for after recording stops)
+            if settings.transcription.enable_postprocessing:
+                print("DEBUG: Initializing post-processing queue")
+                self._post_processor = PostProcessingQueue(
+                    settings=settings,
+                    on_progress=self._on_post_process_progress,
+                    on_complete=self._on_post_process_complete_callback
+                )
+                self._post_processor.start()
             
             return None
             
@@ -309,6 +342,33 @@ class RecordingController:
                 message=f"Failed to initialize transcription: {e}",
                 is_recoverable=True
             )
+    
+    def _on_post_process_progress(self, job_id: str, progress: int) -> None:
+        """Handle post-processing progress updates.
+        
+        Args:
+            job_id: The job identifier
+            progress: Progress percentage (0-100)
+        """
+        print(f"DEBUG: Post-processing job {job_id}: {progress}%")
+    
+    def _on_post_process_complete_callback(self, job_id: str, result: dict) -> None:
+        """Handle post-processing completion.
+        
+        Args:
+            job_id: The job identifier
+            result: Result dictionary with enhanced_path, etc.
+        """
+        print(f"DEBUG: Post-processing job {job_id} completed!")
+        print(f"DEBUG: Enhanced transcript: {result.get('enhanced_path')}")
+        print(f"DEBUG: Real-time words: {result.get('realtime_word_count')}")
+        print(f"DEBUG: Enhanced words: {result.get('word_count')}")
+        
+        if self.on_post_process_complete:
+            enhanced_path_str = result.get('enhanced_path')
+            if enhanced_path_str and isinstance(enhanced_path_str, str):
+                enhanced_path = Path(enhanced_path_str)
+                self.on_post_process_complete(job_id, enhanced_path)
     
     def _start_transcription_polling(self) -> None:
         """Start polling for transcription results."""
