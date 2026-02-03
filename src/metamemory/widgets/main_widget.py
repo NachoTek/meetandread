@@ -13,6 +13,7 @@ to avoid clipping issues and enable proper text editing.
 """
 
 from pathlib import Path
+from typing import Optional
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsTextItem,
