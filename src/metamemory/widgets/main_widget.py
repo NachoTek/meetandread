@@ -1,19 +1,22 @@
 """
-Main metamemory widget implementation using QGraphicsView.
+Main metamemory widget implementation using QGraphicsView with floating panels.
 
 This widget provides a borderless, always-on-top interface with:
 - Record button as main body
 - Toggle lobes for audio input selection
-- Transcript panel that expands from the widget
+- FloatingTranscriptPanel that appears outside the widget (not clipped)
 - Drag and snap-to-edge functionality
 - Real-time transcription display with confidence colors
+
+Key improvement: Uses floating QWidget panels instead of QGraphicsItem panels
+to avoid clipping issues and enable proper text editing.
 """
 
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsTextItem,
-    QGraphicsWidget, QApplication, QGraphicsItemGroup
+    QGraphicsWidget, QApplication, QGraphicsItemGroup, QWidget
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
@@ -21,8 +24,10 @@ from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
 from metamemory.recording import RecordingController, ControllerState, ControllerError
 from metamemory.transcription.confidence import get_confidence_color, get_distortion_intensity
 from metamemory.transcription.transcript_store import Word
+from metamemory.transcription.accumulating_processor import PhraseResult
 from metamemory.config import get_config, set_config, save_config, AppSettings
 from metamemory.hardware.recommender import ModelRecommender, get_model_info
+from metamemory.widgets.floating_panels import FloatingTranscriptPanel, FloatingSettingsPanel
 
 
 class DragSurfaceItem(QGraphicsRectItem):
@@ -56,416 +61,15 @@ class DragSurfaceItem(QGraphicsRectItem):
         painter.fillRect(self.rect(), self.brush())
 
 
-class TranscriptPanelItem(QGraphicsRectItem):
-    """Transcript panel that displays transcribed words with confidence colors."""
-    
-    def __init__(self, parent_widget):
-        super().__init__(0, 0, 300, 400)
-        self.parent_widget = parent_widget
-        self._words = []  # List of Word objects
-        self._auto_scroll = True
-        self._user_scrolling = False
-        self._visible = False
-        
-        # Panel styling
-        self.setBrush(QBrush(QColor(30, 30, 30, 230)))
-        self.setPen(QPen(QColor(100, 100, 100, 200), 2))
-        self.setZValue(100)
-        
-        # Text items for words
-        self._word_items = []
-        self._current_y = 10
-        self._max_height = 380
-        
-        # Auto-scroll resume timer
-        self._scroll_pause_timer = QTimer()
-        self._scroll_pause_timer.timeout.connect(self._resume_auto_scroll)
-    
-    def show_panel(self):
-        """Show the transcript panel."""
-        self._visible = True
-        self.show()
-        self.update()
-    
-    def hide_panel(self):
-        """Hide the transcript panel."""
-        self._visible = False
-        self.hide()
-    
-    def toggle_panel(self):
-        """Toggle panel visibility."""
-        if self._visible:
-            self.hide_panel()
-        else:
-            self.show_panel()
-    
-    def add_words(self, words):
-        """Add new words to the transcript display.
-        
-        Args:
-            words: List of Word objects
-        """
-        for word in words:
-            self._add_word_item(word)
-        
-        self._words.extend(words)
-        
-        if self._auto_scroll and self._visible:
-            self._scroll_to_bottom()
-        
-        self.update()
-    
-    def _add_word_item(self, word):
-        """Add a single word to the display."""
-        # Create text item
-        text_item = QGraphicsTextItem(word.text, self)
-        
-        # Set color based on confidence
-        color = self._get_word_color(word.confidence)
-        text_item.setDefaultTextColor(color)
-        
-        # Set font
-        font = QFont("Arial", 11)
-        if word.is_enhanced:
-            font.setBold(True)
-        text_item.setFont(font)
-        
-        # Position word
-        text_item.setPos(10, self._current_y)
-        
-        # Track word item
-        self._word_items.append({
-            'item': text_item,
-            'word': word,
-            'y': self._current_y
-        })
-        
-        # Update Y position
-        self._current_y += 20
-        
-        # Remove old words if exceeding max height
-        if self._current_y > self._max_height:
-            self._remove_oldest_words()
-    
-    def _remove_oldest_words(self):
-        """Remove oldest words to make room for new ones."""
-        # Remove first few words
-        remove_count = 5
-        for i in range(min(remove_count, len(self._word_items))):
-            item_data = self._word_items.pop(0)
-            self._scene.removeItem(item_data['item'])
-        
-        # Reposition remaining words
-        self._current_y = 10
-        for item_data in self._word_items:
-            item_data['item'].setPos(10, self._current_y)
-            item_data['y'] = self._current_y
-            self._current_y += 20
-    
-    def _get_word_color(self, confidence):
-        """Get color for word based on confidence score.
-        
-        Args:
-            confidence: Confidence score (0-100)
-        
-        Returns:
-            QColor for the word
-        """
-        hex_color = get_confidence_color(confidence)
-        # Convert hex to RGB
-        r = int(hex_color[1:3], 16)
-        g = int(hex_color[3:5], 16)
-        b = int(hex_color[5:7], 16)
-        return QColor(r, g, b)
-    
-    def _scroll_to_bottom(self):
-        """Scroll to show latest words."""
-        # For now, just ensure we're showing the latest
-        # In a full implementation, this would scroll the view
-        pass
-    
-    def on_user_scroll(self):
-        """Called when user manually scrolls - pauses auto-scroll."""
-        self._auto_scroll = False
-        self._user_scrolling = True
-        
-        # Resume auto-scroll after 10 seconds
-        self._scroll_pause_timer.start(10000)
-    
-    def _resume_auto_scroll(self):
-        """Resume auto-scrolling after user pause."""
-        self._auto_scroll = True
-        self._user_scrolling = False
-        self._scroll_pause_timer.stop()
-    
-    def clear(self):
-        """Clear all transcript content."""
-        for item_data in self._word_items:
-            if item_data['item'].scene():
-                item_data['item'].scene().removeItem(item_data['item'])
-        
-        self._word_items = []
-        self._words = []
-        self._current_y = 10
-        self.update()
-    
-    def paint(self, painter, option, widget=None):
-        """Paint the panel background."""
-        if not self._visible:
-            return
-        
-        # Draw background
-        rect = self.rect()
-        painter.setBrush(self.brush())
-        painter.setPen(self.pen())
-        painter.drawRoundedRect(rect, 10, 10)
-        
-        # Draw header
-        header_rect = rect.adjusted(0, 0, 0, -rect.height() + 30)
-        gradient = QLinearGradient(header_rect.topLeft(), header_rect.bottomLeft())
-        gradient.setColorAt(0, QColor(50, 50, 50, 255))
-        gradient.setColorAt(1, QColor(40, 40, 40, 255))
-        painter.setBrush(QBrush(gradient))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(header_rect, 10, 10)
-        painter.drawRect(header_rect.adjusted(0, 10, 0, 0))  # Fill bottom corners
-        
-        # Draw header text
-        painter.setPen(QPen(QColor(255, 255, 255, 255), 1))
-        font = QFont("Arial", 10)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(header_rect, Qt.AlignmentFlag.AlignCenter, "Transcript")
-
-
-class SettingsPanelItem(QGraphicsRectItem):
-    """Settings panel for model selection and configuration."""
-    
-    def __init__(self, parent_widget):
-        super().__init__(0, 0, 250, 200)
-        self.parent_widget = parent_widget
-        self._visible = False
-        self._current_model = "auto"
-        self._recommended_model = ""
-        
-        # Panel styling
-        self.setBrush(QBrush(QColor(30, 30, 30, 240)))
-        self.setPen(QPen(QColor(100, 100, 100, 200), 2))
-        self.setZValue(100)
-        
-        # Load current settings
-        self._load_settings()
-    
-    def _load_settings(self):
-        """Load current settings from config."""
-        try:
-            settings = get_config()
-            self._current_model = settings.model.realtime_model_size
-            self._recommended_model = settings.hardware.recommended_model or ""
-        except Exception:
-            self._current_model = "auto"
-            self._recommended_model = ""
-    
-    def show_panel(self):
-        """Show the settings panel."""
-        self._visible = True
-        self.show()
-        self._load_settings()
-        self.update()
-    
-    def hide_panel(self):
-        """Hide the settings panel."""
-        self._visible = False
-        self.hide()
-    
-    def toggle_panel(self):
-        """Toggle panel visibility."""
-        if self._visible:
-            self.hide_panel()
-        else:
-            self.show_panel()
-    
-    def is_visible(self):
-        """Check if panel is visible."""
-        return self._visible
-    
-    def set_model_size(self, model_size):
-        """Set the model size and save to config.
-        
-        Args:
-            model_size: Model size string ("tiny", "base", "small", "auto")
-        """
-        try:
-            set_config("model.realtime_model_size", model_size)
-            
-            # If user selects a specific model, also save as override
-            if model_size != "auto":
-                set_config("hardware.user_override_model", model_size)
-            else:
-                # Clear override if going back to auto
-                set_config("hardware.user_override_model", None)
-            
-            save_config()
-            self._current_model = model_size
-            self.update()
-        except Exception as e:
-            print(f"Failed to save model setting: {e}")
-    
-    def get_recommended_display(self):
-        """Get display text for hardware recommendation."""
-        if self._recommended_model:
-            model_info = get_model_info(self._recommended_model)
-            return f"Recommended: {self._recommended_model} ({model_info.accuracy_rating})"
-        return "Hardware detection pending"
-    
-    def mousePressEvent(self, event):
-        """Handle clicks on model selection buttons."""
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-        
-        pos = event.pos()
-        x, y = pos.x(), pos.y()
-        
-        # Check which button was clicked
-        # Button layout: tiny, base, small in rows
-        button_y_start = 70
-        button_height = 35
-        button_spacing = 5
-        
-        # Tiny button
-        if button_y_start <= y < button_y_start + button_height:
-            if 10 <= x <= 80:
-                self.set_model_size("tiny")
-            elif 90 <= x <= 160:
-                self.set_model_size("base")
-            elif 170 <= x <= 240:
-                self.set_model_size("small")
-        
-        # Auto button
-        auto_y = button_y_start + button_height + button_spacing + 10
-        if auto_y <= y < auto_y + button_height:
-            if 10 <= x <= 120:
-                self.set_model_size("auto")
-        
-        event.accept()
-    
-    def paint(self, painter, option, widget=None):
-        """Paint the settings panel."""
-        if not self._visible:
-            return
-        
-        rect = self.rect()
-        
-        # Draw background
-        painter.setBrush(self.brush())
-        painter.setPen(self.pen())
-        painter.drawRoundedRect(rect, 10, 10)
-        
-        # Draw header
-        header_rect = rect.adjusted(0, 0, 0, -rect.height() + 30)
-        gradient = QLinearGradient(header_rect.topLeft(), header_rect.bottomLeft())
-        gradient.setColorAt(0, QColor(50, 50, 50, 255))
-        gradient.setColorAt(1, QColor(40, 40, 40, 255))
-        painter.setBrush(QBrush(gradient))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(header_rect, 10, 10)
-        painter.drawRect(header_rect.adjusted(0, 10, 0, 0))
-        
-        # Draw header text
-        painter.setPen(QPen(QColor(255, 255, 255, 255), 1))
-        font = QFont("Arial", 10)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.drawText(header_rect, Qt.AlignmentFlag.AlignCenter, "Settings")
-        
-        # Draw model selection label
-        painter.setPen(QPen(QColor(200, 200, 200, 255), 1))
-        font = QFont("Arial", 9)
-        painter.setFont(font)
-        painter.drawText(10, 45, "Transcription Model:")
-        
-        # Draw recommendation
-        if self._recommended_model:
-            rec_text = f"Recommended: {self._recommended_model}"
-            painter.setPen(QPen(QColor(150, 255, 150, 255), 1))
-            painter.drawText(10, 60, rec_text)
-        
-        # Draw model selection buttons
-        button_y = 70
-        button_height = 35
-        button_width = 70
-        button_spacing = 10
-        
-        models = [
-            ("tiny", "Fastest"),
-            ("base", "Balanced"),
-            ("small", "Best")
-        ]
-        
-        for i, (model, label) in enumerate(models):
-            x = 10 + i * (button_width + button_spacing)
-            is_selected = self._current_model == model
-            
-            # Button background
-            if is_selected:
-                painter.setBrush(QBrush(QColor(100, 150, 255, 200)))
-                painter.setPen(QPen(QColor(150, 200, 255, 255), 2))
-            else:
-                painter.setBrush(QBrush(QColor(60, 60, 60, 200)))
-                painter.setPen(QPen(QColor(100, 100, 100, 255), 1))
-            
-            painter.drawRoundedRect(x, button_y, button_width, button_height, 5, 5)
-            
-            # Button text
-            if is_selected:
-                painter.setPen(QPen(QColor(255, 255, 255, 255), 1))
-            else:
-                painter.setPen(QPen(QColor(200, 200, 200, 255), 1))
-            
-            painter.drawText(
-                QRectF(x, button_y, button_width, button_height),
-                Qt.AlignmentFlag.AlignCenter,
-                model.upper()
-            )
-        
-        # Draw "Auto" button
-        auto_y = button_y + button_height + 15
-        is_auto = self._current_model == "auto"
-        
-        if is_auto:
-            painter.setBrush(QBrush(QColor(100, 200, 100, 200)))
-            painter.setPen(QPen(QColor(150, 255, 150, 255), 2))
-        else:
-            painter.setBrush(QBrush(QColor(60, 60, 60, 200)))
-            painter.setPen(QPen(QColor(100, 100, 100, 255), 1))
-        
-        painter.drawRoundedRect(10, auto_y, 110, button_height, 5, 5)
-        
-        if is_auto:
-            painter.setPen(QPen(QColor(255, 255, 255, 255), 1))
-        else:
-            painter.setPen(QPen(QColor(200, 200, 200, 255), 1))
-        
-        painter.drawText(
-            QRectF(10, auto_y, 110, button_height),
-            Qt.AlignmentFlag.AlignCenter,
-            "AUTO"
-        )
-        
-        # Draw help text
-        painter.setPen(QPen(QColor(150, 150, 150, 255), 1))
-        font = QFont("Arial", 8)
-        painter.setFont(font)
-        help_text = "Smaller = faster, larger = more accurate"
-        painter.drawText(10, auto_y + button_height + 15, help_text)
-
-
 class MeetAndReadWidget(QGraphicsView):
     """
     Main application widget.
     
     Borderless, always-on-top widget with custom painted components
     living in a QGraphicsScene for smooth animations and complex visuals.
+    
+    Uses FLOATING PANELS (separate QWidgets) for transcript and settings
+to avoid clipping issues and enable proper text rendering.
     """
     
     def __init__(self, parent=None):
@@ -508,18 +112,18 @@ class MeetAndReadWidget(QGraphicsView):
         self._controller = RecordingController()
         self._controller.on_state_change = self._on_controller_state_change
         self._controller.on_error = self._on_controller_error
-        self._controller.on_word_received = self._on_word_received
-        self._controller.on_transcript_update = self._on_transcript_update
+        self._controller.on_phrase_result = self._on_phrase_result  # For accumulating processor
+        self._controller.on_recording_complete = self._on_recording_complete
         self._controller.on_post_process_complete = self._on_post_process_complete
         self._error_indicator = None  # For showing errors
         
-        # Transcript display
-        self._transcript_panel = None
-        self._transcript_words = []
-        self._auto_scroll = True
+        # Floating panels (separate windows, not QGraphicsItems)
+        self._floating_transcript_panel: Optional[FloatingTranscriptPanel] = None
+        self._floating_settings_panel: Optional[FloatingSettingsPanel] = None
         
         # Create widget components
         self._create_components()
+        self._create_floating_panels()
         self._layout_components()
         
         # Set initial size
@@ -535,6 +139,8 @@ class MeetAndReadWidget(QGraphicsView):
         self.animation_timer.start(33)  # ~30fps
         
         self.pulse_phase = 0.0
+        
+        print("DEBUG: Main widget initialized with floating panels")
     
     def _create_components(self):
         """Create all widget components."""
@@ -556,20 +162,22 @@ class MeetAndReadWidget(QGraphicsView):
         self.settings_lobe = SettingsLobeItem(self)
         self._scene.addItem(self.settings_lobe)
         
-        # Transcript panel (initially hidden)
-        self._transcript_panel = TranscriptPanelItem(self)
-        self._transcript_panel.hide_panel()
-        self._scene.addItem(self._transcript_panel)
-        
-        # Settings panel (initially hidden)
-        self._settings_panel = SettingsPanelItem(self)
-        self._settings_panel.hide_panel()
-        self._scene.addItem(self._settings_panel)
-        
         # Error indicator (hidden by default)
         self._error_indicator = ErrorIndicatorItem(self)
         self._error_indicator.hide()
         self._scene.addItem(self._error_indicator)
+    
+    def _create_floating_panels(self):
+        """Create floating panels (separate QWidgets)."""
+        # Floating transcript panel
+        self._floating_transcript_panel = FloatingTranscriptPanel(self)
+        self._floating_transcript_panel.hide_panel()
+        print("DEBUG: Created floating transcript panel")
+        
+        # Floating settings panel
+        self._floating_settings_panel = FloatingSettingsPanel(self)
+        self._floating_settings_panel.hide_panel()
+        print("DEBUG: Created floating settings panel")
     
     def _layout_components(self):
         """Position all components."""
@@ -583,39 +191,46 @@ class MeetAndReadWidget(QGraphicsView):
         # Settings lobe on side
         self.settings_lobe.setPos(160, 50)
         
-        # Transcript panel flows out from widget
-        # Position depends on dock edge
-        self._update_transcript_panel_position()
-        
         # Error indicator at bottom
         self._error_indicator.setPos(10, 105)
     
-    def _update_transcript_panel_position(self):
-        """Update transcript panel position based on widget state."""
-        if not self._transcript_panel:
+    def _update_floating_panels_position(self):
+        """Update position of floating panels based on widget position."""
+        if not self._floating_transcript_panel or not self._floating_settings_panel:
             return
         
-        # Default position (flows out to the left)
-        panel_x = -310  # Panel width + margin
-        panel_y = -140  # Center vertically relative to widget
+        # Get widget position in global coordinates
+        widget_global_pos = self.mapToGlobal(self.rect().topLeft())
         
-        # Adjust based on dock edge
-        if self.dock_edge == 'left':
-            # Widget docked to left, panel flows right
-            panel_x = 210
-        elif self.dock_edge == 'right':
-            # Widget docked to right, panel flows left
-            panel_x = -310
+        # Determine position based on dock edge or default
+        if self.dock_edge == 'right':
+            transcript_pos = "left"
+            settings_pos = "left"
+        elif self.dock_edge == 'left':
+            transcript_pos = "right"
+            settings_pos = "right"
         elif self.dock_edge == 'top':
-            # Widget at top, panel flows down
-            panel_x = -150
-            panel_y = 130
+            transcript_pos = "bottom"
+            settings_pos = "right"
         elif self.dock_edge == 'bottom':
-            # Widget at bottom, panel flows up
-            panel_x = -150
-            panel_y = -530
+            transcript_pos = "top"
+            settings_pos = "right"
+        else:
+            # Default: panel flows to the left
+            transcript_pos = "left"
+            settings_pos = "right"
         
-        self._transcript_panel.setPos(panel_x, panel_y)
+        # Update panel positions
+        if self._floating_transcript_panel.isVisible():
+            self._floating_transcript_panel.dock_to_widget(self, transcript_pos)
+        
+        if self._floating_settings_panel.isVisible():
+            self._floating_settings_panel.dock_to_widget(self, settings_pos)
+    
+    def moveEvent(self, event):
+        """Handle widget move - update floating panel positions."""
+        super().moveEvent(event)
+        self._update_floating_panels_position()
     
     def _position_initial(self):
         """Position widget on screen initially."""
@@ -664,8 +279,7 @@ class MeetAndReadWidget(QGraphicsView):
             self.is_docked = False
             self.dock_edge = None
             self._update_docked_state()
-            self._update_transcript_panel_position()
-            self._update_settings_panel_position()
+            self._update_floating_panels_position()
             event.accept()
         elif event.buttons() == Qt.MouseButton.LeftButton and self._press_on_drag_surface:
             # Check if movement exceeds threshold to start dragging
@@ -680,8 +294,7 @@ class MeetAndReadWidget(QGraphicsView):
                 self.is_docked = False
                 self.dock_edge = None
                 self._update_docked_state()
-                self._update_transcript_panel_position()
-                self._update_settings_panel_position()
+                self._update_floating_panels_position()
                 event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -737,8 +350,7 @@ class MeetAndReadWidget(QGraphicsView):
             self.dock_edge = None
         
         self._update_docked_state()
-        self._update_transcript_panel_position()
-        self._update_settings_panel_position()
+        self._update_floating_panels_position()
     
     def _update_docked_state(self):
         """Update widget appearance based on docked state."""
@@ -778,13 +390,14 @@ class MeetAndReadWidget(QGraphicsView):
             self.record_button.set_recording_state(True)
             self._hide_error()
             
-            # Show transcript panel when recording starts
-            if self._transcript_panel:
-                print("DEBUG: Showing transcript panel")
-                self._transcript_panel.clear()
-                self._transcript_panel.show_panel()
+            # Show floating transcript panel when recording starts
+            if self._floating_transcript_panel:
+                print("DEBUG: Showing floating transcript panel")
+                self._floating_transcript_panel.clear()
+                self._floating_transcript_panel.dock_to_widget(self, self._get_panel_position())
+                self._floating_transcript_panel.show_panel()
             else:
-                print("DEBUG: No transcript panel to show!")
+                print("DEBUG: No floating transcript panel to show!")
             
         elif state == ControllerState.STOPPING:
             self.is_recording = False
@@ -798,8 +411,8 @@ class MeetAndReadWidget(QGraphicsView):
             self.record_button.set_recording_state(False)
             self.record_button.set_processing_state(False)
             
-            # Keep transcript panel visible for a bit after recording stops
-            # User can manually close it
+            # Keep transcript panel visible for review
+            # User can manually close it or it will be cleared on next recording
             
         elif state == ControllerState.ERROR:
             self.is_recording = False
@@ -807,53 +420,53 @@ class MeetAndReadWidget(QGraphicsView):
             self.record_button.set_recording_state(False)
             self.record_button.set_processing_state(False)
     
+    def _get_panel_position(self):
+        """Determine where to dock the panel based on widget position."""
+        if self.dock_edge == 'right':
+            return "left"
+        elif self.dock_edge == 'left':
+            return "right"
+        elif self.dock_edge == 'top':
+            return "bottom"
+        elif self.dock_edge == 'bottom':
+            return "top"
+        else:
+            return "left"  # Default
+    
     def _on_controller_error(self, error):
         """Handle controller errors."""
         self._show_error(error.message)
         print(f"Recording error: {error.message}")
     
+    def _on_phrase_result(self, result: PhraseResult):
+        """Handle phrase result from accumulating transcription processor.
+        
+        Args:
+            result: PhraseResult with text, confidence, and completion status
+        """
+        print(f"DEBUG UI: Phrase result received: '{result.text[:50]}...' [conf: {result.confidence}%, complete: {result.is_complete}]")
+        
+        if self._floating_transcript_panel:
+            self._floating_transcript_panel.update_line(
+                text=result.text,
+                confidence=result.confidence,
+                is_final=result.is_complete
+            )
+            print(f"DEBUG UI: Updated floating panel, line count: {len(self._floating_transcript_panel.lines)}")
+        else:
+            print("DEBUG UI: No floating transcript panel available!")
+    
     def _on_recording_complete(self, wav_path, transcript_path):
         """Handle recording completion."""
         self.is_processing = False
         self.record_button.set_processing_state(False)
-        print(f"Recording saved to: {wav_path}")
+        print(f"DEBUG: Recording saved to: {wav_path}")
         if transcript_path:
-            print(f"Transcript saved to: {transcript_path}")
-    
-    def _on_word_received(self, word):
-        """Handle individual word received from transcription.
+            print(f"DEBUG: Transcript saved to: {transcript_path}")
         
-        Args:
-            word: Word object with text and confidence
-        """
-        print(f"DEBUG: Word received: '{word.text}' (confidence: {word.confidence})")
-        
-        # Track word for display
-        self._transcript_words.append(word)
-        
-        # Add to transcript panel
-        if self._transcript_panel:
-            self._transcript_panel.add_words([word])
-            print(f"DEBUG: Added word to panel, panel now has {len(self._transcript_panel._words)} words")
-        else:
-            print("DEBUG: No panel to add word to!")
-    
-    def _on_transcript_update(self, words):
-        """Handle batch of new words from transcription.
-        
-        Args:
-            words: List of Word objects
-        """
-        print(f"DEBUG UI: Batch transcript update - {len(words)} words")
-        
-        # Batch update for efficiency
-        self._transcript_words.extend(words)
-        
-        if self._transcript_panel:
-            self._transcript_panel.add_words(words)
-            print(f"DEBUG UI: Added batch to panel, total words: {len(self._transcript_panel._words)}")
-        else:
-            print("DEBUG UI: No transcript panel available for batch update!")
+        # Update panel status
+        if self._floating_transcript_panel:
+            self._floating_transcript_panel.status_label.setText("Recording complete - Post-processing...")
     
     def _on_post_process_complete(self, job_id, enhanced_path):
         """Handle post-processing completion.
@@ -865,63 +478,28 @@ class MeetAndReadWidget(QGraphicsView):
         print(f"DEBUG UI: Post-processing complete! Job: {job_id}")
         print(f"DEBUG UI: Enhanced transcript saved to: {enhanced_path}")
         
-        # Optionally show a brief notification in the UI
-        # For now, just log it
-        # In the future, could add a visual indicator that enhanced version is available
-    
-    def _format_word(self, word):
-        """Format word with confidence color information.
-        
-        Args:
-            word: Word object
-        
-        Returns:
-            Dict with formatting info for display
-        """
-        color = get_confidence_color(word.confidence)
-        distortion = get_distortion_intensity(word.confidence)
-        
-        return {
-            'text': word.text,
-            'color': color,
-            'confidence': word.confidence,
-            'distortion': distortion,
-            'is_enhanced': word.is_enhanced
-        }
+        # Update panel status
+        if self._floating_transcript_panel:
+            self._floating_transcript_panel.status_label.setText(f"Enhanced transcript saved!")
+            QTimer.singleShot(3000, lambda: self._floating_transcript_panel.status_label.setText("Ready"))
     
     def toggle_transcript_panel(self):
-        """Toggle transcript panel visibility."""
-        if self._transcript_panel:
-            self._transcript_panel.toggle_panel()
+        """Toggle floating transcript panel visibility."""
+        if self._floating_transcript_panel:
+            if self._floating_transcript_panel.isVisible():
+                self._floating_transcript_panel.hide_panel()
+            else:
+                self._floating_transcript_panel.dock_to_widget(self, self._get_panel_position())
+                self._floating_transcript_panel.show_panel()
     
     def _toggle_settings_panel(self):
-        """Toggle settings panel visibility."""
-        if self._settings_panel:
-            self._settings_panel.toggle_panel()
-            # Update position when showing
-            if self._settings_panel.is_visible():
-                self._update_settings_panel_position()
-    
-    def _update_settings_panel_position(self):
-        """Update settings panel position based on widget state."""
-        if not self._settings_panel:
-            return
-        
-        # Position flows out from settings lobe
-        panel_x = 190  # To the right of settings lobe
-        panel_y = 30
-        
-        # Adjust based on dock edge
-        if self.dock_edge == 'right':
-            panel_x = -260  # Flow left
-        elif self.dock_edge == 'left':
-            panel_x = 190  # Flow right
-        elif self.dock_edge == 'top':
-            panel_y = 130  # Flow down
-        elif self.dock_edge == 'bottom':
-            panel_y = -220  # Flow up
-        
-        self._settings_panel.setPos(panel_x, panel_y)
+        """Toggle floating settings panel visibility."""
+        if self._floating_settings_panel:
+            if self._floating_settings_panel.isVisible():
+                self._floating_settings_panel.hide_panel()
+            else:
+                self._floating_settings_panel.dock_to_widget(self, "right")
+                self._floating_settings_panel.show_panel()
     
     def toggle_recording(self):
         """Toggle recording state via controller."""
@@ -949,7 +527,7 @@ class MeetAndReadWidget(QGraphicsView):
     
     def stop_recording(self):
         """Stop recording via controller (non-blocking)."""
-        error = self._controller.stop(on_complete=self._on_recording_complete)
+        error = self._controller.stop()
         if error:
             self._show_error(error.message)
 
@@ -1166,7 +744,7 @@ class SettingsLobeItem(QGraphicsEllipseItem):
     def mousePressEvent(self, event):
         """Open settings."""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Toggle settings panel
+            # Toggle floating settings panel
             self.parent_widget._toggle_settings_panel()
             event.accept()
 
