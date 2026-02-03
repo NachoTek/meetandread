@@ -4,7 +4,11 @@ Orchestrates all transcription components into a unified pipeline:
 - AudioRingBuffer: Thread-safe audio buffering
 - VADChunkingProcessor: Intelligent audio segmentation
 - WhisperTranscriptionEngine: Whisper model inference (whisper.cpp backend)
-- LocalAgreementBuffer: Prevents text flickering
+
+HYBRID TRANSCRIPTION DESIGN:
+- Real-time transcription: Each chunk is committed immediately (no agreement buffer)
+- Confidence scores are preserved for UI color styling
+- Post-processing happens after recording stops (see PostProcessingQueue)
 
 This class runs transcription in a background thread to avoid blocking
 the audio capture or UI threads.
@@ -16,7 +20,7 @@ import threading
 import time
 import queue
 from dataclasses import dataclass
-from typing import Optional, List, Callable, Any
+from typing import Optional, List, Callable, Any, Dict
 from pathlib import Path
 import numpy as np
 
@@ -24,7 +28,6 @@ from metamemory.config.models import TranscriptionSettings
 from metamemory.transcription.audio_buffer import AudioRingBuffer
 from metamemory.transcription.vad_processor import VADChunkingProcessor
 from metamemory.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment
-from metamemory.transcription.local_agreement import LocalAgreementBuffer
 
 
 @dataclass
@@ -37,12 +40,16 @@ class PipelineResult:
         start_time: Start timestamp in seconds from recording start
         end_time: End timestamp
         words: List of word-level data with timestamps and confidence
+        is_realtime: Whether this is from real-time transcription (True) or post-processing (False)
+        chunk_id: Unique identifier for this chunk (for post-processing correlation)
     """
     text: str
     confidence: int
     start_time: float
     end_time: float
     words: List[Any]  # List of WordInfo or similar
+    is_realtime: bool = True
+    chunk_id: int = 0
 
 
 class RealTimeTranscriptionProcessor:
@@ -78,13 +85,20 @@ class RealTimeTranscriptionProcessor:
         processor.stop()
     """
     
-    def __init__(self, config: TranscriptionSettings):
+    def __init__(self, config: TranscriptionSettings, model_size: str = "tiny"):
         """Initialize the transcription processor.
+        
+        HYBRID TRANSCRIPTION:
+        - Real-time: Each chunk is committed immediately (no agreement buffer blocking)
+        - Confidence scores preserved for UI color styling
+        - Post-processing happens after recording stops with stronger model
         
         Args:
             config: Transcription configuration including chunk sizes and thresholds
+            model_size: Whisper model size (tiny for real-time, base/small for post-process)
         """
         self._config = config
+        self._model_size = model_size
         
         # Core components
         self._audio_buffer = AudioRingBuffer(max_seconds=30, sample_rate=16000)
@@ -92,17 +106,12 @@ class RealTimeTranscriptionProcessor:
             min_chunk_size_sec=config.min_chunk_size_sec,
             sample_rate=16000
         )
-        # For streaming, use agreement_threshold=1 to commit immediately
-        # (threshold=2 is for static audio where same text appears multiple times)
-        streaming_threshold = max(1, config.agreement_threshold - 1)
-        print(f"DEBUG: Using agreement_threshold={streaming_threshold} (config was {config.agreement_threshold})")
-        self._agreement_buffer = LocalAgreementBuffer(
-            agreement_threshold=streaming_threshold
-        )
+        # NO LocalAgreementBuffer - we commit immediately for real-time display
+        # The agreement buffer was designed for re-transcribing accumulated audio
+        # We transcribe each chunk once and commit immediately
         
         # Engine is created but model not loaded yet
         self._engine: Optional[WhisperTranscriptionEngine] = None
-        self._model_size: str = "base"  # Default, can be changed before load
         self._model_device: str = "cpu"
         self._model_compute_type: str = "int8"
         
@@ -117,9 +126,13 @@ class RealTimeTranscriptionProcessor:
         self._recording_start_time: Optional[float] = None
         self._total_samples_processed = 0
         self._last_vad_was_speech = False
+        self._chunk_counter = 0  # For tracking chunks
         
         # Callback for model loading progress
         self._load_progress_callback: Optional[Callable[[int], None]] = None
+        
+        # Word-level confidence callback for enhanced granularity
+        self._on_word_confidence: Optional[Callable[[str, int, Dict], None]] = None
     
     def set_model_config(self, model_size: str, device: str = "cpu", 
                          compute_type: str = "int8") -> None:
@@ -301,6 +314,11 @@ class RealTimeTranscriptionProcessor:
                          audio_chunk: np.ndarray) -> None:
         """Process transcription segments and update results.
         
+        HYBRID TRANSCRIPTION: 
+        - Commits immediately (no agreement buffer blocking)
+        - Preserves confidence scores for UI color styling
+        - Stores results in queue for UI consumption
+        
         Args:
             segments: Transcription segments from Whisper
             audio_chunk: The audio chunk that was transcribed
@@ -318,36 +336,58 @@ class RealTimeTranscriptionProcessor:
             print(f"DEBUG: Empty full_text, returning")
             return
         
-        # Pass through agreement buffer to prevent flickering
-        committed_text = self._agreement_buffer.process_iteration(full_text)
-        print(f"DEBUG: Agreement buffer input: '{full_text}' -> committed: '{committed_text}'")
+        # IMMEDIATE COMMIT - no agreement buffer blocking for real-time display
+        # Each transcribed chunk flows immediately to the UI
+        committed_text = full_text
+        print(f"DEBUG: Immediate commit (no agreement buffer): '{committed_text}'")
         
-        if committed_text:
-            # Calculate timing
-            chunk_duration = len(audio_chunk) / 16000  # 16kHz sample rate
-            end_time = self._total_samples_processed / 16000
-            start_time = end_time - chunk_duration
-            
-            # Calculate average confidence
-            avg_confidence = sum(seg.confidence for seg in segments) / len(segments)
-            
-            # Collect all words
-            all_words = []
-            for seg in segments:
-                if hasattr(seg, 'words') and seg.words:
-                    all_words.extend(seg.words)
-            
-            # Create result
-            result = PipelineResult(
-                text=committed_text,
-                confidence=int(avg_confidence),
-                start_time=max(0, start_time),
-                end_time=end_time,
-                words=all_words
-            )
-            
-            # Queue for UI
-            self._result_queue.put(result)
+        # Calculate timing
+        chunk_duration = len(audio_chunk) / 16000  # 16kHz sample rate
+        end_time = self._total_samples_processed / 16000
+        start_time = end_time - chunk_duration
+        
+        # Calculate average confidence across all segments
+        avg_confidence = sum(seg.confidence for seg in segments) / len(segments)
+        
+        # Collect all words with their individual confidence scores
+        all_words = []
+        for seg in segments:
+            if hasattr(seg, 'words') and seg.words:
+                all_words.extend(seg.words)
+        
+        # If no word-level data, create words from the segment text
+        if not all_words:
+            words_list = committed_text.split()
+            word_duration = chunk_duration / max(1, len(words_list))
+            for i, word_text in enumerate(words_list):
+                word_start = start_time + (i * word_duration)
+                word_end = word_start + word_duration
+                # Create a simple word info dict with confidence
+                word_info = {
+                    'word': word_text,
+                    'start': word_start,
+                    'end': word_end,
+                    'confidence': int(avg_confidence)
+                }
+                all_words.append(word_info)
+        
+        # Increment chunk counter for tracking
+        self._chunk_counter += 1
+        
+        # Create result with full metadata
+        result = PipelineResult(
+            text=committed_text,
+            confidence=int(avg_confidence),
+            start_time=max(0, start_time),
+            end_time=end_time,
+            words=all_words,
+            is_realtime=True,
+            chunk_id=self._chunk_counter
+        )
+        
+        # Queue for UI consumption
+        self._result_queue.put(result)
+        print(f"DEBUG: Queued result chunk #{self._chunk_counter} with {len(all_words)} words")
     
     def get_stats(self) -> dict:
         """Get processing statistics.
@@ -382,10 +422,7 @@ class RealTimeTranscriptionProcessor:
                 sample_rate=16000
             )
         
-        # Reset agreement buffer
-        self._agreement_buffer = LocalAgreementBuffer(
-            agreement_threshold=self._config.agreement_threshold
-        )
+        # NO agreement buffer to reset - we commit immediately
         
         # Clear results queue
         while not self._result_queue.empty():
