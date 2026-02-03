@@ -1,11 +1,16 @@
-"""Real-time transcription engine with whisper.cpp.
+"""Hybrid transcription engine with whisper.cpp.
+
+HYBRID TRANSCRIPTION DESIGN:
+- Real-time: Tiny model for immediate display (no agreement buffer blocking)
+- Post-process: Stronger model for enhanced accuracy after recording stops
 
 Provides the core transcription pipeline:
 - AudioRingBuffer: Thread-safe audio buffering
 - VADChunkingProcessor: Intelligent audio segmentation
-- LocalAgreementBuffer: Prevents text flickering
 - WhisperTranscriptionEngine: Whisper model inference with confidence (whisper.cpp backend)
-- Confidence scoring and color coding
+- PostProcessingQueue: Background enhancement after recording stops
+- TranscriptStore: Word-level storage with confidence for UI color coding
+- Confidence scoring and color coding for visual feedback
 
 Uses whisper.cpp via pywhispercpp for CPU-only operation without PyTorch DLL dependencies.
 """
@@ -28,14 +33,32 @@ from metamemory.transcription.confidence import (
     ConfidenceLevel,
     ConfidenceLegendItem,
 )
+from metamemory.transcription.post_processor import (
+    PostProcessingQueue,
+    PostProcessJob,
+    PostProcessStatus,
+)
+from metamemory.transcription.transcript_store import (
+    TranscriptStore,
+    Word,
+    Segment,
+)
 
 __all__ = [
+    # Core components
     "AudioRingBuffer",
     "VADChunkingProcessor",
     "LocalAgreementBuffer",
     "WhisperTranscriptionEngine",
     "TranscriptionSegment",
     "WordInfo",
+    # Hybrid transcription
+    "PostProcessingQueue",
+    "PostProcessJob",
+    "PostProcessStatus",
+    "TranscriptStore",
+    "Word",
+    "Segment",
     # Confidence scoring
     "normalize_confidence",
     "get_confidence_level",
