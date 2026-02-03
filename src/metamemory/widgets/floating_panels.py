@@ -171,6 +171,14 @@ class FloatingTranscriptPanel(QWidget):
             confidence: Confidence score (0-100)
             is_final: If True, this phrase is complete, start new line next time
         """
+        # Skip if same text as current line and not final (prevents flicker/duplicates)
+        if (self.current_line_idx >= 0 and 
+            self.lines and 
+            len(self.lines) > self.current_line_idx and
+            self.lines[self.current_line_idx].text == text and 
+            not is_final):
+            return  # Duplicate, skip
+        
         # Determine color based on confidence
         color = self._get_confidence_color(confidence)
         

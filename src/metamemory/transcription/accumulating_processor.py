@@ -111,6 +111,11 @@ class AccumulatingTranscriptionProcessor:
         self._audio_chunks_fed = 0
         self._total_samples_processed = 0
         self._transcription_count = 0
+        
+        # Deduplication tracking
+        self._last_transcribed_text = ""  # For deduplication
+        self._last_phrase_start_time: Optional[datetime] = None  # Track phrase timing
+        self._min_phrase_duration = 0.3  # Minimum audio duration before transcription (seconds)
     
     def load_model(self, progress_callback: Optional[Callable[[int], None]] = None) -> None:
         """Load the Whisper model."""
@@ -140,6 +145,8 @@ class AccumulatingTranscriptionProcessor:
         self._audio_chunks_fed = 0
         self._total_samples_processed = 0
         self._transcription_count = 0
+        self._last_transcribed_text = ""  # Reset dedup
+        self._last_phrase_start_time = None  # Reset phrase timing
         
         # Start processing thread
         self._processing_thread = threading.Thread(
@@ -253,13 +260,13 @@ class AccumulatingTranscriptionProcessor:
                     
                     # Transcribe if:
                     # 1. Silence timeout reached (phrase complete)
-                    # 2. Update frequency reached and we have enough audio (> 0.5s)
+                    # 2. Update frequency reached and we have enough audio (> min_phrase_duration)
                     if time_since_audio >= self.silence_timeout:
                         # Silence detected - phrase is complete
                         should_transcribe = True
                         phrase_complete = True
                         print(f"DEBUG: Silence detected ({time_since_audio:.1f}s >= {self.silence_timeout}s), finalizing phrase")
-                    elif time_since_update >= self.update_frequency and buffer_duration >= 0.5:
+                    elif time_since_update >= self.update_frequency and buffer_duration >= self._min_phrase_duration:
                         # Update frequency reached - transcribe but continue phrase
                         should_transcribe = True
                         phrase_complete = False
@@ -273,6 +280,8 @@ class AccumulatingTranscriptionProcessor:
                         # Clear buffer for next phrase
                         print("DEBUG: Starting new phrase after silence")
                         self._phrase_bytes = bytes()
+                        self._last_transcribed_text = ""  # Reset dedup
+                        self._last_phrase_start_time = None  # Reset phrase timing
                 
                 # Sleep to prevent CPU spinning (check every 100ms)
                 time.sleep(0.1)
@@ -313,6 +322,14 @@ class AccumulatingTranscriptionProcessor:
             if segments:
                 # Combine all segments
                 full_text = " ".join([seg.text for seg in segments]).strip()
+                
+                # Deduplication: only output if text is different or phrase is complete
+                if full_text == self._last_transcribed_text and not force_complete:
+                    print(f"DEBUG: Skipping duplicate text: '{full_text[:50]}...'")
+                    return  # Skip duplicate
+                
+                # Update tracking
+                self._last_transcribed_text = full_text if force_complete else ""
                 
                 # Calculate average confidence
                 avg_confidence = sum(seg.confidence for seg in segments) / len(segments)
