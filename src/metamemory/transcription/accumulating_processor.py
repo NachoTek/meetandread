@@ -119,6 +119,7 @@ class AccumulatingTranscriptionProcessor:
         self._last_transcribed_text = ""  # For deduplication
         self._last_phrase_start_time: Optional[datetime] = None  # Track phrase timing
         self._min_phrase_duration = 0.3  # Minimum audio duration before transcription (seconds)
+        self._last_emitted_text = ""  # Track last emitted text for deduplication
         
         # Phrase tracking
         self._new_phrase_started = False  # Flag to indicate start of new phrase
@@ -158,6 +159,7 @@ class AccumulatingTranscriptionProcessor:
         self._last_transcribed_text = ""  # Reset dedup
         self._last_phrase_start_time = None  # Reset phrase timing
         self._last_emitted_segment_index = -1  # Reset segment tracking for new session
+        self._last_emitted_text = ""  # Reset text tracking for new session
         
         # Start processing thread
         self._processing_thread = threading.Thread(
@@ -201,7 +203,8 @@ class AccumulatingTranscriptionProcessor:
             energy = 0
         
         # Threshold for speech detection (tune this value based on testing)
-        SPEECH_THRESHOLD = 0.01
+        # Lowered to 0.005 for better sensitivity with quiet microphones
+        SPEECH_THRESHOLD = 0.005
         is_speech = energy > SPEECH_THRESHOLD
         
         # Only update last_audio_time if speech detected (fixes silence timeout bug)
@@ -267,7 +270,7 @@ class AccumulatingTranscriptionProcessor:
                     if silence_debug_counter >= 10:
                         silence_debug_counter = 0
                         silence_detected = time_since_audio >= self.silence_timeout
-                        print(f"DEBUG: Silence check - time_since_audio: {time_since_audio:.2f}s, silence_timeout: {self.silence_timeout}s, silence_detected: {silence_detected}")
+                        print(f"DEBUG: Silence check - {time_since_audio:.1f}s since audio, {buffer_duration:.1f}s buffer")
                     
                     # Transcribe if:
                     # 1. Silence timeout reached AND we have enough audio (phrase complete)
@@ -304,6 +307,7 @@ class AccumulatingTranscriptionProcessor:
                         self._last_phrase_start_time = None  # Reset phrase timing
                         self._new_phrase_started = True  # Flag: next transcription starts new phrase
                         self._last_emitted_segment_index = -1  # Reset segment tracking for new phrase
+                        self._last_emitted_text = ""  # Reset text tracking for new phrase
                         print("DEBUG: State reset - waiting for new audio")
                 
                 # Sleep to prevent CPU spinning (check every 100ms)
@@ -350,47 +354,50 @@ class AccumulatingTranscriptionProcessor:
             self._transcription_count += 1
             
             if segments:
-                # Filter segments: only emit segments with index > _last_emitted_segment_index
-                # This prevents repeating text as the buffer grows
-                new_segments = []
+                # Emit all segments for display
+                # The panel's update_segment method handles in-place updates
+                # Whisper re-transcribes the same content, but panel handles displaying it
+                print(f"DEBUG: Processing {len(segments)} segments")
+
                 for i, seg in enumerate(segments):
-                    if i > self._last_emitted_segment_index:
-                        new_segments.append((i, seg))
-                
-                if new_segments:
-                    print(f"DEBUG: Emitting {len(new_segments)} new segments (indices {new_segments[0][0]}-{new_segments[-1][0]}, last emitted: {self._last_emitted_segment_index})")
-                
-                # Output only new segments
-                for i, seg in new_segments:
-                    segment_text = seg.text.strip()
-                    if not segment_text:
+                    seg_text = seg.text.strip()
+                    print(f"DEBUG:   Segment {i}: '{seg_text[:30]}...'")
+
+                    # Skip blank audio markers only
+                    if seg_text == "[BLANK_AUDIO]":
+                        print(f"DEBUG:     Skipping [BLANK_AUDIO]")
                         continue
-                    
-                    # Calculate timing relative to recording start
-                    elapsed = (datetime.utcnow() - self._recording_start_time).total_seconds() if self._recording_start_time else 0
-                    segment_start = elapsed - buffer_duration + seg.start
-                    segment_end = elapsed - buffer_duration + seg.end
-                    
-                    # Create result for this segment with its actual confidence
-                    result = SegmentResult(
-                        text=segment_text,
+
+                    # Emit all non-blank segments
+                    # The panel will display/replace as needed based on segment_index
+                    print(f"DEBUG:     Emitting segment {i}")
+                    self._result_queue.put(SegmentResult(
+                        text=seg_text,
                         confidence=int(seg.confidence),
-                        start_time=segment_start,
-                        end_time=segment_end,
+                        start_time=seg.start,
+                        end_time=seg.end,
                         segment_index=i,
                         is_final=force_complete,
-                        phrase_start=(i == 0 and phrase_start)  # First segment of new phrase
-                    )
-                    
-                    # Queue for UI
-                    self._result_queue.put(result)
-                    
+                        phrase_start=(i == 0 and self._new_phrase_started)
+                    ))
+
+                # Track last state (for logging only)
+                if segments:
+                    last_seg_text = segments[-1].text.strip()
+                    self._last_emitted_text = last_seg_text
+                    print(f"DEBUG:   Last emitted text: '{self._last_emitted_text[:30]}...'")
+
+
                     # Callback
                     if self.on_result:
                         try:
+                            print(f"DEBUG: Calling on_result callback")
                             self.on_result(result)
+                            print(f"DEBUG: on_result callback returned successfully")
                         except Exception as e:
                             print(f"ERROR: on_result callback failed: {e}")
+                    else:
+                        print(f"DEBUG: No on_result callback registered!")
                     
                     print(f"DEBUG: Segment {i}: '{segment_text}' [conf: {seg.confidence}%, final: {force_complete}]")
                 
