@@ -13,11 +13,10 @@ from dataclasses import dataclass
 
 
 @dataclass
-class TranscriptLine:
-    """A line of transcript text with metadata."""
-    text: str
-    confidence: int
-    timestamp: float
+class Phrase:
+    """A phrase (line) of transcript with its segments."""
+    segments: List[str]  # Text of each segment
+    confidences: List[int]  # Confidence of each segment
     is_final: bool  # True if phrase is complete
 
 
@@ -35,6 +34,7 @@ class FloatingTranscriptPanel(QWidget):
     
     # Signals
     closed = pyqtSignal()  # Emitted when user closes panel
+    segment_ready = pyqtSignal(str, int, int, bool, bool)  # text, confidence, segment_index, is_final, phrase_start
     
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -49,25 +49,12 @@ class FloatingTranscriptPanel(QWidget):
         # Size
         self.setFixedSize(400, 300)
         
-        # Styling
+        # Style
         self.setStyleSheet("""
-            QWidget {
-                background-color: rgba(30, 30, 30, 230);
-                border: 2px solid rgba(100, 100, 100, 200);
+            FloatingTranscriptPanel {
+                background-color: #1a1a1a;
+                border: 2px solid #444;
                 border-radius: 10px;
-            }
-            QTextEdit {
-                background-color: transparent;
-                color: white;
-                border: none;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 14px;
-                padding: 10px;
-            }
-            QLabel {
-                color: #aaaaaa;
-                font-size: 12px;
-                padding: 5px 10px;
             }
         """)
         
@@ -76,33 +63,68 @@ class FloatingTranscriptPanel(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(5)
         
-        # Header
-        self.header = QLabel("📝 Live Transcript")
-        self.header.setStyleSheet("font-weight: bold; color: white;")
-        layout.addWidget(self.header)
+        # Title bar (clickable for dragging)
+        title = QLabel("Live Transcript")
+        title.setStyleSheet("""
+            QLabel {
+                color: #4CAF50;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 5px;
+            }
+        """)
+        layout.addWidget(title)
         
-        # Separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setStyleSheet("background-color: rgba(100, 100, 100, 100);")
-        layout.addWidget(separator)
-        
-        # Text area
+        # Text edit for transcript
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
+        self.text_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: #2a2a2a;
+                color: #fff;
+                border: none;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 13px;
+                line-height: 1.4;
+            }
+        """)
+        self.text_edit.setFrameShape(QFrame.Shape.NoFrame)
         layout.addWidget(self.text_edit)
         
-        # Status
-        self.status_label = QLabel("Waiting for audio...")
+        # Status label
+        self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #888;
+                font-size: 11px;
+                padding: 3px;
+            }
+        """)
         layout.addWidget(self.status_label)
         
-        # Track lines
-        self.lines: List[TranscriptLine] = []
-        self.current_line_idx = -1
+        # Dragging
+        self._dragging = False
+        self._drag_pos = None
+        
+        # Track phrases (each phrase is a line)
+        self.phrases: List[Phrase] = []
+        self.current_phrase_idx = -1
         
         # Auto-scroll timer
         self.scroll_timer = QTimer(self)
         self.scroll_timer.timeout.connect(self._scroll_to_bottom)
+        
+        # Auto-scroll pause mechanism
+        self._auto_scroll_paused = False
+        self._pause_timer = QTimer(self)
+        self._pause_timer.setSingleShot(True)
+        self._pause_timer.timeout.connect(self._resume_auto_scroll)
+        self._last_scroll_value = 0
+        self._is_at_bottom = True
+        
+        # Connect to scrollbar value changed signal to detect manual scroll
+        self.text_edit.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
     
     def dock_to_widget(self, widget: QWidget, position: str = "left") -> None:
         """
@@ -155,72 +177,87 @@ class FloatingTranscriptPanel(QWidget):
     def clear(self) -> None:
         """Clear all transcript content."""
         self.text_edit.clear()
-        self.lines.clear()
-        self.current_line_idx = -1
+        self.phrases.clear()
+        self.current_phrase_idx = -1
     
-    def update_line(self, text: str, confidence: int, is_final: bool = False) -> None:
+    def update_segment(self, text: str, confidence: int, segment_index: int, is_final: bool = False, phrase_start: bool = False) -> None:
         """
-        Update the current line (edit in place) or add new line.
-        
-        This matches the reference implementation pattern:
-        - Edit current line while phrase is ongoing
-        - Start new line when phrase is complete
+        Update a single segment. Each segment is part of a phrase (line).
         
         Args:
-            text: Transcribed text
+            text: Transcribed text for this segment
             confidence: Confidence score (0-100)
-            is_final: If True, this phrase is complete, start new line next time
+            segment_index: Position of this segment in the current phrase
+            is_final: If True, this phrase is complete
+            phrase_start: If True, start a new phrase (new line)
         """
-        # Skip if same text as current line and not final (prevents flicker/duplicates)
-        if (self.current_line_idx >= 0 and 
-            self.lines and 
-            len(self.lines) > self.current_line_idx and
-            self.lines[self.current_line_idx].text == text and 
-            not is_final):
-            return  # Duplicate, skip
+        print(f"DEBUG Panel: update_segment text='{text}', idx={segment_index}, phrase_start={phrase_start}")
         
-        # Determine color based on confidence
-        color = self._get_confidence_color(confidence)
+        # Start new phrase if needed (BEFORE checking for blank audio)
+        if phrase_start or self.current_phrase_idx < 0:
+            print(f"DEBUG Panel: Starting NEW PHRASE")
+            self.phrases.append(Phrase(segments=[], confidences=[], is_final=False))
+            self.current_phrase_idx = len(self.phrases) - 1
         
-        # Create format
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
-        fmt.setFontWeight(QFont.Weight.Bold if confidence >= 80 else QFont.Weight.Normal)
+        # Skip [BLANK_AUDIO] after creating the phrase structure
+        if text.strip() == "[BLANK_AUDIO]":
+            print(f"DEBUG Panel: Skipping [BLANK_AUDIO] but phrase {self.current_phrase_idx} exists")
+            return
         
-        cursor = self.text_edit.textCursor()
+        # Get current phrase
+        phrase = self.phrases[self.current_phrase_idx]
+        phrase.is_final = is_final
         
-        if is_final or self.current_line_idx < 0:
-            # Start new line
-            if self.current_line_idx >= 0:
-                cursor.insertBlock()  # New paragraph
-            
-            self.current_line_idx += 1
-            cursor.insertText(text, fmt)
+        # Update or add segment
+        if segment_index < len(phrase.segments):
+            # Update existing segment
+            phrase.segments[segment_index] = text
+            phrase.confidences[segment_index] = confidence
+            print(f"DEBUG Panel: Updated segment {segment_index}: '{text}' [conf: {confidence}%]")
         else:
-            # Edit current line (replace it)
-            # Select current block
-            cursor.movePosition(QTextCursor.MoveOperation.Start)
-            for _ in range(self.current_line_idx):
-                cursor.movePosition(QTextCursor.MoveOperation.NextBlock)
-            
-            cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
-            cursor.insertText(text, fmt)
+            # Add new segment
+            phrase.segments.append(text)
+            phrase.confidences.append(confidence)
+            print(f"DEBUG Panel: Added segment {segment_index}: '{text}' [conf: {confidence}%]")
+        
+        # Rebuild the entire display
+        self._rebuild_display()
         
         # Update status
-        self.status_label.setText(f"Confidence: {confidence}% | Words: {len(self.lines)}")
+        total_segments = sum(len(p.segments) for p in self.phrases)
+        self.status_label.setText(f"Phrases: {len(self.phrases)} | Segments: {total_segments}")
         
-        # Track
-        line = TranscriptLine(
-            text=text,
-            confidence=confidence,
-            timestamp=0,  # Would track actual time
-            is_final=is_final
-        )
-        if len(self.lines) <= self.current_line_idx:
-            self.lines.append(line)
-        else:
-            self.lines[self.current_line_idx] = line
+        # Auto-scroll
+        self._scroll_to_bottom()
+    
+    def _rebuild_display(self) -> None:
+        """Rebuild the entire transcript display from phrases."""
+        self.text_edit.clear()
+        cursor = self.text_edit.textCursor()
+        
+        for phrase_idx, phrase in enumerate(self.phrases):
+            # Build the phrase text from segments
+            for seg_idx, (text, conf) in enumerate(zip(phrase.segments, phrase.confidences)):
+                # Determine color based on confidence
+                color = self._get_confidence_color(conf)
+                
+                # Create format
+                fmt = QTextCharFormat()
+                fmt.setForeground(QColor(color))
+                fmt.setFontWeight(QFont.Weight.Bold if conf >= 80 else QFont.Weight.Normal)
+                
+                # Insert text
+                cursor.insertText(text, fmt)
+                
+                # Add space between segments (but not after last)
+                if seg_idx < len(phrase.segments) - 1:
+                    cursor.insertText(" ")
+            
+            # Add newline after phrase (but not after last)
+            if phrase_idx < len(self.phrases) - 1:
+                cursor.insertBlock()
+        
+        print(f"DEBUG Panel: Rebuilt display with {len(self.phrases)} phrases")
     
     def _get_confidence_color(self, confidence: int) -> str:
         """Get color based on confidence score."""
@@ -242,145 +279,202 @@ class FloatingTranscriptPanel(QWidget):
         """Save transcript to file."""
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write("# Transcription\n\n")
-            for i, line in enumerate(self.lines):
-                f.write(f"{i+1}. [{line.confidence}%] {line.text}\n")
+            for i, phrase in enumerate(self.phrases):
+                text = " ".join(phrase.segments)
+                avg_conf = sum(phrase.confidences) // len(phrase.confidences) if phrase.confidences else 0
+                f.write(f"{i+1}. [{avg_conf}%] {text}\n")
     
     def closeEvent(self, event) -> None:
         """Handle close event."""
         self.closed.emit()
         event.accept()
+    
+    def mousePressEvent(self, event):
+        """Start dragging."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+    
+    def mouseMoveEvent(self, event):
+        """Handle dragging."""
+        if self._dragging and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+    
+    def mouseReleaseEvent(self, event):
+        """Stop dragging."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            event.accept()
 
 
 # Settings panel (similar floating approach)
 class FloatingSettingsPanel(QWidget):
     """Floating settings panel for model selection."""
     
+    closed = pyqtSignal()
+    model_changed = pyqtSignal(str)  # Emit model name when changed
+    
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         
+        # Window settings
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
         
-        self.setFixedSize(300, 200)
+        # Size
+        self.setFixedSize(300, 400)
         
+        # Style
         self.setStyleSheet("""
-            QWidget {
-                background-color: rgba(30, 30, 30, 240);
-                border: 2px solid rgba(100, 100, 100, 200);
+            FloatingSettingsPanel {
+                background-color: #1a1a1a;
+                border: 2px solid #444;
                 border-radius: 10px;
             }
             QLabel {
-                color: white;
+                color: #fff;
                 font-size: 12px;
-                padding: 5px;
             }
-            QComboBox {
-                background-color: rgba(50, 50, 50, 200);
-                color: white;
-                border: 1px solid rgba(100, 100, 100, 200);
-                padding: 5px;
+            QPushButton {
+                background-color: #333;
+                color: #fff;
+                border: 1px solid #555;
                 border-radius: 5px;
+                padding: 8px;
+                font-size: 12px;
             }
-            QComboBox::drop-down {
-                border: none;
+            QPushButton:hover {
+                background-color: #444;
             }
-            QComboBox QAbstractItemView {
-                background-color: rgba(50, 50, 50, 240);
-                color: white;
-                selection-background-color: rgba(100, 100, 100, 200);
+            QPushButton:pressed {
+                background-color: #4CAF50;
             }
         """)
         
-        from PyQt6.QtWidgets import QVBoxLayout, QComboBox, QLabel
-        
+        # Layout
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(10)
         
         # Title
-        title = QLabel("⚙️ Settings")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        title = QLabel("Settings")
+        title.setStyleSheet("font-weight: bold; font-size: 16px; color: #4CAF50;")
         layout.addWidget(title)
         
         # Model selection
-        layout.addWidget(QLabel("Transcription Model:"))
-        self.model_combo = QComboBox()
-        self.model_combo.addItems(["tiny", "base", "small"])
-        self.model_combo.setCurrentText("tiny")
-        layout.addWidget(self.model_combo)
+        model_label = QLabel("Model Size:")
+        layout.addWidget(model_label)
         
-        # Info text
-        info = QLabel("Tiny: Fastest, lowest accuracy\nBase: Balanced\nSmall: Best accuracy, slower")
-        info.setStyleSheet("color: #888888; font-size: 10px;")
-        layout.addWidget(info)
+        from PyQt6.QtWidgets import QButtonGroup, QVBoxLayout as VBox
+        
+        self.model_group = QButtonGroup(self)
+        models = [("tiny", "Tiny (fastest)"), ("base", "Base (balanced)"), ("small", "Small (accurate)")]
+        
+        for model_id, model_name in models:
+            from PyQt6.QtWidgets import QRadioButton
+            btn = QRadioButton(model_name)
+            btn.setStyleSheet("color: #fff;")
+            self.model_group.addButton(btn)
+            layout.addWidget(btn)
+            if model_id == "tiny":
+                btn.setChecked(True)
         
         layout.addStretch()
+        
+        # Close button
+        from PyQt6.QtWidgets import QPushButton
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.hide_panel)
+        layout.addWidget(close_btn)
+        
+        # Dragging
+        self._dragging = False
+        self._drag_pos = None
     
-    def dock_to_widget(self, widget: QWidget, position: str = "right") -> None:
-        """Position panel next to widget."""
+    def show_panel(self):
+        """Show the panel."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+    
+    def hide_panel(self):
+        """Hide the panel."""
+        self.hide()
+    
+    def dock_to_widget(self, widget: QWidget, position: str = "left") -> None:
+        """
+        Position panel next to a widget.
+        
+        Args:
+            widget: The main widget to dock to
+            position: "left", "right", "top", "bottom"
+        """
+        # Get widget position in screen coordinates
         widget_pos = widget.mapToGlobal(widget.rect().topLeft())
         widget_rect = widget.geometry()
         
+        # Calculate panel position
         if position == "left":
             x = widget_pos.x() - self.width() - 10
             y = widget_pos.y()
-        else:
+        elif position == "right":
             x = widget_pos.x() + widget_rect.width() + 10
             y = widget_pos.y()
+        elif position == "top":
+            x = widget_pos.x()
+            y = widget_pos.y() - self.height() - 10
+        else:  # bottom
+            x = widget_pos.x()
+            y = widget_pos.y() + widget_rect.height() + 10
         
         self.move(x, y)
     
-    def show_panel(self) -> None:
-        self.show()
-        self.raise_()
+    def closeEvent(self, event):
+        """Handle close event."""
+        self.closed.emit()
+        event.accept()
     
-    def hide_panel(self) -> None:
-        self.hide()
+    def mousePressEvent(self, event):
+        """Start dragging."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
     
-    def get_selected_model(self) -> str:
-        return self.model_combo.currentText()
+    def mouseMoveEvent(self, event):
+        """Handle dragging."""
+        if self._dragging and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            event.accept()
+    
+    def mouseReleaseEvent(self, event):
+        """Stop dragging."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            event.accept()
 
 
 if __name__ == "__main__":
+    from PyQt6.QtWidgets import QApplication
     import sys
-    from PyQt6.QtWidgets import QApplication, QPushButton
     
     app = QApplication(sys.argv)
     
-    # Create main button (simulating the widget)
-    button = QPushButton("🎤 Record")
-    button.setFixedSize(100, 50)
-    button.move(500, 400)
-    button.show()
-    
-    # Create floating transcript panel
     panel = FloatingTranscriptPanel()
-    panel.dock_to_widget(button, "left")
-    
-    # Simulate transcription
-    def add_text():
-        panel.update_line("Hello this is a test", 85, is_final=False)
-    
-    def finalize_text():
-        panel.update_line("Hello this is a test phrase", 82, is_final=True)
-    
-    # Add buttons to simulate
-    from PyQt6.QtWidgets import QVBoxLayout
-    layout = QVBoxLayout()
-    
-    btn_add = QPushButton("Add Text")
-    btn_add.clicked.connect(add_text)
-    btn_add.show()
-    btn_add.move(500, 460)
-    
-    btn_final = QPushButton("Finalize")
-    btn_final.clicked.connect(finalize_text)
-    btn_final.show()
-    btn_final.move(500, 490)
-    
-    # Show panel
     panel.show_panel()
+    
+    # Test adding some content
+    panel.update_segment("Hello", 85, 0, is_final=False)
+    panel.update_segment("world", 90, 1, is_final=False)
+    panel.update_segment("this is", 75, 2, is_final=True)
+    
+    # New phrase
+    panel.update_segment("New phrase", 80, 0, phrase_start=True, is_final=False)
+    panel.update_segment("here", 85, 1, is_final=True)
     
     sys.exit(app.exec())
