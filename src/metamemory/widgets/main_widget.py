@@ -17,7 +17,7 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsTextItem,
-    QGraphicsWidget, QApplication, QGraphicsItemGroup, QWidget
+    QGraphicsWidget, QApplication, QGraphicsItemGroup, QWidget, QMenu
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
@@ -25,7 +25,7 @@ from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
 from metamemory.recording import RecordingController, ControllerState, ControllerError
 from metamemory.transcription.confidence import get_confidence_color, get_distortion_intensity
 from metamemory.transcription.transcript_store import Word
-from metamemory.transcription.accumulating_processor import PhraseResult
+from metamemory.transcription.accumulating_processor import SegmentResult
 from metamemory.config import get_config, set_config, save_config, AppSettings
 from metamemory.hardware.recommender import ModelRecommender, get_model_info
 from metamemory.widgets.floating_panels import FloatingTranscriptPanel, FloatingSettingsPanel
@@ -141,6 +141,10 @@ to avoid clipping issues and enable proper text rendering.
         
         self.pulse_phase = 0.0
         
+        # Context menu setup
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
+        
         print("DEBUG: Main widget initialized with floating panels")
     
     def _create_components(self):
@@ -173,12 +177,29 @@ to avoid clipping issues and enable proper text rendering.
         # Floating transcript panel
         self._floating_transcript_panel = FloatingTranscriptPanel(self)
         self._floating_transcript_panel.hide_panel()
+        # Connect segment signal (thread-safe, automatically queues to main thread)
+        self._floating_transcript_panel.segment_ready.connect(self._on_panel_segment)
         print("DEBUG: Created floating transcript panel")
         
         # Floating settings panel
         self._floating_settings_panel = FloatingSettingsPanel(self)
         self._floating_settings_panel.hide_panel()
         print("DEBUG: Created floating settings panel")
+    
+    def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool):
+        """Handle segment signal from panel (runs on main thread)."""
+        print(f"DEBUG Panel Signal: text='{text[:30]}...', idx={segment_index}, phrase_start={phrase_start}")
+        try:
+            self._floating_transcript_panel.update_segment(
+                text=text,
+                confidence=confidence,
+                segment_index=segment_index,
+                is_final=is_final,
+                phrase_start=phrase_start
+            )
+            print(f"DEBUG Panel: Updated via signal successfully")
+        except Exception as e:
+            print(f"DEBUG Panel: Error via signal: {e}")
     
     def _layout_components(self):
         """Position all components."""
@@ -235,8 +256,25 @@ to avoid clipping issues and enable proper text rendering.
     
     def _position_initial(self):
         """Position widget on screen initially."""
+        try:
+            settings = get_config()
+            if settings.ui.widget_position:
+                # Restore saved position
+                x, y = settings.ui.widget_position
+                self.move(x, y)
+                print(f"DEBUG: Restored widget position: ({x}, {y})")
+                
+                # Restore dock state if applicable
+                if settings.ui.widget_dock_edge:
+                    self.dock_edge = settings.ui.widget_dock_edge
+                    self.is_docked = True
+                    self._update_docked_state()
+                return
+        except Exception as e:
+            print(f"DEBUG: Failed to restore position: {e}")
+        
+        # Default: Start in bottom-right corner
         screen = QApplication.primaryScreen().geometry()
-        # Start in bottom-right corner
         x = screen.width() - self.width() - 20
         y = screen.height() - self.height() - 40
         self.move(x, y)
@@ -439,21 +477,27 @@ to avoid clipping issues and enable proper text rendering.
         self._show_error(error.message)
         print(f"Recording error: {error.message}")
     
-    def _on_phrase_result(self, result: PhraseResult):
-        """Handle phrase result from accumulating transcription processor.
+    def _on_phrase_result(self, result: SegmentResult):
+        """Handle segment result from accumulating transcription processor.
+        
+        Thread-safe: emits signal which automatically queues to main thread.
         
         Args:
-            result: PhraseResult with text, confidence, and completion status
+            result: SegmentResult with text, confidence, and completion status
         """
-        print(f"DEBUG UI: Phrase result received: '{result.text[:50]}...' [conf: {result.confidence}%, complete: {result.is_complete}]")
+        phrase_start = getattr(result, 'phrase_start', False)
+        print(f"DEBUG UI: Segment: '{result.text}' [conf: {result.confidence}%, final: {result.is_final}, phrase_start: {phrase_start}]")
         
         if self._floating_transcript_panel:
-            self._floating_transcript_panel.update_line(
-                text=result.text,
-                confidence=result.confidence,
-                is_final=result.is_complete
+            # Emit signal (thread-safe, automatically queues to main thread)
+            self._floating_transcript_panel.segment_ready.emit(
+                result.text,
+                result.confidence,
+                result.segment_index,
+                result.is_final,
+                phrase_start
             )
-            print(f"DEBUG UI: Updated floating panel, line count: {len(self._floating_transcript_panel.lines)}")
+            print(f"DEBUG UI: Emitted signal with phrase_start={phrase_start}")
         else:
             print("DEBUG UI: No floating transcript panel available!")
     
@@ -531,6 +575,35 @@ to avoid clipping issues and enable proper text rendering.
         error = self._controller.stop()
         if error:
             self._show_error(error.message)
+    
+    def _show_context_menu(self, position):
+        """Show context menu with Exit action."""
+        menu = QMenu(self)
+        exit_action = menu.addAction("Exit")
+        exit_action.triggered.connect(self._exit_application)
+        menu.exec(self.mapToGlobal(position))
+    
+    def _exit_application(self):
+        """Exit the application cleanly."""
+        self._save_position()
+        QApplication.quit()
+    
+    def _save_position(self):
+        """Save widget position to config."""
+        try:
+            settings = get_config()
+            settings.ui.widget_position = (self.x(), self.y())
+            settings.ui.widget_dock_edge = self.dock_edge
+            save_config(settings)
+            print(f"DEBUG: Saved widget position: ({self.x()}, {self.y()}), dock: {self.dock_edge}")
+        except Exception as e:
+            print(f"DEBUG: Failed to save position: {e}")
+    
+    def closeEvent(self, event):
+        """Handle close event for clean ALT+F4 exit."""
+        self._save_position()
+        event.accept()
+        QApplication.quit()
 
 
 class RecordButtonItem(QGraphicsEllipseItem):
