@@ -5,7 +5,7 @@ This solves the clipping issue by making the panel a separate QWidget
 that floats outside the main widget bounds.
 """
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from typing import List, Optional
@@ -63,6 +63,10 @@ class FloatingTranscriptPanel(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(5)
         
+        # Header with title and close button
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(5)
+        
         # Title bar (clickable for dragging)
         title = QLabel("Live Transcript")
         title.setStyleSheet("""
@@ -73,7 +77,33 @@ class FloatingTranscriptPanel(QWidget):
                 padding: 5px;
             }
         """)
-        layout.addWidget(title)
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        
+        # Close button
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(24, 24)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 12px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background-color: #F44336;
+                border-color: #F44336;
+            }
+        """)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Close panel")
+        close_btn.clicked.connect(self.hide_panel)
+        header_layout.addWidget(close_btn)
+        
+        layout.addLayout(header_layout)
         
         # Text edit for transcript
         self.text_edit = QTextEdit()
