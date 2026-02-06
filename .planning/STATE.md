@@ -17,11 +17,11 @@ See: .planning/PROJECT.md (updated 2026-02-01)
 ## Current Position
 
 Phase: 2 of 6 (Real-Time Transcription Engine)
-Plan: 8 of 9 in current phase (auto-scroll pause implemented)
-Status: Phase 2 In Progress - Gap Closures
-Last activity: 2026-02-06 - Implemented auto-scroll pause on manual scroll (02-08)
+Plan: 9 of 9 in current phase (clean exit implemented)
+Status: Phase 2 Complete - All Gap Closures Applied
+Last activity: 2026-02-06 - Implemented clean exit: context menu, ALT+F4, CTRL+C, close button (02-09)
 
-Progress: ████████████░░░░░░░░ 25%
+Progress: █████████████░░░░░░░ 28%
 
 **Latest Implementation:**
 - ✅ AccumulatingTranscriptionProcessor with 60s window, 2s updates, 3s silence detection
@@ -81,6 +81,8 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 - [✓] 02-05: **GAP CLOSURE** - Replace faster-whisper with whisper.cpp (fix WinError 1114)
 - [✓] 02-06: **GAP CLOSURE** - Fix settings panel dock_to_widget AttributeError
 - [✓] 02-07: **GAP CLOSURE** - Fix transcript repetition with segment tracking
+- [✓] 02-08: **GAP CLOSURE** - Fix auto-scroll pause on manual scroll
+- [✓] 02-09: **GAP CLOSURE** - Implement clean exit (context menu, ALT+F4, CTRL+C, close button)
 
 **Success Criteria:**
 1. ✅ User can start recording and capture clean audio from selected source(s)
@@ -140,6 +142,7 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 | 2026-02-02 | Hybrid transcription architecture | Tiny for real-time, base for post-processing | Complete |
 | 2026-02-03 | Bug fix: Duplicate lines after silence | Add deduplication tracking and min phrase duration | Complete |
 | 2026-02-06 | Bug fix: Transcript text repetition | Segment index tracking to only emit new segments | Complete |
+| 2026-02-06 | Clean exit implementation | Context menu, ALT+F4, CTRL+C signal handling, close button, position persistence | Complete |
 
 ---
 
@@ -180,13 +183,15 @@ None currently.
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: Fixed transcript repetition with segment tracking
-Resume file: .planning/phases/02-real-time-transcription-engine/02-07-SUMMARY.md
+Stopped at: Implemented clean exit with context menu, ALT+F4, CTRL+C, close button
+Resume file: .planning/phases/02-real-time-transcription-engine/02-09-SUMMARY.md
 
-**Current Status:** Phase 2 complete. Two gap closures applied:
+**Current Status:** Phase 2 complete. Four gap closures applied:
 - 02-06: Fixed settings panel dock_to_widget AttributeError
 - 02-07: Fixed transcript repetition with _last_emitted_segment_index tracking
-- Segment filtering prevents repeating text accumulation
+- 02-08: Fixed auto-scroll pause on manual scroll detection
+- 02-09: Implemented clean exit (context menu, ALT+F4, CTRL+C, close button) with position persistence
+- All UAT Test 10 requirements now satisfied
 - Ready for human verification checkpoint
 
 *State file automatically updated throughout project lifecycle*
