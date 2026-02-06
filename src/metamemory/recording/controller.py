@@ -21,7 +21,7 @@ from metamemory.audio import (
     NoSourcesError,
 )
 from metamemory.audio.capture import AudioSourceError
-from metamemory.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, PhraseResult
+from metamemory.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult
 from metamemory.transcription.transcript_store import TranscriptStore, Word
 from metamemory.transcription.post_processor import PostProcessingQueue, PostProcessStatus
 from metamemory.config.manager import ConfigManager
@@ -100,7 +100,7 @@ class RecordingController:
         self.on_state_change: Optional[Callable[[ControllerState], None]] = None
         self.on_error: Optional[Callable[[ControllerError], None]] = None
         self.on_recording_complete: Optional[Callable[[Path, Optional[Path]], None]] = None
-        self.on_phrase_result: Optional[Callable[[PhraseResult], None]] = None  # For accumulating processor results
+        self.on_phrase_result: Optional[Callable[[SegmentResult], None]] = None  # For accumulating processor results
         self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, enhanced_path
         
         # Audio feed tracking
@@ -377,33 +377,33 @@ class RecordingController:
                 is_recoverable=True
             )
     
-    def _on_phrase_result(self, result: PhraseResult) -> None:
-        """Handle phrase result from accumulating transcription processor.
+    def _on_phrase_result(self, result: SegmentResult) -> None:
+        """Handle segment result from accumulating transcription processor.
         
         Args:
-            result: PhraseResult with text, confidence, and completion status
+            result: SegmentResult with text, confidence, and completion status
         """
-        print(f"DEBUG Controller: Phrase result: '{result.text[:50]}...' [conf: {result.confidence}%, complete: {result.is_complete}]")
+        print(f"DEBUG Controller: Segment: '{result.text}' [conf: {result.confidence}%, final: {result.is_final}, idx: {result.segment_index}]")
         
-        # Convert PhraseResult to Word objects for storage
+        # Convert SegmentResult to Word objects for storage
         if self._transcript_store:
-            words = self._phrase_to_words(result)
+            words = self._segment_to_words(result)
             if words:
                 self._transcript_store.add_words(words)
-                print(f"DEBUG Controller: Added {len(words)} words to transcript store")
+                print(f"DEBUG Controller: Added {len(words)} words to transcript store (total words: {self._transcript_store.get_word_count()})")
         
         # Notify UI callback
         if self.on_phrase_result:
             try:
                 self.on_phrase_result(result)
             except Exception as e:
-                print(f"ERROR: Phrase result callback failed: {e}")
+                print(f"ERROR: Segment result callback failed: {e}")
     
-    def _phrase_to_words(self, result: PhraseResult) -> List[Word]:
-        """Convert a PhraseResult to Word objects.
+    def _segment_to_words(self, result: SegmentResult) -> List[Word]:
+        """Convert a SegmentResult to Word objects.
         
         Args:
-            result: PhraseResult from accumulating processor
+            result: SegmentResult from accumulating processor
         
         Returns:
             List of Word objects for storage
