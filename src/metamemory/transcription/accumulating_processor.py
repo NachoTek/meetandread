@@ -120,10 +120,10 @@ class AccumulatingTranscriptionProcessor:
         self._last_phrase_start_time: Optional[datetime] = None  # Track phrase timing
         self._min_phrase_duration = 0.3  # Minimum audio duration before transcription (seconds)
         self._last_emitted_text = ""  # Track last emitted text for deduplication
-        
+
         # Phrase tracking
         self._new_phrase_started = False  # Flag to indicate start of new phrase
-        
+
         # Segment index tracking to prevent duplicate emission
         # Tracks the last segment index that was emitted to the UI
         self._last_emitted_segment_index = -1  # -1 means nothing emitted yet
@@ -354,14 +354,19 @@ class AccumulatingTranscriptionProcessor:
             self._transcription_count += 1
             
             if segments:
-                # Emit all segments for display
-                # The panel's update_segment method handles in-place updates
-                # Whisper re-transcribes the same content, but panel handles displaying it
-                print(f"DEBUG: Processing {len(segments)} segments")
+                # Skip already emitted segments in this phrase
+                start_idx = self._last_emitted_segment_index + 1
+                new_segments = segments[start_idx:]
 
-                for i, seg in enumerate(segments):
+                if new_segments:
+                    print(f"DEBUG: Processing {len(segments)} total segments, emitting {len(new_segments)} new segments")
+                else:
+                    print(f"DEBUG: Processing {len(segments)} total segments, no new segments to emit")
+
+                for i, seg in enumerate(new_segments):
                     seg_text = seg.text.strip()
-                    print(f"DEBUG:   Segment {i}: '{seg_text[:30]}...'")
+                    actual_index = start_idx + i
+                    print(f"DEBUG:   Segment {actual_index}: '{seg_text[:30]}...'")
 
                     # Skip blank audio markers only
                     if seg_text == "[BLANK_AUDIO]":
@@ -370,16 +375,20 @@ class AccumulatingTranscriptionProcessor:
 
                     # Emit all non-blank segments
                     # The panel will display/replace as needed based on segment_index
-                    print(f"DEBUG:     Emitting segment {i}")
+                    print(f"DEBUG:     Emitting segment {actual_index}")
                     self._result_queue.put(SegmentResult(
                         text=seg_text,
                         confidence=int(seg.confidence),
                         start_time=seg.start,
                         end_time=seg.end,
-                        segment_index=i,
+                        segment_index=actual_index,
                         is_final=force_complete,
-                        phrase_start=(i == 0 and self._new_phrase_started)
+                        phrase_start=(actual_index == 0 and self._new_phrase_started)
                     ))
+
+                # Update last emitted index
+                self._last_emitted_segment_index = len(segments) - 1
+                print(f"DEBUG: Updated last emitted segment index: {self._last_emitted_segment_index}")
                 
                 # Track last emitted text for logging
                 if segments:
