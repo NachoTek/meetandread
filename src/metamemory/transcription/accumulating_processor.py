@@ -409,7 +409,7 @@ class AccumulatingTranscriptionProcessor:
                         end_time=segment_end,
                         segment_index=i,
                         is_final=force_complete,
-                        phrase_start=(i == 0 and self._new_phrase_started)
+                        phrase_start=(i == 0 and phrase_start)
                     )
                     
                     # Queue for UI
