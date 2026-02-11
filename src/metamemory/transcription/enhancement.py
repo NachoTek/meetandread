@@ -148,16 +148,18 @@ class EnhancementQueue:
 
 class EnhancementWorkerPool:
     """Async worker pool for background enhancement processing.
-    
+
     Features:
     - Parallel processing using asyncio + ThreadPoolExecutor
     - Dynamic worker scaling based on system load
     - Completion callbacks for real-time transcript updates
     - Error handling with retry logic
     - Graceful degradation under resource constraints
+    - Performance metrics and completion timing
+    - Context tracking for recording vs post-stop scenarios
     """
 
-    def __init__(self, num_workers: int = 4, 
+    def __init__(self, num_workers: int = 4,
                  min_workers: int = 2,
                  max_workers: int = 8,
                  dynamic_scaling: bool = True,
@@ -165,7 +167,7 @@ class EnhancementWorkerPool:
                  worker_scaling_algorithm: str = "adaptive"):
         """
         Initialize the worker pool with specified number of workers.
-        
+
         Args:
             num_workers: Initial number of parallel workers (default: 4)
             min_workers: Minimum workers when scaling down (default: 2)
@@ -180,53 +182,70 @@ class EnhancementWorkerPool:
         self.dynamic_scaling = dynamic_scaling
         self.cpu_usage_threshold = cpu_usage_threshold
         self.worker_scaling_algorithm = worker_scaling_algorithm
-        
+
         # Initialize executor with current worker count
         self.executor = ThreadPoolExecutor(max_workers=num_workers)
-        
+
         # Task tracking
         self.pending_tasks = 0
         self.completed_tasks = 0
         self.failed_tasks = 0
         self.retry_count = 0
         self.max_retries = 2
-        
+
         # Async task tracking
         self.async_tasks: List[asyncio.Task] = []
         self.active_tasks: Dict[str, asyncio.Task] = {}
-        
+
         # Worker pool state
         self.is_running = False
         self._scaling_lock = asyncio.Lock()
-        
+
         # Performance metrics
         self.task_start_times: Dict[str, float] = {}
         self.avg_processing_time = 0.0
         self.last_scale_time = 0.0
-        
+
+        # Completion timing metrics
+        self.completion_times: List[float] = []
+        self.max_completion_time = 0.0
+        self.min_completion_time = float('inf')
+
+        # Context tracking (recording vs post-stop)
+        self.recording_active = True
+        self.tasks_during_recording = 0
+        self.tasks_after_recording = 0
+
         # Completion callbacks
         self.completion_callbacks: List[Callable[[Dict[str, Any]], None]] = []
-        
+
         logger.info(f"Initialized EnhancementWorkerPool: {num_workers} workers, scaling={dynamic_scaling}")
 
-    async def process_segment(self, segment: Dict[str, Any], 
+    async def process_segment(self, segment: Dict[str, Any],
                             processor: 'EnhancementProcessor',
                             retry_count: int = 0) -> Dict[str, Any]:
         """
         Process a segment using the enhancement processor.
-        
+
         Args:
             segment: Segment dictionary to process
             processor: EnhancementProcessor instance to use for processing
             retry_count: Current retry attempt (internal use)
-            
+
         Returns:
             Dict[str, Any]: Enhanced segment with results
         """
         segment_id = segment.get('id', 'unknown')
         start_time = time.time()
         self.task_start_times[segment_id] = start_time
-        
+
+        # Track context (during recording vs after stop)
+        is_during_recording = self.recording_active
+        if is_during_recording:
+            self.tasks_during_recording += 1
+        else:
+            self.tasks_after_recording += 1
+
         # Check if pool is running
         if not self.is_running:
             logger.warning(f"Worker pool not running, skipping segment {segment_id}")
@@ -237,52 +256,59 @@ class EnhancementWorkerPool:
                 'confidence': segment.get('confidence'),
                 'enhanced': False
             }
-        
+
         # Check if dynamic scaling is needed
         if self.dynamic_scaling:
             await self._maybe_scale_workers()
-        
+
         self.pending_tasks += 1
-        
+
         loop = asyncio.get_event_loop()
-        
+
         try:
-            logger.debug(f"Processing segment {segment_id} (retry {retry_count}/{self.max_retries})")
-            
+            context_str = "during recording" if is_during_recording else "after recording stopped"
+            logger.debug(f"Processing segment {segment_id} {context_str} (retry {retry_count}/{self.max_retries})")
+
             enhanced = await loop.run_in_executor(
                 self.executor,
                 processor.enhance,
                 segment
             )
-            
+
             # Update metrics
             processing_time = time.time() - start_time
+            self._update_completion_metrics(processing_time)
             self._update_avg_processing_time(processing_time)
             self.completed_tasks += 1
             self.pending_tasks -= 1
-            
+
             # Remove from active tasks tracking
             if segment_id in self.active_tasks:
                 del self.active_tasks[segment_id]
-            
+
             # Mark as enhanced with bold formatting
             if enhanced:
                 enhanced['enhanced'] = enhanced.get('enhanced', True)
                 enhanced['is_enhanced'] = True  # Additional flag for UI
-                
-            logger.debug(f"Completed segment {segment_id} in {processing_time:.2f}s")
-            
+                enhanced['context'] = 'during_recording' if is_during_recording else 'post_recording'
+                enhanced['processing_time'] = processing_time
+
+            logger.info(
+                f"Completed segment {segment_id} {context_str} in {processing_time:.2f}s "
+                f"(avg: {self.avg_processing_time:.2f}s, enhanced: {enhanced.get('enhanced', False)})"
+            )
+
             # Trigger completion callbacks
             await self._notify_completion_callbacks(enhanced)
-            
+
             return enhanced
-            
+
         except Exception as e:
             self.pending_tasks -= 1
             error_msg = str(e)
-            logger.error(f"Error processing segment {segment_id}: {error_msg}")
-            
-            # Retry logic
+            logger.error(f"Error processing segment {segment_id} {context_str}: {error_msg}")
+
+            # Retry logic with graceful degradation
             if retry_count < self.max_retries:
                 self.retry_count += 1
                 logger.info(f"Retrying segment {segment_id} (attempt {retry_count + 1}/{self.max_retries})")
@@ -290,19 +316,23 @@ class EnhancementWorkerPool:
                 return await self.process_segment(segment, processor, retry_count + 1)
             else:
                 self.failed_tasks += 1
-                logger.error(f"Max retries exceeded for segment {segment_id}")
-                
+                logger.error(f"Max retries exceeded for segment {segment_id}, returning original")
+
                 # Remove from active tasks tracking
                 if segment_id in self.active_tasks:
                     del self.active_tasks[segment_id]
-                
+
+                # Graceful degradation: return original segment with error flag
                 return {
                     'id': segment_id,
                     'error': error_msg,
                     'original_text': segment.get('text', ''),
+                    'enhanced_text': segment.get('text', ''),  # Fallback to original
                     'confidence': segment.get('confidence'),
                     'enhanced': False,
-                    'is_enhanced': False
+                    'is_enhanced': False,
+                    'graceful_degradation': True,
+                    'context': 'during_recording' if is_during_recording else 'post_recording'
                 }
         finally:
             if segment_id in self.task_start_times:
@@ -426,7 +456,7 @@ class EnhancementWorkerPool:
     def _update_avg_processing_time(self, processing_time: float) -> None:
         """
         Update average processing time using exponential moving average.
-        
+
         Args:
             processing_time: Processing time for the last task
         """
@@ -435,6 +465,59 @@ class EnhancementWorkerPool:
         else:
             # EMA with alpha = 0.1
             self.avg_processing_time = 0.9 * self.avg_processing_time + 0.1 * processing_time
+
+    def _update_completion_metrics(self, processing_time: float) -> None:
+        """
+        Update completion time metrics.
+
+        Args:
+            processing_time: Processing time for the last task
+        """
+        self.completion_times.append(processing_time)
+
+        # Keep only last 100 completion times to avoid memory growth
+        if len(self.completion_times) > 100:
+            self.completion_times = self.completion_times[-100:]
+
+        # Update min/max
+        self.max_completion_time = max(self.max_completion_time, processing_time)
+        self.min_completion_time = min(self.min_completion_time, processing_time)
+
+    def set_recording_state(self, is_recording: bool) -> None:
+        """
+        Set the recording state for context tracking.
+
+        Args:
+            is_recording: True if recording is active, False if stopped
+        """
+        old_state = "active" if self.recording_active else "stopped"
+        self.recording_active = is_recording
+        new_state = "active" if self.recording_active else "stopped"
+        logger.debug(f"Recording state changed: {old_state} -> {new_state}")
+
+    def get_completion_metrics(self) -> Dict[str, Any]:
+        """
+        Get completion timing metrics.
+
+        Returns:
+            Dict[str, Any]: Dictionary with completion timing statistics
+        """
+        if not self.completion_times:
+            return {
+                'avg_completion_time': 0.0,
+                'max_completion_time': 0.0,
+                'min_completion_time': 0.0,
+                'total_completions': 0
+            }
+
+        return {
+            'avg_completion_time': sum(self.completion_times) / len(self.completion_times),
+            'max_completion_time': self.max_completion_time,
+            'min_completion_time': self.min_completion_time if self.min_completion_time != float('inf') else 0.0,
+            'total_completions': len(self.completion_times),
+            'tasks_during_recording': self.tasks_during_recording,
+            'tasks_after_recording': self.tasks_after_recording
+        }
     
     def _cleanup_completed_tasks(self) -> None:
         """Remove completed tasks from the tracking list."""
@@ -505,17 +588,19 @@ class EnhancementWorkerPool:
     def get_status(self) -> Dict[str, Any]:
         """
         Get current worker pool status.
-        
+
         Returns:
             Dict[str, Any]: Dictionary with worker pool statistics
         """
         cpu_usage = psutil.cpu_percent(interval=0.1) if self.dynamic_scaling else 0.0
-        
+        completion_metrics = self.get_completion_metrics()
+
         return {
             'num_workers': self.num_workers,
             'min_workers': self.min_workers,
             'max_workers': self.max_workers,
             'is_running': self.is_running,
+            'recording_active': self.recording_active,
             'pending_tasks': self.pending_tasks,
             'completed_tasks': self.completed_tasks,
             'failed_tasks': self.failed_tasks,
@@ -525,7 +610,8 @@ class EnhancementWorkerPool:
             'cpu_usage': cpu_usage,
             'cpu_usage_threshold': self.cpu_usage_threshold,
             'avg_processing_time': self.avg_processing_time,
-            'active_threads': len(self.executor._threads) if hasattr(self.executor, '_threads') else 0
+            'active_threads': len(self.executor._threads) if hasattr(self.executor, '_threads') else 0,
+            'completion_metrics': completion_metrics
         }
 
 
