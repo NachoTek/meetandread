@@ -62,6 +62,7 @@ result: pass
 ### 9. Transcript File Saved
 expected: Stop recording. Check recording directory (shown in console or config). File `transcript-{timestamp}.md` exists with timestamps and text.
 result: pass
+notes: "User confirmed file is saved, despite previous UAT issue about text repetition (may be separate concern)"
 
 ### 10. Widget Dock and Position Persistence
 expected: Drag widget to screen edge - it docks showing 4/5ths. Move to new position. Close and restart - widget returns to last position.
@@ -79,22 +80,68 @@ skipped: 0
 
 ## Gaps
 
-- truth: "Transcript file contains accurate text without repetition"
-  status: issue
-  test: 9
-  root_cause: "AccumulatingTranscriptionProcessor re-transcribes entire accumulated audio buffer on every update cycle (every 2 seconds), and ALL resulting segments are added to the transcript store. The _phrase_bytes buffer accumulates continuously, is only cleared after 3 seconds of silence, and each transcription outputs full accumulated text. No deduplication tracks which segments were already output."
+- truth: "Settings panel shows detected hardware (RAM, CPU cores, frequency) with model recommendation"
+  status: failed
+  test: 2
+  root_cause: "Settings panel crashes on open (FALSE ALARM - already fixed in commit c53a564). Real issue: FloatingSettingsPanel.__init__() has no hardware display code - only model selection UI exists. No imports from hardware module, no QLabel widgets for specs, no display logic."
+  artifacts:
+    - path: "src/metamemory/widgets/floating_panels.py"
+      issue: "Lines 384-462 - __init__ creates only model selection UI, missing hardware display"
+    - path: "src/metamemory/hardware/recommender.py"
+      issue: "Has get_detected_specs() and get_recommendation() methods but not called by UI"
+  missing:
+    - "Import hardware detector/recommender classes"
+    - "Create QLabel widgets for RAM, CPU cores, frequency"
+    - "Display recommended model indicator"
+  debug_session: ".planning/debug/phase2-uat-diagnosis.md"
+
+- truth: "Model selection persists across application restarts"
+  status: failed
+  test: 3
+  root_cause: "FloatingSettingsPanel UI never emits model_changed signal when user selects model. MainWidget never connects this signal to save_config(). Persistence infrastructure (ConfigManager, SettingsPersistence) is complete and working."
+  artifacts:
+    - path: "src/metamemory/widgets/floating_panels.py"
+      issue: "Lines 440-450 - Radio buttons created but no signal emission code"
+    - path: "src/metamemory/widgets/main_widget.py"
+      issue: "model_changed signal defined but never connected to handler"
+    - path: "src/metamemory/config/manager.py"
+      issue: "save_config() called but never invoked from UI events"
+  missing:
+    - "Connect radio button toggles to emit model_changed signal"
+    - "Connect model_changed signal to save_config() in MainWidget"
+    - "Call save_config() on panel close"
+  debug_session: ".planning/debug/model-selection-persistence.md"
+
+- truth: "New speech appears on new line after 3+ second silence"
+  status: failed
+  test: 6
+  root_cause: "AccumulatingTranscriptionProcessor._transcribe_accumulated() line 412 uses self._new_phrase_started instead of local phrase_start variable. Variable is reset to False on line 343 before being used, so phrase_start always evaluates to False regardless of whether this is actually a new phrase."
   artifacts:
     - path: "src/metamemory/transcription/accumulating_processor.py"
-      issue: "Line 227 - Buffer accumulates: self._phrase_bytes += chunk_bytes"
+      issue: "Line 342 - Correctly capture: phrase_start = self._new_phrase_started"
     - path: "src/metamemory/transcription/accumulating_processor.py"
-      issue: "Lines 279-283 - Triggers transcription every 2s without clearing buffer"
+      issue: "Line 343 - Incorrectly reset: self._new_phrase_started = False"
     - path: "src/metamemory/transcription/accumulating_processor.py"
-      issue: "Line 341 - Transcribes entire buffer each time"
-    - path: "src/metamemory/transcription/accumulating_processor.py"
-      issue: "Lines 346-379 - Outputs ALL segments every cycle"
-    - path: "src/metamemory/recording/controller.py"
-      issue: "Lines 380-392 - Adds all words from every segment result"
+      issue: "Line 412 - BUG: uses self._new_phrase_started instead of phrase_start"
   missing:
-    - "Track last segment index to only emit new/changed segments"
-    - "Deduplication to prevent adding same text multiple times"
-  debug_session: ".planning/debug/transcript-repetition-issue.md"
+    - "Fix line 412 to use local phrase_start variable"
+  debug_session: ".planning/debug/no-duplicate-lines-after-silence.md"
+
+- truth: "Transcription keeps pace without delay accumulation during long recordings"
+  status: failed
+  test: 7
+  root_cause: "AccumulatingTranscriptionProcessor re-transcribes entire accumulated audio buffer on every 2-second update cycle. Every cycle outputs ALL segments to transcript store without deduplication tracking. Buffer grows continuously (only cleared after 3s silence), causing exponential growth of transcript store with duplicate words."
+  artifacts:
+    - path: "src/metamemory/transcription/accumulating_processor.py"
+      issue: "Line 235 - Buffer always appends: self._phrase_bytes += chunk_bytes"
+    - path: "src/metamemory/transcription/accumulating_processor.py"
+      issue: "Lines 287-291 - Every 2s triggers re-transcription WITHOUT clearing buffer"
+    - path: "src/metamemory/transcription/accumulating_processor.py"
+      issue: "Lines 351-353 - Transcribes entire buffer each cycle"
+    - path: "src/metamemory/transcription/transcript_store.py"
+      issue: "Line 133 - Appends all segments: self._words.extend(words), no deduplication"
+  missing:
+    - "Track last emitted segment index per phrase"
+    - "Only emit new segments in each cycle (skip already emitted)"
+    - "Reset tracking after phrase completes"
+  debug_session: ".planning/debug/issue-4-transcription-lag.md"

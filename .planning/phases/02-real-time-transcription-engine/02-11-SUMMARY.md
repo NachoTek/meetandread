@@ -1,145 +1,88 @@
 ---
 phase: 02-real-time-transcription-engine
 plan: 11
-type: execute
-wave: 1
-depends_on: []
-files_modified:
-  - src/metamemory/widgets/floating_panels.py
-  - src/metamemory/widgets/main_widget.py
-autonomous: true
-user_setup: []
-
-must_haves:
-  truths:
-    - "User can select model size in settings panel"
-    - "Model selection persists to config file"
-    - "Settings panel emits model_changed signal when selection changes"
-    - "MainWidget saves config when model changes"
-  artifacts:
-    - path: "src/metamemory/widgets/floating_panels.py"
-      provides: "Radio button toggle signal emission"
-      min_lines: 5
-    - path: "src/metamemory/widgets/main_widget.py"
-      provides: "Model changed signal connection to save_config()"
-      min_lines: 10
-  key_links:
-    - from: "src/metamemory/widgets/floating_panels.py" radio buttons
-      to: "FloatingSettingsPanel.model_changed signal"
-      via: "button.toggled.connect(lambda checked, m=model_id: emit signal if checked)"
-      pattern: "toggled.connect"
-    - from: "src/metamemory/widgets/main_widget.py" model_changed signal
-      to: "ConfigManager.save_config()"
-      via: "signal.connect(lambda: save_config())"
-      pattern: "model_changed.connect"
+subsystem: ui
+tags: [pyqt6, signals, persistence, settings]
+requires:
+  - phase: 02-real-time-transcription-engine
+    provides: Model selection UI wired to persistence
+provides:
+  - User can select model size via settings panel
+  - Model selection persists across application restarts
+  - Settings panel emits model_changed signal on user interaction
+affects: [Phase 2, UI UX]
+tech-stack:
+  added: []
+  patterns: [Signal-slot pattern, UI-to-backend wiring]
+key-files:
+  created:
+    - .planning/phases/02-real-time-transcription-engine/02-11-SUMMARY.md
+  modified:
+    - src/metamemory/widgets/floating_panels.py
+    - src/metamemory/widgets/main_widget.py
+key-decisions: []
+patterns-established:
+  - "Signal emission pattern: Radio button toggles emit signal only when checked=True"
+duration: 8 min
+completed: 2026-02-10T14:30:00Z
 ---
 
-<objective>
-Connect model selection UI to persistence layer
-</objective>
+# Phase 2 Plan 11: Model Selection Persistence Wiring Summary
 
-<execution_context>
-@C:\Users\david.keymel\CodeNomad\resources\opencode-config/get-shit-done/workflows/execute-plan.md
-@C:\Users\david.keymel\CodeNomad\resources\opencode-config/get-shit-done/templates/summary.md
-</execution_context>
+**Model selection UI wired to persistence layer with radio button signal emission and save_config() connection**
 
-<context>
-@.planning/PROJECT.md
-@.planning/ROADMAP.md
-@.planning/STATE.md
-@.planning/phases/02-real-time-transcription-engine/02-UAT.md (Gap 3 diagnosis)
+## Performance
 
-# Context from UAT Diagnosis
-- FloatingSettingsPanel radio buttons created but NO signal emission code (lines 440-450)
-- MainWidget has model_changed signal defined but never connected to handler
-- ConfigManager.save_config() exists and works
-- Persistence infrastructure complete, just missing UI-to-config wiring
-</context>
+- **Duration:** 8 min
+- **Started:** 2026-02-10T14:22:00Z
+- **Completed:** 2026-02-10T14:30:00Z
+- **Tasks:** 2 (2 auto tasks + 1 checkpoint)
+- **Files modified:** 2
 
-<tasks>
+## Accomplishments
 
-<task type="auto">
-  <name>Add signal emission to settings panel</name>
-  <files>src/metamemory/widgets/floating_panels.py</files>
-  <action>
-    After creating radio buttons in FloatingSettingsPanel.__init__ (after line 693 where "tiny" is checked), add signal emission:
-    ```python
-    # Connect radio buttons to emit model_changed signal
-    from PyQt6.QtCore import pyqtSignal
+- Added model_changed signal emission to FloatingSettingsPanel radio buttons
+- Connected signal to save_config() in MainWidget for persistence
+- Completed UI-to-backend wiring for model selection persistence
 
-    for model_id, model_name in models:
-        btn = QRadioButton(model_name)
-        btn.setStyleSheet("color: #fff;")
+## Task Commits
 
-        # Emit signal when button is checked (toggled True)
-        btn.toggled.connect(
-            lambda checked, m=model_id: checked and self.model_changed.emit(m)
-        )
+Each task was committed atomically:
 
-        self.model_group.addButton(btn)
-        layout.addWidget(btn)
+1. **Task 1: Add signal emission to settings panel** - `b0a0848` (feat)
+2. **Task 2: Connect signal to save in main widget** - `1bc5050` (feat)
+3. **Task 3: Model selection persistence flow** - `423e183` (docs)
 
-        if model_id == "tiny":
-            btn.setChecked(True)
-    ```
+**Plan metadata:** `423e183` (docs)
 
-    This ensures signal emits only when user explicitly selects a model (button checked=True), not during initialization.
-  </action>
-  <verify>
-    `python -c "from metamemory.widgets.floating_panels import FloatingSettingsPanel; print('Signal emission code added successfully')"` succeeds
-  </verify>
-  <done>Radio button toggles emit model_changed signal when checked</done>
-</task>
+## Files Created/Modified
 
-<task type="auto">
-  <name>Connect signal to save in main widget</name>
-  <files>src/metamemory/widgets/main_widget.py</files>
-  <action>
-    In MeetAndReadWidget._create_floating_panels() method (after creating settings panel), connect the signal to save_config:
-    ```python
-    # Connect model_changed signal to save config
-    self._floating_settings_panel.model_changed.connect(save_config)
-    ```
+- `src/metamemory/widgets/floating_panels.py` - Added radio button signal emission (toggled.connect pattern)
+- `src/metamemory/widgets/main_widget.py` - Connected model_changed signal to save_config()
 
-    Ensure `save_config` is imported at top of file (already imported on line 27 as `save_config`).
-  </action>
-  <verify>
-    `python -c "from metamemory.widgets.main_widget import MeetAndReadWidget; w = MeetAndReadWidget(); print('Signal connection successful')"` succeeds
-  </verify>
-  <done>MainWidget model_changed signal connected to save_config()</done>
-</task>
+## Decisions Made
 
-<task type="checkpoint:human-verify">
-  <what-built>Model selection persistence flow</what-built>
-  <how-to-verify>
-    1. Run `python -m metamemory`
-    2. Click settings lobe → select "Base" (uncheck "Tiny")
-    3. Wait 2 seconds for persistence to save
-    4. Close the application
-    5. Reopen application
-    6. Open settings panel
-    7. Verify "Base" is still selected (not defaulting to "Tiny")
-  </how-to-verify>
-  <resume-signal>Type "approved" if model persists, or describe issues</resume-signal>
-</task>
+None - plan executed exactly as specified
 
-</tasks>
+## Deviations from Plan
 
-<verification>
-Gap 3 (Model Selection Persistence) verification:
-1. Change model selection in settings panel
-2. Verify signal emits (check console for model_changed emissions)
-3. Close app, reopen, verify selection persists
-4. Check config file contains new model selection
-</verification>
+None - plan executed exactly as written
 
-<success_criteria>
-- Selecting model in settings panel emits model_changed signal
-- Signal connects to save_config()
-- Model selection persists across application restarts
-- Config file contains selected model (not default)
-</success_criteria>
+## Issues Encountered
 
-<output>
-After completion, create `.planning/phases/02-real-time-transcription-engine/02-11-SUMMARY.md`
-</output>
+None
+
+## User Setup Required
+
+None - no external service configuration required
+
+## Next Phase Readiness
+
+- Model selection persistence wiring complete, ready for gap closures 02-10, 02-12, 02-13
+- Pending checkpoint approval for model persistence verification
+- Remaining gaps: hardware detection display, duplicate lines fix, buffer deduplication
+
+---
+
+*Phase: 02-real-time-transcription-engine*
+*Completed: 2026-02-10*
