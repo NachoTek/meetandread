@@ -81,28 +81,23 @@ Build the core transcription pipeline. Whisper integration requires model loadin
 - Model size recommendations based on hardware
 - Settings persistence
 
-**Plans:** 13 plans in 4 waves
+**Plans:** 7 plans in 4 waves
 
 | Wave | Plans | Dependencies | Description |
 |------|-------|--------------|-------------|
-| 1 | 02-01, 02-02, 02-03, 02-04 | None | Core engine + Settings + Hardware detection + Integration |
-| 2 | 02-05, 02-06, 02-07, 02-08 | 02-01-02-04 | Gap closures: whisper.cpp, dock_to_widget, auto-scroll, clean exit |
-| 3 | 02-09, 02-10, 02-11, 02-12, 02-13 | 02-05-02-08 | Gap closures: repetition fix, hardware display, persistence, deduplication |
+| 1 | 03-01, 03-02 | None | Enhancement architecture + Large model integration |
+| 2 | 03-03, 03-04 | 03-01-03-02 | Worker pool + UI enhancements |
+| 3 | 03-05, 03-06 | 03-03-03-04 | Testing + Dynamic scaling |
+| 4 | 03-07 | 03-05-03-06 | Go/No-Go validation |
 
 Plans:
-- [ ] 02-01-PLAN.md — Core transcription engine (faster-whisper, VAD chunking, local agreement buffer)
-- [ ] 02-02-PLAN.md — Settings persistence (JSON storage, versioning, smart defaults)
-- [ ] 02-03-PLAN.md — Confidence scoring & hardware detection (model recommendations)
-- [ ] 02-04-PLAN.md — Integration & UI wiring (streaming pipeline, widget display, settings panel)
-- [ ] 02-05-PLAN.md — **GAP CLOSURE** - Replace faster-whisper with whisper.cpp (fix WinError 1114)
-- [ ] 02-06-PLAN.md — **GAP CLOSURE** - Fix settings panel dock_to_widget AttributeError
-- [ ] 02-07-PLAN.md — **GAP CLOSURE** - Fix auto-scroll pause on manual scroll (partially resolved)
-- [ ] 02-08-PLAN.md — **GAP CLOSURE** - Implement clean exit (context menu, ALT+F4, CTRL+C, close button)
-- [ ] 02-09-PLAN.md — **GAP CLOSURE** - Fix transcript text repetition (segment index tracking)
-- [ ] 02-10-PLAN.md — **GAP CLOSURE** - Add hardware detection display to settings panel
-- [ ] 02-11-PLAN.md — **GAP CLOSURE** - Connect model selection UI to persistence layer
-- [ ] 02-12-PLAN.md — **GAP CLOSURE** - Fix duplicate lines after silence bug
-- [ ] 02-13-PLAN.md — **GAP CLOSURE** - Implement buffer deduplication for lag-free transcription
+- [ ] 03-01-PLAN.md — Enhancement architecture foundation (queue management, worker pool configuration)
+- [ ] 03-02-PLAN.md — Enhancement processing with large models (Whisper medium/large integration)
+- [ ] 03-03-PLAN.md — Async worker pool + real-time updates (parallel processing, transcript updates)
+- [ ] 03-04-PLAN.md — UI enhancements (bold formatting, configuration UI)
+- [ ] 03-05-PLAN.md — Testing framework with FakeAudioModule (dual-mode validation)
+- [ ] 03-06-PLAN.md — Dynamic scaling + graceful degradation (auto-scaling, resource management)
+- [ ] 03-07-PLAN.md — Go/No-Go validation framework (accuracy benchmarking, decision criteria)
 
 **Status:** ✅ Planned (ready for execution)
 
