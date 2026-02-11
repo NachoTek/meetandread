@@ -1,7 +1,7 @@
 # Project State: metamemory
 
-**Status:** Phase 2 In Progress
-**Last Updated:** 2026-02-10
+**Status:** Phase 3 In Progress
+**Last Updated:** 2026-02-11
 
 ---
 
@@ -10,20 +10,24 @@
 See: .planning/PROJECT.md (updated 2026-02-01)
 
 **Core value:** Zero information loss during conversations — Users stay fully present knowing every word is captured for AI agent processing
-**Current focus:** Phase 2 - Real-Time Transcription Engine
+**Current focus:** Phase 3 - Dual-Mode Enhancement Architecture
 
 ---
 
 ## Current Position
 
-Phase: 2 of 6 (Real-Time Transcription Engine)
-Plan: 12 of 13 in current phase (buffer deduplication complete)
-Status: Phase 2 In Progress - Gap closures 02-10, 02-11, 02-13 complete
-Last activity: 2026-02-10 - Implemented buffer deduplication to prevent duplicate words (02-13)
+Phase: 3 of 6 (Dual-Mode Enhancement Architecture)
+Plan: 2 of 7 in current phase
+Status: Phase 3 Wave 1 In Progress
+Last activity: 2026-02-11 - Completed enhancement processing with large model inference (03-02)
 
-Progress: ████████████████████████████ 100%
+Progress: ░░░░░░░░░░░░░░░░░░██ 28% (2/7 plans)
 
 **Latest Implementation:**
+- ✅ 03-01: Enhancement queue and worker pool architecture
+- ✅ 03-02: Large model enhancement with confidence-based filtering
+
+**Phase 2 Complete:**
 - ✅ Gap closure 02-05: Replaced faster-whisper with whisper.cpp (fix WinError 1114)
 - ✅ Gap closure 02-06: Fixed settings panel dock_to_widget AttributeError
 - ✅ Gap closure 02-07: Fixed auto-scroll pause on manual scroll (verified)
@@ -42,12 +46,12 @@ Progress: ███████████████████████�
 |-------|--------|----------|--------------|
 | 1 | ✅ | 100% | 8 |
 | 2 | ✅ | 100% | 10 |
-| 3 | ○ | 0% | 16 |
+| 3 | ◆ | 28% | 16 |
 | 4 | ○ | 0% | 8 |
 | 5 | ○ | 0% | 43 |
 | 6 | ○ | 0% | 8 |
 
-**Total:** 93 requirements | 9 complete | 5 in progress | 79 pending
+**Total:** 93 requirements | 18 complete | 3 in progress | 72 pending
 
 ---
 
@@ -59,44 +63,45 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 
 ## Active Phase
 
-**Phase 2: Real-Time Transcription Engine** ◐ **IN PROGRESS**
+**Phase 3: Dual-Mode Enhancement Architecture** ◐ **IN PROGRESS**
 
-**Goal:** Integrate Whisper models for real-time transcription with < 2s latency
+**Goal:** Implement background large model enhancement with selective processing and live UI updates
 
-**Requirements (10):**
-- [✓] TRAN-01: Load Whisper model for real-time transcription (WhisperTranscriptionEngine complete)
-- [✓] TRAN-02: Chunk audio for < 2s transcription latency (VADChunkingProcessor with 1.0s min chunk)
-- [✓] TRAN-03: Extract confidence scores from transcription (confidence.py complete)
-- [✓] TRAN-04: Color-code transcript by confidence (widget displays words with confidence colors)
-- [✓] TRAN-05: Continuous transcription without lag accumulation (AudioRingBuffer with trimming)
-- [✓] TRAN-06: Format transcript for AI agent consumption (markdown export with timestamps)
-- [✓] CFG-02: Select model size (tiny/base/small) via settings panel UI
-- [✓] CFG-05: Display hardware capabilities (HardwareDetector complete)
-- [✓] CFG-06: Recommend model size based on hardware (ModelRecommender complete)
-- [✓] CFG-07: Settings persist across restarts (ConfigManager complete)
+**Requirements (16):**
+- [ ] ENH-01: Low-confidence segments (< 70%) are queued for large model enhancement
+- [ ] ENH-02: Enhancement workers process segments in parallel without blocking real-time transcription
+- [ ] ENH-03: Transcript updates in real-time as enhanced segments complete
+- [ ] ENH-04: Enhanced segments display in bold for visual distinction
+- [ ] ENH-05: Enhancement completes within 15-30 seconds after recording stops
+- [ ] ENH-06: FakeAudioModule validates dual-mode shows accuracy improvement vs single-mode
+- [ ] ENH-07: User can adjust workers and confidence threshold during operation
+- [ ] ENH-08: System resource usage remains acceptable during dual-mode operation
+- [ ] CFG-01: Enhancement configuration (workers, confidence threshold)
+- [ ] CFG-03: Enhancement queue visualization
+- [ ] CFG-04: Real-time enhancement status
+- [ ] TST-01: Dual-mode accuracy validation
+- [ ] TST-02: Performance benchmarking
+- [ ] TST-03: Resource usage monitoring
+- [ ] ENH-09: Dynamic worker scaling
+- [ ] ENH-10: Graceful degradation
 
 **Completed Plans:**
-- [✓] 02-01: Core transcription engine with faster-whisper, VAD chunking, local agreement buffer
-- [✓] 02-02: Settings persistence with JSON storage, versioning, smart defaults
-- [✓] 02-03: Confidence scoring & hardware detection with model recommendations
-- [✓] 02-04: Integration & UI wiring (streaming pipeline, widget display, settings panel)
-- [✓] 02-05: **GAP CLOSURE** - Replace faster-whisper with whisper.cpp (fix WinError 1114)
-- [✓] 02-06: **GAP CLOSURE** - Fix settings panel dock_to_widget AttributeError
-- [✓] 02-07: **GAP CLOSURE** - Fix auto-scroll pause on manual scroll (partially resolved)
-- [✓] 02-08: **GAP CLOSURE** - Implement clean exit (context menu, ALT+F4, CTRL+C, close button)
-- [✓] 02-09: **GAP CLOSURE** - Fix transcript text repetition (segment index tracking)
-- [✓] 02-10: **GAP CLOSURE** - Add hardware detection display to settings panel
-- [✓] 02-11: **GAP CLOSURE** - Connect model selection UI to persistence layer
-- [✓] 02-12: **GAP CLOSURE** - Fix duplicate lines after silence bug (line 386 in deduplication path)
-- [✓] 02-13: **GAP CLOSURE** - Implement buffer deduplication (segment index tracking)
+- [✓] 03-01: Enhancement queue and worker pool architecture
+- [✓] 03-02: Large model enhancement with confidence-based filtering
+
+**Remaining Plans (Phase 3 Wave 1):**
+- [ ] 03-03: Worker pool integration and processing flow
+- [ ] 03-04: Live UI updates for enhanced segments
+- [ ] 03-05: Configuration management for enhancement settings
+- [ ] 03-06: Testing framework with FakeAudioModule
+- [ ] 03-07: Validation and performance measurement
 
 **Success Criteria:**
-1. ✅ User can start recording and capture clean audio from selected source(s)
-2. ✅ Audio streams to disk simultaneously with transcription processing
-3. ✅ Recording can be stopped and audio file is complete and playable
-4. ✅ FakeAudioModule successfully injects pre-recorded audio for testing
-5. ✅ System captures both microphone and system audio when "both" selected
-6. ✅ No audio dropouts or corruption during 30+ minute recordings
+1. Low-confidence segments are automatically queued for enhancement
+2. Enhancement workers process segments in parallel without blocking real-time
+3. Enhanced segments display in bold with improved quality
+4. Enhancement completes within 15-30 seconds after recording stops
+5. Dual-mode shows measurable accuracy improvement over single-mode
 
 ---
 
@@ -128,6 +133,7 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 | 2026-02-01 | Gap closure: Widget single-click | Replace mousePressEvent with click detection | Complete |
 | 2026-02-01 | Gap closure: Crash recovery false positive | finalize_stem defaults to delete_part=True | Complete |
 | 2026-02-01 | Gap closure: CLI fake duration | Session-side max_frames cap enforces --seconds | Complete |
+| 2026-02-11 | WhisperTranscriptionEngine for EnhancementProcessor | EnhancementProcessor wraps WhisperTranscriptionEngine for large models | Active |
 | 2026-02-01 | Gap closure: Widget drag surface | Alpha=1 invisible surface for drag and click-through prevention | Complete |
 | 2026-02-02 | Settings persistence architecture | Dataclasses with atomic JSON writes, smart defaults, versioning | Complete |
 | 2026-02-02 | faster-whisper integration | 4x speed improvement over openai-whisper for real-time | Complete |
@@ -161,26 +167,26 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 None currently.
 
 **Notes:**
-- Phase 2 gaps updated: Settings panel and clean exit resolved by user
-- Gap 3 (transcript repetition) remains - requires further investigation
+- Phase 3 in progress - Wave 1 (03-01, 03-02) complete
 - System audio loopback requires Windows Core Audio implementation (planned for Phase 4)
 - PortAudio WASAPI loopback symbol not exported in sounddevice binary
-- **Gap Closure 02-05 Complete:** PyTorch DLL issue resolved via whisper.cpp replacement
+- Enhancement quality validation pending testing phase (03-06, 03-07)
 
 ---
 
 ## Next Actions
 
 **Immediate:**
-1. ⏳ Execute Phase 2 gap closure 02-12:
-   - 02-12: Fix duplicate lines after silence bug
+1. ⏳ Execute Phase 3 Wave 1 plan 03-03:
+    - 03-03: Worker pool integration and processing flow
 
 **Ready to Start:**
-- Phase 3: Dual-Mode Enhancement Architecture (after checkpoint approval)
+- Phase 3 Wave 1 remaining plans: 03-03, 03-04, 03-05, 03-06, 03-07
 
 **Upcoming:**
 - Phase 4: Speaker Identification (includes Core Audio loopback completion)
 - Phase 5: Widget Interface & System Integration
+- Phase 6: System Integration & Testing
 
 **Deferred:**
 - Windows Core Audio loopback for system capture (AUD-02 completion → Phase 4)
@@ -189,14 +195,14 @@ None currently.
 
 ## Session Continuity
 
-Last session: 2026-02-10
-Stopped at: Implemented hardware detection display in settings panel (Gap 02-10 complete)
-Resume file: .planning/phases/02-real-time-transcription-engine/02-10-SUMMARY.md
+Last session: 2026-02-11
+Stopped at: Completed enhancement processing with large model inference (03-02 complete)
+Resume file: .planning/phases/03-dual-mode-enhancement-architecture/03-02-SUMMARY.md
 
-**Current Status:** Phase 2 gap closures in progress:
-- Model persistence wiring complete (Gap 02-11)
-- Hardware detection display complete (Gap 02-10)
-- Settings panel and clean exit resolved (Gap 02-08, 02-06)
+**Current Status:** Phase 3 Wave 1 in progress:
+- Enhancement queue and worker pool architecture complete (03-01)
+- Large model enhancement with confidence-based filtering complete (03-02)
+- Ready for worker pool integration (03-03)
 - Buffer deduplication complete (Gap 02-13)
 - Remaining: duplicate lines fix (Gap 02-12)
 
