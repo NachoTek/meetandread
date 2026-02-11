@@ -187,6 +187,7 @@ to avoid clipping issues and enable proper text rendering.
 
         # Connect model_changed signal to save config
         self._floating_settings_panel.model_changed.connect(save_config)
+        self._floating_settings_panel.enhancement_settings_changed.connect(self._on_enhancement_settings_changed)
 
         print("DEBUG: Created floating settings panel")
     
@@ -483,15 +484,16 @@ to avoid clipping issues and enable proper text rendering.
     
     def _on_phrase_result(self, result: SegmentResult):
         """Handle segment result from accumulating transcription processor.
-        
+
         Thread-safe: emits signal which automatically queues to main thread.
-        
+
         Args:
             result: SegmentResult with text, confidence, and completion status
         """
         phrase_start = getattr(result, 'phrase_start', False)
-        print(f"DEBUG UI: Segment: '{result.text}' [conf: {result.confidence}%, final: {result.is_final}, phrase_start: {phrase_start}]")
-        
+        enhanced = getattr(result, 'enhanced', False)  # Get enhancement status
+        print(f"DEBUG UI: Segment: '{result.text}' [conf: {result.confidence}%, final: {result.is_final}, phrase_start: {phrase_start}, enhanced: {enhanced}]")
+
         if self._floating_transcript_panel:
             # Emit signal (thread-safe, automatically queues to main thread)
             self._floating_transcript_panel.segment_ready.emit(
@@ -499,9 +501,10 @@ to avoid clipping issues and enable proper text rendering.
                 result.confidence,
                 result.segment_index,
                 result.is_final,
-                phrase_start
+                phrase_start,
+                enhanced
             )
-            print(f"DEBUG UI: Emitted signal with phrase_start={phrase_start}")
+            print(f"DEBUG UI: Emitted signal with phrase_start={phrase_start}, enhanced={enhanced}")
         else:
             print("DEBUG UI: No floating transcript panel available!")
     
@@ -519,19 +522,29 @@ to avoid clipping issues and enable proper text rendering.
     
     def _on_post_process_complete(self, job_id, enhanced_path):
         """Handle post-processing completion.
-        
+
         Args:
             job_id: The post-processing job ID
             enhanced_path: Path to the enhanced transcript file
         """
         print(f"DEBUG UI: Post-processing complete! Job: {job_id}")
         print(f"DEBUG UI: Enhanced transcript saved to: {enhanced_path}")
-        
+
         # Update panel status
         if self._floating_transcript_panel:
             self._floating_transcript_panel.status_label.setText(f"Enhanced transcript saved!")
             QTimer.singleShot(3000, lambda: self._floating_transcript_panel.status_label.setText("Ready"))
-    
+
+    def _on_enhancement_settings_changed(self, settings: dict):
+        """Handle enhancement settings changes.
+
+        Args:
+            settings: Dictionary with enhancement settings (confidence_threshold, num_workers)
+        """
+        print(f"DEBUG UI: Enhancement settings changed: {settings}")
+        # TODO: Apply enhancement settings to the enhancement system
+        # This will be connected in a future phase when enhancement is fully integrated
+
     def toggle_transcript_panel(self):
         """Toggle floating transcript panel visibility."""
         if self._floating_transcript_panel:

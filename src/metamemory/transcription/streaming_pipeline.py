@@ -32,7 +32,6 @@ from metamemory.transcription.vad_processor import VADChunkingProcessor
 from metamemory.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment
 from metamemory.transcription.enhancement import EnhancementQueue, EnhancementWorkerPool, EnhancementProcessor, TranscriptUpdater
 from metamemory.transcription.confidence import should_enhance, ConfidenceLevel
-from metamemory.transcription.confidence import should_enhance, ConfidenceLevel
 
 
 @dataclass
@@ -360,13 +359,15 @@ class RealTimeTranscriptionProcessor:
             avg_confidence = 0
             
         # Check if this segment should be enhanced
-        if should_enhance({
+        should_enhance_flag = should_enhance({
             'confidence': avg_confidence,
             'text': committed_text,
             'id': f"chunk_{self._chunk_counter}"
         }, 
-        threshold=self._enhancement_config.confidence_threshold):
-            # Queue for enhancement if eligible
+        threshold=self._enhancement_config.confidence_threshold)
+        
+        # Queue for enhancement if eligible
+        if should_enhance_flag:
             enhancement_segment = {
                 'id': f"chunk_{self._chunk_counter}",
                 'text': committed_text,

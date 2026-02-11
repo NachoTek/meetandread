@@ -17,10 +17,11 @@ from metamemory.hardware.recommender import ModelRecommender
 
 @dataclass
 class Phrase:
-    """A phrase (line) of transcript with its segments."""
+    """A phrase (line) of transcript with its segments and enhancement status."""
     segments: List[str]  # Text of each segment
     confidences: List[int]  # Confidence of each segment
     is_final: bool  # True if phrase is complete
+    enhanced: List[bool]  # Whether each segment was enhanced
 
 
 class FloatingTranscriptPanel(QWidget):
@@ -37,7 +38,7 @@ class FloatingTranscriptPanel(QWidget):
     
     # Signals
     closed = pyqtSignal()  # Emitted when user closes panel
-    segment_ready = pyqtSignal(str, int, int, bool, bool)  # text, confidence, segment_index, is_final, phrase_start
+    segment_ready = pyqtSignal(str, int, int, bool, bool, bool)  # text, confidence, segment_index, is_final, phrase_start, enhanced
     
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -124,7 +125,20 @@ class FloatingTranscriptPanel(QWidget):
         """)
         self.text_edit.setFrameShape(QFrame.Shape.NoFrame)
         layout.addWidget(self.text_edit)
-        
+
+        # Enhancement status bar
+        self.enhancement_status_label = QLabel("Enhancement: Idle")
+        self.enhancement_status_label.setStyleSheet("""
+            QLabel {
+                color: #888;
+                font-size: 10px;
+                padding: 3px;
+                background-color: #222;
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(self.enhancement_status_label)
+
         # Status label
         self.status_label = QLabel("Ready")
         self.status_label.setStyleSheet("""
@@ -212,24 +226,38 @@ class FloatingTranscriptPanel(QWidget):
         self.text_edit.clear()
         self.phrases.clear()
         self.current_phrase_idx = -1
+        self.enhancement_status_label.setText("Enhancement: Idle")
+
+    def update_enhancement_status(self, queue_size: int, workers_active: int, total_enhanced: int) -> None:
+        """
+        Update the enhancement status display.
+
+        Args:
+            queue_size: Number of segments currently in enhancement queue
+            workers_active: Number of workers currently processing
+            total_enhanced: Total number of segments enhanced
+        """
+        status = f"Enhancement: Queue {queue_size} | Workers {workers_active} | Enhanced {total_enhanced}"
+        self.enhancement_status_label.setText(status)
     
-    def update_segment(self, text: str, confidence: int, segment_index: int, is_final: bool = False, phrase_start: bool = False) -> None:
+    def update_segment(self, text: str, confidence: int, segment_index: int, is_final: bool = False, phrase_start: bool = False, enhanced: bool = False) -> None:
         """
         Update a single segment. Each segment is part of a phrase (line).
-        
+
         Args:
             text: Transcribed text for this segment
             confidence: Confidence score (0-100)
-            segment_index: Position of this segment in the current phrase
+            segment_index: Position of this segment in current phrase
             is_final: If True, this phrase is complete
             phrase_start: If True, start a new phrase (new line)
+            enhanced: If True, this segment was enhanced by background processor
         """
-        print(f"DEBUG Panel: update_segment text='{text}', idx={segment_index}, phrase_start={phrase_start}")
+        print(f"DEBUG Panel: update_segment text='{text}', idx={segment_index}, phrase_start={phrase_start}, enhanced={enhanced}")
         
         # Start new phrase if needed (BEFORE checking for blank audio)
         if phrase_start or self.current_phrase_idx < 0:
             print(f"DEBUG Panel: Starting NEW PHRASE")
-            self.phrases.append(Phrase(segments=[], confidences=[], is_final=False))
+            self.phrases.append(Phrase(segments=[], confidences=[], is_final=False, enhanced=[]))
             self.current_phrase_idx = len(self.phrases) - 1
         
         # Skip [BLANK_AUDIO] after creating the phrase structure
@@ -246,12 +274,14 @@ class FloatingTranscriptPanel(QWidget):
             # Update existing segment
             phrase.segments[segment_index] = text
             phrase.confidences[segment_index] = confidence
+            # Keep existing enhanced status
             print(f"DEBUG Panel: Updated segment {segment_index}: '{text}' [conf: {confidence}%]")
         else:
             # Add new segment
             phrase.segments.append(text)
             phrase.confidences.append(confidence)
-            print(f"DEBUG Panel: Added segment {segment_index}: '{text}' [conf: {confidence}%]")
+            phrase.enhanced.append(enhanced)  # Set enhancement status
+            print(f"DEBUG Panel: Added segment {segment_index}: '{text}' [conf: {confidence}%] enhanced={enhanced}")
         
         # Rebuild the entire display
         self._rebuild_display()
@@ -271,13 +301,16 @@ class FloatingTranscriptPanel(QWidget):
         for phrase_idx, phrase in enumerate(self.phrases):
             # Build the phrase text from segments
             for seg_idx, (text, conf) in enumerate(zip(phrase.segments, phrase.confidences)):
+                # Determine if this segment was enhanced
+                is_enhanced = phrase.enhanced[seg_idx] if seg_idx < len(phrase.enhanced) else False
+                
                 # Determine color based on confidence
                 color = self._get_confidence_color(conf)
                 
                 # Create format
                 fmt = QTextCharFormat()
                 fmt.setForeground(QColor(color))
-                fmt.setFontWeight(QFont.Weight.Bold if conf >= 80 else QFont.Weight.Normal)
+                fmt.setFontWeight(QFont.Weight.Bold if conf >= 80 or is_enhanced else QFont.Weight.Normal)
                 
                 # Insert text
                 cursor.insertText(text, fmt)
@@ -383,6 +416,7 @@ class FloatingSettingsPanel(QWidget):
     
     closed = pyqtSignal()
     model_changed = pyqtSignal(str)  # Emit model name when changed
+    enhancement_settings_changed = pyqtSignal(dict)  # Emit enhancement settings dict when changed
     
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -480,6 +514,103 @@ class FloatingSettingsPanel(QWidget):
         layout.addWidget(cpu_label)
         layout.addWidget(rec_label)
 
+        # Enhancement settings section
+        enhancement_label = QLabel("Enhancement Settings:")
+        enhancement_label.setStyleSheet("font-weight: bold; color: #4CAF50; margin-top: 10px;")
+        layout.addWidget(enhancement_label)
+
+        # Confidence threshold slider
+        threshold_label = QLabel("Confidence Threshold:")
+        layout.addWidget(threshold_label)
+
+        from PyQt6.QtWidgets import QSlider, QLabel as QLabel2
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.threshold_slider.setRange(50, 95)  # 50% to 95%
+        self.threshold_slider.setValue(70)  # Default: 70%
+        self.threshold_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #333;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #4CAF50;
+                border: 1px solid #fff;
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                margin: -5px 0;
+            }
+        """)
+        self.threshold_value_label = QLabel2("70%")
+        self.threshold_value_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+
+        threshold_layout = QHBoxLayout()
+        threshold_layout.addWidget(self.threshold_slider)
+        threshold_layout.addWidget(self.threshold_value_label)
+        layout.addLayout(threshold_layout)
+
+        # Number of workers slider
+        workers_label = QLabel("Enhancement Workers:")
+        layout.addWidget(workers_label)
+
+        self.workers_slider = QSlider(Qt.Orientation.Horizontal)
+        self.workers_slider.setRange(1, 8)  # 1 to 8 workers
+        self.workers_slider.setValue(4)  # Default: 4
+        self.workers_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #333;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #4CAF50;
+                border: 1px solid #fff;
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                margin: -5px 0;
+            }
+        """)
+        self.workers_value_label = QLabel2("4")
+        self.workers_value_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+
+        workers_layout = QHBoxLayout()
+        workers_layout.addWidget(self.workers_slider)
+        workers_layout.addWidget(self.workers_value_label)
+        layout.addLayout(workers_layout)
+
+        # Connect slider signals
+        self.threshold_slider.valueChanged.connect(
+            lambda value: (
+                self.threshold_value_label.setText(f"{value}%"),
+                self._emit_enhancement_settings()
+            )
+        )
+        self.workers_slider.valueChanged.connect(
+            lambda value: (
+                self.workers_value_label.setText(str(value)),
+                self._emit_enhancement_settings()
+            )
+        )
+
+        # Enhancement model selection
+        enhancement_model_label = QLabel("Enhancement Model:")
+        layout.addWidget(enhancement_model_label)
+
+        self.enhancement_model_group = QButtonGroup(self)
+        enhancement_models = [("small", "Small"), ("medium", "Medium"), ("large", "Large")]
+
+        for model_id, model_name in enhancement_models:
+            from PyQt6.QtWidgets import QRadioButton
+            btn = QRadioButton(model_name)
+            btn.setStyleSheet("color: #fff;")
+            self.enhancement_model_group.addButton(btn)
+            layout.addWidget(btn)
+
+            if model_id == "medium":
+                btn.setChecked(True)
+
         layout.addStretch()
         
         # Close button
@@ -487,11 +618,19 @@ class FloatingSettingsPanel(QWidget):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.hide_panel)
         layout.addWidget(close_btn)
-        
+
         # Dragging
         self._dragging = False
         self._drag_pos = None
-    
+
+    def _emit_enhancement_settings(self) -> None:
+        """Emit current enhancement settings."""
+        settings = {
+            'confidence_threshold': self.threshold_slider.value() / 100.0,  # Convert to 0-1 range
+            'num_workers': self.workers_slider.value(),
+        }
+        self.enhancement_settings_changed.emit(settings)
+
     def show_panel(self):
         """Show the panel."""
         self.show()
