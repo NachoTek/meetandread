@@ -254,37 +254,45 @@ class FloatingTranscriptPanel(QWidget):
         """
         print(f"DEBUG Panel: update_segment text='{text}', idx={segment_index}, phrase_start={phrase_start}, enhanced={enhanced}")
         
-        # Start new phrase if needed (BEFORE checking for blank audio)
+        # Skip [BLANK_AUDIO] after creating a phrase structure
+        if text.strip() == "[BLANK_AUDIO]":
+            print(f"DEBUG Panel: Skipping [BLANK_AUDIO]")
+            return
+        
+        # Start new phrase if needed
         if phrase_start or self.current_phrase_idx < 0:
             print(f"DEBUG Panel: Starting NEW PHRASE")
+            # Insert new block before creating phrase structure
+            cursor = self.text_edit.textCursor()
+            if self.current_phrase_idx >= 0:
+                cursor.insertBlock()  # New paragraph after previous phrase
+            
             self.phrases.append(Phrase(segments=[], confidences=[], is_final=False, enhanced=[]))
             self.current_phrase_idx = len(self.phrases) - 1
-        
-        # Skip [BLANK_AUDIO] after creating the phrase structure
-        if text.strip() == "[BLANK_AUDIO]":
-            print(f"DEBUG Panel: Skipping [BLANK_AUDIO] but phrase {self.current_phrase_idx} exists")
-            return
         
         # Get current phrase
         phrase = self.phrases[self.current_phrase_idx]
         phrase.is_final = is_final
         
-        # Update or add segment
+        # Update or add segment to internal tracking
         if segment_index < len(phrase.segments):
-            # Update existing segment
+            # Update existing segment - REPLACE IN PLACE
             phrase.segments[segment_index] = text
             phrase.confidences[segment_index] = confidence
-            # Keep existing enhanced status
-            print(f"DEBUG Panel: Updated segment {segment_index}: '{text}' [conf: {confidence}%]")
+            phrase.enhanced[segment_index] = enhanced
+            print(f"DEBUG Panel: Updated segment {segment_index}: '{text}' [conf: {confidence}%] enhanced={enhanced}")
+            
+            # Find and replace just this segment in display
+            self._replace_segment_in_display(self.current_phrase_idx, segment_index, text, confidence, enhanced)
         else:
-            # Add new segment
+            # Add new segment - APPEND TO CURRENT LINE
             phrase.segments.append(text)
             phrase.confidences.append(confidence)
-            phrase.enhanced.append(enhanced)  # Set enhancement status
+            phrase.enhanced.append(enhanced)
             print(f"DEBUG Panel: Added segment {segment_index}: '{text}' [conf: {confidence}%] enhanced={enhanced}")
-        
-        # Rebuild the entire display
-        self._rebuild_display()
+            
+            # Append segment to display with proper formatting
+            self._append_segment_to_display(text, confidence, enhanced)
         
         # Update status
         total_segments = sum(len(p.segments) for p in self.phrases)
@@ -293,38 +301,61 @@ class FloatingTranscriptPanel(QWidget):
         # Auto-scroll
         self._scroll_to_bottom()
     
-    def _rebuild_display(self) -> None:
-        """Rebuild the entire transcript display from phrases."""
-        self.text_edit.clear()
+    def _append_segment_to_display(self, text: str, confidence: int, enhanced: bool) -> None:
+        """Append a segment to the current line with proper formatting."""
         cursor = self.text_edit.textCursor()
-
-        for phrase_idx, phrase in enumerate(self.phrases):
-            # Build the phrase text from segments
-            for seg_idx, (text, conf) in enumerate(zip(phrase.segments, phrase.confidences)):
-                # Determine if this segment was enhanced
-                is_enhanced = phrase.enhanced[seg_idx] if seg_idx < len(phrase.enhanced) else False
-
-                # Determine color based on confidence
-                color = self._get_confidence_color(conf)
-
-                # Create format
-                fmt = QTextCharFormat()
-                fmt.setForeground(QColor(color))
-                # Enhanced segments display in bold for visual distinction
-                fmt.setFontWeight(QFont.Weight.Bold if is_enhanced else QFont.Weight.Normal)
-                
-                # Insert text
-                cursor.insertText(text, fmt)
-                
-                # Add space between segments (but not after last)
-                if seg_idx < len(phrase.segments) - 1:
-                    cursor.insertText(" ")
-            
-            # Add newline after phrase (but not after last)
-            if phrase_idx < len(self.phrases) - 1:
-                cursor.insertBlock()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
         
-        print(f"DEBUG Panel: Rebuilt display with {len(self.phrases)} phrases")
+        # Add space between segments
+        if self.phrases[self.current_phrase_idx].segments and len(self.phrases[self.current_phrase_idx].segments) > 0:
+            cursor.insertText(" ")
+        
+        # Determine color and formatting
+        color = self._get_confidence_color(confidence)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        # ONLY bold if enhanced, not based on confidence
+        fmt.setFontWeight(QFont.Weight.Bold if enhanced else QFont.Weight.Normal)
+        
+        cursor.insertText(text, fmt)
+    
+    def _replace_segment_in_display(self, phrase_idx: int, segment_idx: int, text: str, confidence: int, enhanced: bool) -> None:
+        """Replace a specific segment in the display without rebuilding everything."""
+        cursor = self.text_edit.textCursor()
+        
+        # Move to start of document
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        
+        # Navigate to correct phrase block
+        for _ in range(phrase_idx):
+            cursor.movePosition(QTextCursor.MoveOperation.NextBlock)
+        
+        # Navigate to correct segment within phrase
+        # Segments are separated by spaces, so we move by words
+        for _ in range(segment_idx):
+            # Move past text and space
+            cursor.movePosition(QTextCursor.MoveOperation.NextWord)
+            # Skip the space between segments (if not last)
+            if _ < segment_idx - 1:
+                cursor.movePosition(QTextCursor.MoveOperation.NextCharacter)
+        
+        # Select the segment text
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfWord)
+        # Find end of this segment (either space or block end)
+        if segment_idx < len(self.phrases[phrase_idx].segments) - 1:
+            # Segment is followed by space
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfWord, QTextCursor.MoveMode.KeepAnchor)
+        else:
+            # Last segment - select to end of block
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        
+        # Replace with new text and formatting
+        color = self._get_confidence_color(confidence)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        # ONLY bold if enhanced
+        fmt.setFontWeight(QFont.Weight.Bold if enhanced else QFont.Weight.Normal)
+        cursor.insertText(text, fmt)
     
     def _get_confidence_color(self, confidence: int) -> str:
         """Get color based on confidence score."""
@@ -705,12 +736,12 @@ if __name__ == "__main__":
     panel.show_panel()
     
     # Test adding some content
-    panel.update_segment("Hello", 85, 0, is_final=False)
-    panel.update_segment("world", 90, 1, is_final=False)
-    panel.update_segment("this is", 75, 2, is_final=True)
+    panel.update_segment("Hello", 85, 0, is_final=False, enhanced=False)
+    panel.update_segment("world", 90, 1, is_final=False, enhanced=False)
+    panel.update_segment("this is", 75, 2, is_final=True, enhanced=False)
     
     # New phrase
-    panel.update_segment("New phrase", 80, 0, phrase_start=True, is_final=False)
-    panel.update_segment("here", 85, 1, is_final=True)
+    panel.update_segment("New phrase", 80, 0, phrase_start=True, is_final=False, enhanced=False)
+    panel.update_segment("here", 85, 1, is_final=True, enhanced=False)
     
     sys.exit(app.exec())
