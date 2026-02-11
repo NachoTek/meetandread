@@ -191,16 +191,17 @@ to avoid clipping issues and enable proper text rendering.
 
         print("DEBUG: Created floating settings panel")
     
-    def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool):
+    def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool, enhanced: bool = False):
         """Handle segment signal from panel (runs on main thread)."""
-        print(f"DEBUG Panel Signal: text='{text[:30]}...', idx={segment_index}, phrase_start={phrase_start}")
+        print(f"DEBUG Panel Signal: text='{text[:30]}...', idx={segment_index}, phrase_start={phrase_start}, enhanced={enhanced}")
         try:
             self._floating_transcript_panel.update_segment(
                 text=text,
                 confidence=confidence,
                 segment_index=segment_index,
                 is_final=is_final,
-                phrase_start=phrase_start
+                phrase_start=phrase_start,
+                enhanced=enhanced
             )
             print(f"DEBUG Panel: Updated via signal successfully")
         except Exception as e:
