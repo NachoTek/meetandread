@@ -5,7 +5,7 @@ All settings use dataclasses with from_dict/to_dict methods for JSON persistence
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Optional, Tuple, Any, Dict
+from typing import Optional, Tuple, Any, Dict, List
 
 
 @dataclass
