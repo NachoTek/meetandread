@@ -49,10 +49,13 @@ class EnhancementSettings:
     Attributes:
         confidence_threshold: Minimum confidence score to trigger enhancement (default: 0.7)
         num_workers: Number of parallel workers for enhancement processing (default: 4)
+        min_workers: Minimum number of workers for dynamic scaling (default: 2)
+        max_workers: Maximum number of workers for dynamic scaling (default: 8)
         max_queue_size: Maximum segments in enhancement queue (default: 100)
         enhancement_model: Whisper model size for enhancement (default: "medium")
         dynamic_scaling: Enable auto-scaling of workers based on system load (default: True)
         cpu_usage_threshold: CPU usage threshold for worker scaling (default: 0.8)
+        worker_scaling_algorithm: Algorithm for worker scaling - "adaptive", "linear", or "none" (default: "adaptive")
     """
     confidence_threshold: float = field(
         default=0.7,
@@ -61,6 +64,14 @@ class EnhancementSettings:
     num_workers: int = field(
         default=4,
         metadata={"description": "Number of parallel workers for enhancement processing"}
+    )
+    min_workers: int = field(
+        default=2,
+        metadata={"description": "Minimum number of workers for dynamic scaling"}
+    )
+    max_workers: int = field(
+        default=8,
+        metadata={"description": "Maximum number of workers for dynamic scaling"}
     )
     max_queue_size: int = field(
         default=100,
@@ -78,6 +89,10 @@ class EnhancementSettings:
         default=0.8,
         metadata={"description": "CPU usage threshold for worker scaling (0.0-1.0)"}
     )
+    worker_scaling_algorithm: str = field(
+        default="adaptive",
+        metadata={"description": "Algorithm for worker scaling: adaptive, linear, or none"}
+    )
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -89,11 +104,54 @@ class EnhancementSettings:
         return cls(
             confidence_threshold=data.get("confidence_threshold", cls.confidence_threshold),
             num_workers=data.get("num_workers", cls.num_workers),
+            min_workers=data.get("min_workers", cls.min_workers),
+            max_workers=data.get("max_workers", cls.max_workers),
             max_queue_size=data.get("max_queue_size", cls.max_queue_size),
             enhancement_model=data.get("enhancement_model", cls.enhancement_model),
             dynamic_scaling=data.get("dynamic_scaling", cls.dynamic_scaling),
-            cpu_usage_threshold=data.get("cpu_usage_threshold", cls.cpu_usage_threshold)
+            cpu_usage_threshold=data.get("cpu_usage_threshold", cls.cpu_usage_threshold),
+            worker_scaling_algorithm=data.get("worker_scaling_algorithm", cls.worker_scaling_algorithm)
         )
+    
+    def validate(self) -> List[str]:
+        """
+        Validate enhancement settings and return list of errors.
+        
+        Returns:
+            List[str]: List of validation error messages (empty if valid)
+        """
+        errors = []
+        
+        # Validate confidence threshold
+        if not 0.0 <= self.confidence_threshold <= 1.0:
+            errors.append(f"confidence_threshold must be between 0.0 and 1.0, got {self.confidence_threshold}")
+        
+        # Validate worker counts
+        if self.num_workers < 1:
+            errors.append(f"num_workers must be at least 1, got {self.num_workers}")
+        if self.min_workers < 1:
+            errors.append(f"min_workers must be at least 1, got {self.min_workers}")
+        if self.max_workers < 1:
+            errors.append(f"max_workers must be at least 1, got {self.max_workers}")
+        if self.min_workers > self.max_workers:
+            errors.append(f"min_workers ({self.min_workers}) cannot be greater than max_workers ({self.max_workers})")
+        if not (self.min_workers <= self.num_workers <= self.max_workers):
+            errors.append(f"num_workers ({self.num_workers}) must be between min_workers ({self.min_workers}) and max_workers ({self.max_workers})")
+        
+        # Validate queue size
+        if self.max_queue_size < 1:
+            errors.append(f"max_queue_size must be at least 1, got {self.max_queue_size}")
+        
+        # Validate CPU usage threshold
+        if not 0.0 <= self.cpu_usage_threshold <= 1.0:
+            errors.append(f"cpu_usage_threshold must be between 0.0 and 1.0, got {self.cpu_usage_threshold}")
+        
+        # Validate scaling algorithm
+        valid_algorithms = ["adaptive", "linear", "none"]
+        if self.worker_scaling_algorithm not in valid_algorithms:
+            errors.append(f"worker_scaling_algorithm must be one of {valid_algorithms}, got {self.worker_scaling_algorithm}")
+        
+        return errors
 
 
 @dataclass
