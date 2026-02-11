@@ -297,20 +297,21 @@ class FloatingTranscriptPanel(QWidget):
         """Rebuild the entire transcript display from phrases."""
         self.text_edit.clear()
         cursor = self.text_edit.textCursor()
-        
+
         for phrase_idx, phrase in enumerate(self.phrases):
             # Build the phrase text from segments
             for seg_idx, (text, conf) in enumerate(zip(phrase.segments, phrase.confidences)):
                 # Determine if this segment was enhanced
                 is_enhanced = phrase.enhanced[seg_idx] if seg_idx < len(phrase.enhanced) else False
-                
+
                 # Determine color based on confidence
                 color = self._get_confidence_color(conf)
-                
+
                 # Create format
                 fmt = QTextCharFormat()
                 fmt.setForeground(QColor(color))
-                fmt.setFontWeight(QFont.Weight.Bold if conf >= 80 or is_enhanced else QFont.Weight.Normal)
+                # Enhanced segments display in bold for visual distinction
+                fmt.setFontWeight(QFont.Weight.Bold if is_enhanced else QFont.Weight.Normal)
                 
                 # Insert text
                 cursor.insertText(text, fmt)
