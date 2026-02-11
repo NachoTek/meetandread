@@ -78,7 +78,12 @@ The bug on line 386 used `self._new_phrase_started` (already reset to False) ins
 
 ## Issues Encountered
 
-None - plan executed smoothly.
+**Critical Bug Location Error:**
+- Initial fix targeted line 412 (fallback path) but actual bug was on line 386 (deduplication path)
+- User reported issue persisted after initial fix
+- Investigation revealed deduplication code path (lines 357-391) was the active path during live transcription
+- Corrected fix applied to line 386
+- **User verified:** Fix works correctly — phrases now separate with empty lines after silence
 
 ## User Setup Required
 
