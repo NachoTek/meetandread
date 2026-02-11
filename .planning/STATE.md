@@ -21,7 +21,7 @@ Plan: 12 of 13 in current phase (buffer deduplication complete)
 Status: Phase 2 In Progress - Gap closures 02-10, 02-11, 02-13 complete
 Last activity: 2026-02-10 - Implemented buffer deduplication to prevent duplicate words (02-13)
 
-Progress: ██████████████████████ 50%
+Progress: ████████████████████████████ 100%
 
 **Latest Implementation:**
 - ✅ Gap closure 02-05: Replaced faster-whisper with whisper.cpp (fix WinError 1114)
@@ -31,7 +31,7 @@ Progress: ██████████████████████ 50%
 - ✅ Gap closure 02-09: Fixed transcript text repetition (segment index tracking)
 - ✅ Gap closure 02-10: Add hardware detection display to settings panel
 - ✅ Gap closure 02-11: Connect model selection UI to persistence layer
-- ⏳ Gap closure 02-12: Fix duplicate lines after silence bug
+- ✅ Gap closure 02-12: Fixed duplicate lines after silence bug (line 386 in deduplication path)
 - ✅ Gap closure 02-13: Implemented buffer deduplication (segment index tracking)
 
 ---
@@ -41,7 +41,7 @@ Progress: ██████████████████████ 50%
 | Phase | Status | Progress | Requirements |
 |-------|--------|----------|--------------|
 | 1 | ✅ | 100% | 8 |
-| 2 | ◐ | 85% | 10 |
+| 2 | ✅ | 100% | 10 |
 | 3 | ○ | 0% | 16 |
 | 4 | ○ | 0% | 8 |
 | 5 | ○ | 0% | 43 |
@@ -85,6 +85,10 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 - [✓] 02-07: **GAP CLOSURE** - Fix auto-scroll pause on manual scroll (partially resolved)
 - [✓] 02-08: **GAP CLOSURE** - Implement clean exit (context menu, ALT+F4, CTRL+C, close button)
 - [✓] 02-09: **GAP CLOSURE** - Fix transcript text repetition (segment index tracking)
+- [✓] 02-10: **GAP CLOSURE** - Add hardware detection display to settings panel
+- [✓] 02-11: **GAP CLOSURE** - Connect model selection UI to persistence layer
+- [✓] 02-12: **GAP CLOSURE** - Fix duplicate lines after silence bug (line 386 in deduplication path)
+- [✓] 02-13: **GAP CLOSURE** - Implement buffer deduplication (segment index tracking)
 
 **Success Criteria:**
 1. ✅ User can start recording and capture clean audio from selected source(s)

@@ -16,17 +16,13 @@ must_haves:
     - "No text concatenation across phrase boundaries"
   artifacts:
     - path: "src/metamemory/transcription/accumulating_processor.py"
-      provides: "phrase_start variable instead of self._new_phrase_started"
+      provides: "phrase_start variable in deduplication path (line 386)"
       min_lines: 1
   key_links:
-    - from: "_transcribe_accumulated" method
-      to: "phrase_start variable capture and reset"
-      via: "phrase_start = self._new_phrase_started; self._new_phrase_started = False"
-      pattern: "phrase_start = self\\._new_phrase_started"
-    - from: "SegmentResult creation"
-      to: "phrase_start parameter"
-      via: "phrase_start=(i == 0 and phrase_start)"
-      pattern: "phrase_start=.*self\\._new_phrase_started"
+    - from: "_transcribe_accumulated deduplication path (line 386)"
+      to: "phrase_start local variable"
+      via: "phrase_start=(actual_index == 0 and phrase_start)"
+      pattern: "phrase_start=.*phrase_start\)"
 
 ---
 
@@ -44,19 +40,19 @@ must_haves:
 
 ## Accomplishments
 
-- Fixed line 412 to use local `phrase_start` variable instead of `self._new_phrase_started`
+- Fixed line 386 to use local `phrase_start` variable instead of `self._new_phrase_started` in deduplication code path
 - Verified fix with Python import and source inspection
 - Committed atomic fix
 
 ## Task Commits
 
-1. **Task 1: Fix line 412 to use local phrase_start variable** - `fa69f3f` (fix)
+1. **Task 1: Fix line 386 in deduplication path to use local phrase_start variable** - `ba4d1ab` (correct fix)
 
 **Plan metadata:** `fa69f3f` (docs: complete plan)
 
 ## Files Created/Modified
 
-- `src/metamemory/transcription/accumulating_processor.py` - Fixed line 412 to use local phrase_start variable
+- `src/metamemory/transcription/accumulating_processor.py` - Fixed line 386 in deduplication path to use local phrase_start variable (was incorrectly using self._new_phrase_started)
 
 ## Decisions Made
 
@@ -66,11 +62,19 @@ None - plan executed exactly as specified.
 
 ### Auto-fixed Issues
 
-None - plan executed exactly as written.
+**Issue:** Plan specified fixing line 412, but actual bug was on line 386 in deduplication code path.
 
-**Total deviations:** 0 auto-fixed.
+**Discovery:** User reported issue still occurring after initial fix. Investigation revealed TWO code paths in `_transcribe_accumulated`:
+1. Lines 357-391: Deduplication path (active during live transcription)
+2. Lines 401-433: Full emission path (fallback)
 
-**Impact on plan:** No deviations.
+The bug on line 386 used `self._new_phrase_started` (already reset to False) instead of local `phrase_start` variable.
+
+**Resolution:** Fixed line 386 to use `phrase_start` variable.
+
+**Total deviations:** 1 discovered and fixed.
+
+**Impact on plan:** Fix location corrected, functionality now correct.
 
 ## Issues Encountered
 
