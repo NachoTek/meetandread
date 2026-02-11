@@ -43,6 +43,60 @@ class ModelSettings:
 
 
 @dataclass
+class EnhancementSettings:
+    """Configuration for enhancement processing.
+    
+    Attributes:
+        confidence_threshold: Minimum confidence score to trigger enhancement (default: 0.7)
+        num_workers: Number of parallel workers for enhancement processing (default: 4)
+        max_queue_size: Maximum segments in enhancement queue (default: 100)
+        enhancement_model: Whisper model size for enhancement (default: "medium")
+        dynamic_scaling: Enable auto-scaling of workers based on system load (default: True)
+        cpu_usage_threshold: CPU usage threshold for worker scaling (default: 0.8)
+    """
+    confidence_threshold: float = field(
+        default=0.7,
+        metadata={"description": "Minimum confidence score to trigger enhancement (0.0-1.0)"}
+    )
+    num_workers: int = field(
+        default=4,
+        metadata={"description": "Number of parallel workers for enhancement processing"}
+    )
+    max_queue_size: int = field(
+        default=100,
+        metadata={"description": "Maximum segments in enhancement queue"}
+    )
+    enhancement_model: str = field(
+        default="medium",
+        metadata={"description": "Whisper model size for enhancement: small, medium, large"}
+    )
+    dynamic_scaling: bool = field(
+        default=True,
+        metadata={"description": "Enable auto-scaling of workers based on system load"}
+    )
+    cpu_usage_threshold: float = field(
+        default=0.8,
+        metadata={"description": "CPU usage threshold for worker scaling (0.0-1.0)"}
+    )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "EnhancementSettings":
+        """Create from dictionary, using defaults for missing fields."""
+        return cls(
+            confidence_threshold=data.get("confidence_threshold", cls.confidence_threshold),
+            num_workers=data.get("num_workers", cls.num_workers),
+            max_queue_size=data.get("max_queue_size", cls.max_queue_size),
+            enhancement_model=data.get("enhancement_model", cls.enhancement_model),
+            dynamic_scaling=data.get("dynamic_scaling", cls.dynamic_scaling),
+            cpu_usage_threshold=data.get("cpu_usage_threshold", cls.cpu_usage_threshold)
+        )
+
+
+@dataclass
 class TranscriptionSettings:
     """Configuration for transcription behavior.
     
@@ -242,6 +296,7 @@ class AppSettings:
         transcription: Transcription behavior settings.
         hardware: Hardware detection and recommendation settings.
         ui: UI behavior and appearance settings.
+        enhancement: Enhancement processing settings.
     """
     config_version: int = field(
         default=1,
@@ -251,6 +306,7 @@ class AppSettings:
     transcription: TranscriptionSettings = field(default_factory=TranscriptionSettings)
     hardware: HardwareSettings = field(default_factory=HardwareSettings)
     ui: UISettings = field(default_factory=UISettings)
+    enhancement: EnhancementSettings = field(default_factory=EnhancementSettings)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -259,7 +315,8 @@ class AppSettings:
             "model": self.model.to_dict(),
             "transcription": self.transcription.to_dict(),
             "hardware": self.hardware.to_dict(),
-            "ui": self.ui.to_dict()
+            "ui": self.ui.to_dict(),
+            "enhancement": self.enhancement.to_dict()
         }
 
     @classmethod
@@ -270,13 +327,15 @@ class AppSettings:
         transcription_data = data.get("transcription", {})
         hardware_data = data.get("hardware", {})
         ui_data = data.get("ui", {})
+        enhancement_data = data.get("enhancement", {})
         
         return cls(
             config_version=data.get("config_version", cls.config_version),
             model=ModelSettings.from_dict(model_data) if isinstance(model_data, dict) else ModelSettings(),
             transcription=TranscriptionSettings.from_dict(transcription_data) if isinstance(transcription_data, dict) else TranscriptionSettings(),
             hardware=HardwareSettings.from_dict(hardware_data) if isinstance(hardware_data, dict) else HardwareSettings(),
-            ui=UISettings.from_dict(ui_data) if isinstance(ui_data, dict) else UISettings()
+            ui=UISettings.from_dict(ui_data) if isinstance(ui_data, dict) else UISettings(),
+            enhancement=EnhancementSettings.from_dict(enhancement_data) if isinstance(enhancement_data, dict) else EnhancementSettings()
         )
 
     @classmethod
