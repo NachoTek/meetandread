@@ -139,6 +139,24 @@ The core innovation — dual-mode parallel enhancement. This is make-or-break fo
 - Dual-mode vs single-mode comparison testing
 - Go/No-Go validation framework
 
+**Plans:** 7 plans in 4 waves
+
+| Wave | Plans | Dependencies | Description |
+|------|-------|--------------|-------------|
+| 1 | 03-01, 03-02 | None | Enhancement foundation + large model integration |
+| 2 | 03-03, 03-04 | 03-01-03-02 | Async worker pool + UI enhancements |
+| 3 | 03-05, 03-06 | 03-01-03-04 | Testing framework + dynamic scaling |
+| 4 | 03-07 | 03-01-03-06 | Go/No-Go validation framework |
+
+Plans:
+- [ ] 03-01-PLAN.md — Enhancement architecture foundation (queue + worker config)
+- [ ] 03-02-PLAN.md — Enhancement processing with large models (confidence filtering)
+- [ ] 03-03-PLAN.md — Async worker pool + real-time transcript updates
+- [ ] 03-04-PLAN.md — UI enhancements (bold formatting + configuration)
+- [ ] 03-05-PLAN.md — Testing framework with FakeAudioModule
+- [ ] 03-06-PLAN.md — Dynamic scaling + graceful degradation
+- [ ] 03-07-PLAN.md — Go/No-Go validation framework
+
 ---
 
 ## Phase 4: Speaker Identification & Voice Signatures
