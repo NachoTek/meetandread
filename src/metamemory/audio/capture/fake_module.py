@@ -25,6 +25,7 @@ class FakeAudioModule:
         blocksize: int = 1024,
         queue_size: int = 10,
         loop: bool = False,
+        noise_level: float = 0.0,  # 0.0 = no noise, 0.5 = moderate noise, 1.0 = high noise
     ):
         """
         Initialize fake audio source from a WAV file.
@@ -34,6 +35,7 @@ class FakeAudioModule:
             blocksize: Number of frames per block
             queue_size: Maximum size of internal queue
             loop: Whether to loop the file when it ends
+            noise_level: Amount of noise to add (0.0-1.0). Higher = lower confidence.
         """
         self.wav_path = wav_path
         self.blocksize = blocksize
@@ -42,6 +44,7 @@ class FakeAudioModule:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._loop = loop
+        self._noise_level = noise_level
         
         # Read WAV file metadata
         with wave.open(wav_path, 'rb') as wf:
@@ -79,6 +82,14 @@ class FakeAudioModule:
                     audio_data = np.frombuffer(raw_data, dtype=np.int16)
                     audio_data = audio_data.reshape(-1, self._channels)
                     audio_data = audio_data.astype(np.float32) / 32768.0
+                    
+                    # Add noise if noise_level > 0 (induces lower confidence scores)
+                    if self._noise_level > 0:
+                        # Generate random noise scaled by noise_level
+                        noise = np.random.normal(0, self._noise_level * 0.1, audio_data.shape).astype(np.float32)
+                        audio_data = audio_data + noise
+                        # Clip to prevent overflow
+                        audio_data = np.clip(audio_data, -1.0, 1.0)
                     
                     # Push to queue (block if full to simulate real-time)
                     try:
@@ -150,6 +161,7 @@ class FakeAudioModule:
             'wav_path': self.wav_path,
             'duration': self._duration,
             'total_frames': self._nframes,
+            'noise_level': self._noise_level,
         }
 
 
