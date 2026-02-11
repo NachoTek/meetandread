@@ -4,9 +4,23 @@ Provides confidence normalization from Whisper log probabilities to 0-100 scale,
 color coding by confidence level, and visual distortion effects for low confidence text.
 """
 
-from dataclasses import dataclass
+from typing import Dict, Any, List
 from enum import Enum
-from typing import List
+from dataclasses import dataclass
+
+
+def should_enhance(segment: Dict[str, Any], threshold: float = 0.7) -> bool:
+    """Determine if segment should be enhanced based on confidence threshold.
+    
+    Args:
+        segment: Segment dictionary containing at least 'confidence' key
+        threshold: Confidence threshold for enhancement eligibility (0.0-1.0)
+        
+    Returns:
+        bool: True if segment confidence is below threshold and should be enhanced
+    """
+    # Only enhance if confidence below threshold
+    return segment.get("confidence", 100) < (threshold * 100)
 
 
 class ConfidenceLevel(Enum):
@@ -267,4 +281,109 @@ def format_confidence_for_display(confidence: int, text: str) -> dict:
         "color": get_confidence_color(confidence),
         "level": level.value,
         "distortion": get_distortion_intensity(confidence),
+    }
+
+
+def enhanced_confidence(original_confidence: int, enhanced_confidence_score: int) -> Dict[str, Any]:
+    """Calculate confidence improvement metrics for enhanced segments.
+    
+    Provides quality metrics for enhancement validation by comparing
+    original confidence with enhanced confidence scores.
+    
+    Args:
+        original_confidence: Original confidence score 0-100 from real-time transcription
+        enhanced_confidence_score: Enhanced confidence score 0-100 from large model
+        
+    Returns:
+        Dictionary with keys:
+        - original_confidence: Original confidence score
+        - enhanced_confidence: Enhanced confidence score
+        - improvement: Point difference (enhanced - original)
+        - improvement_percent: Percentage improvement relative to original
+        - quality_quality: Quality category ('excellent', 'good', 'moderate', 'none', 'degraded')
+        
+    Example:
+        >>> result = enhanced_confidence(60, 85)
+        >>> result['improvement']
+        25
+        >>> result['quality_category']
+        'good'
+    """
+    improvement = enhanced_confidence_score - original_confidence
+    
+    # Calculate percentage improvement relative to original
+    # Avoid division by zero
+    if original_confidence > 0:
+        improvement_percent = (improvement / original_confidence) * 100
+    else:
+        improvement_percent = improvement  # If original was 0, just use the improvement
+    
+    # Determine quality category
+    if improvement > 20:
+        quality_category = "excellent"
+    elif improvement > 10:
+        quality_category = "good"
+    elif improvement > 0:
+        quality_category = "moderate"
+    elif improvement == 0:
+        quality_category = "none"
+    else:
+        quality_category = "degraded"  # Enhancement made things worse
+    
+    return {
+        "original_confidence": original_confidence,
+        "enhanced_confidence": enhanced_confidence_score,
+        "improvement": improvement,
+        "improvement_percent": improvement_percent,
+        "quality_category": quality_category
+    }
+
+
+def calculate_enhancement_eligibility(confidence: int, threshold: float = 0.7) -> Dict[str, Any]:
+    """Calculate enhancement eligibility with detailed metrics.
+    
+    Provides detailed eligibility information including distance from threshold
+    and priority ranking for enhancement processing.
+    
+    Args:
+        confidence: Confidence score 0-100
+        threshold: Confidence threshold for enhancement eligibility (0.0-1.0)
+        
+    Returns:
+        Dictionary with keys:
+        - eligible: Whether segment is eligible for enhancement
+        - confidence: Original confidence score
+        - threshold_score: Threshold as score (threshold * 100)
+        - distance: Distance below threshold (negative if above)
+        - priority: Enhancement priority (1=highest, 5=lowest)
+        
+    Example:
+        >>> result = calculate_enhancement_eligibility(60, 0.7)
+        >>> result['eligible']
+        True
+        >>> result['priority']
+        2
+    """
+    threshold_score = threshold * 100
+    eligible = confidence < threshold_score
+    distance = threshold_score - confidence
+    
+    # Calculate priority based on how far below threshold
+    if not eligible:
+        priority = 5  # Not eligible
+    elif distance > 30:
+        priority = 1  # Very low confidence - highest priority
+    elif distance > 20:
+        priority = 2  # Low confidence
+    elif distance > 10:
+        priority = 3  # Below threshold
+    else:
+        priority = 4  # Near threshold - lowest priority
+    
+    return {
+        "eligible": eligible,
+        "confidence": confidence,
+        "threshold_score": threshold_score,
+        "distance": distance,
+        "priority": priority
     }
