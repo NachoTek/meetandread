@@ -19,15 +19,20 @@ Compatible with whisper.cpp via pywhispercpp (CPU-only, no PyTorch DLLs).
 import threading
 import time
 import queue
+import logging
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from typing import Optional, List, Callable, Any, Dict
 from pathlib import Path
 import numpy as np
 
-from metamemory.config.models import TranscriptionSettings
+from metamemory.config.models import AppSettings, TranscriptionSettings, EnhancementSettings
 from metamemory.transcription.audio_buffer import AudioRingBuffer
 from metamemory.transcription.vad_processor import VADChunkingProcessor
 from metamemory.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment
+from metamemory.transcription.enhancement import EnhancementQueue, EnhancementWorkerPool, EnhancementProcessor, TranscriptUpdater
+from metamemory.transcription.confidence import should_enhance, ConfidenceLevel
+from metamemory.transcription.confidence import should_enhance, ConfidenceLevel
 
 
 @dataclass
@@ -85,27 +90,35 @@ class RealTimeTranscriptionProcessor:
         processor.stop()
     """
     
-    def __init__(self, config: TranscriptionSettings, model_size: str = "tiny"):
+    def __init__(self, config: AppSettings, model_size: str = "tiny"):
         """Initialize the transcription processor.
         
-        HYBRID TRANSCRIPTION:
+        HYBRID TRANSCRIPTION: 
         - Real-time: Each chunk is committed immediately (no agreement buffer blocking)
         - Confidence scores preserved for UI color styling
         - Post-processing happens after recording stops with stronger model
         
         Args:
-            config: Transcription configuration including chunk sizes and thresholds
+            config: Complete application settings including enhancement configuration
             model_size: Whisper model size (tiny for real-time, base/small for post-process)
         """
-        self._config = config
+        self._config = config.transcription  # Use transcription settings
+        self._enhancement_config = config.enhancement  # Use enhancement settings
         self._model_size = model_size
         
         # Core components
         self._audio_buffer = AudioRingBuffer(max_seconds=30, sample_rate=16000)
         self._vad_processor = VADChunkingProcessor(
-            min_chunk_size_sec=config.min_chunk_size_sec,
+            min_chunk_size_sec=self._config.min_chunk_size_sec,
             sample_rate=16000
         )
+        
+        # Enhancement components
+        self._enhancement_queue = EnhancementQueue(max_size=100)
+        self._enhancement_worker_pool = EnhancementWorkerPool(num_workers=4)
+        self._enhancement_processor = EnhancementProcessor(model_name="medium")
+        self._transcript_updater = TranscriptUpdater()
+        
         # NO LocalAgreementBuffer - we commit immediately for real-time display
         # The agreement buffer was designed for re-transcribing accumulated audio
         # We transcribe each chunk once and commit immediately
@@ -339,6 +352,31 @@ class RealTimeTranscriptionProcessor:
         # IMMEDIATE COMMIT - no agreement buffer blocking for real-time display
         # Each transcribed chunk flows immediately to the UI
         committed_text = full_text
+        
+        # Calculate average confidence for the segment
+        if segments:
+            avg_confidence = sum(seg.confidence for seg in segments) / len(segments)
+        else:
+            avg_confidence = 0
+            
+        # Check if this segment should be enhanced
+        if should_enhance({
+            'confidence': avg_confidence,
+            'text': committed_text,
+            'id': f"chunk_{self._chunk_counter}"
+        }, 
+        threshold=self._enhancement_config.confidence_threshold):
+            # Queue for enhancement if eligible
+            enhancement_segment = {
+                'id': f"chunk_{self._chunk_counter}",
+                'text': committed_text,
+                'confidence': avg_confidence,
+                'start': segments[0].start if segments else 0,
+                'end': segments[-1].end if segments else 0
+            }
+            
+            if not self._enhancement_queue.enqueue(enhancement_segment):
+                logger.warning(f"Failed to enqueue segment {enhancement_segment['id']} for enhancement")
         print(f"DEBUG: Immediate commit (no agreement buffer): '{committed_text}'")
         
         # Calculate timing
