@@ -46,7 +46,7 @@ from metamemory.transcription.transcript_store import (
 )
 from metamemory.transcription.accumulating_processor import (
     AccumulatingTranscriptionProcessor,
-    PhraseResult,
+    SegmentResult,
 )
 
 __all__ = [
@@ -66,7 +66,7 @@ __all__ = [
     "Segment",
     # Accumulating processor (for meetings)
     "AccumulatingTranscriptionProcessor",
-    "PhraseResult",
+    "SegmentResult",
     # Confidence scoring
     "normalize_confidence",
     "get_confidence_level",

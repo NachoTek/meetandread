@@ -213,6 +213,8 @@ class RecordingController:
             # Start transcription if available
             if self._transcription_processor:
                 print("DEBUG: Starting transcription processor...")
+                print(f"DEBUG: Transcription processor exists: {self._transcription_processor is not None}")
+                print(f"DEBUG: Processor on_result callback: {self._transcription_processor.on_result is not None}")
                 self._transcription_processor.start()
                 print("DEBUG: Transcription processor started")
             
