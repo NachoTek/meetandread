@@ -3660,6 +3660,448 @@ class GoNoGoValidator:
         """
         return self._validation_history[-1] if self._validation_history else None
     
+    # =========================================================================
+    # Threshold Validation and Edge Case Handling
+    # =========================================================================
+    
+    def validate_thresholds(self) -> Dict[str, Any]:
+        """
+        Validate that configured thresholds are sensible and consistent.
+        
+        Returns:
+            Dict[str, Any]: Threshold validation result with any issues found
+        """
+        issues = []
+        warnings = []
+        
+        # Check accuracy thresholds
+        if self.criteria.min_accuracy_improvement > self.criteria.target_accuracy_improvement:
+            issues.append("min_accuracy_improvement > target_accuracy_improvement")
+        
+        if self.criteria.min_accuracy_improvement < 0 or self.criteria.min_accuracy_improvement > 1:
+            issues.append("min_accuracy_improvement must be between 0 and 1")
+        
+        if self.criteria.min_wer_reduction < 0 or self.criteria.min_wer_reduction > 1:
+            issues.append("min_wer_reduction must be between 0 and 1")
+        
+        # Check performance thresholds
+        if self.criteria.min_enhancement_completion_time > self.criteria.max_enhancement_completion_time:
+            issues.append("min_enhancement_completion_time > max_enhancement_completion_time")
+        
+        if self.criteria.target_enhancement_completion_time < self.criteria.min_enhancement_completion_time or \
+           self.criteria.target_enhancement_completion_time > self.criteria.max_enhancement_completion_time:
+            warnings.append("target_enhancement_completion_time not between min and max")
+        
+        if self.criteria.max_enhancement_completion_time < 1:
+            warnings.append("max_enhancement_completion_time < 1s may be too aggressive")
+        
+        if self.criteria.max_enhancement_completion_time > 300:
+            warnings.append("max_enhancement_completion_time > 300s may be too lenient")
+        
+        # Check resource thresholds
+        if self.criteria.max_cpu_percent < 10 or self.criteria.max_cpu_percent > 100:
+            issues.append("max_cpu_percent must be between 10 and 100")
+        
+        if self.criteria.max_ram_gb < 0.5:
+            warnings.append("max_ram_gb < 0.5GB may be too restrictive")
+        
+        if self.criteria.max_ram_gb > 64:
+            warnings.append("max_ram_gb > 64GB may be too lenient")
+        
+        # Check segment thresholds
+        if self.criteria.min_improved_segments_percent + self.criteria.max_degraded_segments_percent > 100:
+            warnings.append("min_improved + max_degraded > 100% may be inconsistent")
+        
+        if self.criteria.min_improved_segments_percent < 0 or self.criteria.min_improved_segments_percent > 100:
+            issues.append("min_improved_segments_percent must be between 0 and 100")
+        
+        if self.criteria.max_degraded_segments_percent < 0 or self.criteria.max_degraded_segments_percent > 100:
+            issues.append("max_degraded_segments_percent must be between 0 and 100")
+        
+        # Check latency threshold
+        if self.criteria.max_latency_overhead_percent < 0:
+            issues.append("max_latency_overhead_percent cannot be negative")
+        
+        if self.criteria.max_latency_overhead_percent > 200:
+            warnings.append("max_latency_overhead_percent > 200% may be too lenient")
+        
+        return {
+            'valid': len(issues) == 0,
+            'issues': issues,
+            'warnings': warnings,
+            'criteria_summary': self.criteria.to_dict(),
+        }
+    
+    def check_accuracy_threshold(
+        self,
+        accuracy_improvement: float,
+        wer_reduction: float
+    ) -> Dict[str, Any]:
+        """
+        Check accuracy improvement against thresholds.
+        
+        Args:
+            accuracy_improvement: Measured accuracy improvement (0.0-1.0)
+            wer_reduction: Measured WER reduction (0.0-1.0)
+            
+        Returns:
+            Dict[str, Any]: Accuracy threshold check result
+        """
+        accuracy_pass = accuracy_improvement >= self.criteria.min_accuracy_improvement
+        wer_pass = wer_reduction >= self.criteria.min_wer_reduction
+        meets_target = accuracy_improvement >= self.criteria.target_accuracy_improvement
+        
+        # Determine status
+        if meets_target:
+            status = "excellent"
+        elif accuracy_pass and wer_pass:
+            status = "pass"
+        elif accuracy_pass:
+            status = "partial_pass"
+        else:
+            status = "fail"
+        
+        return {
+            'status': status,
+            'accuracy_improvement': accuracy_improvement,
+            'wer_reduction': wer_reduction,
+            'accuracy_pass': accuracy_pass,
+            'wer_pass': wer_pass,
+            'meets_target': meets_target,
+            'thresholds': {
+                'min_accuracy': self.criteria.min_accuracy_improvement,
+                'target_accuracy': self.criteria.target_accuracy_improvement,
+                'min_wer_reduction': self.criteria.min_wer_reduction,
+            },
+            'margin': {
+                'accuracy_margin': accuracy_improvement - self.criteria.min_accuracy_improvement,
+                'wer_margin': wer_reduction - self.criteria.min_wer_reduction,
+            },
+        }
+    
+    def check_performance_threshold(
+        self,
+        completion_time: float,
+        latency_overhead_percent: float
+    ) -> Dict[str, Any]:
+        """
+        Check performance targets against thresholds.
+        
+        Args:
+            completion_time: Enhancement completion time in seconds
+            latency_overhead_percent: Latency overhead percentage
+            
+        Returns:
+            Dict[str, Any]: Performance threshold check result
+        """
+        # Handle edge cases
+        if completion_time <= 0:
+            return {
+                'status': 'invalid',
+                'completion_time': completion_time,
+                'error': 'Completion time must be positive',
+                'performance_pass': False,
+                'latency_pass': latency_overhead_percent <= self.criteria.max_latency_overhead_percent,
+            }
+        
+        time_pass = (
+            self.criteria.min_enhancement_completion_time <= 
+            completion_time <= 
+            self.criteria.max_enhancement_completion_time
+        )
+        latency_pass = latency_overhead_percent <= self.criteria.max_latency_overhead_percent
+        
+        # Determine status
+        if time_pass and latency_pass:
+            if completion_time <= self.criteria.target_enhancement_completion_time:
+                status = "excellent"
+            else:
+                status = "pass"
+        elif time_pass:
+            status = "partial_pass"
+        else:
+            status = "fail"
+        
+        # Calculate margin
+        if completion_time < self.criteria.min_enhancement_completion_time:
+            time_margin = completion_time - self.criteria.min_enhancement_completion_time
+        elif completion_time > self.criteria.max_enhancement_completion_time:
+            time_margin = self.criteria.max_enhancement_completion_time - completion_time
+        else:
+            time_margin = min(
+                completion_time - self.criteria.min_enhancement_completion_time,
+                self.criteria.max_enhancement_completion_time - completion_time
+            )
+        
+        return {
+            'status': status,
+            'completion_time': completion_time,
+            'latency_overhead_percent': latency_overhead_percent,
+            'performance_pass': time_pass,
+            'latency_pass': latency_pass,
+            'thresholds': {
+                'min_time': self.criteria.min_enhancement_completion_time,
+                'max_time': self.criteria.max_enhancement_completion_time,
+                'target_time': self.criteria.target_enhancement_completion_time,
+                'max_latency_overhead': self.criteria.max_latency_overhead_percent,
+            },
+            'margin': {
+                'time_margin': time_margin,
+                'latency_margin': self.criteria.max_latency_overhead_percent - latency_overhead_percent,
+            },
+        }
+    
+    def check_resource_threshold(
+        self,
+        cpu_percent: float,
+        ram_gb: float
+    ) -> Dict[str, Any]:
+        """
+        Check resource usage against thresholds.
+        
+        Args:
+            cpu_percent: CPU usage percentage
+            ram_gb: RAM usage in GB
+            
+        Returns:
+            Dict[str, Any]: Resource threshold check result
+        """
+        # Handle edge cases
+        if cpu_percent < 0:
+            cpu_percent = 0
+        if cpu_percent > 100:
+            cpu_percent = 100
+        if ram_gb < 0:
+            ram_gb = 0
+        
+        cpu_pass = cpu_percent <= self.criteria.max_cpu_percent
+        ram_pass = ram_gb <= self.criteria.max_ram_gb
+        
+        # Determine status
+        if cpu_pass and ram_pass:
+            # Check if we're close to limits (within 10%)
+            cpu_close = cpu_percent > self.criteria.max_cpu_percent * 0.9
+            ram_close = ram_gb > self.criteria.max_ram_gb * 0.9
+            
+            if cpu_close or ram_close:
+                status = "pass_warning"
+            else:
+                status = "pass"
+        elif cpu_pass or ram_pass:
+            status = "partial_fail"
+        else:
+            status = "fail"
+        
+        return {
+            'status': status,
+            'cpu_percent': cpu_percent,
+            'ram_gb': ram_gb,
+            'cpu_pass': cpu_pass,
+            'ram_pass': ram_pass,
+            'thresholds': {
+                'max_cpu': self.criteria.max_cpu_percent,
+                'max_ram': self.criteria.max_ram_gb,
+            },
+            'margin': {
+                'cpu_margin': self.criteria.max_cpu_percent - cpu_percent,
+                'ram_margin': self.criteria.max_ram_gb - ram_gb,
+            },
+            'utilization': {
+                'cpu_utilization': cpu_percent / self.criteria.max_cpu_percent * 100,
+                'ram_utilization': ram_gb / self.criteria.max_ram_gb * 100,
+            },
+        }
+    
+    def check_segment_threshold(
+        self,
+        improved_percent: float,
+        degraded_percent: float,
+        total_segments: int
+    ) -> Dict[str, Any]:
+        """
+        Check segment improvement against thresholds.
+        
+        Args:
+            improved_percent: Percentage of segments improved
+            degraded_percent: Percentage of segments degraded
+            total_segments: Total number of segments evaluated
+            
+        Returns:
+            Dict[str, Any]: Segment threshold check result
+        """
+        # Handle edge case of no segments
+        if total_segments == 0:
+            return {
+                'status': 'no_data',
+                'improved_percent': 0,
+                'degraded_percent': 0,
+                'total_segments': 0,
+                'improved_pass': False,
+                'degraded_pass': False,
+                'error': 'No segments to evaluate',
+            }
+        
+        # Handle edge cases for percentages
+        if improved_percent < 0:
+            improved_percent = 0
+        if improved_percent > 100:
+            improved_percent = 100
+        if degraded_percent < 0:
+            degraded_percent = 0
+        if degraded_percent > 100:
+            degraded_percent = 100
+        
+        improved_pass = improved_percent >= self.criteria.min_improved_segments_percent
+        degraded_pass = degraded_percent <= self.criteria.max_degraded_segments_percent
+        
+        # Calculate net improvement
+        net_improvement = improved_percent - degraded_percent
+        
+        # Determine status
+        if improved_pass and degraded_pass:
+            if net_improvement > 50:
+                status = "excellent"
+            elif net_improvement > 20:
+                status = "good"
+            else:
+                status = "pass"
+        elif improved_pass:
+            status = "partial_pass"
+        else:
+            status = "fail"
+        
+        return {
+            'status': status,
+            'improved_percent': improved_percent,
+            'degraded_percent': degraded_percent,
+            'total_segments': total_segments,
+            'improved_pass': improved_pass,
+            'degraded_pass': degraded_pass,
+            'net_improvement': net_improvement,
+            'thresholds': {
+                'min_improved': self.criteria.min_improved_segments_percent,
+                'max_degraded': self.criteria.max_degraded_segments_percent,
+            },
+            'margin': {
+                'improved_margin': improved_percent - self.criteria.min_improved_segments_percent,
+                'degraded_margin': self.criteria.max_degraded_segments_percent - degraded_percent,
+            },
+        }
+    
+    def interpret_validation_result(self, result: ValidationResult) -> Dict[str, Any]:
+        """
+        Interpret validation result and provide detailed analysis.
+        
+        Args:
+            result: ValidationResult to interpret
+            
+        Returns:
+            Dict[str, Any]: Detailed interpretation of the validation result
+        """
+        interpretation = {
+            'decision': result.decision,
+            'overall_assessment': '',
+            'strengths': [],
+            'weaknesses': [],
+            'critical_issues': [],
+            'improvement_potential': [],
+        }
+        
+        # Overall assessment
+        if result.decision == "go":
+            interpretation['overall_assessment'] = (
+                "Dual-mode enhancement validation passed all critical criteria. "
+                "The system is ready for production deployment."
+            )
+        elif result.decision == "conditional_go":
+            interpretation['overall_assessment'] = (
+                "Dual-mode enhancement shows promise but has some limitations. "
+                "Consider using with monitoring and potential constraints."
+            )
+        else:
+            interpretation['overall_assessment'] = (
+                "Dual-mode enhancement does not meet validation criteria. "
+                "Review issues and consider fallback options."
+            )
+        
+        # Identify strengths
+        if result.accuracy_improvement >= self.criteria.target_accuracy_improvement:
+            interpretation['strengths'].append(
+                f"Excellent accuracy improvement ({result.accuracy_improvement*100:.1f}%)"
+            )
+        elif result.accuracy_pass:
+            interpretation['strengths'].append(
+                f"Acceptable accuracy improvement ({result.accuracy_improvement*100:.1f}%)"
+            )
+        
+        if result.improved_segments_percent >= 70:
+            interpretation['strengths'].append(
+                f"Strong segment improvement rate ({result.improved_segments_percent:.0f}%)"
+            )
+        
+        if result.cpu_usage_percent < self.criteria.max_cpu_percent * 0.7:
+            interpretation['strengths'].append(
+                f"Efficient CPU usage ({result.cpu_usage_percent:.0f}%)"
+            )
+        
+        if result.ram_usage_gb < self.criteria.max_ram_gb * 0.7:
+            interpretation['strengths'].append(
+                f"Efficient RAM usage ({result.ram_usage_gb:.1f}GB)"
+            )
+        
+        # Identify weaknesses
+        if not result.accuracy_pass:
+            interpretation['weaknesses'].append(
+                f"Insufficient accuracy improvement ({result.accuracy_improvement*100:.1f}%)"
+            )
+        
+        if not result.improved_pass:
+            interpretation['weaknesses'].append(
+                f"Low segment improvement rate ({result.improved_segments_percent:.0f}%)"
+            )
+        
+        if not result.degraded_pass:
+            interpretation['weaknesses'].append(
+                f"High segment degradation rate ({result.degraded_segments_percent:.0f}%)"
+            )
+        
+        if not result.performance_pass:
+            interpretation['weaknesses'].append(
+                f"Performance outside target range ({result.enhancement_completion_time:.1f}s)"
+            )
+        
+        if not result.cpu_pass:
+            interpretation['weaknesses'].append(
+                f"High CPU usage ({result.cpu_usage_percent:.0f}%)"
+            )
+        
+        if not result.ram_pass:
+            interpretation['weaknesses'].append(
+                f"High RAM usage ({result.ram_usage_gb:.1f}GB)"
+            )
+        
+        # Critical issues
+        interpretation['critical_issues'] = result.failure_reasons.copy()
+        
+        # Improvement potential
+        if result.accuracy_improvement > 0 and result.accuracy_improvement < self.criteria.target_accuracy_improvement:
+            gap = self.criteria.target_accuracy_improvement - result.accuracy_improvement
+            interpretation['improvement_potential'].append(
+                f"Could improve accuracy by {gap*100:.1f}% to reach target"
+            )
+        
+        if result.improved_segments_percent < 70:
+            interpretation['improvement_potential'].append(
+                "Consider adjusting confidence threshold to capture more segments"
+            )
+        
+        if result.degraded_segments_percent > 10:
+            interpretation['improvement_potential'].append(
+                "Review enhancement model selection to reduce degradation"
+            )
+        
+        return interpretation
+    
     def run_automated_validation(
         self,
         test_segments: List[Dict[str, Any]],
