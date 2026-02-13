@@ -2837,3 +2837,905 @@ class TestRunner:
                 else 'Validation failed - review test results and adjust parameters'
             ),
         }
+
+
+# =============================================================================
+# Go/No-Go Validation Framework
+# =============================================================================
+
+@dataclass
+class ValidationCriteria:
+    """
+    Criteria for Go/No-Go validation decision.
+    
+    Defines the thresholds and targets that determine whether dual-mode
+    enhancement provides meaningful benefit and acceptable performance.
+    """
+    # Accuracy improvement thresholds
+    min_accuracy_improvement: float = 0.05  # 5% minimum improvement
+    target_accuracy_improvement: float = 0.10  # 10% target improvement
+    min_wer_reduction: float = 0.05  # 5% minimum WER reduction
+    
+    # Performance targets (in seconds)
+    min_enhancement_completion_time: float = 15.0  # Minimum acceptable time
+    max_enhancement_completion_time: float = 30.0  # Maximum acceptable time
+    target_enhancement_completion_time: float = 20.0  # Target time
+    
+    # Resource usage thresholds
+    max_cpu_percent: float = 80.0  # Maximum CPU usage %
+    max_ram_gb: float = 4.0  # Maximum RAM usage in GB
+    max_latency_overhead_percent: float = 50.0  # Maximum latency overhead
+    
+    # Segment improvement thresholds
+    min_improved_segments_percent: float = 50.0  # Minimum % of segments improved
+    max_degraded_segments_percent: float = 20.0  # Maximum % of segments degraded
+    
+    # Quality thresholds
+    min_avg_confidence_improvement: float = 5.0  # Minimum confidence improvement %
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'accuracy': {
+                'min_improvement': self.min_accuracy_improvement,
+                'target_improvement': self.target_accuracy_improvement,
+                'min_wer_reduction': self.min_wer_reduction,
+            },
+            'performance': {
+                'min_completion_time': self.min_enhancement_completion_time,
+                'max_completion_time': self.max_enhancement_completion_time,
+                'target_completion_time': self.target_enhancement_completion_time,
+            },
+            'resources': {
+                'max_cpu_percent': self.max_cpu_percent,
+                'max_ram_gb': self.max_ram_gb,
+                'max_latency_overhead_percent': self.max_latency_overhead_percent,
+            },
+            'segments': {
+                'min_improved_percent': self.min_improved_segments_percent,
+                'max_degraded_percent': self.max_degraded_segments_percent,
+            },
+            'quality': {
+                'min_confidence_improvement': self.min_avg_confidence_improvement,
+            },
+        }
+
+
+@dataclass
+class ValidationResult:
+    """
+    Result of Go/No-Go validation run.
+    
+    Contains all validation metrics, pass/fail status for each criterion,
+    and the overall Go/No-Go decision.
+    """
+    # Overall decision
+    decision: str = "pending"  # "go", "no_go", "conditional_go", "pending"
+    decision_timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    
+    # Accuracy validation
+    accuracy_improvement: float = 0.0
+    accuracy_pass: bool = False
+    wer_reduction: float = 0.0
+    wer_pass: bool = False
+    
+    # Performance validation
+    enhancement_completion_time: float = 0.0
+    performance_pass: bool = False
+    latency_overhead_percent: float = 0.0
+    latency_pass: bool = False
+    
+    # Resource validation
+    cpu_usage_percent: float = 0.0
+    cpu_pass: bool = False
+    ram_usage_gb: float = 0.0
+    ram_pass: bool = False
+    
+    # Segment validation
+    improved_segments_percent: float = 0.0
+    improved_pass: bool = False
+    degraded_segments_percent: float = 0.0
+    degraded_pass: bool = False
+    
+    # Quality validation
+    confidence_improvement: float = 0.0
+    confidence_pass: bool = False
+    
+    # Detailed metrics
+    segments_validated: int = 0
+    validation_duration_seconds: float = 0.0
+    
+    # Failure reasons
+    failure_reasons: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    
+    # Recommendations
+    recommendations: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'decision': self.decision,
+            'decision_timestamp': self.decision_timestamp,
+            'validation_summary': {
+                'accuracy': {
+                    'improvement': self.accuracy_improvement,
+                    'pass': self.accuracy_pass,
+                    'wer_reduction': self.wer_reduction,
+                    'wer_pass': self.wer_pass,
+                },
+                'performance': {
+                    'completion_time': self.enhancement_completion_time,
+                    'pass': self.performance_pass,
+                    'latency_overhead_percent': self.latency_overhead_percent,
+                    'latency_pass': self.latency_pass,
+                },
+                'resources': {
+                    'cpu_percent': self.cpu_usage_percent,
+                    'pass': self.cpu_pass,
+                    'ram_gb': self.ram_usage_gb,
+                    'pass': self.ram_pass,
+                },
+                'segments': {
+                    'improved_percent': self.improved_segments_percent,
+                    'pass': self.improved_pass,
+                    'degraded_percent': self.degraded_segments_percent,
+                    'pass': self.degraded_pass,
+                },
+                'quality': {
+                    'confidence_improvement': self.confidence_improvement,
+                    'pass': self.confidence_pass,
+                },
+            },
+            'metrics': {
+                'segments_validated': self.segments_validated,
+                'duration_seconds': self.validation_duration_seconds,
+            },
+            'issues': {
+                'failures': self.failure_reasons,
+                'warnings': self.warnings,
+            },
+            'recommendations': self.recommendations,
+        }
+
+
+@dataclass
+class FallbackGuidance:
+    """
+    Guidance for fallback scenarios when dual-mode doesn't meet criteria.
+    
+    Provides recommendations for single-mode fallback, resource optimization,
+    and next steps for improvement.
+    """
+    # Fallback type
+    fallback_type: str = "single_mode"  # "single_mode", "optimized_dual", "conditional_dual"
+    
+    # Primary recommendation
+    primary_recommendation: str = ""
+    
+    # Resource optimization suggestions
+    resource_suggestions: List[str] = field(default_factory=list)
+    
+    # Configuration adjustments
+    config_adjustments: Dict[str, Any] = field(default_factory=dict)
+    
+    # Next steps
+    next_steps: List[str] = field(default_factory=list)
+    
+    # Reason for fallback
+    fallback_reason: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'fallback_type': self.fallback_type,
+            'primary_recommendation': self.primary_recommendation,
+            'resource_suggestions': self.resource_suggestions,
+            'config_adjustments': self.config_adjustments,
+            'next_steps': self.next_steps,
+            'fallback_reason': self.fallback_reason,
+        }
+
+
+class GoNoGoValidator:
+    """
+    Automated Go/No-Go validation framework for dual-mode enhancement.
+    
+    Validates that dual-mode enhancement provides:
+    - Meaningful accuracy improvement over single-mode
+    - Acceptable performance (15-30s enhancement completion)
+    - Acceptable resource usage (CPU < 80%, RAM < 4GB)
+    - Net positive impact (more segments improved than degraded)
+    
+    Provides automated Go/No-Go decision with detailed reporting and
+    fallback guidance when criteria are not met.
+    """
+    
+    def __init__(
+        self,
+        criteria: Optional[ValidationCriteria] = None,
+        output_dir: str = "validation_results",
+        save_results: bool = True,
+        verbose: bool = True
+    ):
+        """
+        Initialize the Go/No-Go validator.
+        
+        Args:
+            criteria: Validation criteria (uses defaults if None)
+            output_dir: Directory to save validation results
+            save_results: Whether to save results to files
+            verbose: Whether to log detailed validation progress
+        """
+        self.criteria = criteria or ValidationCriteria()
+        self.output_dir = output_dir
+        self.save_results = save_results
+        self.verbose = verbose
+        
+        # Validation history
+        self._validation_history: List[ValidationResult] = []
+        
+        # Create output directory if needed
+        if self.save_results:
+            os.makedirs(output_dir, exist_ok=True)
+        
+        logger.info(
+            f"Initialized GoNoGoValidator with criteria: "
+            f"accuracy_improvement>={self.criteria.min_accuracy_improvement*100:.0f}%, "
+            f"completion_time<={self.criteria.max_enhancement_completion_time:.0f}s"
+        )
+    
+    def validate(
+        self,
+        comparison_result: DualModeComparisonResult,
+        performance_metrics: Optional[PerformanceMetrics] = None,
+        system_metrics: Optional[Dict[str, Any]] = None,
+        enhancement_completion_time: Optional[float] = None
+    ) -> ValidationResult:
+        """
+        Validate dual-mode enhancement against Go/No-Go criteria.
+        
+        Args:
+            comparison_result: DualModeComparisonResult from DualModeComparator
+            performance_metrics: Optional performance metrics from benchmarking
+            system_metrics: Optional system resource metrics
+            enhancement_completion_time: Time taken for enhancement completion
+            
+        Returns:
+            ValidationResult: Complete validation result with Go/No-Go decision
+        """
+        start_time = time.time()
+        
+        result = ValidationResult()
+        result.segments_validated = comparison_result.segments_compared
+        
+        if self.verbose:
+            logger.info(f"Starting Go/No-Go validation for {result.segments_validated} segments")
+        
+        # === ACCURACY VALIDATION ===
+        result.accuracy_improvement = comparison_result.accuracy_improvement
+        result.accuracy_pass = result.accuracy_improvement >= self.criteria.min_accuracy_improvement
+        result.wer_reduction = comparison_result.wer_improvement
+        result.wer_pass = result.wer_reduction >= self.criteria.min_wer_reduction
+        
+        if not result.accuracy_pass:
+            result.failure_reasons.append(
+                f"Accuracy improvement ({result.accuracy_improvement*100:.1f}%) "
+                f"below minimum ({self.criteria.min_accuracy_improvement*100:.0f}%)"
+            )
+        
+        if not result.wer_pass:
+            result.warnings.append(
+                f"WER reduction ({result.wer_reduction*100:.1f}%) "
+                f"below target ({self.criteria.min_wer_reduction*100:.0f}%)"
+            )
+        
+        # === PERFORMANCE VALIDATION ===
+        if enhancement_completion_time is not None:
+            result.enhancement_completion_time = enhancement_completion_time
+            result.performance_pass = (
+                self.criteria.min_enhancement_completion_time <= 
+                enhancement_completion_time <= 
+                self.criteria.max_enhancement_completion_time
+            )
+            
+            if enhancement_completion_time < self.criteria.min_enhancement_completion_time:
+                result.warnings.append(
+                    f"Enhancement completed very quickly ({enhancement_completion_time:.1f}s) - "
+                    f"may indicate insufficient processing"
+                )
+            elif enhancement_completion_time > self.criteria.max_enhancement_completion_time:
+                result.failure_reasons.append(
+                    f"Enhancement completion time ({enhancement_completion_time:.1f}s) "
+                    f"exceeds maximum ({self.criteria.max_enhancement_completion_time:.0f}s)"
+                )
+        
+        # Latency overhead validation
+        result.latency_overhead_percent = comparison_result.latency_overhead_percent
+        result.latency_pass = result.latency_overhead_percent <= self.criteria.max_latency_overhead_percent
+        
+        if not result.latency_pass:
+            result.warnings.append(
+                f"Latency overhead ({result.latency_overhead_percent:.1f}%) "
+                f"exceeds target ({self.criteria.max_latency_overhead_percent:.0f}%)"
+            )
+        
+        # === RESOURCE VALIDATION ===
+        if system_metrics:
+            # CPU validation
+            cpu_metrics = system_metrics.get('cpu', {})
+            result.cpu_usage_percent = cpu_metrics.get('avg_usage', 0)
+            result.cpu_pass = result.cpu_usage_percent <= self.criteria.max_cpu_percent
+            
+            if not result.cpu_pass:
+                result.failure_reasons.append(
+                    f"CPU usage ({result.cpu_usage_percent:.1f}%) "
+                    f"exceeds maximum ({self.criteria.max_cpu_percent:.0f}%)"
+                )
+            
+            # RAM validation
+            ram_metrics = system_metrics.get('ram', {})
+            result.ram_usage_gb = ram_metrics.get('used_gb', 0)
+            result.ram_pass = result.ram_usage_gb <= self.criteria.max_ram_gb
+            
+            if not result.ram_pass:
+                result.failure_reasons.append(
+                    f"RAM usage ({result.ram_usage_gb:.1f}GB) "
+                    f"exceeds maximum ({self.criteria.max_ram_gb:.0f}GB)"
+                )
+        else:
+            # No system metrics available - mark as pass with warning
+            result.cpu_pass = True
+            result.ram_pass = True
+            result.warnings.append("System metrics not provided - resource validation skipped")
+        
+        # === SEGMENT VALIDATION ===
+        if comparison_result.segments_compared > 0:
+            result.improved_segments_percent = (
+                comparison_result.segments_improved / comparison_result.segments_compared * 100
+            )
+            result.degraded_segments_percent = (
+                comparison_result.segments_degraded / comparison_result.segments_compared * 100
+            )
+        else:
+            result.improved_segments_percent = 0
+            result.degraded_segments_percent = 0
+        
+        result.improved_pass = result.improved_segments_percent >= self.criteria.min_improved_segments_percent
+        result.degraded_pass = result.degraded_segments_percent <= self.criteria.max_degraded_segments_percent
+        
+        if not result.improved_pass:
+            result.failure_reasons.append(
+                f"Improved segments ({result.improved_segments_percent:.1f}%) "
+                f"below minimum ({self.criteria.min_improved_segments_percent:.0f}%)"
+            )
+        
+        if not result.degraded_pass:
+            result.failure_reasons.append(
+                f"Degraded segments ({result.degraded_segments_percent:.1f}%) "
+                f"exceeds maximum ({self.criteria.max_degraded_segments_percent:.0f}%)"
+            )
+        
+        # === QUALITY VALIDATION ===
+        result.confidence_improvement = comparison_result.confidence_improvement
+        result.confidence_pass = result.confidence_improvement >= self.criteria.min_avg_confidence_improvement
+        
+        if not result.confidence_pass:
+            result.warnings.append(
+                f"Confidence improvement ({result.confidence_improvement:.1f}%) "
+                f"below target ({self.criteria.min_avg_confidence_improvement:.0f}%)"
+            )
+        
+        # === OVERALL DECISION ===
+        result.validation_duration_seconds = time.time() - start_time
+        
+        # Determine Go/No-Go decision
+        critical_passes = [
+            result.accuracy_pass,
+            result.improved_pass,
+            result.degraded_pass,
+        ]
+        
+        performance_passes = [
+            result.performance_pass,
+            result.cpu_pass,
+            result.ram_pass,
+        ]
+        
+        if all(critical_passes) and all(performance_passes):
+            result.decision = "go"
+            result.recommendations.append("Dual-mode enhancement is ready for production use")
+            
+            if result.accuracy_improvement >= self.criteria.target_accuracy_improvement:
+                result.recommendations.append(
+                    f"Excellent accuracy improvement ({result.accuracy_improvement*100:.1f}%) "
+                    f"exceeds target ({self.criteria.target_accuracy_improvement*100:.0f}%)"
+                )
+        elif all(critical_passes) and not all(performance_passes):
+            result.decision = "conditional_go"
+            result.recommendations.append(
+                "Dual-mode provides accuracy benefits but has performance constraints"
+            )
+            result.recommendations.append(
+                "Consider using dual-mode for high-priority recordings only"
+            )
+        else:
+            result.decision = "no_go"
+            result.recommendations.append(
+                "Dual-mode enhancement does not meet validation criteria"
+            )
+        
+        # Store result
+        self._validation_history.append(result)
+        
+        if self.verbose:
+            logger.info(
+                f"Validation complete: {result.decision.upper()} "
+                f"(accuracy: {'PASS' if result.accuracy_pass else 'FAIL'}, "
+                f"segments: {'PASS' if result.improved_pass else 'FAIL'}, "
+                f"duration: {result.validation_duration_seconds:.2f}s)"
+            )
+        
+        # Save results if configured
+        if self.save_results:
+            self._save_validation_result(result)
+        
+        return result
+    
+    def validate_benchmark_results(
+        self,
+        single_mode_result: BenchmarkResult,
+        dual_mode_result: BenchmarkResult,
+        comparison_result: Optional[DualModeComparisonResult] = None
+    ) -> ValidationResult:
+        """
+        Validate using benchmark results directly.
+        
+        Args:
+            single_mode_result: Benchmark result for single mode
+            dual_mode_result: Benchmark result for dual mode
+            comparison_result: Optional pre-computed comparison result
+            
+        Returns:
+            ValidationResult: Complete validation result
+        """
+        # Create comparison if not provided
+        if comparison_result is None:
+            comparator = DualModeComparator()
+            # Create synthetic segments for comparison
+            # This is a simplified validation path
+            comparison_result = DualModeComparisonResult(
+                single_mode_accuracy=1.0 - single_mode_result.accuracy.wer,
+                dual_mode_accuracy=1.0 - dual_mode_result.accuracy.wer,
+                accuracy_improvement=(1.0 - dual_mode_result.accuracy.wer) - (1.0 - single_mode_result.accuracy.wer),
+                single_mode_wer=single_mode_result.accuracy.wer,
+                dual_mode_wer=dual_mode_result.accuracy.wer,
+                wer_improvement=single_mode_result.accuracy.wer - dual_mode_result.accuracy.wer,
+                single_mode_avg_confidence=single_mode_result.accuracy.avg_confidence,
+                dual_mode_avg_confidence=dual_mode_result.accuracy.avg_confidence,
+                segments_compared=max(
+                    single_mode_result.accuracy.segment_count,
+                    dual_mode_result.accuracy.segment_count
+                ),
+                segments_improved=max(
+                    1,
+                    int(dual_mode_result.accuracy.segment_count * 
+                        (1.0 if dual_mode_result.accuracy.wer < single_mode_result.accuracy.wer else 0.5))
+                ),
+                segments_degraded=max(
+                    0,
+                    int(dual_mode_result.accuracy.segment_count * 
+                        (0.0 if dual_mode_result.accuracy.wer < single_mode_result.accuracy.wer else 0.3))
+                ),
+                is_improvement=dual_mode_result.accuracy.wer < single_mode_result.accuracy.wer,
+                latency_overhead_percent=(
+                    (dual_mode_result.performance.avg_latency_ms - single_mode_result.performance.avg_latency_ms) /
+                    single_mode_result.performance.avg_latency_ms * 100
+                    if single_mode_result.performance.avg_latency_ms > 0 else 0
+                ),
+            )
+        
+        # Extract system metrics
+        system_metrics = {
+            'cpu': {
+                'avg_usage': dual_mode_result.performance.avg_cpu_percent,
+            },
+            'ram': {
+                'used_gb': dual_mode_result.performance.avg_ram_mb / 1024,
+            },
+        }
+        
+        return self.validate(
+            comparison_result=comparison_result,
+            performance_metrics=dual_mode_result.performance,
+            system_metrics=system_metrics,
+            enhancement_completion_time=dual_mode_result.performance.total_time_s
+        )
+    
+    def get_fallback_guidance(self, result: ValidationResult) -> FallbackGuidance:
+        """
+        Generate fallback guidance for No-Go or conditional results.
+        
+        Args:
+            result: ValidationResult to generate guidance for
+            
+        Returns:
+            FallbackGuidance: Detailed fallback recommendations
+        """
+        guidance = FallbackGuidance()
+        
+        if result.decision == "go":
+            guidance.fallback_type = "none"
+            guidance.primary_recommendation = "No fallback needed - dual-mode validation passed"
+            return guidance
+        
+        # Determine fallback type based on failure reasons
+        if not result.accuracy_pass or not result.improved_pass:
+            guidance.fallback_type = "single_mode"
+            guidance.fallback_reason = "Dual-mode does not provide meaningful accuracy improvement"
+            guidance.primary_recommendation = (
+                "Use single-mode transcription as the default mode. "
+                "Consider dual-mode only for specific use cases where accuracy is critical."
+            )
+        elif not result.performance_pass or not result.cpu_pass or not result.ram_pass:
+            guidance.fallback_type = "optimized_dual"
+            guidance.fallback_reason = "Dual-mode has performance constraints"
+            guidance.primary_recommendation = (
+                "Optimize dual-mode configuration for better performance, "
+                "or use dual-mode selectively for important recordings."
+            )
+        else:
+            guidance.fallback_type = "conditional_dual"
+            guidance.fallback_reason = "Dual-mode has some limitations"
+            guidance.primary_recommendation = (
+                "Use dual-mode with caution and monitor performance closely."
+            )
+        
+        # Add resource optimization suggestions
+        if not result.cpu_pass:
+            guidance.resource_suggestions.extend([
+                "Reduce number of enhancement workers",
+                "Use smaller enhancement model (e.g., base instead of medium)",
+                "Implement more aggressive confidence threshold",
+                "Process enhancement only during idle periods",
+            ])
+        
+        if not result.ram_pass:
+            guidance.resource_suggestions.extend([
+                "Limit concurrent enhancement tasks",
+                "Use memory-efficient model variants",
+                "Implement streaming enhancement instead of batch",
+                "Clear model cache between sessions",
+            ])
+        
+        if not result.performance_pass:
+            guidance.resource_suggestions.extend([
+                "Optimize audio chunk size for enhancement",
+                "Use GPU acceleration if available",
+                "Implement lazy loading for enhancement model",
+                "Consider asynchronous enhancement pipeline",
+            ])
+        
+        # Add configuration adjustments
+        guidance.config_adjustments = {
+            'confidence_threshold': 0.75,  # More selective
+            'num_workers': 2,  # Reduce workers
+            'enhancement_model': 'base',  # Smaller model
+            'max_queue_size': 50,  # Smaller queue
+        }
+        
+        if result.accuracy_improvement < 0.03:
+            guidance.config_adjustments['confidence_threshold'] = 0.6  # Less selective
+        
+        # Add next steps
+        if result.decision == "no_go":
+            guidance.next_steps.extend([
+                "Review validation results and identify specific issues",
+                "Tune confidence threshold and worker configuration",
+                "Re-run validation with adjusted parameters",
+                "Consider alternative enhancement strategies",
+                "Document findings and update configuration",
+            ])
+        else:  # conditional_go
+            guidance.next_steps.extend([
+                "Monitor dual-mode performance in production",
+                "Set up alerts for resource usage thresholds",
+                "Implement graceful degradation handling",
+                "Periodically re-run validation to track improvements",
+            ])
+        
+        return guidance
+    
+    def _save_validation_result(self, result: ValidationResult) -> None:
+        """Save validation result to file."""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"validation_result_{result.decision}_{timestamp}.json"
+            filepath = os.path.join(self.output_dir, filename)
+            
+            with open(filepath, 'w') as f:
+                json.dump(result.to_dict(), f, indent=2)
+            
+            # Also save a markdown report
+            report = self.generate_report(result)
+            report_filepath = os.path.join(self.output_dir, f"validation_report_{timestamp}.md")
+            with open(report_filepath, 'w') as f:
+                f.write(report)
+            
+            logger.info(f"Saved validation result to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save validation result: {e}")
+    
+    def generate_report(self, result: Optional[ValidationResult] = None) -> str:
+        """
+        Generate a detailed validation report.
+        
+        Args:
+            result: ValidationResult to report (uses latest if None)
+            
+        Returns:
+            str: Formatted validation report in markdown
+        """
+        if result is None:
+            if not self._validation_history:
+                return "No validation results available."
+            result = self._validation_history[-1]
+        
+        # Determine emoji for decision
+        decision_emoji = {
+            "go": "✅",
+            "no_go": "❌",
+            "conditional_go": "⚠️",
+            "pending": "⏳",
+        }.get(result.decision, "❓")
+        
+        lines = [
+            "# Go/No-Go Validation Report",
+            "",
+            f"**Decision:** {decision_emoji} **{result.decision.upper()}**",
+            f"**Timestamp:** {result.decision_timestamp}",
+            f"**Segments Validated:** {result.segments_validated}",
+            f"**Validation Duration:** {result.validation_duration_seconds:.2f}s",
+            "",
+            "---",
+            "",
+            "## Validation Summary",
+            "",
+            "| Category | Metric | Value | Threshold | Status |",
+            "|----------|--------|-------|-----------|--------|",
+            f"| Accuracy | Improvement | {result.accuracy_improvement*100:.1f}% | ≥{self.criteria.min_accuracy_improvement*100:.0f}% | {'✅ PASS' if result.accuracy_pass else '❌ FAIL'} |",
+            f"| Accuracy | WER Reduction | {result.wer_reduction*100:.1f}% | ≥{self.criteria.min_wer_reduction*100:.0f}% | {'✅ PASS' if result.wer_pass else '⚠️ WARN'} |",
+            f"| Performance | Completion Time | {result.enhancement_completion_time:.1f}s | {self.criteria.min_enhancement_completion_time:.0f}-{self.criteria.max_enhancement_completion_time:.0f}s | {'✅ PASS' if result.performance_pass else '❌ FAIL'} |",
+            f"| Performance | Latency Overhead | {result.latency_overhead_percent:.1f}% | ≤{self.criteria.max_latency_overhead_percent:.0f}% | {'✅ PASS' if result.latency_pass else '⚠️ WARN'} |",
+            f"| Resources | CPU Usage | {result.cpu_usage_percent:.1f}% | ≤{self.criteria.max_cpu_percent:.0f}% | {'✅ PASS' if result.cpu_pass else '❌ FAIL'} |",
+            f"| Resources | RAM Usage | {result.ram_usage_gb:.1f}GB | ≤{self.criteria.max_ram_gb:.0f}GB | {'✅ PASS' if result.ram_pass else '❌ FAIL'} |",
+            f"| Segments | Improved | {result.improved_segments_percent:.1f}% | ≥{self.criteria.min_improved_segments_percent:.0f}% | {'✅ PASS' if result.improved_pass else '❌ FAIL'} |",
+            f"| Segments | Degraded | {result.degraded_segments_percent:.1f}% | ≤{self.criteria.max_degraded_segments_percent:.0f}% | {'✅ PASS' if result.degraded_pass else '❌ FAIL'} |",
+            f"| Quality | Confidence Improvement | {result.confidence_improvement:.1f}% | ≥{self.criteria.min_avg_confidence_improvement:.0f}% | {'✅ PASS' if result.confidence_pass else '⚠️ WARN'} |",
+            "",
+        ]
+        
+        # Add failure reasons if any
+        if result.failure_reasons:
+            lines.extend([
+                "## ❌ Failure Reasons",
+                "",
+            ])
+            for reason in result.failure_reasons:
+                lines.append(f"- {reason}")
+            lines.append("")
+        
+        # Add warnings if any
+        if result.warnings:
+            lines.extend([
+                "## ⚠️ Warnings",
+                "",
+            ])
+            for warning in result.warnings:
+                lines.append(f"- {warning}")
+            lines.append("")
+        
+        # Add recommendations
+        if result.recommendations:
+            lines.extend([
+                "## 📋 Recommendations",
+                "",
+            ])
+            for rec in result.recommendations:
+                lines.append(f"- {rec}")
+            lines.append("")
+        
+        # Add fallback guidance if not a clean Go
+        if result.decision != "go":
+            guidance = self.get_fallback_guidance(result)
+            lines.extend([
+                "## 🔄 Fallback Guidance",
+                "",
+                f"**Type:** {guidance.fallback_type}",
+                "",
+                f"**Reason:** {guidance.fallback_reason}",
+                "",
+                f"**Primary Recommendation:** {guidance.primary_recommendation}",
+                "",
+            ])
+            
+            if guidance.resource_suggestions:
+                lines.append("### Resource Optimization Suggestions")
+                lines.append("")
+                for suggestion in guidance.resource_suggestions:
+                    lines.append(f"- {suggestion}")
+                lines.append("")
+            
+            if guidance.config_adjustments:
+                lines.append("### Suggested Configuration Adjustments")
+                lines.append("")
+                lines.append("```python")
+                for key, value in guidance.config_adjustments.items():
+                    if isinstance(value, str):
+                        lines.append(f'{key} = "{value}"')
+                    else:
+                        lines.append(f'{key} = {value}')
+                lines.append("```")
+                lines.append("")
+            
+            if guidance.next_steps:
+                lines.append("### Next Steps")
+                lines.append("")
+                for i, step in enumerate(guidance.next_steps, 1):
+                    lines.append(f"{i}. {step}")
+                lines.append("")
+        
+        lines.extend([
+            "---",
+            f"*Report generated by GoNoGoValidator*",
+        ])
+        
+        return "\n".join(lines)
+    
+    def export_results(
+        self,
+        result: Optional[ValidationResult] = None,
+        format: str = "json",
+        filepath: Optional[str] = None
+    ) -> str:
+        """
+        Export validation results in specified format.
+        
+        Args:
+            result: ValidationResult to export (uses latest if None)
+            format: Export format ("json", "markdown", "summary")
+            filepath: Optional filepath to save (auto-generated if None)
+            
+        Returns:
+            str: Path to exported file
+        """
+        if result is None:
+            if not self._validation_history:
+                raise ValueError("No validation results available to export")
+            result = self._validation_history[-1]
+        
+        if filepath is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ext = "md" if format in ["markdown", "md"] else "json"
+            filepath = os.path.join(self.output_dir, f"validation_export_{timestamp}.{ext}")
+        
+        if format in ["json"]:
+            content = json.dumps(result.to_dict(), indent=2)
+        elif format in ["markdown", "md"]:
+            content = self.generate_report(result)
+        elif format == "summary":
+            content = self._generate_summary(result)
+        else:
+            raise ValueError(f"Unknown export format: {format}")
+        
+        with open(filepath, 'w') as f:
+            f.write(content)
+        
+        logger.info(f"Exported validation results to {filepath}")
+        return filepath
+    
+    def _generate_summary(self, result: ValidationResult) -> str:
+        """Generate a one-line summary of validation result."""
+        return (
+            f"Go/No-Go: {result.decision.upper()} | "
+            f"Accuracy: {result.accuracy_improvement*100:.1f}% | "
+            f"Segments: {result.improved_segments_percent:.0f}% improved | "
+            f"Time: {result.enhancement_completion_time:.1f}s | "
+            f"CPU: {result.cpu_usage_percent:.0f}% | "
+            f"RAM: {result.ram_usage_gb:.1f}GB"
+        )
+    
+    def get_validation_history(self) -> List[ValidationResult]:
+        """
+        Get all validation results.
+        
+        Returns:
+            List[ValidationResult]: All validation results
+        """
+        return self._validation_history.copy()
+    
+    def get_latest_result(self) -> Optional[ValidationResult]:
+        """
+        Get the most recent validation result.
+        
+        Returns:
+            Optional[ValidationResult]: Latest result or None
+        """
+        return self._validation_history[-1] if self._validation_history else None
+    
+    def run_automated_validation(
+        self,
+        test_segments: List[Dict[str, Any]],
+        ground_truths: List[str],
+        single_mode_processor: Callable,
+        dual_mode_processor: Callable,
+        confidence_threshold: float = 0.7
+    ) -> ValidationResult:
+        """
+        Run fully automated validation with provided processors.
+        
+        This is a convenience method that runs the full validation pipeline:
+        1. Process segments with single-mode
+        2. Process segments with dual-mode
+        3. Compare results
+        4. Validate against criteria
+        5. Return Go/No-Go decision
+        
+        Args:
+            test_segments: Segments to process
+            ground_truths: Ground truth strings
+            single_mode_processor: Function that processes segments in single-mode
+            dual_mode_processor: Function that processes segments in dual-mode
+            confidence_threshold: Confidence threshold for enhancement
+            
+        Returns:
+            ValidationResult: Complete validation result
+        """
+        start_time = time.time()
+        
+        if self.verbose:
+            logger.info(f"Starting automated validation with {len(test_segments)} segments")
+        
+        # Process with single-mode
+        single_mode_segments = []
+        for segment in test_segments:
+            processed = single_mode_processor(segment)
+            single_mode_segments.append(processed)
+        
+        # Process with dual-mode
+        dual_mode_segments = []
+        enhancement_start = time.time()
+        for segment in test_segments:
+            processed = dual_mode_processor(segment)
+            dual_mode_segments.append(processed)
+        enhancement_time = time.time() - enhancement_start
+        
+        # Compare results
+        comparator = DualModeComparator(confidence_threshold=confidence_threshold)
+        comparison_result = comparator.compare(
+            single_mode_segments,
+            dual_mode_segments,
+            ground_truths
+        )
+        
+        # Get system metrics
+        system_metrics = {
+            'cpu': {
+                'avg_usage': psutil.cpu_percent(interval=0.1),
+            },
+            'ram': {
+                'used_gb': psutil.virtual_memory().used / (1024**3),
+            },
+        }
+        
+        # Validate
+        result = self.validate(
+            comparison_result=comparison_result,
+            system_metrics=system_metrics,
+            enhancement_completion_time=enhancement_time
+        )
+        
+        if self.verbose:
+            logger.info(
+                f"Automated validation complete: {result.decision.upper()} "
+                f"(total time: {time.time() - start_time:.2f}s)"
+            )
+        
+        return result
