@@ -549,6 +549,32 @@ class AccumulatingTranscriptionProcessor:
         if self._enhancement_enabled and self._enhancement_queue:
             stats["enhancement"] = self._enhancement_queue.get_status()
         return stats
+
+    def get_enhancement_status(self) -> Dict[str, Any]:
+        """Get enhancement status for UI display.
+
+        Returns:
+            Dict with queue_size, workers_active, and total_enhanced
+        """
+        if not self._enhancement_enabled:
+            return {
+                'queue_size': 0,
+                'workers_active': 0,
+                'total_enhanced': 0,
+                'enabled': False
+            }
+
+        queue_status = self._enhancement_queue.get_status() if self._enhancement_queue else {}
+        worker_status = self._enhancement_worker_pool.get_status() if self._enhancement_worker_pool else {}
+
+        return {
+            'queue_size': queue_status.get('size', 0),
+            'workers_active': worker_status.get('active_tasks', 0),
+            'total_enhanced': worker_status.get('completed_tasks', 0),
+            'enabled': True,
+            'pending_tasks': worker_status.get('pending_tasks', 0),
+            'failed_tasks': worker_status.get('failed_tasks', 0)
+        }
     
     def _start_enhancement_processing(self) -> None:
         """Start the background enhancement processing thread."""

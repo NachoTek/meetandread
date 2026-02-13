@@ -138,6 +138,10 @@ to avoid clipping issues and enable proper text rendering.
         self.animation_timer = QTimer(self)
         self.animation_timer.timeout.connect(self._update_animations)
         self.animation_timer.start(33)  # ~30fps
+
+        # Timer for enhancement status updates
+        self._status_update_counter = 0
+        self._status_update_interval = 15  # Update every 15 animation frames (~500ms)
         
         self.pulse_phase = 0.0
         
@@ -297,6 +301,34 @@ to avoid clipping issues and enable proper text rendering.
             if self.pulse_phase > 6.28:
                 self.pulse_phase = 0.0
             self.record_button.set_swirl_phase(self.pulse_phase)
+
+        # Update enhancement status periodically (~500ms)
+        self._status_update_counter += 1
+        if self._status_update_counter >= self._status_update_interval:
+            self._status_update_counter = 0
+            self._update_enhancement_status()
+
+    def _update_enhancement_status(self):
+        """Update enhancement status display in the transcript panel."""
+        if not self._floating_transcript_panel or not self._controller:
+            return
+
+        # Only update when recording is active
+        if not self.is_recording and not self.is_processing:
+            return
+
+        # Get status from controller
+        status = self._controller.get_enhancement_status()
+
+        # Update panel
+        if status.get('enabled', False):
+            self._floating_transcript_panel.update_enhancement_status(
+                queue_size=status.get('queue_size', 0),
+                workers_active=status.get('workers_active', 0),
+                total_enhanced=status.get('total_enhanced', 0)
+            )
+        else:
+            self._floating_transcript_panel.enhancement_status_label.setText("Enhancement: Disabled")
     
     def mousePressEvent(self, event):
         """Record press position for click vs drag detection."""

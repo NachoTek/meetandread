@@ -535,7 +535,22 @@ class RecordingController:
     def get_transcript_store(self) -> Optional[TranscriptStore]:
         """Get the current transcript store (for UI access during recording)."""
         return self._transcript_store
-    
+
+    def get_enhancement_status(self) -> dict:
+        """Get current enhancement status for UI display.
+
+        Returns:
+            Dict with queue_size, workers_active, and total_enhanced
+        """
+        if not self._transcription_processor:
+            return {
+                'queue_size': 0,
+                'workers_active': 0,
+                'total_enhanced': 0,
+                'enabled': False
+            }
+        return self._transcription_processor.get_enhancement_status()
+
     def update_enhancement_settings(self, settings: dict) -> None:
         """Update enhancement settings on the running transcription processor.
         
