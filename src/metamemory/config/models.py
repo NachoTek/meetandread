@@ -55,7 +55,18 @@ class EnhancementSettings:
         enhancement_model: Whisper model size for enhancement (default: "medium")
         dynamic_scaling: Enable auto-scaling of workers based on system load (default: True)
         cpu_usage_threshold: CPU usage threshold for worker scaling (default: 0.8)
+        ram_usage_threshold: RAM usage threshold for worker scaling (default: 0.85)
         worker_scaling_algorithm: Algorithm for worker scaling - "adaptive", "linear", or "none" (default: "adaptive")
+        
+        # Graceful degradation settings
+        enable_graceful_degradation: Enable graceful degradation under resource constraints (default: True)
+        degradation_cpu_threshold: CPU threshold to trigger degradation mode (default: 0.9)
+        degradation_ram_threshold: RAM threshold to trigger degradation mode (default: 0.9)
+        degradation_strategy: Strategy for handling degradation - "reduce_workers", "skip_low_confidence", "queue_only" (default: "reduce_workers")
+        fallback_on_failure: Fall back to original text when enhancement fails (default: True)
+        max_retries_before_fallback: Maximum retries before falling back (default: 2)
+        degradation_logging: Enable detailed logging during degradation (default: True)
+        queue_overflow_strategy: Strategy when queue overflows - "drop_oldest", "drop_newest", "pause_enqueue" (default: "drop_oldest")
     """
     confidence_threshold: float = field(
         default=0.7,
@@ -89,9 +100,47 @@ class EnhancementSettings:
         default=0.8,
         metadata={"description": "CPU usage threshold for worker scaling (0.0-1.0)"}
     )
+    ram_usage_threshold: float = field(
+        default=0.85,
+        metadata={"description": "RAM usage threshold for worker scaling (0.0-1.0)"}
+    )
     worker_scaling_algorithm: str = field(
         default="adaptive",
         metadata={"description": "Algorithm for worker scaling: adaptive, linear, or none"}
+    )
+    
+    # Graceful degradation settings
+    enable_graceful_degradation: bool = field(
+        default=True,
+        metadata={"description": "Enable graceful degradation under resource constraints"}
+    )
+    degradation_cpu_threshold: float = field(
+        default=0.9,
+        metadata={"description": "CPU threshold (0.0-1.0) to trigger degradation mode"}
+    )
+    degradation_ram_threshold: float = field(
+        default=0.9,
+        metadata={"description": "RAM threshold (0.0-1.0) to trigger degradation mode"}
+    )
+    degradation_strategy: str = field(
+        default="reduce_workers",
+        metadata={"description": "Strategy for degradation: reduce_workers, skip_low_confidence, or queue_only"}
+    )
+    fallback_on_failure: bool = field(
+        default=True,
+        metadata={"description": "Fall back to original text when enhancement fails"}
+    )
+    max_retries_before_fallback: int = field(
+        default=2,
+        metadata={"description": "Maximum retries before falling back to original"}
+    )
+    degradation_logging: bool = field(
+        default=True,
+        metadata={"description": "Enable detailed logging during degradation events"}
+    )
+    queue_overflow_strategy: str = field(
+        default="drop_oldest",
+        metadata={"description": "Strategy when queue overflows: drop_oldest, drop_newest, or pause_enqueue"}
     )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -110,7 +159,17 @@ class EnhancementSettings:
             enhancement_model=data.get("enhancement_model", cls.enhancement_model),
             dynamic_scaling=data.get("dynamic_scaling", cls.dynamic_scaling),
             cpu_usage_threshold=data.get("cpu_usage_threshold", cls.cpu_usage_threshold),
-            worker_scaling_algorithm=data.get("worker_scaling_algorithm", cls.worker_scaling_algorithm)
+            ram_usage_threshold=data.get("ram_usage_threshold", cls.ram_usage_threshold),
+            worker_scaling_algorithm=data.get("worker_scaling_algorithm", cls.worker_scaling_algorithm),
+            # Graceful degradation settings
+            enable_graceful_degradation=data.get("enable_graceful_degradation", cls.enable_graceful_degradation),
+            degradation_cpu_threshold=data.get("degradation_cpu_threshold", cls.degradation_cpu_threshold),
+            degradation_ram_threshold=data.get("degradation_ram_threshold", cls.degradation_ram_threshold),
+            degradation_strategy=data.get("degradation_strategy", cls.degradation_strategy),
+            fallback_on_failure=data.get("fallback_on_failure", cls.fallback_on_failure),
+            max_retries_before_fallback=data.get("max_retries_before_fallback", cls.max_retries_before_fallback),
+            degradation_logging=data.get("degradation_logging", cls.degradation_logging),
+            queue_overflow_strategy=data.get("queue_overflow_strategy", cls.queue_overflow_strategy)
         )
     
     def validate(self) -> List[str]:
@@ -146,10 +205,34 @@ class EnhancementSettings:
         if not 0.0 <= self.cpu_usage_threshold <= 1.0:
             errors.append(f"cpu_usage_threshold must be between 0.0 and 1.0, got {self.cpu_usage_threshold}")
         
+        # Validate RAM usage threshold
+        if not 0.0 <= self.ram_usage_threshold <= 1.0:
+            errors.append(f"ram_usage_threshold must be between 0.0 and 1.0, got {self.ram_usage_threshold}")
+        
         # Validate scaling algorithm
         valid_algorithms = ["adaptive", "linear", "none"]
         if self.worker_scaling_algorithm not in valid_algorithms:
             errors.append(f"worker_scaling_algorithm must be one of {valid_algorithms}, got {self.worker_scaling_algorithm}")
+        
+        # Validate degradation thresholds
+        if not 0.0 <= self.degradation_cpu_threshold <= 1.0:
+            errors.append(f"degradation_cpu_threshold must be between 0.0 and 1.0, got {self.degradation_cpu_threshold}")
+        if not 0.0 <= self.degradation_ram_threshold <= 1.0:
+            errors.append(f"degradation_ram_threshold must be between 0.0 and 1.0, got {self.degradation_ram_threshold}")
+        
+        # Validate degradation strategy
+        valid_strategies = ["reduce_workers", "skip_low_confidence", "queue_only"]
+        if self.degradation_strategy not in valid_strategies:
+            errors.append(f"degradation_strategy must be one of {valid_strategies}, got {self.degradation_strategy}")
+        
+        # Validate queue overflow strategy
+        valid_overflow = ["drop_oldest", "drop_newest", "pause_enqueue"]
+        if self.queue_overflow_strategy not in valid_overflow:
+            errors.append(f"queue_overflow_strategy must be one of {valid_overflow}, got {self.queue_overflow_strategy}")
+        
+        # Validate retries
+        if self.max_retries_before_fallback < 0:
+            errors.append(f"max_retries_before_fallback must be >= 0, got {self.max_retries_before_fallback}")
         
         return errors
 
