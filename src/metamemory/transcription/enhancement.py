@@ -3642,6 +3642,528 @@ class GoNoGoValidator:
             f"RAM: {result.ram_usage_gb:.1f}GB"
         )
     
+    def generate_summary_report(self, result: Optional[ValidationResult] = None) -> str:
+        """
+        Generate a concise summary report.
+        
+        Args:
+            result: ValidationResult to report (uses latest if None)
+            
+        Returns:
+            str: Concise summary report
+        """
+        if result is None:
+            if not self._validation_history:
+                return "No validation results available."
+            result = self._validation_history[-1]
+        
+        decision_icon = {"go": "✅", "no_go": "❌", "conditional_go": "⚠️"}.get(result.decision, "❓")
+        
+        lines = [
+            f"{decision_icon} **Validation Result: {result.decision.upper()}**",
+            "",
+            f"| Metric | Value | Status |",
+            f"|--------|-------|--------|",
+            f"| Accuracy Improvement | {result.accuracy_improvement*100:.1f}% | {'✅' if result.accuracy_pass else '❌'} |",
+            f"| WER Reduction | {result.wer_reduction*100:.1f}% | {'✅' if result.wer_pass else '⚠️'} |",
+            f"| Completion Time | {result.enhancement_completion_time:.1f}s | {'✅' if result.performance_pass else '❌'} |",
+            f"| Improved Segments | {result.improved_segments_percent:.0f}% | {'✅' if result.improved_pass else '❌'} |",
+            f"| Degraded Segments | {result.degraded_segments_percent:.0f}% | {'✅' if result.degraded_pass else '❌'} |",
+            f"| CPU Usage | {result.cpu_usage_percent:.0f}% | {'✅' if result.cpu_pass else '❌'} |",
+            f"| RAM Usage | {result.ram_usage_gb:.1f}GB | {'✅' if result.ram_pass else '❌'} |",
+        ]
+        
+        return "\n".join(lines)
+    
+    def generate_detailed_report(self, result: Optional[ValidationResult] = None) -> str:
+        """
+        Generate a detailed validation report with analysis.
+        
+        Args:
+            result: ValidationResult to report (uses latest if None)
+            
+        Returns:
+            str: Detailed validation report in markdown
+        """
+        if result is None:
+            if not self._validation_history:
+                return "No validation results available."
+            result = self._validation_history[-1]
+        
+        # Get interpretation
+        interpretation = self.interpret_validation_result(result)
+        
+        # Build detailed report
+        lines = [
+            "# Go/No-Go Validation Detailed Report",
+            "",
+            f"**Generated:** {datetime.now().isoformat()}",
+            f"**Decision:** {result.decision.upper()}",
+            f"**Segments Validated:** {result.segments_validated}",
+            "",
+            "---",
+            "",
+            "## Executive Summary",
+            "",
+            interpretation['overall_assessment'],
+            "",
+        ]
+        
+        # Strengths
+        if interpretation['strengths']:
+            lines.extend([
+                "### Strengths",
+                "",
+            ])
+            for strength in interpretation['strengths']:
+                lines.append(f"- ✅ {strength}")
+            lines.append("")
+        
+        # Weaknesses
+        if interpretation['weaknesses']:
+            lines.extend([
+                "### Weaknesses",
+                "",
+            ])
+            for weakness in interpretation['weaknesses']:
+                lines.append(f"- ⚠️ {weakness}")
+            lines.append("")
+        
+        # Critical issues
+        if interpretation['critical_issues']:
+            lines.extend([
+                "### Critical Issues",
+                "",
+            ])
+            for issue in interpretation['critical_issues']:
+                lines.append(f"- ❌ {issue}")
+            lines.append("")
+        
+        # Detailed metrics section
+        lines.extend([
+            "---",
+            "",
+            "## Detailed Metrics",
+            "",
+            "### Accuracy Metrics",
+            "",
+            f"| Metric | Value | Threshold | Status |",
+            f"|--------|-------|-----------|--------|",
+            f"| Accuracy Improvement | {result.accuracy_improvement*100:.2f}% | ≥{self.criteria.min_accuracy_improvement*100:.0f}% | {'PASS' if result.accuracy_pass else 'FAIL'} |",
+            f"| WER Reduction | {result.wer_reduction*100:.2f}% | ≥{self.criteria.min_wer_reduction*100:.0f}% | {'PASS' if result.wer_pass else 'WARN'} |",
+            f"| Confidence Improvement | {result.confidence_improvement:.1f}% | ≥{self.criteria.min_avg_confidence_improvement:.0f}% | {'PASS' if result.confidence_pass else 'WARN'} |",
+            "",
+            "### Performance Metrics",
+            "",
+            f"| Metric | Value | Threshold | Status |",
+            f"|--------|-------|-----------|--------|",
+            f"| Enhancement Time | {result.enhancement_completion_time:.2f}s | {self.criteria.min_enhancement_completion_time:.0f}-{self.criteria.max_enhancement_completion_time:.0f}s | {'PASS' if result.performance_pass else 'FAIL'} |",
+            f"| Latency Overhead | {result.latency_overhead_percent:.1f}% | ≤{self.criteria.max_latency_overhead_percent:.0f}% | {'PASS' if result.latency_pass else 'WARN'} |",
+            f"| Validation Duration | {result.validation_duration_seconds:.2f}s | - | - |",
+            "",
+            "### Resource Metrics",
+            "",
+            f"| Metric | Value | Threshold | Status |",
+            f"|--------|-------|-----------|--------|",
+            f"| CPU Usage | {result.cpu_usage_percent:.1f}% | ≤{self.criteria.max_cpu_percent:.0f}% | {'PASS' if result.cpu_pass else 'FAIL'} |",
+            f"| RAM Usage | {result.ram_usage_gb:.2f}GB | ≤{self.criteria.max_ram_gb:.0f}GB | {'PASS' if result.ram_pass else 'FAIL'} |",
+            "",
+            "### Segment Analysis",
+            "",
+            f"| Metric | Value | Threshold | Status |",
+            f"|--------|-------|-----------|--------|",
+            f"| Segments Validated | {result.segments_validated} | - | - |",
+            f"| Improved | {result.improved_segments_percent:.1f}% | ≥{self.criteria.min_improved_segments_percent:.0f}% | {'PASS' if result.improved_pass else 'FAIL'} |",
+            f"| Degraded | {result.degraded_segments_percent:.1f}% | ≤{self.criteria.max_degraded_segments_percent:.0f}% | {'PASS' if result.degraded_pass else 'FAIL'} |",
+            "",
+        ])
+        
+        # Improvement potential
+        if interpretation['improvement_potential']:
+            lines.extend([
+                "---",
+                "",
+                "## Improvement Opportunities",
+                "",
+            ])
+            for opportunity in interpretation['improvement_potential']:
+                lines.append(f"- 💡 {opportunity}")
+            lines.append("")
+        
+        # Recommendations
+        if result.recommendations:
+            lines.extend([
+                "## Recommendations",
+                "",
+            ])
+            for rec in result.recommendations:
+                lines.append(f"- {rec}")
+            lines.append("")
+        
+        # Fallback guidance if applicable
+        if result.decision != "go":
+            guidance = self.get_fallback_guidance(result)
+            lines.extend([
+                "## Fallback Guidance",
+                "",
+                f"**Type:** {guidance.fallback_type}",
+                "",
+                f"**Reason:** {guidance.fallback_reason}",
+                "",
+                f"**Recommendation:** {guidance.primary_recommendation}",
+                "",
+            ])
+            
+            if guidance.next_steps:
+                lines.append("### Next Steps")
+                lines.append("")
+                for i, step in enumerate(guidance.next_steps, 1):
+                    lines.append(f"{i}. {step}")
+                lines.append("")
+        
+        return "\n".join(lines)
+    
+    def export_results_csv(
+        self,
+        results: Optional[List[ValidationResult]] = None,
+        filepath: Optional[str] = None
+    ) -> str:
+        """
+        Export validation results to CSV format.
+        
+        Args:
+            results: Results to export (uses history if None)
+            filepath: Optional filepath (auto-generated if None)
+            
+        Returns:
+            str: Path to exported file
+        """
+        if results is None:
+            results = self._validation_history
+        
+        if not results:
+            raise ValueError("No validation results available to export")
+        
+        if filepath is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = os.path.join(self.output_dir, f"validation_results_{timestamp}.csv")
+        
+        import csv
+        
+        with open(filepath, 'w', newline='') as f:
+            writer = csv.writer(f)
+            
+            # Header
+            writer.writerow([
+                'timestamp', 'decision', 'segments_validated',
+                'accuracy_improvement', 'accuracy_pass',
+                'wer_reduction', 'wer_pass',
+                'completion_time', 'performance_pass',
+                'latency_overhead_percent', 'latency_pass',
+                'cpu_percent', 'cpu_pass',
+                'ram_gb', 'ram_pass',
+                'improved_percent', 'improved_pass',
+                'degraded_percent', 'degraded_pass',
+                'confidence_improvement', 'confidence_pass',
+                'validation_duration', 'failure_count', 'warning_count'
+            ])
+            
+            # Data rows
+            for result in results:
+                writer.writerow([
+                    result.decision_timestamp,
+                    result.decision,
+                    result.segments_validated,
+                    f"{result.accuracy_improvement:.4f}",
+                    result.accuracy_pass,
+                    f"{result.wer_reduction:.4f}",
+                    result.wer_pass,
+                    f"{result.enhancement_completion_time:.2f}",
+                    result.performance_pass,
+                    f"{result.latency_overhead_percent:.1f}",
+                    result.latency_pass,
+                    f"{result.cpu_usage_percent:.1f}",
+                    result.cpu_pass,
+                    f"{result.ram_usage_gb:.2f}",
+                    result.ram_pass,
+                    f"{result.improved_segments_percent:.1f}",
+                    result.improved_pass,
+                    f"{result.degraded_segments_percent:.1f}",
+                    result.degraded_pass,
+                    f"{result.confidence_improvement:.1f}",
+                    result.confidence_pass,
+                    f"{result.validation_duration_seconds:.2f}",
+                    len(result.failure_reasons),
+                    len(result.warnings),
+                ])
+        
+        logger.info(f"Exported {len(results)} validation results to {filepath}")
+        return filepath
+    
+    def export_results_html(
+        self,
+        result: Optional[ValidationResult] = None,
+        filepath: Optional[str] = None
+    ) -> str:
+        """
+        Export validation result as HTML report.
+        
+        Args:
+            result: Result to export (uses latest if None)
+            filepath: Optional filepath (auto-generated if None)
+            
+        Returns:
+            str: Path to exported file
+        """
+        if result is None:
+            if not self._validation_history:
+                raise ValueError("No validation results available to export")
+            result = self._validation_history[-1]
+        
+        if filepath is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = os.path.join(self.output_dir, f"validation_report_{timestamp}.html")
+        
+        # Generate markdown and convert to HTML
+        markdown_report = self.generate_detailed_report(result)
+        
+        # Simple markdown to HTML conversion
+        html_lines = [
+            "<!DOCTYPE html>",
+            "<html>",
+            "<head>",
+            "<title>Go/No-Go Validation Report</title>",
+            "<style>",
+            "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; }",
+            "h1 { color: #333; border-bottom: 2px solid #333; padding-bottom: 10px; }",
+            "h2 { color: #555; margin-top: 30px; }",
+            "h3 { color: #666; }",
+            "table { border-collapse: collapse; width: 100%; margin: 20px 0; }",
+            "th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }",
+            "th { background-color: #4CAF50; color: white; }",
+            "tr:nth-child(even) { background-color: #f2f2f2; }",
+            ".pass { color: green; font-weight: bold; }",
+            ".fail { color: red; font-weight: bold; }",
+            ".warn { color: orange; font-weight: bold; }",
+            "code { background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px; }",
+            "pre { background-color: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }",
+            "</style>",
+            "</head>",
+            "<body>",
+        ]
+        
+        # Convert markdown to HTML
+        in_code_block = False
+        in_table = False
+        
+        for line in markdown_report.split('\n'):
+            # Code blocks
+            if line.strip().startswith('```'):
+                if in_code_block:
+                    html_lines.append('</code></pre>')
+                    in_code_block = False
+                else:
+                    html_lines.append('<pre><code>')
+                    in_code_block = True
+                continue
+            
+            if in_code_block:
+                html_lines.append(line)
+                continue
+            
+            # Tables
+            if line.strip().startswith('|'):
+                if not in_table:
+                    html_lines.append('<table>')
+                    in_table = True
+                
+                # Skip separator rows
+                if '---' in line:
+                    continue
+                
+                cells = [c.strip() for c in line.split('|')[1:-1]]
+                if cells:
+                    # First row is header
+                    if html_lines[-1] == '<table>':
+                        html_lines.append('<tr>' + ''.join(f'<th>{c}</th>' for c in cells) + '</tr>')
+                    else:
+                        html_lines.append('<tr>' + ''.join(f'<td>{c}</td>' for c in cells) + '</tr>')
+                continue
+            elif in_table:
+                html_lines.append('</table>')
+                in_table = False
+            
+            # Headers
+            if line.startswith('# '):
+                html_lines.append(f'<h1>{line[2:]}</h1>')
+            elif line.startswith('## '):
+                html_lines.append(f'<h2>{line[3:]}</h2>')
+            elif line.startswith('### '):
+                html_lines.append(f'<h3>{line[4:]}</h3>')
+            # Horizontal rule
+            elif line.strip() == '---':
+                html_lines.append('<hr>')
+            # List items
+            elif line.strip().startswith('- '):
+                content = line.strip()[2:]
+                # Add styling for status indicators
+                content = content.replace('✅', '<span class="pass">✅</span>')
+                content = content.replace('❌', '<span class="fail">❌</span>')
+                content = content.replace('⚠️', '<span class="warn">⚠️</span>')
+                html_lines.append(f'<li>{content}</li>')
+            elif line.strip() and line.strip()[0].isdigit() and '. ' in line:
+                # Numbered list
+                content = line.strip().split('. ', 1)[1] if '. ' in line else line.strip()
+                html_lines.append(f'<li>{content}</li>')
+            # Bold text
+            elif line.strip().startswith('**') and '**' in line[2:]:
+                parts = line.split('**')
+                for i in range(1, len(parts) - 1, 2):
+                    parts[i] = f'<strong>{parts[i]}</strong>'
+                html_lines.append('<p>' + ''.join(parts) + '</p>')
+            # Regular paragraph
+            elif line.strip():
+                html_lines.append(f'<p>{line}</p>')
+            else:
+                html_lines.append('')
+        
+        # Close any open tags
+        if in_table:
+            html_lines.append('</table>')
+        
+        html_lines.extend([
+            "</body>",
+            "</html>",
+        ])
+        
+        with open(filepath, 'w') as f:
+            f.write('\n'.join(html_lines))
+        
+        logger.info(f"Exported HTML report to {filepath}")
+        return filepath
+    
+    def persist_results(
+        self,
+        result: Optional[ValidationResult] = None,
+        formats: Optional[List[str]] = None
+    ) -> Dict[str, str]:
+        """
+        Persist validation results in multiple formats.
+        
+        Args:
+            result: Result to persist (uses latest if None)
+            formats: List of formats to export (default: all)
+            
+        Returns:
+            Dict[str, str]: Mapping of format to filepath
+        """
+        if result is None:
+            if not self._validation_history:
+                raise ValueError("No validation results available to persist")
+            result = self._validation_history[-1]
+        
+        if formats is None:
+            formats = ['json', 'markdown', 'html']
+        
+        exported = {}
+        
+        if 'json' in formats:
+            exported['json'] = self.export_results(result, format='json')
+        
+        if 'markdown' in formats or 'md' in formats:
+            exported['markdown'] = self.export_results(result, format='markdown')
+        
+        if 'html' in formats:
+            exported['html'] = self.export_results_html(result)
+        
+        if 'csv' in formats:
+            exported['csv'] = self.export_results_csv([result])
+        
+        if 'summary' in formats:
+            exported['summary'] = self.export_results(result, format='summary')
+        
+        logger.info(f"Persisted validation results in {len(exported)} formats")
+        return exported
+    
+    def generate_trend_report(self) -> str:
+        """
+        Generate a trend report across all validation history.
+        
+        Returns:
+            str: Trend analysis report in markdown
+        """
+        if len(self._validation_history) < 2:
+            return "Insufficient validation history for trend analysis (need at least 2 results)."
+        
+        lines = [
+            "# Validation Trend Report",
+            "",
+            f"**Analysis Period:** {self._validation_history[0].decision_timestamp} to {self._validation_history[-1].decision_timestamp}",
+            f"**Total Validations:** {len(self._validation_history)}",
+            "",
+        ]
+        
+        # Count decisions
+        decisions = [r.decision for r in self._validation_history]
+        go_count = decisions.count('go')
+        no_go_count = decisions.count('no_go')
+        conditional_count = decisions.count('conditional_go')
+        
+        lines.extend([
+            "## Decision Summary",
+            "",
+            f"| Decision | Count | Percentage |",
+            f"|----------|-------|------------|",
+            f"| ✅ Go | {go_count} | {go_count/len(decisions)*100:.1f}% |",
+            f"| ⚠️ Conditional Go | {conditional_count} | {conditional_count/len(decisions)*100:.1f}% |",
+            f"| ❌ No-Go | {no_go_count} | {no_go_count/len(decisions)*100:.1f}% |",
+            "",
+        ])
+        
+        # Calculate averages
+        avg_accuracy = sum(r.accuracy_improvement for r in self._validation_history) / len(self._validation_history)
+        avg_improved = sum(r.improved_segments_percent for r in self._validation_history) / len(self._validation_history)
+        avg_time = sum(r.enhancement_completion_time for r in self._validation_history) / len(self._validation_history)
+        avg_cpu = sum(r.cpu_usage_percent for r in self._validation_history) / len(self._validation_history)
+        
+        lines.extend([
+            "## Average Metrics",
+            "",
+            f"| Metric | Average |",
+            f"|--------|---------|",
+            f"| Accuracy Improvement | {avg_accuracy*100:.1f}% |",
+            f"| Improved Segments | {avg_improved:.1f}% |",
+            f"| Completion Time | {avg_time:.1f}s |",
+            f"| CPU Usage | {avg_cpu:.0f}% |",
+            "",
+        ])
+        
+        # Trend direction
+        first_half = self._validation_history[:len(self._validation_history)//2]
+        second_half = self._validation_history[len(self._validation_history)//2:]
+        
+        if first_half and second_half:
+            first_acc = sum(r.accuracy_improvement for r in first_half) / len(first_half)
+            second_acc = sum(r.accuracy_improvement for r in second_half) / len(second_half)
+            
+            if second_acc > first_acc + 0.01:
+                trend = "📈 Improving"
+            elif second_acc < first_acc - 0.01:
+                trend = "📉 Declining"
+            else:
+                trend = "➡️ Stable"
+            
+            lines.extend([
+                "## Trend Analysis",
+                "",
+                f"**Accuracy Trend:** {trend}",
+                f"- First Half Average: {first_acc*100:.1f}%",
+                f"- Second Half Average: {second_acc*100:.1f}%",
+                "",
+            ])
+        
+        return "\n".join(lines)
+    
     def get_validation_history(self) -> List[ValidationResult]:
         """
         Get all validation results.
