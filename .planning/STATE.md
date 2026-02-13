@@ -1,7 +1,7 @@
 # Project State: metamemory
 
 **Status:** Phase 3 In Progress
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-12
 
 ---
 
@@ -17,16 +17,17 @@ See: .planning/PROJECT.md (updated 2026-02-01)
 ## Current Position
 
 Phase: 3 of 6 (Dual-Mode Enhancement Architecture)
-Plan: 3 of 7 in current phase
-Status: Phase 3 Wave 1 In Progress
-Last activity: 2026-02-11 - Completed worker pool integration and processing flow (03-03)
+Plan: 4 of 7 in current phase
+Status: Phase 3 Wave 2 In Progress
+Last activity: 2026-02-12 - Completed live UI updates for enhanced segments (03-04)
 
-Progress: ░░░░░░░░░░░░░░░░░░██ 43% (3/7 plans)
+Progress: ░░░░░░░░░░░░░░░░░░███ 57% (4/7 plans)
 
 **Latest Implementation:**
 - ✅ 03-01: Enhancement queue and worker pool architecture
 - ✅ 03-02: Large model enhancement with confidence-based filtering
 - ✅ 03-03: Worker pool integration and processing flow
+- ✅ 03-04: Live UI updates for enhanced segments
 
 **Phase 2 Complete:**
 - ✅ Gap closure 02-05: Replaced faster-whisper with whisper.cpp (fix WinError 1114)
@@ -47,12 +48,12 @@ Progress: ░░░░░░░░░░░░░░░░░░██ 43% (3/7 
 |-------|--------|----------|--------------|
 | 1 | ✅ | 100% | 8 |
 | 2 | ✅ | 100% | 10 |
-| 3 | ◆ | 43% | 16 |
+| 3 | ◆ | 57% | 16 |
 | 4 | ○ | 0% | 8 |
 | 5 | ○ | 0% | 43 |
 | 6 | ○ | 0% | 8 |
 
-**Total:** 93 requirements | 18 complete | 3 in progress | 72 pending
+**Total:** 93 requirements | 18 complete | 4 in progress | 71 pending
 
 ---
 
@@ -69,30 +70,30 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 **Goal:** Implement background large model enhancement with selective processing and live UI updates
 
 **Requirements (16):**
-- [ ] ENH-01: Low-confidence segments (< 70%) are queued for large model enhancement
-- [ ] ENH-02: Enhancement workers process segments in parallel without blocking real-time transcription
-- [ ] ENH-03: Transcript updates in real-time as enhanced segments complete
-- [ ] ENH-04: Enhanced segments display in bold for visual distinction
+- [x] ENH-01: Low-confidence segments (< 70%) are queued for large model enhancement
+- [x] ENH-02: Enhancement workers process segments in parallel without blocking real-time transcription
+- [x] ENH-03: Transcript updates in real-time as enhanced segments complete
+- [x] ENH-04: Enhanced segments display in bold for visual distinction
 - [ ] ENH-05: Enhancement completes within 15-30 seconds after recording stops
 - [ ] ENH-06: FakeAudioModule validates dual-mode shows accuracy improvement vs single-mode
-- [ ] ENH-07: User can adjust workers and confidence threshold during operation
+- [x] ENH-07: User can adjust workers and confidence threshold during operation
 - [ ] ENH-08: System resource usage remains acceptable during dual-mode operation
-- [ ] CFG-01: Enhancement configuration (workers, confidence threshold)
-- [ ] CFG-03: Enhancement queue visualization
-- [ ] CFG-04: Real-time enhancement status
+- [x] CFG-01: Enhancement configuration (workers, confidence threshold)
+- [x] CFG-03: Enhancement queue visualization
+- [x] CFG-04: Real-time enhancement status
 - [ ] TST-01: Dual-mode accuracy validation
 - [ ] TST-02: Performance benchmarking
 - [ ] TST-03: Resource usage monitoring
-- [ ] ENH-09: Dynamic worker scaling
-- [ ] ENH-10: Graceful degradation
+- [x] ENH-09: Dynamic worker scaling
+- [x] ENH-10: Graceful degradation
 
 **Completed Plans:**
 - [✓] 03-01: Enhancement queue and worker pool architecture
 - [✓] 03-02: Large model enhancement with confidence-based filtering
 - [✓] 03-03: Worker pool integration and processing flow
+- [✓] 03-04: Live UI updates for enhanced segments
 
-**Remaining Plans (Phase 3 Wave 1):**
-- [ ] 03-04: Live UI updates for enhanced segments
+**Remaining Plans (Phase 3 Wave 2):**
 - [ ] 03-05: Configuration management for enhancement settings
 - [ ] 03-06: Testing framework with FakeAudioModule
 - [ ] 03-07: Validation and performance measurement
@@ -160,10 +161,12 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 | 2026-02-10 | Model selection persistence wiring | Radio button toggles emit model_changed signal, connected to save_config() | Complete |
 | 2026-02-10 | Buffer deduplication for continuous transcription | Segment index tracking to skip already-emitted segments in each 2s cycle, reset on phrase complete | Complete |
 | 2026-02-10 | Hardware detection display integration | Added HardwareDetector and ModelRecommender to settings panel, display RAM, CPU cores, frequency, recommended model | Complete |
-| 2026-02-11 | Async worker pool with dynamic scaling | asyncio + ThreadPoolExecutor for parallel enhancement, psutil for CPU monitoring, adaptive worker scaling (2-8 workers) | Active |
-| 2026-02-11 | Completion callback pattern for real-time updates | Callback mechanism for enhancement completion, enabling real-time transcript updates as segments complete | Active |
-| 2026-02-11 | Context-aware enhancement processing | Track recording state (during vs after stop) for performance metrics and enhancement timing | Active |
-| 2026-02-11 | Graceful degradation with retry logic | Max 2 retries with exponential backoff, fallback to original text on failure | Active |
+| 2026-02-11 | Async worker pool with dynamic scaling | asyncio + ThreadPoolExecutor for parallel enhancement, psutil for CPU monitoring, adaptive worker scaling (2-8 workers) | Complete |
+| 2026-02-11 | Completion callback pattern for real-time updates | Callback mechanism for enhancement completion, enabling real-time transcript updates as segments complete | Complete |
+| 2026-02-11 | Context-aware enhancement processing | Track recording state (during vs after stop) for performance metrics and enhancement timing | Complete |
+| 2026-02-11 | Graceful degradation with retry logic | Max 2 retries with exponential backoff, fallback to original text on failure | Complete |
+| 2026-02-12 | Timer-based enhancement status polling | ~500ms status updates via animation_timer infrastructure | Complete |
+| 2026-02-12 | Bold formatting for enhanced segments | Enhanced segments display in bold using QFont.Weight.Bold | Complete |
 
 ---
 
@@ -172,8 +175,9 @@ A widget foundation was built ahead of schedule as exploration code. This code e
 None currently.
 
 **Notes:**
-- Phase 3 in progress - Wave 1 (03-01, 03-02, 03-03) complete
-- Async worker pool fully implemented with dynamic scaling
+- Phase 3 Wave 1 complete (03-01, 03-02, 03-03)
+- Phase 3 Wave 2 started (03-04 complete)
+- Bold formatting and real-time status display implemented
 - System audio loopback requires Windows Core Audio implementation (planned for Phase 4)
 - PortAudio WASAPI loopback symbol not exported in sounddevice binary
 - Enhancement quality validation pending testing phase (03-06, 03-07)
@@ -183,11 +187,11 @@ None currently.
 ## Next Actions
 
 **Immediate:**
-1. ⏳ Execute Phase 3 Wave 1 plan 03-04:
-    - 03-04: Live UI updates for enhanced segments
+1. ⏳ Execute Phase 3 Wave 2 plan 03-05:
+    - 03-05: Configuration management for enhancement settings
 
 **Ready to Start:**
-- Phase 3 Wave 1 remaining plans: 03-04, 03-05, 03-06, 03-07
+- Phase 3 Wave 2 remaining plans: 03-05, 03-06, 03-07
 
 **Upcoming:**
 - Phase 4: Speaker Identification (includes Core Audio loopback completion)
@@ -201,15 +205,15 @@ None currently.
 
 ## Session Continuity
 
-Last session: 2026-02-11
-Stopped at: Completed worker pool integration and processing flow (03-03 complete)
-Resume file: .planning/phases/03-dual-mode-enhancement-architecture/03-03-SUMMARY.md
+Last session: 2026-02-12
+Stopped at: Completed live UI updates for enhanced segments (03-04 complete)
+Resume file: .planning/phases/03-dual-mode-enhancement-architecture/03-04-SUMMARY.md
 
-**Current Status:** Phase 3 Wave 1 in progress:
+**Current Status:** Phase 3 Wave 2 in progress:
 - Enhancement queue and worker pool architecture complete (03-01)
 - Large model enhancement with confidence-based filtering complete (03-02)
 - Worker pool integration and processing flow complete (03-03)
-- Ready for live UI updates (03-04)
-- Buffer deduplication complete (Gap 02-13)
+- Live UI updates with bold formatting and real-time status complete (03-04)
+- Ready for configuration management (03-05)
 
 *State file automatically updated throughout project lifecycle*
