@@ -2387,3 +2387,453 @@ class DualModeComparator:
                 else 'Dual-mode may not be beneficial for this test case'
             ),
         }
+
+
+# =============================================================================
+# Test Automation and Validation
+# =============================================================================
+
+@dataclass
+class TestScenario:
+    """Definition of a test scenario for dual-mode validation."""
+    name: str
+    description: str
+    audio_config: Dict[str, Any] = field(default_factory=dict)
+    expected_confidence_range: Tuple[float, float] = (0.3, 0.9)
+    expected_wer_range: Tuple[float, float] = (0.0, 0.5)
+    min_segments: int = 10
+    max_segments: int = 100
+    test_duration_seconds: float = 10.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'description': self.description,
+            'audio_config': self.audio_config,
+            'expected_confidence_range': self.expected_confidence_range,
+            'expected_wer_range': self.expected_wer_range,
+            'min_segments': self.min_segments,
+            'max_segments': self.max_segments,
+            'test_duration_seconds': self.test_duration_seconds,
+            'metadata': self.metadata,
+        }
+
+
+@dataclass
+class TestResult:
+    """Result of a single test run."""
+    scenario_name: str
+    passed: bool
+    accuracy_score: float = 0.0
+    wer_score: float = 0.0
+    confidence_avg: float = 0.0
+    segments_tested: int = 0
+    error_message: Optional[str] = None
+    duration_seconds: float = 0.0
+    details: Dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'scenario_name': self.scenario_name,
+            'passed': self.passed,
+            'accuracy_score': self.accuracy_score,
+            'wer_score': self.wer_score,
+            'confidence_avg': self.confidence_avg,
+            'segments_tested': self.segments_tested,
+            'error_message': self.error_message,
+            'duration_seconds': self.duration_seconds,
+            'details': self.details,
+            'timestamp': self.timestamp,
+        }
+
+
+@dataclass
+class TestSuiteResult:
+    """Result of a complete test suite run."""
+    suite_name: str
+    total_tests: int = 0
+    passed_tests: int = 0
+    failed_tests: int = 0
+    skipped_tests: int = 0
+    total_duration_seconds: float = 0.0
+    test_results: List[TestResult] = field(default_factory=list)
+    summary: Dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    
+    @property
+    def pass_rate(self) -> float:
+        return self.passed_tests / max(1, self.total_tests)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'suite_name': self.suite_name,
+            'total_tests': self.total_tests,
+            'passed_tests': self.passed_tests,
+            'failed_tests': self.failed_tests,
+            'skipped_tests': self.skipped_tests,
+            'pass_rate': self.pass_rate,
+            'total_duration_seconds': self.total_duration_seconds,
+            'test_results': [r.to_dict() for r in self.test_results],
+            'summary': self.summary,
+            'timestamp': self.timestamp,
+        }
+
+
+class TestRunner:
+    """
+    Automated test runner for dual-mode validation.
+    
+    Features:
+    - Configurable test scenarios
+    - Batch test execution
+    - Pass/fail criteria validation
+    - Test result reporting and logging
+    - Support for integration with CI/CD
+    """
+    
+    def __init__(
+        self,
+        output_dir: str = "test_results",
+        save_results: bool = True,
+        verbose: bool = True
+    ):
+        """
+        Initialize the test runner.
+        
+        Args:
+            output_dir: Directory to save test results
+            save_results: Whether to save results to files
+            verbose: Whether to log detailed test progress
+        """
+        self.output_dir = output_dir
+        self.save_results = save_results
+        self.verbose = verbose
+        self._scenarios: List[TestScenario] = []
+        self._last_suite_result: Optional[TestSuiteResult] = None
+        
+        # Create output directory if needed
+        if self.save_results:
+            os.makedirs(output_dir, exist_ok=True)
+    
+    def add_scenario(self, scenario: TestScenario) -> None:
+        """
+        Add a test scenario to the runner.
+        
+        Args:
+            scenario: TestScenario to add
+        """
+        self._scenarios.append(scenario)
+        logger.info(f"Added test scenario: {scenario.name}")
+    
+    def add_default_scenarios(self) -> None:
+        """Add default test scenarios for dual-mode validation."""
+        default_scenarios = [
+            TestScenario(
+                name="low_confidence_enhancement",
+                description="Test enhancement of low-confidence segments (< 70%)",
+                audio_config={'confidence_pattern': 'step', 'confidence_min': 0.3, 'confidence_max': 0.65},
+                expected_confidence_range=(0.3, 0.65),
+                expected_wer_range=(0.0, 0.4),
+                min_segments=10,
+                max_segments=50
+            ),
+            TestScenario(
+                name="mixed_confidence_processing",
+                description="Test processing with mixed confidence levels",
+                audio_config={'confidence_pattern': 'sine', 'confidence_min': 0.4, 'confidence_max': 0.9},
+                expected_confidence_range=(0.4, 0.9),
+                expected_wer_range=(0.0, 0.35),
+                min_segments=15,
+                max_segments=100
+            ),
+            TestScenario(
+                name="high_noise_accuracy",
+                description="Test accuracy improvement with high noise levels",
+                audio_config={'noise_level': 0.7, 'confidence_pattern': 'random'},
+                expected_confidence_range=(0.2, 0.6),
+                expected_wer_range=(0.0, 0.5),
+                min_segments=10,
+                max_segments=50
+            ),
+        ]
+        
+        for scenario in default_scenarios:
+            self.add_scenario(scenario)
+    
+    def run_test(
+        self,
+        scenario: TestScenario,
+        segments: List[Dict[str, Any]],
+        ground_truths: List[str]
+    ) -> TestResult:
+        """
+        Run a single test scenario.
+        
+        Args:
+            scenario: TestScenario to run
+            segments: Segments to test
+            ground_truths: Ground truth strings for validation
+            
+        Returns:
+            TestResult: Result of the test
+        """
+        start_time = time.time()
+        
+        if self.verbose:
+            logger.info(f"Running test scenario: {scenario.name}")
+        
+        # Initialize result
+        result = TestResult(
+            scenario_name=scenario.name,
+            passed=False
+        )
+        
+        try:
+            # Validate segment count
+            if len(segments) < scenario.min_segments:
+                result.error_message = f"Insufficient segments: {len(segments)} < {scenario.min_segments}"
+                result.passed = False
+                return result
+            
+            if len(segments) > scenario.max_segments:
+                segments = segments[:scenario.max_segments]
+                ground_truths = ground_truths[:scenario.max_segments]
+            
+            # Calculate metrics
+            accuracies: List[float] = []
+            wers: List[float] = []
+            confidences: List[float] = []
+            
+            for segment, truth in zip(segments, ground_truths):
+                text = segment.get('enhanced_text', segment.get('text', ''))
+                wer = calculate_wer(truth, text)
+                acc = calculate_accuracy(truth, text)
+                conf = segment.get('confidence', 0.0)
+                
+                wers.append(wer)
+                accuracies.append(acc)
+                confidences.append(conf)
+            
+            # Aggregate results
+            result.wer_score = mean(wers) if wers else 1.0
+            result.accuracy_score = mean(accuracies) if accuracies else 0.0
+            result.confidence_avg = mean(confidences) if confidences else 0.0
+            result.segments_tested = len(segments)
+            
+            # Validate against expected ranges
+            wer_in_range = scenario.expected_wer_range[0] <= result.wer_score <= scenario.expected_wer_range[1]
+            conf_in_range = scenario.expected_confidence_range[0] <= result.confidence_avg <= scenario.expected_confidence_range[1]
+            
+            # Determine pass/fail
+            result.passed = wer_in_range and conf_in_range
+            
+            # Add details
+            result.details = {
+                'wer_in_range': wer_in_range,
+                'conf_in_range': conf_in_range,
+                'actual_wer': result.wer_score,
+                'actual_confidence': result.confidence_avg,
+                'expected_wer_range': scenario.expected_wer_range,
+                'expected_confidence_range': scenario.expected_confidence_range,
+            }
+            
+            if self.verbose:
+                status = "PASSED" if result.passed else "FAILED"
+                logger.info(f"Test {scenario.name}: {status} (WER={result.wer_score:.3f}, accuracy={result.accuracy_score:.3f})")
+        
+        except Exception as e:
+            result.error_message = str(e)
+            result.passed = False
+            logger.error(f"Test {scenario.name} failed with error: {e}")
+        
+        finally:
+            result.duration_seconds = time.time() - start_time
+        
+        return result
+    
+    def run_batch(
+        self,
+        segments: List[Dict[str, Any]],
+        ground_truths: List[str],
+        suite_name: str = "default_suite"
+    ) -> TestSuiteResult:
+        """
+        Run all test scenarios as a batch.
+        
+        Args:
+            segments: Segments to test
+            ground_truths: Ground truth strings for validation
+            suite_name: Name for this test suite
+            
+        Returns:
+            TestSuiteResult: Complete suite result
+        """
+        suite_start = time.time()
+        
+        suite_result = TestSuiteResult(suite_name=suite_name)
+        suite_result.total_tests = len(self._scenarios)
+        
+        if self.verbose:
+            logger.info(f"Starting test suite: {suite_name} ({suite_result.total_tests} scenarios)")
+        
+        for scenario in self._scenarios:
+            result = self.run_test(scenario, segments, ground_truths)
+            suite_result.test_results.append(result)
+            
+            if result.passed:
+                suite_result.passed_tests += 1
+            elif result.error_message:
+                suite_result.failed_tests += 1
+            else:
+                suite_result.failed_tests += 1
+        
+        suite_result.total_duration_seconds = time.time() - suite_start
+        
+        # Generate summary
+        suite_result.summary = {
+            'pass_rate_percent': suite_result.pass_rate * 100,
+            'avg_wer': mean([r.wer_score for r in suite_result.test_results]) if suite_result.test_results else 0,
+            'avg_accuracy': mean([r.accuracy_score for r in suite_result.test_results]) if suite_result.test_results else 0,
+            'total_segments_tested': sum(r.segments_tested for r in suite_result.test_results),
+        }
+        
+        self._last_suite_result = suite_result
+        
+        if self.verbose:
+            logger.info(
+                f"Test suite complete: {suite_result.passed_tests}/{suite_result.total_tests} passed "
+                f"({suite_result.pass_rate*100:.1f}%) in {suite_result.total_duration_seconds:.2f}s"
+            )
+        
+        # Save results if configured
+        if self.save_results:
+            self._save_suite_result(suite_result)
+        
+        return suite_result
+    
+    def _save_suite_result(self, result: TestSuiteResult) -> None:
+        """Save test suite result to file."""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"test_suite_{result.suite_name}_{timestamp}.json"
+            filepath = os.path.join(self.output_dir, filename)
+            
+            with open(filepath, 'w') as f:
+                json.dump(result.to_dict(), f, indent=2)
+            
+            logger.info(f"Saved test suite result to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save test suite result: {e}")
+    
+    def get_last_result(self) -> Optional[TestSuiteResult]:
+        """
+        Get the last test suite result.
+        
+        Returns:
+            Optional[TestSuiteResult]: Last suite result or None
+        """
+        return self._last_suite_result
+    
+    def generate_report(self, result: Optional[TestSuiteResult] = None) -> str:
+        """
+        Generate a detailed test report.
+        
+        Args:
+            result: TestSuiteResult to report (uses last if None)
+            
+        Returns:
+            str: Formatted test report
+        """
+        if result is None:
+            result = self._last_suite_result
+        
+        if result is None:
+            return "No test results available."
+        
+        lines = [
+            "=" * 70,
+            f"TEST SUITE REPORT: {result.suite_name}",
+            "=" * 70,
+            "",
+            "SUMMARY",
+            "-" * 40,
+            f"  Total Tests:     {result.total_tests}",
+            f"  Passed:          {result.passed_tests}",
+            f"  Failed:          {result.failed_tests}",
+            f"  Pass Rate:       {result.pass_rate*100:.1f}%",
+            f"  Duration:        {result.total_duration_seconds:.2f}s",
+            "",
+            "AGGREGATED METRICS",
+            "-" * 40,
+            f"  Average WER:     {result.summary.get('avg_wer', 0):.4f}",
+            f"  Average Accuracy: {result.summary.get('avg_accuracy', 0):.4f}",
+            f"  Segments Tested: {result.summary.get('total_segments_tested', 0)}",
+            "",
+            "INDIVIDUAL TEST RESULTS",
+            "-" * 40,
+        ]
+        
+        for test_result in result.test_results:
+            status = "✓ PASSED" if test_result.passed else "✗ FAILED"
+            lines.extend([
+                f"",
+                f"  [{status}] {test_result.scenario_name}",
+                f"    WER: {test_result.wer_score:.4f} | Accuracy: {test_result.accuracy_score:.4f}",
+                f"    Confidence: {test_result.confidence_avg:.2f}% | Segments: {test_result.segments_tested}",
+            ])
+            if test_result.error_message:
+                lines.append(f"    Error: {test_result.error_message}")
+        
+        lines.extend([
+            "",
+            "=" * 70,
+            f"Report generated: {result.timestamp}",
+            "=" * 70,
+        ])
+        
+        return "\n".join(lines)
+    
+    def validate_results(
+        self,
+        result: TestSuiteResult,
+        min_pass_rate: float = 0.8,
+        max_avg_wer: float = 0.3
+    ) -> Dict[str, Any]:
+        """
+        Validate test results against thresholds.
+        
+        Args:
+            result: TestSuiteResult to validate
+            min_pass_rate: Minimum required pass rate (default: 0.8)
+            max_avg_wer: Maximum allowed average WER (default: 0.3)
+            
+        Returns:
+            Dict[str, Any]: Validation result with pass/fail status
+        """
+        pass_rate_ok = result.pass_rate >= min_pass_rate
+        wer_ok = result.summary.get('avg_wer', 1.0) <= max_avg_wer
+        
+        overall_pass = pass_rate_ok and wer_ok
+        
+        return {
+            'overall_pass': overall_pass,
+            'checks': {
+                'pass_rate': {
+                    'actual': result.pass_rate,
+                    'threshold': min_pass_rate,
+                    'passed': pass_rate_ok,
+                },
+                'avg_wer': {
+                    'actual': result.summary.get('avg_wer', 1.0),
+                    'threshold': max_avg_wer,
+                    'passed': wer_ok,
+                },
+            },
+            'recommendation': (
+                'All validation checks passed'
+                if overall_pass
+                else 'Validation failed - review test results and adjust parameters'
+            ),
+        }
