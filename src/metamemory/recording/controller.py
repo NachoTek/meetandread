@@ -535,3 +535,25 @@ class RecordingController:
     def get_transcript_store(self) -> Optional[TranscriptStore]:
         """Get the current transcript store (for UI access during recording)."""
         return self._transcript_store
+    
+    def update_enhancement_settings(self, settings: dict) -> None:
+        """Update enhancement settings on the running transcription processor.
+        
+        Args:
+            settings: Dictionary with enhancement settings:
+                - confidence_threshold: float (0.0-1.0)
+                - num_workers: int
+        """
+        if not self._transcription_processor:
+            print("DEBUG: No transcription processor to update")
+            return
+        
+        threshold = settings.get('confidence_threshold')
+        if threshold is not None and self._transcription_processor._enhancement_config:
+            self._transcription_processor._enhancement_config.confidence_threshold = threshold
+            print(f"DEBUG: Updated enhancement threshold to {threshold*100}%")
+            
+            # Also update the queue's threshold
+            if self._transcription_processor._enhancement_queue:
+                self._transcription_processor._enhancement_queue.confidence_threshold = threshold
+                print(f"DEBUG: Updated queue threshold to {threshold*100}%")

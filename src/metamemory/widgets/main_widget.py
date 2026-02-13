@@ -543,8 +543,10 @@ to avoid clipping issues and enable proper text rendering.
             settings: Dictionary with enhancement settings (confidence_threshold, num_workers)
         """
         print(f"DEBUG UI: Enhancement settings changed: {settings}")
-        # TODO: Apply enhancement settings to the enhancement system
-        # This will be connected in a future phase when enhancement is fully integrated
+        
+        # Apply settings to the running transcription processor via controller
+        if self._controller:
+            self._controller.update_enhancement_settings(settings)
 
     def toggle_transcript_panel(self):
         """Toggle floating transcript panel visibility."""
