@@ -556,7 +556,10 @@ class AccumulatingTranscriptionProcessor:
         Returns:
             Dict with queue_size, workers_active, and total_enhanced
         """
+        print(f"[ENHANCEMENT STATUS] _enhancement_enabled={self._enhancement_enabled}")
+
         if not self._enhancement_enabled:
+            print(f"[ENHANCEMENT STATUS] Returning disabled status")
             return {
                 'queue_size': 0,
                 'workers_active': 0,
@@ -567,7 +570,10 @@ class AccumulatingTranscriptionProcessor:
         queue_status = self._enhancement_queue.get_status() if self._enhancement_queue else {}
         worker_status = self._enhancement_worker_pool.get_status() if self._enhancement_worker_pool else {}
 
-        return {
+        print(f"[ENHANCEMENT STATUS] queue_status={queue_status}")
+        print(f"[ENHANCEMENT STATUS] worker_status keys={worker_status.keys() if worker_status else 'None'}")
+
+        result = {
             'queue_size': queue_status.get('size', 0),
             'workers_active': worker_status.get('active_tasks', 0),
             'total_enhanced': worker_status.get('completed_tasks', 0),
@@ -575,6 +581,8 @@ class AccumulatingTranscriptionProcessor:
             'pending_tasks': worker_status.get('pending_tasks', 0),
             'failed_tasks': worker_status.get('failed_tasks', 0)
         }
+        print(f"[ENHANCEMENT STATUS] Returning: {result}")
+        return result
     
     def _start_enhancement_processing(self) -> None:
         """Start the background enhancement processing thread."""
