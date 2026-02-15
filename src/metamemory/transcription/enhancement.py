@@ -126,11 +126,11 @@ class EnhancementQueue:
     def get_status(self) -> Dict[str, Any]:
         """
         Get current queue status.
-        
+
         Returns:
             Dict[str, Any]: Dictionary with queue statistics
         """
-        return {
+        status = {
             'size': self.queue.qsize(),
             'max_size': self.queue.maxsize,
             'total_enqueued': self.total_enqueued,
@@ -140,6 +140,8 @@ class EnhancementQueue:
             'is_empty': self.queue.empty(),
             'confidence_threshold': self.confidence_threshold
         }
+        print(f"[QUEUE STATUS] Returning: size={status['size']}, total_enqueued={status['total_enqueued']}, total_processed={status['total_processed']}")
+        return status
     
     def set_confidence_threshold(self, threshold: float):
         """Update the confidence threshold for enhancement eligibility.
@@ -785,7 +787,7 @@ class EnhancementWorkerPool:
         resource_metrics = self.get_system_metrics()
         degradation_status = self.get_degradation_status()
 
-        return {
+        result = {
             'num_workers': self.num_workers,
             'min_workers': self.min_workers,
             'max_workers': self.max_workers,
@@ -807,6 +809,8 @@ class EnhancementWorkerPool:
             'resource_metrics': resource_metrics,
             'degradation_status': degradation_status
         }
+        print(f"[WORKER STATUS] active_tasks={result['active_tasks']}, completed_tasks={result['completed_tasks']}, is_running={result['is_running']}, pending_tasks={result['pending_tasks']}")
+        return result
     
     def get_system_metrics(self) -> Dict[str, Any]:
         """
