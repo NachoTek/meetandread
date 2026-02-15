@@ -318,8 +318,12 @@ to avoid clipping issues and enable proper text rendering.
 
         # Only update when recording is active
         if not self.is_recording and not self.is_processing:
-            print(f"[STATUS DEBUG] Early return: not recording or processing")
-            return
+            # NEW: Also check if enhancement is still active after recording stops
+            status = self._controller.get_enhancement_status()
+            if not status.get('enabled', False) or (status.get('queue_size', 0) == 0 and status.get('workers_active', 0) == 0):
+                return
+            # Enhancement is still active - continue updating even after recording stops
+            print(f"[STATUS DEBUG] Enhancement still active: queue={status.get('queue_size', 0)}, workers={status.get('workers_active', 0)}")
 
         # Get status from controller
         status = self._controller.get_enhancement_status()
