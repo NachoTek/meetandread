@@ -275,24 +275,35 @@ class FloatingTranscriptPanel(QWidget):
         phrase.is_final = is_final
         
         # Update or add segment to internal tracking
-        if segment_index < len(phrase.segments):
-            # Update existing segment - REPLACE IN PLACE
+        if enhanced:
+            # ENHANCED SEGMENTS: Append to end of current phrase with bold formatting
+            # Enhanced segments arrive asynchronously, so we can't reliably replace by index
+            phrase.segments.append(text)
+            phrase.confidences.append(confidence)
+            phrase.enhanced.append(True)
+            print(f"DEBUG Panel: Added enhanced segment: '{text}' [conf: {confidence}%]")
+            print(f"DEBUG Panel: Phrase has {len(phrase.segments)} segments now")
+
+            # Append enhanced segment to display with bold formatting
+            self._append_enhanced_segment_to_display(text, confidence)
+        elif segment_index < len(phrase.segments):
+            # Update existing segment - REPLACE IN PLACE (for non-enhanced)
             phrase.segments[segment_index] = text
             phrase.confidences[segment_index] = confidence
-            phrase.enhanced[segment_index] = enhanced
+            phrase.enhanced[segment_index] = False
             print(f"DEBUG Panel: Updated segment {segment_index}: '{text}' [conf: {confidence}%] enhanced={enhanced}")
-            
+
             # Find and replace just this segment in display
-            self._replace_segment_in_display(self.current_phrase_idx, segment_index, text, confidence, enhanced)
+            self._replace_segment_in_display(self.current_phrase_idx, segment_index, text, confidence, False)
         else:
             # Add new segment - APPEND TO CURRENT LINE
             phrase.segments.append(text)
             phrase.confidences.append(confidence)
-            phrase.enhanced.append(enhanced)
+            phrase.enhanced.append(False)
             print(f"DEBUG Panel: Added segment {segment_index}: '{text}' [conf: {confidence}%] enhanced={enhanced}")
-            
+
             # Append segment to display with proper formatting
-            self._append_segment_to_display(text, confidence, enhanced)
+            self._append_segment_to_display(text, confidence, False)
         
         # Update status
         total_segments = sum(len(p.segments) for p in self.phrases)
@@ -305,19 +316,47 @@ class FloatingTranscriptPanel(QWidget):
         """Append a segment to the current line with proper formatting."""
         cursor = self.text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        
+
         # Add space between segments
         if self.phrases[self.current_phrase_idx].segments and len(self.phrases[self.current_phrase_idx].segments) > 0:
             cursor.insertText(" ")
-        
+
         # Determine color and formatting
         color = self._get_confidence_color(confidence)
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(color))
         # ONLY bold if enhanced, not based on confidence
         fmt.setFontWeight(QFont.Weight.Bold if enhanced else QFont.Weight.Normal)
-        
+
         cursor.insertText(text, fmt)
+
+    def _append_enhanced_segment_to_display(self, text: str, confidence: int) -> None:
+        """Append an enhanced segment to the current line with bold formatting.
+
+        Enhanced segments arrive asynchronously after the original transcription,
+        so we append them to the end of the current phrase with special styling
+        to indicate they were enhanced.
+        """
+        print(f"DEBUG Panel: Appending enhanced segment: '{text}'")
+
+        cursor = self.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+
+        # Add space if there are existing segments
+        if self.phrases[self.current_phrase_idx].segments:
+            cursor.insertText(" ")
+
+        # Use special enhanced formatting
+        color = self._get_confidence_color(confidence)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        # ALWAYS bold for enhanced segments
+        fmt.setFontWeight(QFont.Weight.Bold)
+
+        # Add [ENHANCED] prefix to indicate this was enhanced
+        cursor.insertText(f"[ENHANCED] {text}", fmt)
+
+        print(f"DEBUG Panel: Enhanced segment appended with text: '{text}'")
     
     def _replace_segment_in_display(self, phrase_idx: int, segment_idx: int, text: str, confidence: int, enhanced: bool) -> None:
         """Replace a specific segment in the display without rebuilding everything."""
