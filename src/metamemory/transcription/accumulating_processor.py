@@ -493,10 +493,12 @@ class AccumulatingTranscriptionProcessor:
                                 'text': seg_text,
                                 'confidence': result.confidence,
                                 'start': segment_start,
-                                'end': segment_end
+                                'end': segment_end,
+                                'original_segment_index': i,  # Track the original segment index
+                                'phrase_start': (i == 0 and phrase_start)  # Track if starts new phrase
                             }
                             enqueued = self._enhancement_queue.enqueue(enhancement_segment)
-                            print(f"[ENHANCEMENT {'ENQUEUE' if enqueued else 'FAILED'}] segment {i} queued={enqueued}")
+                            print(f"[ENHANCEMENT {'ENQUEUE' if enqueued else 'FAILED'}] segment {i} queued={enqueued}, phrase_start={i == 0 and phrase_start}")
                     
                     # Queue for UI
                     self._result_queue.put(result)
@@ -694,23 +696,27 @@ class AccumulatingTranscriptionProcessor:
     def _on_enhancement_complete(self, result: Dict[str, Any]) -> None:
         """Handle completion of segment enhancement."""
         segment_id = result.get('id', 'unknown')
-        
+
         if result.get('enhanced', False):
             enhanced_text = result.get('enhanced_text', result.get('original_text', ''))
             original_text = result.get('original_text', '')
             confidence = result.get('confidence', 0)
-            
-            print(f"[ENHANCEMENT COMPLETE] segment {segment_id}: '{original_text}' -> '{enhanced_text}' (conf: {confidence}%)")
-            
-            # Create enhanced SegmentResult
+            original_segment_index = result.get('original_segment_index', 0)  # Get tracked index
+            phrase_start = result.get('phrase_start', False)  # Get phrase start flag
+
+            print(f"[ENHANCEMENT COMPLETE] segment {segment_id}: '{original_text}' -> '{enhanced_text}'")
+            print(f"[ENHANCEMENT COMPLETE] original_segment_index={original_segment_index}, phrase_start={phrase_start}")
+            print(f"[ENHANCEMENT COMPLETE] Queueing SegmentResult with enhanced=True")
+
+            # Create enhanced SegmentResult with CORRECT segment index
             enhanced_result = SegmentResult(
                 text=enhanced_text,
                 confidence=int(confidence),
                 start_time=result.get('start', 0.0),
                 end_time=result.get('end', 0.0),
-                segment_index=0,  # Will be ignored since we're replacing by text match
+                segment_index=original_segment_index,  # Use tracked index
                 is_final=True,
-                phrase_start=False,
+                phrase_start=phrase_start,
                 enhanced=True
             )
             
