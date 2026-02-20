@@ -101,14 +101,14 @@ Plans:
 - [x] 03-07-PLAN.md — Go/No-Go validation framework (accuracy benchmarking, decision criteria)
 - [x] 03-08-PLAN.md — Fix enhancement status propagation for real-time UI updates
 - [x] 03-09-PLAN.md — Fix enhanced segment index tracking for bold formatting
-- [ ] 03-10-PLAN.md — Fix race condition in enhancement status reporting
+- [x] 03-10-PLAN.md — Fix race condition in enhancement status reporting
 
-**Status:** ✅ Complete (2026-02-15)
+**Status:** ✅ Complete (2026-02-19)
 - Original 7 plans complete and verified
 - Gap closure added 3 plans: 03-08 (status propagation), 03-09 (enhanced segment tracking), 03-10 (race condition fix)
 - Enhancement status counters now update in real-time during processing
 - Enhanced segments display in bold with [ENHANCED] prefix and proper index tracking
-- Race condition fixed using queue.copy() for thread-safe status reporting
+- Race condition fixed using queue.mutex for thread-safe status reporting
 - All 10 plans complete, all success criteria met
 
 ---
