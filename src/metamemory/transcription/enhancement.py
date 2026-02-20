@@ -45,8 +45,8 @@ class EnhancementQueue:
     
     def __init__(self, max_size: int = 100, confidence_threshold: float = 0.7):
         """
-        Initialize the enhancement queue with bounded capacity.
-        
+        Initialize enhancement queue with bounded capacity.
+
         Args:
             max_size: Maximum number of segments to hold in queue (default: 100)
             confidence_threshold: Confidence threshold for enhancement (default: 0.7)
@@ -56,6 +56,17 @@ class EnhancementQueue:
         self.total_processed = 0
         self.dropped_segments = 0
         self.confidence_threshold = confidence_threshold
+
+    def _get_threadsafe_queue_size(self) -> int:
+        """
+        Get thread-safe snapshot of queue size.
+
+        Returns:
+            int: Number of items in queue (atomic snapshot)
+        """
+        # Use queue's internal mutex to get consistent snapshot
+        with self.queue.mutex:
+            return len(self.queue.queue)
         
     def should_enhance(self, segment: Dict[str, Any]) -> bool:
         """
@@ -86,38 +97,40 @@ class EnhancementQueue:
     def enqueue(self, segment: Dict[str, Any]) -> bool:
         """
         Add segment to queue if space available and meets enhancement criteria.
-        
+
         Args:
             segment: Dictionary containing segment data with at least 'id', 'text', and 'confidence'
-            
+
         Returns:
             bool: True if segment was enqueued, False if queue was full or not eligible
         """
         # Check if segment should be enhanced
         if not self.should_enhance(segment):
             return False
-            
+
         if self.queue.full():
             self.dropped_segments += 1
             logger.warning(f"Enhancement queue full, dropped segment {segment['id']}")
             return False
-            
+
         self.queue.put(segment)
         self.total_enqueued += 1
-        logger.info(f"[ENHANCEMENT ENQUEUE] Enqueued segment {segment['id']} (queue size: {self.queue.qsize()})")
+        # Use thread-safe helper for queue size
+        logger.info(f"[ENHANCEMENT ENQUEUE] Enqueued segment {segment['id']} (queue size: {self._get_threadsafe_queue_size()})")
         return True
     
     def dequeue(self) -> Optional[Dict[str, Any]]:
         """
         Get next segment from queue.
-        
+
         Returns:
             Optional[Dict[str, Any]]: Segment dictionary or None if queue is empty
         """
         try:
             segment = self.queue.get_nowait()
             self.total_processed += 1
-            logger.info(f"[ENHANCEMENT DEQUEUE] Dequeued segment {segment['id']} (queue size: {self.queue.qsize()})")
+            # Use thread-safe helper for queue size
+            logger.info(f"[ENHANCEMENT DEQUEUE] Dequeued segment {segment['id']} (queue size: {self._get_threadsafe_queue_size()})")
             return segment
         except:
             logger.debug("[ENHANCEMENT DEQUEUE] Queue is empty")
@@ -131,7 +144,7 @@ class EnhancementQueue:
             Dict[str, Any]: Dictionary with queue statistics
         """
         status = {
-            'size': self.queue.qsize(),
+            'size': self._get_threadsafe_queue_size(),  # Thread-safe snapshot
             'max_size': self.queue.maxsize,
             'total_enqueued': self.total_enqueued,
             'total_processed': self.total_processed,
