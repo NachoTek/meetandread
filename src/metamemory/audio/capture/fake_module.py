@@ -401,7 +401,7 @@ class FakeAudioModule:
             'duration': self._duration,
             'total_frames': self._nframes,
             'noise_level': self._noise_level,
-            # Enhancement testing metadata
+            # Confidence testing metadata
             'confidence_variation': self._confidence_variation,
             'confidence_pattern': self._confidence_pattern,
             'has_ground_truth': len(self._ground_truth_segments) > 0,

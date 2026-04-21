@@ -73,7 +73,7 @@ class TranscriptStore:
     
     Thread-safe storage for transcribed words with timestamps and confidence.
     Supports word-by-word streaming display, confidence color coding,
-    and future enhancement/speaker identification features.
+    and future speaker identification features.
     
     Memory Management:
     - For 30+ minute recordings: ~5000 words, ~500KB memory

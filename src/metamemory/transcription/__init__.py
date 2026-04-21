@@ -8,7 +8,7 @@ Provides the core transcription pipeline:
 - AudioRingBuffer: Thread-safe audio buffering
 - VADChunkingProcessor: Intelligent audio segmentation
 - WhisperTranscriptionEngine: Whisper model inference with confidence (whisper.cpp backend)
-- PostProcessingQueue: Background enhancement after recording stops
+- PostProcessingQueue: Background post-processing after recording stops
 - TranscriptStore: Word-level storage with confidence for UI color coding
 - Confidence scoring and color coding for visual feedback
 - AccumulatingTranscriptionProcessor: Accumulating audio processor for meetings
