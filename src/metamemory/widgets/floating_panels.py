@@ -8,13 +8,15 @@ that floats outside the main widget bounds.
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
-    QSplitter,
+    QSplitter, QTextBrowser,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
+import json
+import re
 
 from metamemory.hardware.detector import HardwareDetector
 from metamemory.hardware.recommender import ModelRecommender
@@ -262,11 +264,11 @@ class FloatingTranscriptPanel(QWidget):
         self._history_list.itemClicked.connect(self._on_history_item_clicked)
         splitter.addWidget(self._history_list)
 
-        # Bottom: transcript viewer (read-only)
-        self._history_viewer = QTextEdit()
+        # Bottom: transcript viewer (read-only, supports anchor clicks)
+        self._history_viewer = QTextBrowser()
         self._history_viewer.setReadOnly(True)
         self._history_viewer.setStyleSheet("""
-            QTextEdit {
+            QTextBrowser {
                 background-color: #2a2a2a;
                 color: #fff;
                 border: none;
@@ -278,6 +280,9 @@ class FloatingTranscriptPanel(QWidget):
         """)
         self._history_viewer.setFrameShape(QFrame.Shape.NoFrame)
         self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
+        self._history_viewer.setOpenExternalLinks(False)
+        self._history_viewer.setOpenLinks(False)
+        self._history_viewer.anchorClicked.connect(self._on_history_anchor_clicked)
         splitter.addWidget(self._history_viewer)
 
         # 40% list / 60% viewer
@@ -288,6 +293,9 @@ class FloatingTranscriptPanel(QWidget):
 
         # Connect tab change to refresh history when switching to it
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
+
+        # Track the currently-viewed history transcript path (for rename)
+        self._current_history_md_path: Optional[Path] = None
         
         # Dragging
         self._dragging = False
@@ -570,26 +578,314 @@ class FloatingTranscriptPanel(QWidget):
             return
         md_path = Path(md_path_str)
         if not md_path.exists():
+            self._current_history_md_path = None
             self._history_viewer.setPlainText(f"(File not found: {md_path})")
             return
 
+        self._current_history_md_path = md_path
+        html = self._render_history_transcript(md_path)
+        if html is not None:
+            self._history_viewer.setHtml(html)
+        else:
+            # Fallback: display raw markdown without anchors
+            try:
+                content = md_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                self._history_viewer.setPlainText(f"(Error reading file: {exc})")
+                return
+            footer_marker = "\n---\n\n<!-- METADATA:"
+            marker_idx = content.find(footer_marker)
+            if marker_idx != -1:
+                content = content[:marker_idx]
+            self._history_viewer.setMarkdown(content)
+
+    # ------------------------------------------------------------------
+    # History transcript rendering with clickable speaker anchors
+    # ------------------------------------------------------------------
+
+    def _render_history_transcript(self, md_path: Path) -> Optional[str]:
+        """Render a transcript .md file as HTML with clickable speaker anchors.
+
+        Reads the .md file, parses the JSON metadata footer to get speakers,
+        and returns HTML where each speaker label is an anchor tag with
+        format ``speaker://{speaker_id}``.
+
+        Args:
+            md_path: Path to the transcript .md file.
+
+        Returns:
+            HTML string for the viewer, or None if no metadata is found.
+        """
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
-            self._history_viewer.setPlainText(f"(Error reading file: {exc})")
-            return
+            logger.error("Failed to read transcript for rendering: %s: %s", md_path, exc)
+            return None
 
-        # Strip the JSON footer: everything from "\n---\n\n<!-- METADATA:" to end
+        # Split markdown body from JSON footer
         footer_marker = "\n---\n\n<!-- METADATA:"
         marker_idx = content.find(footer_marker)
-        if marker_idx != -1:
-            content = content[:marker_idx]
+        if marker_idx == -1:
+            return None
 
-        self._history_viewer.setMarkdown(content)
+        md_body = content[:marker_idx]
+
+        # Parse metadata to find speakers
+        metadata_text = content[marker_idx + len(footer_marker):]
+        if metadata_text.strip().endswith(" -->"):
+            metadata_text = metadata_text.strip()[:-len(" -->")]
+
+        try:
+            data = json.loads(metadata_text)
+        except json.JSONDecodeError as exc:
+            logger.warning("Malformed metadata in %s: %s", md_path, exc)
+            return None
+
+        # Collect unique speaker IDs from words
+        speakers = []
+        seen = set()
+        for word in data.get("words", []):
+            sid = word.get("speaker_id")
+            if sid is not None and sid not in seen:
+                seen.add(sid)
+                speakers.append(sid)
+
+        if not speakers:
+            # No speakers — just return the markdown body as-is
+            return None
+
+        # Build HTML with clickable speaker anchors
+        # The markdown body has lines like "**SPK_0**" — make them anchors
+        html_lines = []
+        for line in md_body.splitlines():
+            # Match speaker label lines: **SpeakerName**
+            match = re.match(r"^\*\*(.+?)\*\*\s*$", line)
+            if match:
+                speaker_label = match.group(1)
+                if speaker_label in seen:
+                    color = speaker_color(speaker_label)
+                    html_lines.append(
+                        f'<p><a href="speaker:{speaker_label}" '
+                        f'style="color:{color}; font-weight:bold; text-decoration:none;">'
+                        f'[{speaker_label}]</a></p>'
+                    )
+                else:
+                    html_lines.append(f"<p><b>{speaker_label}</b></p>")
+            else:
+                # Regular line — escape HTML and preserve whitespace
+                escaped = (
+                    line.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                )
+                # Preserve leading spaces and convert newlines
+                if escaped.strip():
+                    # Convert markdown italic markers
+                    escaped = re.sub(r"\*(.+?)\*", r"<i>\1</i>", escaped)
+                    html_lines.append(f"<p>{escaped}</p>")
+                elif not escaped:
+                    html_lines.append("<br>")
+
+        return "\n".join(html_lines)
 
     # ------------------------------------------------------------------
-    # Display rendering
+    # Speaker rename in history transcripts
     # ------------------------------------------------------------------
+
+    def _on_history_anchor_clicked(self, url: QUrl) -> None:
+        """Handle clicks on speaker label anchors in the history viewer.
+
+        Extracts the speaker_id from the ``speaker:{id}`` URL, prompts
+        the user for a new name, and performs the rename.
+        """
+        link = url.toString()
+        prefix = "speaker:"
+        if not link.startswith(prefix):
+            return
+
+        old_name = link[len(prefix):]
+        if not old_name:
+            return
+
+        parent = self.parent() if self.parent() else self
+        name, ok = QInputDialog.getText(
+            parent,
+            "Rename Speaker",
+            f"Enter a new name for '{old_name}':",
+            text=old_name if not old_name.startswith("SPK_") else "",
+        )
+        if not ok or not name.strip():
+            return
+
+        new_name = name.strip()
+        if new_name == old_name:
+            return
+
+        md_path = self._current_history_md_path
+        if md_path is None or not md_path.exists():
+            logger.warning("No transcript file selected for rename")
+            return
+
+        try:
+            self._rename_speaker_in_file(md_path, old_name, new_name)
+        except Exception as exc:
+            logger.error(
+                "Failed to rename speaker '%s' -> '%s' in %s: %s",
+                old_name, new_name, md_path, exc,
+            )
+            return
+
+        # Propagate to signature store (best-effort)
+        try:
+            self._propagate_rename_to_signatures(md_path, old_name, new_name)
+        except Exception as exc:
+            logger.error(
+                "Failed to propagate rename to signature store for '%s' -> '%s': %s",
+                old_name, new_name, exc,
+            )
+
+        # Refresh the viewer
+        html = self._render_history_transcript(md_path)
+        if html is not None:
+            self._history_viewer.setHtml(html)
+        else:
+            self._history_viewer.setPlainText("(Error refreshing after rename)")
+
+    def _rename_speaker_in_file(
+        self, md_path: Path, old_name: str, new_name: str
+    ) -> None:
+        """Rename a speaker in a transcript .md file.
+
+        Updates both the JSON metadata (words and segments arrays) and the
+        markdown body speaker labels.
+
+        Args:
+            md_path: Path to the transcript .md file.
+            old_name: Current speaker name to replace.
+            new_name: New speaker name.
+        """
+        content = md_path.read_text(encoding="utf-8")
+
+        # Split into markdown body and JSON footer
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx == -1:
+            raise ValueError(f"No metadata footer found in {md_path}")
+
+        md_body = content[:marker_idx]
+        # Capture the full prefix including the space before JSON
+        # e.g. "\n---\n\n<!-- METADATA: "
+        after_marker = content[marker_idx + len(footer_marker):]
+        space_before_json = ""
+        if after_marker.startswith(" "):
+            space_before_json = " "
+            after_marker = after_marker[1:]
+
+        metadata_text = after_marker
+        if metadata_text.strip().endswith(" -->"):
+            metadata_text = metadata_text.strip()[:-len(" -->")]
+
+        data = json.loads(metadata_text)
+
+        # Update words array
+        words_updated = 0
+        for word in data.get("words", []):
+            if word.get("speaker_id") == old_name:
+                word["speaker_id"] = new_name
+                words_updated += 1
+
+        # Update segments array
+        segments_updated = 0
+        for segment in data.get("segments", []):
+            if segment.get("speaker_id") == old_name:
+                segment["speaker_id"] = new_name
+                segments_updated += 1
+
+        # Rebuild markdown body: replace speaker labels
+        # Speaker labels appear as **OldName** on their own line
+        updated_body = re.sub(
+            re.escape(f"**{old_name}**"),
+            f"**{new_name}**",
+            md_body,
+        )
+
+        # Rebuild the file
+        updated_json = json.dumps(data, indent=2)
+        new_content = (
+            updated_body + footer_marker + space_before_json + updated_json + " -->\n"
+        )
+
+        md_path.write_text(new_content, encoding="utf-8")
+
+        logger.info(
+            "Renamed speaker '%s' -> '%s' in %s (%d words, %d segments updated)",
+            old_name, new_name, md_path, words_updated, segments_updated,
+        )
+
+    def _propagate_rename_to_signatures(
+        self, md_path: Path, old_name: str, new_name: str
+    ) -> None:
+        """Propagate a speaker rename to the VoiceSignatureStore.
+
+        If the old speaker name has a saved embedding in the signature
+        database (located in the same directory as the transcript file),
+        saves the embedding under the new name and deletes the old entry.
+
+        Args:
+            md_path: Path to the transcript file (used to locate the DB).
+            old_name: Current speaker name.
+            new_name: New speaker name.
+        """
+        try:
+            from metamemory.speaker.signatures import VoiceSignatureStore
+        except ImportError:
+            logger.warning(
+                "VoiceSignatureStore not available — skipping rename propagation"
+            )
+            return
+
+        db_path = md_path.parent / "speaker_signatures.db"
+        if not db_path.exists():
+            # Try the default data directory
+            from metamemory.audio.storage.paths import get_recordings_dir
+            default_db = get_recordings_dir() / "speaker_signatures.db"
+            if default_db.exists():
+                db_path = default_db
+            else:
+                logger.info(
+                    "No signature database found — speaker '%s' not in store",
+                    old_name,
+                )
+                return
+
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            # Find the old speaker's profile
+            profiles = store.load_signatures()
+            old_profile = None
+            for profile in profiles:
+                if profile.name == old_name:
+                    old_profile = profile
+                    break
+
+            if old_profile is None:
+                logger.info(
+                    "Speaker '%s' not found in signature store — no propagation needed",
+                    old_name,
+                )
+                return
+
+            # Save under new name, delete old
+            store.save_signature(
+                new_name,
+                old_profile.embedding,
+                averaged_from_segments=old_profile.num_samples,
+            )
+            store.delete_signature(old_name)
+
+            logger.info(
+                "Propagated rename '%s' -> '%s' to signature store at %s",
+                old_name, new_name, db_path,
+            )
 
     def _rebuild_display(self) -> None:
         """Rebuild the entire text display from stored phrases."""

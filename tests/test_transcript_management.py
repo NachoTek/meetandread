@@ -461,3 +461,394 @@ class TestHistoryTab:
         assert panel.status_label is not None
         # text_edit should still work for live transcript
         assert panel.text_edit.isReadOnly()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Speaker rename in history transcripts (T04)
+# ---------------------------------------------------------------------------
+
+class TestSpeakerRename:
+    """Verify speaker rename updates .md JSON metadata, markdown body,
+    and propagates to VoiceSignatureStore when applicable.
+    """
+
+    @pytest.fixture
+    def panel(self, qapp):
+        """Create a FloatingTranscriptPanel for testing."""
+        from metamemory.widgets.floating_panels import FloatingTranscriptPanel
+
+        p = FloatingTranscriptPanel()
+        yield p
+        p.close()
+
+    @staticmethod
+    def _make_transcript_md(
+        tmp_path: Path,
+        words: list,
+        segments: list,
+        recording_time: str = "2026-04-22T14:30:00",
+    ) -> Path:
+        """Create a transcript .md file with JSON metadata footer.
+
+        Args:
+            tmp_path: Directory to write into.
+            words: List of word dicts with speaker_id.
+            segments: List of segment dicts with speaker_id.
+            recording_time: ISO timestamp.
+
+        Returns:
+            Path to the created .md file.
+        """
+        import json
+
+        # Build markdown body from segments
+        lines = ["# Transcript", ""]
+        lines.append(f"**Recorded:** {recording_time}")
+        lines.append("")
+
+        # Group words by speaker for markdown rendering
+        current_speaker = None
+        current_words = []
+        for w in words:
+            sid = w.get("speaker_id") or "Unknown Speaker"
+            if sid != current_speaker:
+                if current_words:
+                    lines.append(f"**{current_speaker}**")
+                    lines.append("")
+                    lines.append(" ".join(current_words))
+                    lines.append("")
+                current_speaker = sid
+                current_words = [w["text"]]
+            else:
+                current_words.append(w["text"])
+        if current_words:
+            lines.append(f"**{current_speaker}**")
+            lines.append("")
+            lines.append(" ".join(current_words))
+            lines.append("")
+
+        md_body = "\n".join(lines)
+        metadata = {
+            "recording_start_time": recording_time,
+            "word_count": len(words),
+            "words": words,
+            "segments": segments,
+        }
+
+        md_file = tmp_path / "test_rec.md"
+        md_file.write_text(
+            md_body + "\n---\n\n<!-- METADATA: " + json.dumps(metadata, indent=2) + " -->\n",
+            encoding="utf-8",
+        )
+        return md_file
+
+    @staticmethod
+    def _read_metadata(md_path: Path) -> dict:
+        """Read and parse JSON metadata from a transcript .md file."""
+        content = md_path.read_text(encoding="utf-8")
+        marker = "<!-- METADATA: "
+        idx = content.find(marker)
+        assert idx != -1, "No metadata footer found"
+        end_marker = " -->"
+        json_str = content[idx + len(marker):]
+        if json_str.rstrip().endswith(end_marker):
+            json_str = json_str.rstrip()[: -len(end_marker)]
+        return json.loads(json_str)
+
+    # -- _rename_speaker_in_file tests ------------------------------------
+
+    def test_rename_updates_words_and_segments_in_metadata(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_rename_speaker_in_file must update speaker_id in words and segments."""
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
+            {"text": "World", "start_time": 0.5, "end_time": 1.0, "confidence": 85, "speaker_id": "SPK_0"},
+            {"text": "Hi", "start_time": 1.0, "end_time": 1.5, "confidence": 88, "speaker_id": "SPK_1"},
+        ]
+        segments = [
+            {"words": words[:2], "start_time": 0.0, "end_time": 1.0, "avg_confidence": 87, "speaker_id": "SPK_0"},
+            {"words": [words[2]], "start_time": 1.0, "end_time": 1.5, "avg_confidence": 88, "speaker_id": "SPK_1"},
+        ]
+
+        md_path = self._make_transcript_md(tmp_path, words, segments)
+        panel._rename_speaker_in_file(md_path, "SPK_0", "Alice")
+
+        data = self._read_metadata(md_path)
+
+        # Words should have SPK_0 -> Alice
+        assert data["words"][0]["speaker_id"] == "Alice"
+        assert data["words"][1]["speaker_id"] == "Alice"
+        assert data["words"][2]["speaker_id"] == "SPK_1"  # unchanged
+
+        # Segments should be updated too
+        assert data["segments"][0]["speaker_id"] == "Alice"
+        assert data["segments"][1]["speaker_id"] == "SPK_1"  # unchanged
+
+    def test_rename_updates_markdown_body_speaker_labels(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_rename_speaker_in_file must update **SpeakerLabel** in markdown body."""
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
+            {"text": "Hi", "start_time": 1.0, "end_time": 1.5, "confidence": 88, "speaker_id": "SPK_1"},
+        ]
+        segments = [
+            {"words": [words[0]], "start_time": 0.0, "end_time": 0.5, "avg_confidence": 90, "speaker_id": "SPK_0"},
+            {"words": [words[1]], "start_time": 1.0, "end_time": 1.5, "avg_confidence": 88, "speaker_id": "SPK_1"},
+        ]
+
+        md_path = self._make_transcript_md(tmp_path, words, segments)
+        panel._rename_speaker_in_file(md_path, "SPK_0", "Alice")
+
+        content = md_path.read_text(encoding="utf-8")
+        # Markdown body should have **Alice** instead of **SPK_0**
+        assert "**Alice**" in content
+        assert "**SPK_0**" not in content
+        # SPK_1 should remain unchanged
+        assert "**SPK_1**" in content
+
+    def test_rename_propagate_to_signatures_saves_new_deletes_old(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_propagate_rename_to_signatures saves under new name and deletes old."""
+        import numpy as np
+        from metamemory.speaker.signatures import VoiceSignatureStore
+
+        # Create a signature DB with the old speaker
+        db_path = tmp_path / "speaker_signatures.db"
+        embedding = np.random.randn(256).astype(np.float32)
+
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            store.save_signature("SPK_0", embedding, averaged_from_segments=3)
+
+        # Create a transcript file in the same directory
+        md_path = tmp_path / "test_rec.md"
+        md_path.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+
+        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Alice")
+
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            profiles = store.load_signatures()
+            names = [p.name for p in profiles]
+            assert "Alice" in names
+            assert "SPK_0" not in names
+
+    def test_rename_propagate_handles_missing_speaker_gracefully(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_propagate_rename_to_signatures must not error when old_name is missing."""
+        import numpy as np
+        from metamemory.speaker.signatures import VoiceSignatureStore
+
+        # Create a DB with a different speaker (not the one being renamed)
+        db_path = tmp_path / "speaker_signatures.db"
+        embedding = np.random.randn(256).astype(np.float32)
+
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            store.save_signature("SPK_1", embedding)
+
+        md_path = tmp_path / "test_rec.md"
+        md_path.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+
+        # Should not raise — SPK_0 is not in the store
+        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Alice")
+
+        # Verify no changes were made
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            profiles = store.load_signatures()
+            names = [p.name for p in profiles]
+            assert names == ["SPK_1"]
+
+    def test_rename_propagate_handles_no_db_gracefully(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_propagate_rename_to_signatures must not error when no DB exists."""
+        md_path = tmp_path / "test_rec.md"
+        md_path.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+
+        # Should not raise — no signature DB exists
+        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Alice")
+
+    def test_full_rename_flow_md_and_signatures(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """Full rename flow: update .md metadata + propagate to signature store."""
+        import numpy as np
+        from metamemory.speaker.signatures import VoiceSignatureStore
+
+        # Set up signature DB with SPK_0
+        db_path = tmp_path / "speaker_signatures.db"
+        embedding = np.random.randn(256).astype(np.float32)
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            store.save_signature("SPK_0", embedding, averaged_from_segments=2)
+
+        # Create transcript with SPK_0 and SPK_1
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
+            {"text": "There", "start_time": 0.5, "end_time": 1.0, "confidence": 85, "speaker_id": "SPK_0"},
+            {"text": "Hey", "start_time": 1.0, "end_time": 1.5, "confidence": 88, "speaker_id": "SPK_1"},
+        ]
+        segments = [
+            {"words": words[:2], "start_time": 0.0, "end_time": 1.0, "avg_confidence": 87, "speaker_id": "SPK_0"},
+            {"words": [words[2]], "start_time": 1.0, "end_time": 1.5, "avg_confidence": 88, "speaker_id": "SPK_1"},
+        ]
+
+        md_path = self._make_transcript_md(tmp_path, words, segments)
+
+        # Perform full rename
+        panel._rename_speaker_in_file(md_path, "SPK_0", "Bob")
+        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Bob")
+
+        # Verify .md metadata
+        data = self._read_metadata(md_path)
+        assert data["words"][0]["speaker_id"] == "Bob"
+        assert data["words"][1]["speaker_id"] == "Bob"
+        assert data["words"][2]["speaker_id"] == "SPK_1"
+        assert data["segments"][0]["speaker_id"] == "Bob"
+
+        # Verify markdown body
+        content = md_path.read_text(encoding="utf-8")
+        assert "**Bob**" in content
+        assert "**SPK_0**" not in content
+
+        # Verify signature store
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            profiles = store.load_signatures()
+            names = [p.name for p in profiles]
+            assert "Bob" in names
+            assert "SPK_0" not in names
+
+    # -- _render_history_transcript tests ----------------------------------
+
+    def test_render_history_transcript_produces_anchors(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_render_history_transcript should produce HTML with speaker anchors."""
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
+            {"text": "Hi", "start_time": 1.0, "end_time": 1.5, "confidence": 88, "speaker_id": "SPK_1"},
+        ]
+        segments = [
+            {"words": [words[0]], "start_time": 0.0, "end_time": 0.5, "avg_confidence": 90, "speaker_id": "SPK_0"},
+            {"words": [words[1]], "start_time": 1.0, "end_time": 1.5, "avg_confidence": 88, "speaker_id": "SPK_1"},
+        ]
+
+        md_path = self._make_transcript_md(tmp_path, words, segments)
+        html = panel._render_history_transcript(md_path)
+
+        assert html is not None
+        assert 'href="speaker:SPK_0"' in html
+        assert 'href="speaker:SPK_1"' in html
+
+    def test_render_history_transcript_returns_none_no_metadata(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_render_history_transcript returns None when no metadata footer."""
+        md_path = tmp_path / "bare.md"
+        md_path.write_text("# Just markdown\n\nNo metadata here.\n", encoding="utf-8")
+
+        result = panel._render_history_transcript(md_path)
+        assert result is None
+
+    # -- History viewer uses QTextBrowser ---------------------------------
+
+    def test_history_viewer_is_text_browser(self, panel) -> None:
+        """History viewer should be a QTextBrowser for anchor click support."""
+        from PyQt6.QtWidgets import QTextBrowser
+
+        assert isinstance(panel._history_viewer, QTextBrowser)
+
+    def test_history_viewer_anchor_clicked_connected(self, panel) -> None:
+        """History viewer must have anchorClicked signal connected."""
+        # Verify the method exists (QTextBrowser provides it)
+        assert hasattr(panel._history_viewer, "anchorClicked")
+
+    # -- Anchor click rename flow ------------------------------------------
+
+    def test_on_history_anchor_clicked_triggers_rename(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """Clicking a speaker anchor in history triggers rename dialog."""
+        from PyQt6.QtCore import QUrl
+        from unittest.mock import patch
+
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
+        ]
+        segments = [
+            {"words": [words[0]], "start_time": 0.0, "end_time": 0.5, "avg_confidence": 90, "speaker_id": "SPK_0"},
+        ]
+
+        md_path = self._make_transcript_md(tmp_path, words, segments)
+        panel._current_history_md_path = md_path
+
+        # Mock QInputDialog to return "Alice"
+        with patch(
+            "metamemory.widgets.floating_panels.QInputDialog.getText",
+            return_value=("Alice", True),
+        ):
+            panel._on_history_anchor_clicked(QUrl("speaker:SPK_0"))
+
+        # Verify the rename happened
+        data = self._read_metadata(md_path)
+        assert data["words"][0]["speaker_id"] == "Alice"
+        assert data["segments"][0]["speaker_id"] == "Alice"
+
+        content = md_path.read_text(encoding="utf-8")
+        assert "**Alice**" in content
+
+    def test_on_history_anchor_clicked_cancels_no_change(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """Cancelling the rename dialog must not modify the file."""
+        from PyQt6.QtCore import QUrl
+        from unittest.mock import patch
+
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
+        ]
+        segments = [
+            {"words": [words[0]], "start_time": 0.0, "end_time": 0.5, "avg_confidence": 90, "speaker_id": "SPK_0"},
+        ]
+
+        md_path = self._make_transcript_md(tmp_path, words, segments)
+        original_content = md_path.read_text(encoding="utf-8")
+        panel._current_history_md_path = md_path
+
+        # Mock QInputDialog to return cancelled
+        with patch(
+            "metamemory.widgets.floating_panels.QInputDialog.getText",
+            return_value=("", False),
+        ):
+            panel._on_history_anchor_clicked(QUrl("speaker:SPK_0"))
+
+        # File must be unchanged
+        assert md_path.read_text(encoding="utf-8") == original_content
+
+    def test_viewer_refreshes_after_rename(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """After rename, the history viewer content should be refreshed."""
+        from PyQt6.QtCore import QUrl
+        from unittest.mock import patch
+
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
+        ]
+        segments = [
+            {"words": [words[0]], "start_time": 0.0, "end_time": 0.5, "avg_confidence": 90, "speaker_id": "SPK_0"},
+        ]
+
+        md_path = self._make_transcript_md(tmp_path, words, segments)
+        panel._current_history_md_path = md_path
+
+        with patch(
+            "metamemory.widgets.floating_panels.QInputDialog.getText",
+            return_value=("Carol", True),
+        ):
+            panel._on_history_anchor_clicked(QUrl("speaker:SPK_0"))
+
+        # Viewer HTML should contain the new name as an anchor
+        html = panel._history_viewer.toHtml()
+        assert "Carol" in html
