@@ -8,6 +8,7 @@ sounddevice>=0.4.6  # WASAPI via PortAudio
 numpy>=1.24.0       # Frame conversion + mixing
 soxr>=0.3.0         # Resampling
 comtypes>=1.2.0     # Windows COM interface for WASAPI loopback
+pyaudiowpatch>=0.2.12  # WASAPI loopback capture via patched PortAudio
 
 # AI/ML - Whisper
 # Using whisper.cpp via pywhispercpp to avoid PyTorch DLL issues on Windows

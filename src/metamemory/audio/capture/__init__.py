@@ -23,6 +23,8 @@ from .fake_module import (
     FakeAudioSource,  # Compatibility alias
 )
 
+from .pyaudiowpatch_source import PyAudioWPatchSource
+
 __all__ = [
     # Device enumeration
     "list_devices",
@@ -33,6 +35,7 @@ __all__ = [
     "SoundDeviceSource",
     "MicSource",
     "SystemSource",
+    "PyAudioWPatchSource",
     "FakeAudioModule",
     "FakeAudioSource",
     # Exceptions
