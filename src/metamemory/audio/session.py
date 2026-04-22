@@ -353,6 +353,8 @@ class AudioSession:
     
     def _create_sources(self, config: SessionConfig) -> List[AudioSourceWrapper]:
         """Create source wrappers from configuration."""
+        import logging
+        _log = logging.getLogger(__name__)
         wrappers = []
         
         for source_config in config.sources:
@@ -368,6 +370,12 @@ class AudioSession:
                     blocksize=1024,
                     queue_size=10,
                 )
+                if not source.available:
+                    _log.warning(
+                        "SystemSource unavailable — skipping system audio. "
+                        "Recording will continue with remaining sources.",
+                    )
+                    continue  # Skip this source, don't add to wrappers
             elif source_config.type == 'fake':
                 if not source_config.fake_path:
                     raise SessionError("fake_path required for type='fake'")
@@ -387,6 +395,12 @@ class AudioSession:
                 target_channels=config.channels,
             )
             wrappers.append(wrapper)
+        
+        if not wrappers:
+            raise NoSourcesError(
+                "No usable audio sources available. "
+                "Ensure at least one source (mic, fake) can be initialized."
+            )
         
         return wrappers
     

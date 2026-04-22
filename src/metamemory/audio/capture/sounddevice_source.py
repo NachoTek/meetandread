@@ -163,16 +163,16 @@ class MicSource(SoundDeviceSource):
         )
 
 
-class SystemSource(SoundDeviceSource):
-    """System audio loopback capture source.
-    
-    NOTE: This is a placeholder implementation. Actual WASAPI loopback capture
-    requires Windows Core Audio API (pycaw/comtypes), not sounddevice's PortAudio.
-    
-    For now, this will raise an error with a helpful message directing users
-    to the implementation status.
+class SystemSource:
+    """System audio loopback capture source using WASAPI via pyaudiowpatch.
+
+    Auto-discovers the default WASAPI loopback device. If no loopback device
+    is available (non-Windows, no output device, pyaudiowpatch not installed),
+    the source gracefully degrades to an unavailable state — all methods become
+    no-ops and ``available`` is False. This allows AudioSession to proceed with
+    mic-only recording instead of crashing.
     """
-    
+
     def __init__(
         self,
         device_id: Optional[int] = None,
@@ -181,15 +181,115 @@ class SystemSource(SoundDeviceSource):
         blocksize: int = 1024,
         queue_size: int = 10,
     ):
-        if platform.system() != 'Windows':
-            raise AudioSourceError(
-                "SystemSource is only supported on Windows with WASAPI loopback"
+        import logging
+        self._log = logging.getLogger(__name__)
+
+        self.available: bool = False
+        self._loopback_device_name: Optional[str] = None
+        self._device_index: Optional[int] = None
+        self._channels: int = channels or 2
+        self._samplerate: int = samplerate or 48000
+        self._blocksize: int = blocksize
+        self._queue_size: int = queue_size
+        self._backend: Optional[Any] = None  # PyAudioWPatchSource when available
+
+        # device_id is the legacy alias from SoundDeviceSource — if supplied,
+        # it maps to device_index in the pyaudiowpatch backend.
+        if device_id is not None:
+            self._device_index = device_id
+
+        try:
+            from .pyaudiowpatch_source import PyAudioWPatchSource, _HAS_PYAUDIOWPATCH
+
+            if not _HAS_PYAUDIOWPATCH:
+                raise ImportError("pyaudiowpatch is not installed")
+
+            import pyaudiowpatch as _paw
+
+            # Auto-discover the default WASAPI loopback device
+            with _paw.PyAudio() as pa:
+                loopback_info = pa.get_default_wasapi_loopback()
+                if loopback_info is None:
+                    raise AudioSourceError(
+                        "No WASAPI loopback device found by pyaudiowpatch"
+                    )
+
+            # Extract device parameters from loopback info
+            self._device_index = loopback_info.get("index", self._device_index)
+            self._channels = channels or loopback_info.get(
+                "maxInputChannels", loopback_info.get("max_input_channels", 2)
             )
-        
-        # TEMPORARY: System audio loopback requires Windows Core Audio implementation
-        # which is planned for a future update. For now, we provide a clear error.
-        raise AudioSourceError(
-            "System audio capture requires Windows Core Audio loopback implementation. "
-            "Please use microphone-only recording for now. "
-            "(Planned: WASAPI loopback via Windows Core Audio API)"
-        )
+            self._samplerate = samplerate or int(
+                loopback_info.get("defaultSampleRate",
+                                  loopback_info.get("default_samplerate", 48000))
+            )
+            self._loopback_device_name = loopback_info.get("name", "unknown")
+
+            self._backend = PyAudioWPatchSource(
+                device_index=self._device_index,
+                channels=self._channels,
+                samplerate=self._samplerate,
+                blocksize=self._blocksize,
+                queue_size=self._queue_size,
+            )
+            self.available = True
+
+            self._log.info(
+                "SystemSource: WASAPI loopback device found — %s "
+                "(index=%s, %dHz, %dch)",
+                self._loopback_device_name,
+                self._device_index,
+                self._samplerate,
+                self._channels,
+            )
+
+        except Exception as exc:
+            self.available = False
+            self._backend = None
+            self._log.warning(
+                "SystemSource: loopback capture unavailable — %s. "
+                "Recording will proceed mic-only.",
+                exc,
+            )
+
+    # ------------------------------------------------------------------
+    # Public interface — delegates to backend when available, else no-op
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        if self.available and self._backend is not None:
+            self._backend.start()
+
+    def stop(self) -> None:
+        if self.available and self._backend is not None:
+            self._backend.stop()
+
+    def read_frames(self, timeout: Optional[float] = None) -> Optional[np.ndarray]:
+        if self.available and self._backend is not None:
+            return self._backend.read_frames(timeout=timeout)
+        return None
+
+    def is_running(self) -> bool:
+        if self.available and self._backend is not None:
+            return self._backend.is_running()
+        return False
+
+    def get_metadata(self) -> Dict[str, Any]:
+        if self.available and self._backend is not None:
+            meta = self._backend.get_metadata()
+        else:
+            meta = {
+                "source_type": "system_loopback",
+                "sample_rate": self._samplerate,
+                "channels": self._channels,
+                "dtype": "float32",
+                "device_id": self._device_index,
+                "running": False,
+            }
+        meta["available"] = self.available
+        meta["loopback_device"] = self._loopback_device_name or "none"
+        return meta
+
+    def close(self) -> None:
+        if self._backend is not None:
+            self._backend.close()

@@ -6,6 +6,7 @@ Provides device enumeration and audio capture sources (mic, system, fake).
 from .devices import (
     list_devices,
     get_wasapi_hostapi_index,
+    get_default_loopback_device,
     list_mic_inputs,
     list_loopback_outputs,
 )
@@ -29,6 +30,7 @@ __all__ = [
     # Device enumeration
     "list_devices",
     "get_wasapi_hostapi_index",
+    "get_default_loopback_device",
     "list_mic_inputs",
     "list_loopback_outputs",
     # Capture sources

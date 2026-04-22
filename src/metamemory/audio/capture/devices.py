@@ -2,13 +2,26 @@
 
 This module provides device enumeration and WASAPI loopback probing.
 On Windows, it uses sounddevice for microphone capture and can probe
-loopback capabilities on output devices.
+loopback capabilities on output devices. When pyaudiowpatch is available,
+it uses pyaudiowpatch's WASAPI loopback device discovery for more accurate
+results.
 """
 
 import sounddevice
 from typing import Dict, List, Optional, Tuple, Any
 import sys
 import platform
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Optional pyaudiowpatch import — graceful degradation when not installed
+try:
+    import pyaudiowpatch as _paw
+    _HAS_PYAUDIOWPATCH = True
+except ImportError:
+    _paw = None  # type: ignore[assignment]
+    _HAS_PYAUDIOWPATCH = False
 
 
 def list_devices() -> List[Dict[str, Any]]:
@@ -24,6 +37,32 @@ def get_wasapi_hostapi_index() -> Optional[int]:
         if 'WASAPI' in hostapi.get('name', '').upper():
             return idx
     return None
+
+
+def get_default_loopback_device() -> Optional[Dict[str, Any]]:
+    """Return the default WASAPI loopback device info, or None.
+
+    Uses pyaudiowpatch's ``get_default_wasapi_loopback()`` when available.
+    Returns None on non-Windows platforms or when pyaudiowpatch is not
+    installed or no loopback device is found.
+    """
+    if not _HAS_PYAUDIOWPATCH:
+        logger.debug("pyaudiowpatch not available — cannot probe loopback device")
+        return None
+
+    try:
+        with _paw.PyAudio() as pa:
+            info = pa.get_default_wasapi_loopback()
+            if info is not None:
+                logger.info(
+                    "Default loopback device: %s (index=%s)",
+                    info.get("name"),
+                    info.get("index"),
+                )
+            return info
+    except Exception as exc:
+        logger.warning("Failed to query loopback device via pyaudiowpatch: %s", exc)
+        return None
 
 
 def list_mic_inputs() -> List[Dict[str, Any]]:
@@ -98,10 +137,38 @@ def probe_loopback_capability(device: Dict[str, Any]) -> Tuple[bool, Optional[st
 def list_loopback_outputs() -> List[Dict[str, Any]]:
     """
     List output devices with loopback capability probing.
-    
+
+    When pyaudiowpatch is available, uses its
+    ``get_loopback_device_info_generator()`` for accurate loopback device
+    discovery. Falls back to sounddevice-based probing otherwise.
+
     For each output device, checks if loopback capture is possible.
     Returns devices with loopback_ok and loopback_error fields.
     """
+    # Try pyaudiowpatch-based discovery first (more accurate on Windows)
+    if _HAS_PYAUDIOWPATCH:
+        try:
+            loopback_devices = []
+            with _paw.PyAudio() as pa:
+                for dev_info in pa.get_loopback_device_info_generator():
+                    device = dict(dev_info)
+                    device['loopback_ok'] = True
+                    device['loopback_error'] = None
+                    loopback_devices.append(device)
+            if loopback_devices:
+                logger.info(
+                    "Found %d loopback device(s) via pyaudiowpatch",
+                    len(loopback_devices),
+                )
+                return loopback_devices
+        except Exception as exc:
+            logger.warning(
+                "pyaudiowpatch loopback enumeration failed, "
+                "falling back to sounddevice: %s",
+                exc,
+            )
+
+    # Fallback: sounddevice-based probing
     all_devices = list_devices()
     output_devices = []
     
