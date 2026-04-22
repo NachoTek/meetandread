@@ -324,6 +324,9 @@ to avoid clipping issues and enable proper text rendering.
     
     def _update_animations(self):
         """Update animation states."""
+        # Advance record button state transitions (~200ms eased cross-fade)
+        self.record_button.tick()
+        
         if self.is_recording and not self.is_processing:
             self.pulse_phase += 0.1
             if self.pulse_phase > 6.28:  # 2*PI
@@ -709,15 +712,46 @@ class RecordButtonItem(QGraphicsEllipseItem):
         
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        # State transition animation (~200ms eased cross-fade)
+        self._state_t = 1.0  # 0.0 (old state) → 1.0 (new state)
+        self._transition_speed = 1.0 / 6  # ~200ms at 33ms/frame
+        self._from_key = 'idle'
+        self._to_key = 'idle'
+    
+    def _state_key(self):
+        """Return current visual state key."""
+        if self.is_processing:
+            return 'processing'
+        if self.is_recording:
+            return 'recording'
+        return 'idle'
+    
+    def tick(self):
+        """Advance state transition animation by one frame (~33ms)."""
+        if self._state_t < 1.0:
+            self._state_t = min(1.0, self._state_t + self._transition_speed)
+            self.update()
+    
+    @staticmethod
+    def _ease_out(t):
+        """Quadratic ease-out curve for smooth deceleration."""
+        return 1 - (1 - t) ** 2
     
     def set_recording_state(self, recording):
-        """Update recording state."""
+        """Update recording state with eased transition."""
+        self._from_key = self._to_key
         self.is_recording = recording
+        self._to_key = self._state_key()
+        self._state_t = 0.0
         self.update()
     
     def set_processing_state(self, processing):
-        """Update processing state."""
+        """Update processing state with eased transition."""
+        self._from_key = self._to_key
         self.is_processing = processing
+        self._to_key = self._state_key()
+        self._state_t = 0.0
         self.update()
     
     def set_pulse_phase(self, phase):
@@ -731,21 +765,35 @@ class RecordButtonItem(QGraphicsEllipseItem):
         self.update()
     
     def paint(self, painter, option, widget=None):
-        """Custom paint for glass effect and animations."""
+        """Custom paint with eased cross-fade between states."""
         rect = self.rect()
         
-        if self.is_processing:
-            # Swirling animation
-            self._paint_swirl(painter, rect)
-        elif self.is_recording:
-            # Glowing red pulse
-            self._paint_recording(painter, rect)
+        if self._state_t < 1.0:
+            t = self._ease_out(self._state_t)
+            # Draw previous state fading out
+            painter.save()
+            painter.setOpacity(1.0 - t)
+            self._paint_for_state(painter, rect, self._from_key)
+            self._paint_icon_for_state(painter, rect, self._from_key)
+            painter.restore()
+            # Draw new state fading in
+            painter.save()
+            painter.setOpacity(t)
+            self._paint_for_state(painter, rect, self._to_key)
+            self._paint_icon_for_state(painter, rect, self._to_key)
+            painter.restore()
         else:
-            # Translucent glass
+            self._paint_for_state(painter, rect, self._to_key)
+            self._paint_icon_for_state(painter, rect, self._to_key)
+    
+    def _paint_for_state(self, painter, rect, state_key):
+        """Paint the visual appearance for a given state key."""
+        if state_key == 'recording':
+            self._paint_recording(painter, rect)
+        elif state_key == 'processing':
+            self._paint_swirl(painter, rect)
+        else:
             self._paint_idle(painter, rect)
-        
-        # Draw record icon
-        self._paint_icon(painter, rect)
     
     def _paint_idle(self, painter, rect):
         """Paint idle state - translucent glass."""
@@ -798,11 +846,11 @@ class RecordButtonItem(QGraphicsEllipseItem):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(int(x) - 4, int(y) - 4, 8, 8)
     
-    def _paint_icon(self, painter, rect):
-        """Paint record/stop icon."""
+    def _paint_icon_for_state(self, painter, rect, state_key):
+        """Paint record/stop icon for a given state key."""
         center = rect.center()
         
-        if self.is_recording:
+        if state_key == 'recording':
             # Stop icon (square)
             size = 20
             painter.setBrush(QBrush(QColor(255, 255, 255, 255)))
@@ -835,19 +883,48 @@ class ToggleLobeItem(QGraphicsEllipseItem):
         
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setTransformOriginPoint(20, 20)  # Center of 40×40
+        self._hovered = False
+    
+    def hoverEnterEvent(self, event):
+        """Scale up and brighten on hover."""
+        self._hovered = True
+        self.setScale(1.05)
+        self.update()
+        super().hoverEnterEvent(event)
+    
+    def hoverLeaveEvent(self, event):
+        """Revert to normal on hover leave."""
+        self._hovered = False
+        self.setScale(1.0)
+        self.update()
+        super().hoverLeaveEvent(event)
     
     def paint(self, painter, option, widget=None):
-        """Paint the lobe."""
+        """Paint the lobe with hover glow effect."""
         rect = self.rect()
         
+        # Hover glow (subtle outer ring)
+        if self._hovered:
+            for i in range(2, 0, -1):
+                glow_alpha = 40 if self.is_active else 25
+                painter.setBrush(QBrush(QColor(255, 255, 255, glow_alpha // i)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(rect.adjusted(-i * 3, -i * 3, i * 3, i * 3))
+        
         if self.is_active:
-            # Active state - bright
-            painter.setBrush(QBrush(QColor(100, 200, 100, 200)))
+            # Active state - bright, boosted on hover
+            fill_alpha = 230 if self._hovered else 200
+            painter.setBrush(QBrush(QColor(100, 200, 100, fill_alpha)))
             painter.setPen(QPen(QColor(150, 255, 150, 255), 2))
         else:
-            # Inactive state - dim
-            painter.setBrush(QBrush(QColor(100, 100, 100, 150)))
-            painter.setPen(QPen(QColor(150, 150, 150, 200), 2))
+            # Inactive state - dim, brightened on hover
+            fill_alpha = 190 if self._hovered else 150
+            border_alpha = 240 if self._hovered else 200
+            fill_val = 140 if self._hovered else 100
+            border_val = 200 if self._hovered else 150
+            painter.setBrush(QBrush(QColor(fill_val, fill_val, fill_val, fill_alpha)))
+            painter.setPen(QPen(QColor(border_val, border_val, border_val, border_alpha), 2))
         
         painter.drawEllipse(rect)
         
@@ -890,12 +967,37 @@ class SettingsLobeItem(QGraphicsEllipseItem):
         
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setTransformOriginPoint(15, 15)  # Center of 30×30
+        self._hovered = False
+    
+    def hoverEnterEvent(self, event):
+        """Scale up and brighten on hover."""
+        self._hovered = True
+        self.setScale(1.05)
+        self.update()
+        super().hoverEnterEvent(event)
+    
+    def hoverLeaveEvent(self, event):
+        """Revert to normal on hover leave."""
+        self._hovered = False
+        self.setScale(1.0)
+        self.update()
+        super().hoverLeaveEvent(event)
     
     def paint(self, painter, option, widget=None):
-        """Paint settings lobe."""
+        """Paint settings lobe with hover glow effect."""
         rect = self.rect()
         
-        painter.setBrush(QBrush(QColor(100, 100, 200, 180)))
+        # Hover glow (subtle outer ring)
+        if self._hovered:
+            for i in range(2, 0, -1):
+                painter.setBrush(QBrush(QColor(255, 255, 255, 30 // i)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(rect.adjusted(-i * 3, -i * 3, i * 3, i * 3))
+        
+        fill_alpha = 220 if self._hovered else 180
+        fill_val = 130 if self._hovered else 100
+        painter.setBrush(QBrush(QColor(fill_val, fill_val, 220 if self._hovered else 200, fill_alpha)))
         painter.setPen(QPen(QColor(150, 150, 255, 255), 2))
         painter.drawEllipse(rect)
         
