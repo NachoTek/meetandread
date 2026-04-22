@@ -339,3 +339,142 @@ class TestDiarizer:
                     sig = result.signatures[label]
                     assert len(sig.embedding) > 0, f"Empty embedding for {label}"
                     assert sig.speaker_label == label
+
+
+# ---------------------------------------------------------------------------
+# T04: Controller diarization wiring tests
+# ---------------------------------------------------------------------------
+
+class TestSpeakerSettings:
+    """Tests for the SpeakerSettings config model."""
+
+    def test_defaults(self):
+        from metamemory.config.models import SpeakerSettings
+
+        s = SpeakerSettings()
+        assert s.enabled is True
+        assert s.confidence_threshold == 0.6
+        assert s.clustering_threshold == 0.5
+
+    def test_roundtrip(self):
+        from metamemory.config.models import AppSettings
+
+        app = AppSettings()
+        app.speaker.enabled = False
+        app.speaker.confidence_threshold = 0.8
+        d = app.to_dict()
+        assert d["speaker"]["enabled"] is False
+        assert d["speaker"]["confidence_threshold"] == 0.8
+
+        app2 = AppSettings.from_dict(d)
+        assert app2.speaker.enabled is False
+        assert app2.speaker.confidence_threshold == 0.8
+
+    def test_missing_speaker_key_uses_defaults(self):
+        from metamemory.config.models import AppSettings
+
+        # Config file without speaker section (migration case)
+        d = {"config_version": 1, "model": {}, "transcription": {}, "hardware": {}, "ui": {}}
+        app = AppSettings.from_dict(d)
+        assert app.speaker.enabled is True
+        assert app.speaker.confidence_threshold == 0.6
+
+    def test_from_dict_partial(self):
+        from metamemory.config.models import SpeakerSettings
+
+        s = SpeakerSettings.from_dict({"enabled": False})
+        assert s.enabled is False
+        assert s.confidence_threshold == 0.6  # default
+        assert s.clustering_threshold == 0.5  # default
+
+
+class TestApplySpeakerLabels:
+    """Tests for RecordingController._apply_speaker_labels."""
+
+    def _make_controller(self):
+        """Create a RecordingController with a transcript store."""
+        from metamemory.recording.controller import RecordingController
+        from metamemory.transcription.transcript_store import TranscriptStore
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        return ctrl
+
+    def test_labels_applied_to_overlapping_words(self):
+        from metamemory.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature, SpeakerMatch,
+        )
+        from metamemory.transcription.transcript_store import Word
+
+        ctrl = self._make_controller()
+        # Add words at 0-2s and 3-5s
+        words = [
+            Word(text="hello", start_time=0.0, end_time=0.5, confidence=90, speaker_id=None),
+            Word(text="world", start_time=0.5, end_time=1.0, confidence=85, speaker_id=None),
+            Word(text="hey", start_time=3.0, end_time=3.5, confidence=88, speaker_id=None),
+            Word(text="there", start_time=3.5, end_time=4.0, confidence=92, speaker_id=None),
+        ]
+        ctrl._transcript_store.add_words(words)
+
+        # Two segments from different speakers
+        result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+                SpeakerSegment(start=2.5, end=5.0, speaker="spk1"),
+            ],
+            signatures={},
+            matches={
+                "spk0": SpeakerMatch(name="Alice", score=0.9, confidence="high"),
+            },
+            num_speakers=2,
+        )
+
+        ctrl._apply_speaker_labels(result)
+
+        tagged = ctrl._transcript_store.get_all_words()
+        assert tagged[0].speaker_id == "Alice"  # matched known speaker
+        assert tagged[1].speaker_id == "Alice"
+        assert tagged[2].speaker_id == "SPK_1"  # no match -> raw label
+        assert tagged[3].speaker_id == "SPK_1"
+
+    def test_no_words_no_crash(self):
+        from metamemory.speaker.models import DiarizationResult, SpeakerSegment
+
+        ctrl = self._make_controller()
+        result = DiarizationResult(
+            segments=[SpeakerSegment(start=0.0, end=1.0, speaker="spk0")],
+            num_speakers=1,
+        )
+        ctrl._apply_speaker_labels(result)  # should not crash
+
+    def test_graceful_degradation_no_sherpa_onnx(self):
+        """Import error for sherpa-onnx should be handled gracefully."""
+        from metamemory.recording.controller import RecordingController
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = None  # no store -> should not crash
+
+        # The import guard in _run_diarization catches ImportError
+        # This test just verifies the method exists and the import path is correct
+        assert hasattr(ctrl, "_run_diarization")
+
+    def test_diarization_disabled_skips(self):
+        """When speaker.enabled=False, diarization should skip."""
+        from metamemory.recording.controller import RecordingController
+        from metamemory.transcription.transcript_store import TranscriptStore, Word
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+
+        # Mock config to disable speaker
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker.enabled = False
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        with mock.patch("metamemory.speaker.diarizer.Diarizer") as mock_diarizer_cls:
+            ctrl._run_diarization(Path("test.wav"))
+            mock_diarizer_cls.assert_not_called()

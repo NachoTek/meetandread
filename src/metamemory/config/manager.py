@@ -11,6 +11,7 @@ from metamemory.config.models import (
     AppSettings,
     HardwareSettings,
     ModelSettings,
+    SpeakerSettings,
     TranscriptionSettings,
     UISettings
 )

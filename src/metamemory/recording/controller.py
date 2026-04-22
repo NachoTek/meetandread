@@ -6,6 +6,7 @@ and state management for UI integration. Includes hybrid transcription:
 - Post-process: stronger model after recording stops
 """
 
+import logging
 import threading
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -25,6 +26,8 @@ from metamemory.transcription.accumulating_processor import AccumulatingTranscri
 from metamemory.transcription.transcript_store import TranscriptStore, Word
 from metamemory.transcription.post_processor import PostProcessingQueue, PostProcessStatus
 from metamemory.config.manager import ConfigManager
+
+logger = logging.getLogger(__name__)
 
 
 class ControllerState(Enum):
@@ -275,6 +278,10 @@ class RecordingController:
             self._last_wav_path = wav_path
             print(f"DEBUG: Audio saved to: {wav_path}")
             
+            # --- Speaker diarization (post-processing step) ---
+            if self._transcript_store and self._last_wav_path:
+                self._run_diarization(self._last_wav_path)
+            
             # Save transcript if available
             transcript_path = None
             if self._transcript_store and self._last_wav_path:
@@ -483,6 +490,116 @@ class RecordingController:
                 stats = self._transcription_processor.get_stats()
                 print(f"DEBUG: Fed {self._audio_chunks_fed} audio chunks, buffer: {stats.get('buffer_duration', 0):.1f}s")
     
+    def _run_diarization(self, wav_path: Path) -> None:
+        """Run speaker diarization on the saved WAV and tag transcript words.
+
+        Post-processing step executed AFTER the WAV is saved and BEFORE the
+        transcript is saved. Gracefully degrades if sherpa-onnx is not
+        installed — logs a warning and returns without tagging.
+
+        Args:
+            wav_path: Path to the saved WAV file.
+        """
+        try:
+            from metamemory.speaker.diarizer import Diarizer
+            from metamemory.speaker.signatures import VoiceSignatureStore
+        except ImportError:
+            logger.warning(
+                "sherpa-onnx not installed — speaker diarization skipped. "
+                "Install sherpa-onnx to enable speaker identification."
+            )
+            return
+
+        try:
+            settings = self._config_manager.get_settings()
+            speaker_cfg = settings.speaker
+
+            if not speaker_cfg.enabled:
+                logger.info("Speaker diarization disabled in settings — skipped")
+                return
+
+            logger.info("Running speaker diarization on %s", wav_path.name)
+
+            # (1) Run diarization
+            diarizer = Diarizer(clustering_threshold=speaker_cfg.clustering_threshold)
+            result = diarizer.diarize(wav_path)
+
+            if not result.succeeded:
+                logger.error(
+                    "Diarization failed for %s: %s", wav_path.name, result.error
+                )
+                return
+
+            if not result.segments:
+                logger.info("No speaker segments detected in %s", wav_path.name)
+                return
+
+            logger.info(
+                "Diarized %s: %d segments, %d speakers",
+                wav_path.name, len(result.segments), result.num_speakers,
+            )
+
+            # (2) Match speaker embeddings against known signatures
+            db_path = wav_path.parent / "speaker_signatures.db"
+            with VoiceSignatureStore(db_path=db_path) as store:
+                for label, sig in result.signatures.items():
+                    match = store.find_match(
+                        sig.embedding,
+                        threshold=speaker_cfg.confidence_threshold,
+                    )
+                    if match:
+                        result.matches[label] = match
+                        logger.debug(
+                            "Matched %s -> '%s' (score=%.4f, confidence=%s)",
+                            label, match.name, match.score, match.confidence,
+                        )
+
+            # (3) Tag transcript words with speaker labels
+            self._apply_speaker_labels(result)
+
+        except Exception as exc:
+            logger.error(
+                "Speaker diarization error for %s: %s",
+                wav_path.name, exc, exc_info=True,
+            )
+
+    def _apply_speaker_labels(self, result: "DiarizationResult") -> None:
+        """Tag transcript store words with speaker IDs from diarization.
+
+        For each diarized segment, finds words whose time range overlaps
+        and assigns the resolved speaker label (known name or SPK_N).
+
+        Args:
+            result: A successful DiarizationResult with segments and matches.
+        """
+        assert self._transcript_store is not None
+        from metamemory.speaker.models import DiarizationResult
+
+        words = self._transcript_store.get_all_words()
+        if not words:
+            return
+
+        # Build a mapping from raw label -> display label
+        label_map: dict[str, str] = {}
+        for seg in result.segments:
+            raw = seg.speaker
+            if raw not in label_map:
+                label_map[raw] = result.speaker_label_for(raw)
+
+        tagged_count = 0
+        for word in words:
+            word_mid = (word.start_time + word.end_time) / 2
+            for seg in result.segments:
+                if seg.start <= word_mid <= seg.end:
+                    word.speaker_id = label_map[seg.speaker]
+                    tagged_count += 1
+                    break
+
+        logger.info(
+            "Tagged %d/%d words with speaker labels (%d speakers)",
+            tagged_count, len(words), len(label_map),
+        )
+
     def _save_transcript(self) -> Optional[Path]:
         """Save transcript to file.
         

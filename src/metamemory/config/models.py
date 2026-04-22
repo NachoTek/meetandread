@@ -221,6 +221,45 @@ class UISettings:
 
 
 @dataclass
+class SpeakerSettings:
+    """Configuration for speaker diarization and identification.
+
+    Attributes:
+        enabled: Whether speaker diarization is enabled.
+            Default: True
+        confidence_threshold: Minimum cosine similarity to identify a
+            known speaker (0.0–1.0). Default: 0.6
+        clustering_threshold: Threshold for fast clustering in diarization
+            (0–1). Higher values produce more speakers. Default: 0.5
+    """
+    enabled: bool = field(
+        default=True,
+        metadata={"description": "Whether speaker diarization is enabled"}
+    )
+    confidence_threshold: float = field(
+        default=0.6,
+        metadata={"description": "Min cosine similarity for speaker identification (0.0-1.0)"}
+    )
+    clustering_threshold: float = field(
+        default=0.5,
+        metadata={"description": "Clustering threshold for diarization (higher = more speakers)"}
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SpeakerSettings":
+        """Create from dictionary, using defaults for missing fields."""
+        return cls(
+            enabled=data.get("enabled", cls.enabled),
+            confidence_threshold=data.get("confidence_threshold", cls.confidence_threshold),
+            clustering_threshold=data.get("clustering_threshold", cls.clustering_threshold),
+        )
+
+
+@dataclass
 class AppSettings:
     """Root container for all application settings.
     
@@ -243,6 +282,7 @@ class AppSettings:
     transcription: TranscriptionSettings = field(default_factory=TranscriptionSettings)
     hardware: HardwareSettings = field(default_factory=HardwareSettings)
     ui: UISettings = field(default_factory=UISettings)
+    speaker: SpeakerSettings = field(default_factory=SpeakerSettings)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -251,7 +291,8 @@ class AppSettings:
             "model": self.model.to_dict(),
             "transcription": self.transcription.to_dict(),
             "hardware": self.hardware.to_dict(),
-            "ui": self.ui.to_dict()
+            "ui": self.ui.to_dict(),
+            "speaker": self.speaker.to_dict(),
         }
 
     @classmethod
@@ -262,13 +303,15 @@ class AppSettings:
         transcription_data = data.get("transcription", {})
         hardware_data = data.get("hardware", {})
         ui_data = data.get("ui", {})
+        speaker_data = data.get("speaker", {})
         
         return cls(
             config_version=data.get("config_version", cls.config_version),
             model=ModelSettings.from_dict(model_data) if isinstance(model_data, dict) else ModelSettings(),
             transcription=TranscriptionSettings.from_dict(transcription_data) if isinstance(transcription_data, dict) else TranscriptionSettings(),
             hardware=HardwareSettings.from_dict(hardware_data) if isinstance(hardware_data, dict) else HardwareSettings(),
-            ui=UISettings.from_dict(ui_data) if isinstance(ui_data, dict) else UISettings()
+            ui=UISettings.from_dict(ui_data) if isinstance(ui_data, dict) else UISettings(),
+            speaker=SpeakerSettings.from_dict(speaker_data) if isinstance(speaker_data, dict) else SpeakerSettings(),
         )
 
     @classmethod
