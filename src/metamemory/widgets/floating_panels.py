@@ -349,17 +349,62 @@ class FloatingTranscriptPanel(QWidget):
         self.move(x, y)
     
     def show_panel(self) -> None:
-        """Show the panel and start auto-scroll."""
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        """Show the panel with a 150ms fade-in and start auto-scroll."""
+        self._start_fade_in()
         self.scroll_timer.start(100)  # Scroll check every 100ms
         self.status_label.setText("Recording...")
     
     def hide_panel(self) -> None:
-        """Hide the panel."""
+        """Hide the panel with a 150ms fade-out."""
         self.scroll_timer.stop()
-        self.hide()
+        self._start_fade_out()
+
+    # ------------------------------------------------------------------
+    # Fade transition helpers
+    # ------------------------------------------------------------------
+
+    _FADE_DURATION_MS = 150
+    _FADE_STEP_MS = 10
+    _FADE_STEPS = _FADE_DURATION_MS // _FADE_STEP_MS  # 15
+
+    def _start_fade_in(self) -> None:
+        """Animate window opacity from 0 → 1 over 150ms, then show."""
+        if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
+            self._fade_timer.stop()
+        self.setWindowOpacity(0.0)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._fade_step = 0
+        self._fade_direction = 1  # 1 = fading in
+        self._fade_timer = QTimer(self)
+        self._fade_timer.timeout.connect(self._on_fade_tick)
+        self._fade_timer.start(self._FADE_STEP_MS)
+
+    def _start_fade_out(self) -> None:
+        """Animate window opacity from 1 → 0 over 150ms, then hide."""
+        if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
+            self._fade_timer.stop()
+        self.setWindowOpacity(1.0)
+        self._fade_step = 0
+        self._fade_direction = -1  # -1 = fading out
+        self._fade_timer = QTimer(self)
+        self._fade_timer.timeout.connect(self._on_fade_tick)
+        self._fade_timer.start(self._FADE_STEP_MS)
+
+    def _on_fade_tick(self) -> None:
+        """Process one step of a fade animation."""
+        self._fade_step += 1
+        progress = self._fade_step / self._FADE_STEPS
+        if self._fade_direction == 1:
+            self.setWindowOpacity(min(progress, 1.0))
+        else:
+            self.setWindowOpacity(max(1.0 - progress, 0.0))
+        if self._fade_step >= self._FADE_STEPS:
+            self._fade_timer.stop()
+            if self._fade_direction == -1:
+                self.hide()
+                self.setWindowOpacity(1.0)  # Reset for next show
     
     def toggle_panel(self) -> None:
         """Toggle panel visibility."""
@@ -1077,9 +1122,9 @@ class FloatingSettingsPanel(QWidget):
         )
         
         # Size
-        self.setFixedSize(300, 400)
+        self.setFixedSize(300, 420)
         
-        # Style
+        # Style — aligned with FloatingTranscriptPanel dark theme
         self.setStyleSheet("""
             FloatingSettingsPanel {
                 background-color: #1a1a1a;
@@ -1087,48 +1132,84 @@ class FloatingSettingsPanel(QWidget):
                 border-radius: 10px;
             }
             QLabel {
-                color: #fff;
+                color: #ddd;
                 font-size: 12px;
             }
-            QPushButton {
-                background-color: #333;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 5px;
-                padding: 8px;
+            QRadioButton {
+                color: #ddd;
                 font-size: 12px;
+                spacing: 6px;
             }
-            QPushButton:hover {
-                background-color: #444;
-            }
-            QPushButton:pressed {
-                background-color: #4CAF50;
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
             }
         """)
         
         # Layout
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(5)
         
-        # Title
+        # Header with title and close button (matches transcript panel)
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(5)
+        
         title = QLabel("Settings")
-        title.setStyleSheet("font-weight: bold; font-size: 16px; color: #4CAF50;")
-        layout.addWidget(title)
+        title.setStyleSheet("""
+            QLabel {
+                color: #4CAF50;
+                font-weight: bold;
+                font-size: 14px;
+                padding: 5px;
+            }
+        """)
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+        
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(24, 24)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: #fff;
+                border: 1px solid #555;
+                border-radius: 12px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background-color: #F44336;
+                border-color: #F44336;
+            }
+        """)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setToolTip("Close panel")
+        close_btn.clicked.connect(self.hide_panel)
+        header_layout.addWidget(close_btn)
+        
+        layout.addLayout(header_layout)
+        
+        # Separator line
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("QFrame { background-color: #444; max-height: 1px; border: none; }")
+        layout.addWidget(separator)
         
         # Model selection
         model_label = QLabel("Model Size:")
+        model_label.setStyleSheet("QLabel { color: #888; font-size: 11px; padding: 3px; }")
         layout.addWidget(model_label)
         
-        from PyQt6.QtWidgets import QButtonGroup, QVBoxLayout as VBox
+        from PyQt6.QtWidgets import QButtonGroup, QRadioButton
         
         self.model_group = QButtonGroup(self)
         models = [("tiny", "Tiny (fastest)"), ("base", "Base (balanced)"), ("small", "Small (accurate)")]
         
         for model_id, model_name in models:
-            from PyQt6.QtWidgets import QRadioButton
             btn = QRadioButton(model_name)
-            btn.setStyleSheet("color: #fff;")
+            btn.setStyleSheet("color: #ddd;")
 
             # Emit signal when button is checked (toggled True)
             btn.toggled.connect(
@@ -1143,6 +1224,7 @@ class FloatingSettingsPanel(QWidget):
 
         # Hardware detection section
         hardware_label = QLabel("Hardware:")
+        hardware_label.setStyleSheet("QLabel { color: #888; font-size: 11px; padding: 3px; }")
         layout.addWidget(hardware_label)
 
         self.hardware_detector = HardwareDetector()
@@ -1163,26 +1245,65 @@ class FloatingSettingsPanel(QWidget):
         layout.addWidget(rec_label)
 
         layout.addStretch()
-        
-        # Close button
-        from PyQt6.QtWidgets import QPushButton
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.hide_panel)
-        layout.addWidget(close_btn)
 
         # Dragging
         self._dragging = False
         self._drag_pos = None
 
     def show_panel(self):
-        """Show the panel."""
+        """Show the panel with a 150ms fade-in."""
+        self._start_fade_in()
+    
+    def hide_panel(self):
+        """Hide the panel with a 150ms fade-out."""
+        self._start_fade_out()
+
+    # ------------------------------------------------------------------
+    # Fade transition helpers
+    # ------------------------------------------------------------------
+
+    _FADE_DURATION_MS = 150
+    _FADE_STEP_MS = 10
+    _FADE_STEPS = _FADE_DURATION_MS // _FADE_STEP_MS  # 15
+
+    def _start_fade_in(self) -> None:
+        """Animate window opacity from 0 → 1 over 150ms, then show."""
+        if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
+            self._fade_timer.stop()
+        self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
         self.activateWindow()
-    
-    def hide_panel(self):
-        """Hide the panel."""
-        self.hide()
+        self._fade_step = 0
+        self._fade_direction = 1  # 1 = fading in
+        self._fade_timer = QTimer(self)
+        self._fade_timer.timeout.connect(self._on_fade_tick)
+        self._fade_timer.start(self._FADE_STEP_MS)
+
+    def _start_fade_out(self) -> None:
+        """Animate window opacity from 1 → 0 over 150ms, then hide."""
+        if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
+            self._fade_timer.stop()
+        self.setWindowOpacity(1.0)
+        self._fade_step = 0
+        self._fade_direction = -1  # -1 = fading out
+        self._fade_timer = QTimer(self)
+        self._fade_timer.timeout.connect(self._on_fade_tick)
+        self._fade_timer.start(self._FADE_STEP_MS)
+
+    def _on_fade_tick(self) -> None:
+        """Process one step of a fade animation."""
+        self._fade_step += 1
+        progress = self._fade_step / self._FADE_STEPS
+        if self._fade_direction == 1:
+            self.setWindowOpacity(min(progress, 1.0))
+        else:
+            self.setWindowOpacity(max(1.0 - progress, 0.0))
+        if self._fade_step >= self._FADE_STEPS:
+            self._fade_timer.stop()
+            if self._fade_direction == -1:
+                self.hide()
+                self.setWindowOpacity(1.0)  # Reset for next show
     
     def dock_to_widget(self, widget: QWidget, position: str = "left") -> None:
         """
