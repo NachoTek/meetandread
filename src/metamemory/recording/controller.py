@@ -104,7 +104,7 @@ class RecordingController:
         self.on_error: Optional[Callable[[ControllerError], None]] = None
         self.on_recording_complete: Optional[Callable[[Path, Optional[Path]], None]] = None
         self.on_phrase_result: Optional[Callable[[SegmentResult], None]] = None  # For accumulating processor results
-        self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, enhanced_path
+        self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, transcript_path
         
         # Audio feed tracking
         self._audio_chunks_fed = 0
@@ -462,16 +462,16 @@ class RecordingController:
             result: Result dictionary with transcript_path, etc.
         """
         print(f"DEBUG: Post-processing job {job_id} completed!")
-        print(f"DEBUG: Post-processed transcript: {result.get('enhanced_path')}")
+        print(f"DEBUG: Post-processed transcript: {result.get('transcript_path')}")
         print(f"DEBUG: Real-time words: {result.get('realtime_word_count')}")
         print(f"DEBUG: Post-processed words: {result.get('word_count')}")
         
         if self.on_post_process_complete:
-            enhanced_path_str = result.get('enhanced_path')
-            if enhanced_path_str and isinstance(enhanced_path_str, str):
-                enhanced_path = Path(enhanced_path_str)
+            transcript_path_str = result.get('transcript_path')
+            if transcript_path_str and isinstance(transcript_path_str, str):
+                transcript_path = Path(transcript_path_str)
                 try:
-                    self.on_post_process_complete(job_id, enhanced_path)
+                    self.on_post_process_complete(job_id, transcript_path)
                 except Exception as e:
                     print(f"ERROR: Post-process complete callback failed: {e}")
     

@@ -520,15 +520,15 @@ to avoid clipping issues and enable proper text rendering.
         if self._floating_transcript_panel:
             self._floating_transcript_panel.status_label.setText("Recording complete - Post-processing...")
     
-    def _on_post_process_complete(self, job_id, enhanced_path):
+    def _on_post_process_complete(self, job_id, transcript_path):
         """Handle post-processing completion.
 
         Args:
             job_id: The post-processing job ID
-            enhanced_path: Path to the post-processed transcript file
+            transcript_path: Path to the post-processed transcript file
         """
         print(f"DEBUG UI: Post-processing complete! Job: {job_id}")
-        print(f"DEBUG UI: Post-processed transcript saved to: {enhanced_path}")
+        print(f"DEBUG UI: Post-processed transcript saved to: {transcript_path}")
 
         # Update panel status
         if self._floating_transcript_panel:

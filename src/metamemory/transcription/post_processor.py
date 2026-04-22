@@ -3,7 +3,7 @@
 When recording stops, this system:
 1. Queues the full audio file for re-transcription with a stronger model
 2. Runs transcription in a background thread to avoid blocking UI
-3. Saves enhanced transcript alongside the real-time one
+3. Overwrites the original transcript .md in-place with the stronger result
 4. Allows easy model swapping for different use cases
 
 HYBRID TRANSCRIPTION FLOW:
@@ -46,6 +46,7 @@ Usage:
     status = post_processor.get_status()
 """
 
+import logging
 import threading
 import queue
 from dataclasses import dataclass
@@ -54,6 +55,8 @@ from pathlib import Path
 from typing import Optional, List, Callable, Dict, Any
 import numpy as np
 import wave
+
+logger = logging.getLogger(__name__)
 
 from metamemory.config.models import TranscriptionSettings, AppSettings
 from metamemory.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment
@@ -117,7 +120,7 @@ class PostProcessingQueue:
         # Check status later
         status = queue.get_job_status(job.job_id)
         if status.status == PostProcessStatus.COMPLETED:
-            print(f"Enhanced transcript: {status.result['enhanced_path']}")
+            print(f"Transcript: {status.result['transcript_path']}")
     """
     
     def __init__(
@@ -292,20 +295,22 @@ class PostProcessingQueue:
             enhanced_store = self._create_post_processed_transcript(segments)
             self._update_progress(job, 90)
             
-            # Save post-processed transcript
-            enhanced_path = self._save_post_processed_transcript(job, enhanced_store)
+            # Save post-processed transcript (overwrites original .md)
+            transcript_path = self._save_post_processed_transcript(job, enhanced_store)
             self._update_progress(job, 100)
             
             # Mark complete
             job.status = PostProcessStatus.COMPLETED
             job.result = {
-                "enhanced_path": str(enhanced_path),
+                "transcript_path": str(transcript_path),
                 "word_count": enhanced_store.get_word_count(),
                 "realtime_word_count": job.realtime_transcript.get_word_count(),
                 "model_used": job.model_size
             }
             
-            print(f"DEBUG: Job {job.job_id} completed. Enhanced transcript: {enhanced_path}")
+            logger.info(
+                "Job %s completed. Transcript: %s", job.job_id, transcript_path
+            )
             
             # Notify completion
             if self._on_complete:
@@ -430,24 +435,36 @@ class PostProcessingQueue:
         return store
     
     def _save_post_processed_transcript(self, job: PostProcessJob, store: TranscriptStore) -> Path:
-        """Save post-processed transcript to file.
-        
+        """Save post-processed transcript by overwriting the original .md in-place.
+
+        Derives the original transcript path from the audio file stem:
+        ``{audio_file.stem}.md`` in the same output directory.
+
         Args:
             job: The job being processed
             store: The transcript store to save
-        
+
         Returns:
-            Path to saved file
+            Path to the (over)written transcript file
         """
-        # Create post-processed filename
         base_name = job.audio_file.stem
-        enhanced_path = job.output_dir / f"{base_name}_enhanced.md"
-        
-        # Save with post-processed marker
-        store.save_to_file(enhanced_path)
-        
-        print(f"DEBUG: Saved post-processed transcript to {enhanced_path}")
-        return enhanced_path
+        transcript_path = job.output_dir / f"{base_name}.md"
+
+        if transcript_path.exists():
+            logger.debug(
+                "Overwriting existing transcript in-place: %s", transcript_path
+            )
+        else:
+            logger.debug(
+                "Creating new transcript (no prior .md found): %s", transcript_path
+            )
+
+        store.save_to_file(transcript_path)
+
+        logger.info(
+            "Saved post-processed transcript to %s", transcript_path
+        )
+        return transcript_path
     
     def _update_progress(self, job: PostProcessJob, progress: int) -> None:
         """Update job progress and notify.
