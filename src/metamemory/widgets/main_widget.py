@@ -30,6 +30,26 @@ from metamemory.transcription.accumulating_processor import SegmentResult
 from metamemory.config import get_config, set_config, save_config, AppSettings
 from metamemory.hardware.recommender import ModelRecommender, get_model_info
 from metamemory.widgets.floating_panels import FloatingTranscriptPanel, FloatingSettingsPanel
+import time as _time
+
+
+class _SlideState:
+    """Tracks an in-progress slide animation from one position to another."""
+
+    __slots__ = ('active', 'start_pos', 'target_pos', 'start_time_ms', 'duration_ms')
+
+    def __init__(self):
+        self.active: bool = False
+        self.start_pos: QPoint = QPoint()
+        self.target_pos: QPoint = QPoint()
+        self.start_time_ms: int = 0
+        self.duration_ms: int = 300
+
+    def __repr__(self):
+        if not self.active:
+            return "<_SlideState inactive>"
+        return (f"<_SlideState {self.start_pos}→{self.target_pos} "
+                f"dur={self.duration_ms}ms>")
 
 
 class DragSurfaceItem(QGraphicsRectItem):
@@ -127,6 +147,7 @@ to avoid clipping issues and enable proper text rendering.
         # Docking state
         self.is_docked = False
         self.dock_edge = None  # 'left', 'right', 'top', 'bottom'
+        self._slide_state = _SlideState()
         
         # Recording controller
         self._controller = RecordingController()
@@ -345,6 +366,24 @@ to avoid clipping issues and enable proper text rendering.
         """Update animation states."""
         # Advance record button state transitions (~200ms eased cross-fade)
         self.record_button.tick()
+
+        # --- Slide animation (edge docking) ---
+        s = self._slide_state
+        if s.active:
+            elapsed = int(_time.monotonic() * 1000) - s.start_time_ms
+            progress = min(elapsed / s.duration_ms, 1.0)
+            # Ease-out deceleration: t = 1 - (1 - progress)^2
+            t = 1.0 - (1.0 - progress) ** 2
+            ix = int(s.start_pos.x() + (s.target_pos.x() - s.start_pos.x()) * t)
+            iy = int(s.start_pos.y() + (s.target_pos.y() - s.start_pos.y()) * t)
+            self.move(ix, iy)
+            if progress >= 1.0:
+                s.active = False
+                self.move(s.target_pos)
+                logging.getLogger(__name__).debug(
+                    "Slide complete: widget at %s", s.target_pos
+                )
+                print(f"DEBUG: Slide complete: widget at {s.target_pos}")
         
         if self.is_recording and not self.is_processing:
             self.pulse_phase += 0.1
@@ -454,15 +493,43 @@ to avoid clipping issues and enable proper text rendering.
         self._update_docked_state()
         self._update_floating_panels_position()
     
+    @property
+    def _peek_width(self) -> int:
+        """Width of the visible peek strip when docked (1/5th of widget)."""
+        return int(self.width() * 0.2)
+
+    def _start_slide_to(self, target_pos: QPoint):
+        """Begin a smooth slide animation from current position to *target_pos*.
+
+        The animation is driven by the existing ``animation_timer`` at ~30 fps
+        and completes in 300 ms with ease-out deceleration.
+        """
+        s = self._slide_state
+        s.start_pos = self.pos()
+        s.target_pos = target_pos
+        s.start_time_ms = int(_time.monotonic() * 1000)
+        s.duration_ms = 300
+        s.active = True
+        logging.getLogger(__name__).debug(
+            "Slide start: %s → %s", s.start_pos, target_pos
+        )
+        print(f"DEBUG: Slide start: {s.start_pos} → {target_pos}")
+
     def _update_docked_state(self):
-        """Update widget appearance based on docked state."""
+        """Update widget appearance based on docked state.
+
+        When docked, slides the widget to a peek position where only 1/5th
+        of its width is visible at the screen edge. Uses smooth 300 ms
+        slide animation instead of instant positioning.
+        """
         if self.is_docked:
-            # When docked, show 4/5ths of the button
+            peek = self._peek_width
             if self.dock_edge == 'right':
-                self.move(QApplication.primaryScreen().geometry().width() - 
-                         int(self.width() * 0.8), self.y())
+                target_x = QApplication.primaryScreen().geometry().width() - peek
+                self._start_slide_to(QPoint(target_x, self.y()))
             elif self.dock_edge == 'left':
-                self.move(int(self.width() * -0.2), self.y())
+                target_x = -(self.width() - peek)
+                self._start_slide_to(QPoint(target_x, self.y()))
     
     def _get_selected_sources(self):
         """Get set of selected audio sources based on lobe states."""
