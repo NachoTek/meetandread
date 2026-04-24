@@ -18,6 +18,7 @@ from pathlib import Path
 import json
 import re
 
+from metamemory.transcription.confidence import get_confidence_color, get_confidence_legend
 from metamemory.hardware.detector import HardwareDetector
 from metamemory.hardware.recommender import ModelRecommender
 from metamemory.performance.monitor import ResourceMonitor, ResourceSnapshot
@@ -128,6 +129,35 @@ class FloatingTranscriptPanel(QWidget):
         """)
         header_layout.addWidget(title)
         header_layout.addStretch()
+        
+        # Legend toggle button (?)
+        self._legend_btn = QPushButton("?")
+        self._legend_btn.setFixedSize(24, 24)
+        self._legend_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: #4CAF50;
+                border: 1px solid #555;
+                border-radius: 12px;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                border-color: #4CAF50;
+            }
+            QPushButton:checked {
+                background-color: #4CAF50;
+                color: #fff;
+                border-color: #4CAF50;
+            }
+        """)
+        self._legend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._legend_btn.setToolTip("Confidence legend")
+        self._legend_btn.setCheckable(True)
+        self._legend_btn.clicked.connect(self._toggle_legend)
+        header_layout.addWidget(self._legend_btn)
         
         # Close button
         close_btn = QPushButton("×")
@@ -325,8 +355,96 @@ class FloatingTranscriptPanel(QWidget):
         
         # Connect to scrollbar value changed signal to detect manual scroll
         self.text_edit.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        
+        # Confidence legend overlay (initially hidden)
+        self._create_legend_overlay()
     
-    def dock_to_widget(self, widget: QWidget, position: str = "left") -> None:
+    # ------------------------------------------------------------------
+    # Confidence legend overlay
+    # ------------------------------------------------------------------
+
+    def _create_legend_overlay(self) -> None:
+        """Build the confidence legend overlay positioned over the text edit area."""
+        self._legend_overlay = QFrame(self.text_edit)
+        self._legend_overlay.setStyleSheet("""
+            QFrame {
+                background-color: rgba(42, 42, 42, 230);
+                border: 1px solid #555;
+                border-radius: 8px;
+                padding: 8px;
+            }
+        """)
+        self._legend_overlay.setFixedSize(220, 140)
+
+        # Layout
+        overlay_layout = QVBoxLayout(self._legend_overlay)
+        overlay_layout.setContentsMargins(10, 8, 10, 8)
+        overlay_layout.setSpacing(4)
+
+        # Title
+        title = QLabel("Confidence Levels")
+        title.setStyleSheet("color: #fff; font-weight: bold; font-size: 12px; border: none;")
+        overlay_layout.addWidget(title)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background-color: #555; border: none;")
+        overlay_layout.addWidget(sep)
+
+        # Legend rows from canonical source
+        for item in get_confidence_legend():
+            row = QHBoxLayout()
+            row.setSpacing(6)
+
+            # Color swatch
+            swatch = QLabel()
+            swatch.setFixedSize(14, 14)
+            swatch.setStyleSheet(
+                f"background-color: {item.color}; border-radius: 3px; border: none;"
+            )
+            row.addWidget(swatch)
+
+            # Range text
+            range_label = QLabel(item.range_str)
+            range_label.setStyleSheet("color: #fff; font-size: 11px; border: none;")
+            range_label.setFixedWidth(50)
+            row.addWidget(range_label)
+
+            # Description
+            desc_label = QLabel(item.description)
+            desc_label.setStyleSheet("color: #aaa; font-size: 11px; border: none;")
+            row.addWidget(desc_label)
+
+            row.addStretch()
+            overlay_layout.addLayout(row)
+
+        # Position bottom-right of text_edit
+        self._position_legend_overlay()
+        self._legend_overlay.hide()
+
+    def _position_legend_overlay(self) -> None:
+        """Position the legend overlay in the bottom-right corner of the text edit."""
+        if not hasattr(self, '_legend_overlay'):
+            return
+        te = self.text_edit
+        x = te.width() - self._legend_overlay.width() - 8
+        y = te.height() - self._legend_overlay.height() - 8
+        self._legend_overlay.move(max(x, 0), max(y, 0))
+
+    def _toggle_legend(self) -> None:
+        """Toggle the confidence legend overlay visibility."""
+        visible = self._legend_btn.isChecked()
+        if visible:
+            self._position_legend_overlay()
+        self._legend_overlay.setVisible(visible)
+
+    def resizeEvent(self, event) -> None:
+        """Reposition legend overlay on resize."""
+        super().resizeEvent(event)
+        if hasattr(self, '_legend_overlay') and self._legend_overlay.isVisible():
+            self._position_legend_overlay()
         """
         Position panel next to a widget.
         
@@ -439,12 +557,10 @@ class FloatingTranscriptPanel(QWidget):
             speaker_id: Optional speaker label for this phrase
         """
         if text.strip() == "[BLANK_AUDIO]":
-            print(f"DEBUG Panel: Skipping [BLANK_AUDIO]")
             return
         
         # Start new phrase if needed
         if phrase_start or self.current_phrase_idx < 0:
-            print(f"DEBUG Panel: Starting NEW PHRASE")
             # Insert new block before creating phrase structure
             cursor = self.text_edit.textCursor()
             if self.current_phrase_idx >= 0:
@@ -467,7 +583,6 @@ class FloatingTranscriptPanel(QWidget):
             # Update existing segment - REPLACE IN PLACE
             phrase.segments[segment_index] = text
             phrase.confidences[segment_index] = confidence
-            print(f"DEBUG Panel: Updated segment {segment_index}: '{text}' [conf: {confidence}%]")
 
             # Find and replace just this segment in display
             self._replace_segment_in_display(self.current_phrase_idx, segment_index, text, confidence)
@@ -475,7 +590,6 @@ class FloatingTranscriptPanel(QWidget):
             # Add new segment - APPEND TO CURRENT LINE
             phrase.segments.append(text)
             phrase.confidences.append(confidence)
-            print(f"DEBUG Panel: Added segment {segment_index}: '{text}' [conf: {confidence}%]")
 
             # Append segment to display with proper formatting
             self._append_segment_to_display(text, confidence)
@@ -1027,15 +1141,8 @@ class FloatingTranscriptPanel(QWidget):
         cursor.insertText(text, fmt)
     
     def _get_confidence_color(self, confidence: int) -> str:
-        """Get color based on confidence score."""
-        if confidence >= 85:
-            return "#4CAF50"  # Green
-        elif confidence >= 70:
-            return "#FFC107"  # Yellow
-        elif confidence >= 50:
-            return "#FF9800"  # Orange
-        else:
-            return "#F44336"  # Red
+        """Get color based on confidence score — delegates to canonical thresholds."""
+        return get_confidence_color(confidence)
     
     def _on_scroll_value_changed(self, value: int) -> None:
         """
@@ -1051,7 +1158,6 @@ class FloatingTranscriptPanel(QWidget):
         if maximum > 0 and value < maximum - 10:  # 10 pixel threshold
             # User scrolled up - pause auto-scroll
             if not self._auto_scroll_paused:
-                print(f"DEBUG Panel: Manual scroll detected (value={value}, max={maximum}), pausing auto-scroll")
                 self._auto_scroll_paused = True
                 self._pause_timer.start(10000)  # 10 seconds
                 self.status_label.setText("Auto-scroll paused (10s)")
@@ -1062,7 +1168,6 @@ class FloatingTranscriptPanel(QWidget):
     
     def _resume_auto_scroll(self) -> None:
         """Resume auto-scroll after pause timer expires."""
-        print("DEBUG Panel: Auto-scroll pause expired, resuming")
         self._auto_scroll_paused = False
         self.status_label.setText("Recording...")
         # Immediately scroll to bottom to catch up
