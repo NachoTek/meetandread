@@ -155,6 +155,39 @@ def check_and_offer_recovery(parent=None):
     return len(recovered_files), False
 
 
+def check_hardware_requirements():
+    """Check if the system meets minimum hardware requirements.
+    
+    Shows a warning dialog if the system is below minimum specs.
+    The dialog is informational only — the app still starts.
+    Only runs when auto_detect_on_startup is enabled in settings.
+    Wrapped in try/except so it never blocks startup.
+    """
+    try:
+        settings = get_config()
+        if not settings.hardware.auto_detect_on_startup:
+            return
+        
+        from metamemory.hardware.detector import HardwareDetector
+        detector = HardwareDetector()
+        specs = detector.detect()
+        
+        if not detector.has_minimum_requirements(specs, dual_mode=False):
+            warning_msg = detector.get_warning_message(specs, dual_mode=False)
+            
+            msg_box = QMessageBox()
+            msg_box.setWindowTitle("Hardware Notice")
+            msg_box.setText("Your system may not meet minimum requirements")
+            msg_box.setInformativeText(warning_msg or "System resources may be insufficient for reliable recording.")
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg_box.exec()
+            
+            logging.info(f"Hardware warning shown: {warning_msg}")
+    except Exception as e:
+        logging.warning(f"Hardware requirements check failed: {e}")
+
+
 def setup_signal_handlers(app):
     """Setup signal handlers for graceful shutdown.
     
@@ -218,6 +251,12 @@ def main():
     except Exception as e:
         # Log error but don't block startup
         print(f"Hardware detection failed: {e}")
+    
+    # Check hardware requirements and warn if below minimum
+    try:
+        check_hardware_requirements()
+    except Exception as e:
+        print(f"Hardware requirements check failed: {e}")
     
     # Check for partial recordings and offer recovery before showing widget
     # This runs synchronously before the main event loop
