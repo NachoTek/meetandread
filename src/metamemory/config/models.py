@@ -196,6 +196,10 @@ class UISettings:
         default=None,
         metadata={"description": "Widget dock edge: left, right, top, bottom, or None"}
     )
+    audio_sources: Optional[List[str]] = field(
+        default=None,
+        metadata={"description": "Persisted audio source selection: list of 'mic' and/or 'system'"}
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -216,7 +220,8 @@ class UISettings:
             show_confidence_legend=data.get("show_confidence_legend", cls.show_confidence_legend),
             transcript_auto_scroll=data.get("transcript_auto_scroll", cls.transcript_auto_scroll),
             widget_position=pos,
-            widget_dock_edge=data.get("widget_dock_edge")
+            widget_dock_edge=data.get("widget_dock_edge"),
+            audio_sources=data.get("audio_sources"),
         )
 
 

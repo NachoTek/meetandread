@@ -264,6 +264,7 @@ class ConfigManager:
             "ui.transcript_auto_scroll",
             "ui.widget_position",
             "ui.widget_dock_edge",
+            "ui.audio_sources",
         }
     
     def get_config_path(self) -> str:

@@ -158,6 +158,39 @@ class TestUISettings:
         d = {"widget_position": [50, 75]}
         settings = UISettings.from_dict(d)
         assert settings.widget_position == (50, 75)
+    
+    def test_audio_sources_defaults_to_none(self):
+        """Test audio_sources defaults to None."""
+        settings = UISettings()
+        assert settings.audio_sources is None
+    
+    def test_audio_sources_roundtrip_single(self):
+        """Test audio_sources round-trip serialization with single source."""
+        settings = UISettings(audio_sources=['mic'])
+        d = settings.to_dict()
+        assert d["audio_sources"] == ['mic']
+        
+        restored = UISettings.from_dict(d)
+        assert restored.audio_sources == ['mic']
+    
+    def test_audio_sources_roundtrip_both(self):
+        """Test audio_sources round-trip with both sources."""
+        settings = UISettings(audio_sources=['mic', 'system'])
+        d = settings.to_dict()
+        assert d["audio_sources"] == ['mic', 'system']
+        
+        restored = UISettings.from_dict(d)
+        assert restored.audio_sources == ['mic', 'system']
+    
+    def test_audio_sources_from_dict_missing_key(self):
+        """Test from_dict returns None when audio_sources key is absent."""
+        settings = UISettings.from_dict({})
+        assert settings.audio_sources is None
+    
+    def test_audio_sources_from_dict_explicit_none(self):
+        """Test from_dict handles explicit None value."""
+        settings = UISettings.from_dict({"audio_sources": None})
+        assert settings.audio_sources is None
 
 
 class TestAppSettings:

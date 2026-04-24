@@ -185,7 +185,7 @@ to avoid clipping issues and enable proper text rendering.
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         
-        print("DEBUG: Main widget initialized with floating panels")
+        logging.debug("Main widget initialized with floating panels")
     
     def _create_components(self):
         """Create all widget components."""
@@ -211,6 +211,9 @@ to avoid clipping issues and enable proper text rendering.
         self._error_indicator = ErrorIndicatorItem(self)
         self._error_indicator.hide()
         self._scene.addItem(self._error_indicator)
+        
+        # Restore persisted audio source selection
+        self._restore_audio_sources()
     
     def _create_floating_panels(self):
         """Create floating panels (separate QWidgets)."""
@@ -221,7 +224,7 @@ to avoid clipping issues and enable proper text rendering.
         self._floating_transcript_panel.segment_ready.connect(self._on_panel_segment)
         # Connect speaker name pin signal
         self._floating_transcript_panel.speaker_name_pinned.connect(self._on_speaker_name_pinned)
-        print("DEBUG: Created floating transcript panel")
+        logging.debug("Created floating transcript panel")
         
         # Floating settings panel — pass controller and tray_manager for Performance tab wiring
         self._floating_settings_panel = FloatingSettingsPanel(
@@ -234,11 +237,11 @@ to avoid clipping issues and enable proper text rendering.
         # Connect model_changed signal to save config
         self._floating_settings_panel.model_changed.connect(save_config)
 
-        print("DEBUG: Created floating settings panel")
+        logging.debug("Created floating settings panel")
     
     def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool):
         """Handle segment signal from panel (runs on main thread)."""
-        print(f"DEBUG Panel Signal: text='{text[:30]}...', idx={segment_index}, phrase_start={phrase_start}")
+        logging.debug("Panel signal: text='%s...' idx=%d phrase_start=%s", text[:30], segment_index, phrase_start)
         try:
             self._floating_transcript_panel.update_segment(
                 text=text,
@@ -247,9 +250,8 @@ to avoid clipping issues and enable proper text rendering.
                 is_final=is_final,
                 phrase_start=phrase_start
             )
-            print(f"DEBUG Panel: Updated via signal successfully")
         except Exception as e:
-            print(f"DEBUG Panel: Error via signal: {e}")
+            logging.error("Panel update via signal failed: %s", e)
     
     def _layout_components(self):
         """Position all components."""
@@ -306,7 +308,7 @@ to avoid clipping issues and enable proper text rendering.
                 # Restore saved position
                 x, y = settings.ui.widget_position
                 self.move(x, y)
-                print(f"DEBUG: Restored widget position: ({x}, {y})")
+                logging.debug("Restored widget position: (%d, %d)", x, y)
                 
                 # Restore dock state if applicable
                 if settings.ui.widget_dock_edge:
@@ -319,7 +321,7 @@ to avoid clipping issues and enable proper text rendering.
                 self._recover_offscreen_position()
                 return
         except Exception as e:
-            print(f"DEBUG: Failed to restore position: {e}")
+            logging.warning("Failed to restore position: %s", e)
         
         # Default: Start in bottom-right corner
         screen = QApplication.primaryScreen().geometry()
@@ -377,7 +379,6 @@ to avoid clipping issues and enable proper text rendering.
                 logging.getLogger(__name__).debug(
                     "Slide complete: widget at %s", s.target_pos
                 )
-                print(f"DEBUG: Slide complete: widget at {s.target_pos}")
         
         if self.is_recording and not self.is_processing:
             self.pulse_phase += 0.1
@@ -457,14 +458,12 @@ to avoid clipping issues and enable proper text rendering.
             logging.getLogger(__name__).debug(
                 "Magnet snap: edge=%s, target=%s", edge, target
             )
-            print(f"DEBUG: Magnet snap: edge={edge}, target={target}")
         else:
             # Not near any edge — unsnap if previously docked
             if was_docked:
                 self.is_docked = False
                 self.dock_edge = None
                 logging.getLogger(__name__).debug("Magnet unsnap: following mouse")
-                print("DEBUG: Magnet unsnap: following mouse")
             self.move(new_pos)
 
         self._update_floating_panels_position()
@@ -549,7 +548,6 @@ to avoid clipping issues and enable proper text rendering.
         logging.getLogger(__name__).debug(
             "Slide start: %s → %s", s.start_pos, target_pos
         )
-        print(f"DEBUG: Slide start: {s.start_pos} → {target_pos}")
 
     def _update_docked_state(self):
         """Update widget appearance based on docked state.
@@ -576,6 +574,29 @@ to avoid clipping issues and enable proper text rendering.
             sources.add('system')
         return sources
     
+    def _on_lobe_toggled(self):
+        """Persist the current audio source selection to config.
+
+        Called by ToggleLobeItem after toggling its active state.
+        """
+        sources = list(self._get_selected_sources())
+        set_config('ui.audio_sources', sources)
+        save_config()
+    
+    def _restore_audio_sources(self):
+        """Restore lobe active states from persisted config.
+
+        On first launch (None), both lobes stay inactive. Otherwise
+        sets each lobe active if its name appears in the stored list.
+        """
+        sources = get_config('ui.audio_sources')
+        if sources is None:
+            return
+        self.mic_lobe.is_active = ('mic' in sources)
+        self.system_lobe.is_active = ('system' in sources)
+        self.mic_lobe.update()
+        self.system_lobe.update()
+    
     def _show_error(self, message):
         """Show error indicator with message."""
         self._error_indicator.set_text(message)
@@ -597,7 +618,7 @@ to avoid clipping issues and enable proper text rendering.
             
             # Show floating transcript panel when recording starts
             if self._floating_transcript_panel:
-                print("DEBUG: Showing floating transcript panel")
+                logging.debug("Showing floating transcript panel")
                 self._floating_transcript_panel.clear()
                 # Only dock to widget on first show; preserve user position after that
                 if not self._floating_transcript_panel._has_been_docked:
@@ -605,8 +626,6 @@ to avoid clipping issues and enable proper text rendering.
                 self._floating_transcript_panel.show_panel()
                 # Switch to Live tab
                 self._floating_transcript_panel._tab_widget.setCurrentIndex(0)
-            else:
-                print("DEBUG: No floating transcript panel to show!")
             
         elif state == ControllerState.STARTING:
             # No visual change during startup — wait for RECORDING or ERROR
@@ -649,7 +668,7 @@ to avoid clipping issues and enable proper text rendering.
     def _on_controller_error(self, error):
         """Handle controller errors."""
         self._show_error(error.message)
-        print(f"Recording error: {error.message}")
+        logging.error("Recording error: %s", error.message)
     
     def _on_phrase_result(self, result: SegmentResult):
         """Handle segment result from accumulating transcription processor.
@@ -661,7 +680,8 @@ to avoid clipping issues and enable proper text rendering.
         """
         phrase_start = getattr(result, 'phrase_start', False)
 
-        print(f"DEBUG UI: Segment: '{result.text}' [conf: {result.confidence}%, final: {result.is_final}, phrase_start: {phrase_start}]")
+        logging.debug("Segment: '%s' [conf: %d%%, final: %s, phrase_start: %s]",
+                       result.text[:40], result.confidence, result.is_final, phrase_start)
 
         if self._floating_transcript_panel:
             # Emit signal (thread-safe, automatically queues to main thread)
@@ -672,17 +692,14 @@ to avoid clipping issues and enable proper text rendering.
                 result.is_final,
                 phrase_start
             )
-            print(f"DEBUG UI: Emitted signal with phrase_start={phrase_start}")
-        else:
-            print("DEBUG UI: No floating transcript panel available!")
     
     def _on_recording_complete(self, wav_path, transcript_path):
         """Handle recording completion."""
         self.is_processing = False
         self.record_button.set_processing_state(False)
-        print(f"DEBUG: Recording saved to: {wav_path}")
+        logging.info("Recording saved to: %s", wav_path)
         if transcript_path:
-            print(f"DEBUG: Transcript saved to: {transcript_path}")
+            logging.info("Transcript saved to: %s", transcript_path)
         
         # Update panel status
         if self._floating_transcript_panel:
@@ -695,8 +712,7 @@ to avoid clipping issues and enable proper text rendering.
             job_id: The post-processing job ID
             transcript_path: Path to the post-processed transcript file
         """
-        print(f"DEBUG UI: Post-processing complete! Job: {job_id}")
-        print(f"DEBUG UI: Post-processed transcript saved to: {transcript_path}")
+        logging.info("Post-processing complete! Job: %s, transcript: %s", job_id, transcript_path)
 
         # Update panel status and switch to History tab
         if self._floating_transcript_panel:
@@ -810,9 +826,9 @@ to avoid clipping issues and enable proper text rendering.
             set_config('ui.widget_position', (self.x(), self.y()))
             set_config('ui.widget_dock_edge', self.dock_edge)
             save_config()
-            print(f"DEBUG: Saved widget position: ({self.x()}, {self.y()}), dock: {self.dock_edge}")
+            logging.debug("Saved widget position: (%d, %d), dock: %s", self.x(), self.y(), self.dock_edge)
         except Exception as e:
-            print(f"DEBUG: Failed to save position: {e}")
+            logging.warning("Failed to save position: %s", e)
     
     def closeEvent(self, event):
         """Handle close event — close-to-tray if tray is active, else quit.
@@ -1101,7 +1117,7 @@ class ToggleLobeItem(QGraphicsEllipseItem):
             if not self.parent_widget.is_dragging and not self.parent_widget._click_consumed:
                 self.is_active = not self.is_active
                 self.update()
-                print(f"{self.lobe_type} toggled: {self.is_active}")
+                self.parent_widget._on_lobe_toggled()
             event.accept()
 
 
