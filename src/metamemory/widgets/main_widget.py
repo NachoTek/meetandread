@@ -157,6 +157,8 @@ to avoid clipping issues and enable proper text rendering.
         self._controller.on_recording_complete = self._on_recording_complete
         self._controller.on_post_process_complete = self._on_post_process_complete
         self._error_indicator = None  # For showing errors
+        self._warning_indicator = None  # For showing resource warnings
+        self._warning_hide_timer: Optional[QTimer] = None  # Auto-hide timer for warnings
         
         # Floating panels (separate windows, not QGraphicsItems)
         self._floating_transcript_panel: Optional[FloatingTranscriptPanel] = None
@@ -168,8 +170,8 @@ to avoid clipping issues and enable proper text rendering.
         self._layout_components()
         
         # Set initial size
-        self.setFixedSize(200, 120)
-        self._scene.setSceneRect(0, 0, 200, 120)
+        self.setFixedSize(200, 140)
+        self._scene.setSceneRect(0, 0, 200, 140)
         
         # Position on screen
         self._position_initial()
@@ -211,6 +213,12 @@ to avoid clipping issues and enable proper text rendering.
         self._error_indicator = ErrorIndicatorItem(self)
         self._error_indicator.hide()
         self._scene.addItem(self._error_indicator)
+
+        # Warning indicator for resource warnings (hidden by default)
+        self._warning_indicator = ErrorIndicatorItem(self)
+        self._warning_indicator.set_color_mode("warning")
+        self._warning_indicator.hide()
+        self._scene.addItem(self._warning_indicator)
         
         # Restore persisted audio source selection
         self._restore_audio_sources()
@@ -237,6 +245,7 @@ to avoid clipping issues and enable proper text rendering.
             self,
             controller=self._controller,
             tray_manager=self._tray_manager,
+            main_widget=self,
         )
         self._floating_settings_panel.hide_panel()
 
@@ -273,6 +282,9 @@ to avoid clipping issues and enable proper text rendering.
         
         # Error indicator at bottom
         self._error_indicator.setPos(10, 105)
+
+        # Warning indicator below error indicator
+        self._warning_indicator.setPos(10, 120)
     
     def _update_floating_panels_position(self):
         """Update position of floating panels based on widget position.
@@ -596,7 +608,7 @@ to avoid clipping issues and enable proper text rendering.
         sets each lobe active if its name appears in the stored list.
         """
         sources = get_config('ui.audio_sources')
-        if sources is None:
+        if sources is None or not isinstance(sources, list):
             return
         self.mic_lobe.is_active = ('mic' in sources)
         self.system_lobe.is_active = ('system' in sources)
@@ -668,6 +680,22 @@ to avoid clipping issues and enable proper text rendering.
     def _hide_error(self):
         """Hide error indicator."""
         self._error_indicator.hide()
+    
+    def _show_resource_warning(self, message):
+        """Show resource warning indicator on the main widget scene."""
+        self._warning_indicator.set_text(message)
+        self._warning_indicator.show()
+        # Auto-hide after 10 seconds
+        if self._warning_hide_timer is not None:
+            self._warning_hide_timer.stop()
+        self._warning_hide_timer = QTimer(self)
+        self._warning_hide_timer.setSingleShot(True)
+        self._warning_hide_timer.timeout.connect(self._hide_resource_warning)
+        self._warning_hide_timer.start(10000)
+    
+    def _hide_resource_warning(self):
+        """Hide resource warning indicator."""
+        self._warning_indicator.hide()
     
     def _on_controller_state_change(self, state):
         """Handle controller state changes."""
@@ -1320,7 +1348,12 @@ class ErrorIndicatorItem(QGraphicsRectItem):
         self.parent_widget = parent_widget
         self._text = ""
         self._visible = False
-        
+        self._color_mode = "error"  # "error" (red) or "warning" (orange)
+
+    def set_color_mode(self, mode: str):
+        """Set color mode: 'error' for red, 'warning' for orange."""
+        self._color_mode = mode
+    
     def set_text(self, text):
         """Set the error message text."""
         self._text = text
@@ -1343,9 +1376,12 @@ class ErrorIndicatorItem(QGraphicsRectItem):
         
         rect = self.rect()
         
-        # Background - red translucent
-        painter.setBrush(QBrush(QColor(255, 50, 50, 180)))
-        painter.setPen(QPen(QColor(255, 100, 100, 255), 1))
+        if self._color_mode == "warning":
+            painter.setBrush(QBrush(QColor(255, 152, 0, 200)))
+            painter.setPen(QPen(QColor(255, 183, 77, 255), 1))
+        else:
+            painter.setBrush(QBrush(QColor(255, 50, 50, 180)))
+            painter.setPen(QPen(QColor(255, 100, 100, 255), 1))
         painter.drawRoundedRect(rect, 3, 3)
         
         # Text

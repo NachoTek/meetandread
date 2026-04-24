@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QTextBrowser, QProgressBar,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
-from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
+from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1263,6 +1263,25 @@ class FloatingTranscriptPanel(QWidget):
 
 
 # Settings panel (similar floating approach)
+
+
+class BudgetProgressBar(QProgressBar):
+    """Progress bar that draws a red vertical line at the budget threshold."""
+
+    def __init__(self, budget_percent: float = 80.0, parent=None):
+        super().__init__(parent)
+        self._budget_percent = budget_percent
+
+    def paintEvent(self, event):
+        """Paint the progress bar then overlay a red budget marker."""
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setPen(QPen(QColor(255, 60, 60, 220), 2))
+        x = int(self.width() * self._budget_percent / 100.0)
+        painter.drawLine(x, 0, x, self.height())
+        painter.end()
+
+
 class FloatingSettingsPanel(QWidget):
     """Floating settings panel with model selection and performance monitoring."""
     
@@ -1278,16 +1297,20 @@ class FloatingSettingsPanel(QWidget):
     )
 
     def __init__(self, parent: Optional[QWidget] = None,
-                 controller: object = None, tray_manager: object = None):
+                 controller: object = None, tray_manager: object = None,
+                 main_widget: object = None):
         super().__init__(parent)
         
         # Store optional references
         self._controller = controller
         self._tray_manager = tray_manager
+        self._main_widget = main_widget
 
         # -- Performance backend instances (wired in T03) --
         self._resource_monitor = ResourceMonitor(
             poll_interval_ms=2000,
+            cpu_warning_percent=80.0,
+            ram_warning_percent=85.0,
             on_snapshot=self._on_resource_snapshot,
             on_warning=self._on_resource_warning,
         )
@@ -1492,7 +1515,7 @@ class FloatingSettingsPanel(QWidget):
         ram_lbl.setFixedWidth(36)
         ram_lbl.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
         ram_row.addWidget(ram_lbl)
-        self._ram_bar = QProgressBar()
+        self._ram_bar = BudgetProgressBar(budget_percent=85.0)
         self._ram_bar.setRange(0, 100)
         self._ram_bar.setValue(0)
         self._ram_bar.setFormat("%v%")
@@ -1507,7 +1530,7 @@ class FloatingSettingsPanel(QWidget):
         cpu_lbl.setFixedWidth(36)
         cpu_lbl.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
         cpu_row.addWidget(cpu_lbl)
-        self._cpu_bar = QProgressBar()
+        self._cpu_bar = BudgetProgressBar(budget_percent=80.0)
         self._cpu_bar.setRange(0, 100)
         self._cpu_bar.setValue(0)
         self._cpu_bar.setFormat("%v%")
@@ -1746,18 +1769,18 @@ class FloatingSettingsPanel(QWidget):
         self._ram_bar.setValue(int(snapshot.ram_percent))
         self._cpu_bar.setValue(int(snapshot.cpu_percent))
 
-        # Color-code RAM bar: green → yellow → red
+        # Color-code RAM bar: green → orange → red (budget: 85% orange, 90% red)
         if snapshot.ram_percent >= 90:
             self._ram_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#F44336"))
-        elif snapshot.ram_percent >= 75:
+        elif snapshot.ram_percent >= 85:
             self._ram_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#FF9800"))
         else:
             self._ram_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#4CAF50"))
 
-        # Color-code CPU bar: blue → yellow → red
+        # Color-code CPU bar: blue → orange → red (budget: 80% orange, 90% red)
         if snapshot.cpu_percent >= 90:
             self._cpu_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#F44336"))
-        elif snapshot.cpu_percent >= 75:
+        elif snapshot.cpu_percent >= 80:
             self._cpu_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#FF9800"))
         else:
             self._cpu_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#2196F3"))
@@ -1786,6 +1809,15 @@ class FloatingSettingsPanel(QWidget):
                 )
             except Exception as exc:
                 logger.debug("Failed to send tray notification: %s", exc)
+
+        # Also show warning on the main widget scene
+        if self._main_widget is not None:
+            try:
+                self._main_widget._show_resource_warning(
+                    f"⚠ High {resource_name.upper()}: {value:.0f}%"
+                )
+            except Exception as exc:
+                logger.debug("Failed to show main widget resource warning: %s", exc)
 
     def _check_hide_resource_warning(self) -> None:
         """Hide warning if resources are back to normal."""
