@@ -214,6 +214,12 @@ to avoid clipping issues and enable proper text rendering.
         
         # Restore persisted audio source selection
         self._restore_audio_sources()
+        
+        # Probe system audio loopback availability
+        self._probe_system_audio_availability()
+        
+        # Pulse animation timer (created lazily by _pulse_lobes)
+        self._pulse_timer: Optional[QTimer] = None
     
     def _create_floating_panels(self):
         """Create floating panels (separate QWidgets)."""
@@ -597,6 +603,61 @@ to avoid clipping issues and enable proper text rendering.
         self.mic_lobe.update()
         self.system_lobe.update()
     
+    def _probe_system_audio_availability(self):
+        """Probe system audio loopback availability and mark lobe if absent.
+
+        On non-Windows platforms or when pyaudiowpatch is not installed the
+        probe gracefully degrades — the lobe stays available (optimistic
+        default per failure-mode spec).
+        """
+        try:
+            from metamemory.audio.capture.devices import get_default_loopback_device
+            if get_default_loopback_device() is None:
+                self.system_lobe.set_unavailable(True)
+                logging.info("System audio lobe marked unavailable — no loopback device")
+            else:
+                logging.debug("System audio loopback device detected")
+        except Exception as exc:
+            # Optimistic: keep lobe available on probe errors
+            logging.warning("System audio probe failed, keeping lobe available: %s", exc)
+    
+    def _pulse_lobes(self):
+        """Animate both lobes with an opacity pulse for ~2 seconds.
+
+        Oscillates ``_pulse_opacity`` between 0.3 and 1.0 over 4-5 cycles
+        (20 ticks at 100 ms = 2 s), then resets to 1.0 and stops.
+        """
+        if self._pulse_timer is not None:
+            self._pulse_timer.stop()
+        
+        tick_count = 0
+        
+        def _tick():
+            nonlocal tick_count
+            tick_count += 1
+            # Sinusoidal oscillation: 0.3 → 1.0 → 0.3 …
+            # 4 cycles over 20 ticks → period = 5 ticks
+            import math
+            phase = (tick_count % 5) / 5.0 * 2 * math.pi
+            opacity = 0.65 + 0.35 * math.cos(phase)  # ranges [0.3, 1.0]
+            
+            self.mic_lobe._pulse_opacity = opacity
+            self.system_lobe._pulse_opacity = opacity
+            self.mic_lobe.update()
+            self.system_lobe.update()
+            
+            if tick_count >= 20:
+                # Reset and stop
+                self.mic_lobe._pulse_opacity = 1.0
+                self.system_lobe._pulse_opacity = 1.0
+                self.mic_lobe.update()
+                self.system_lobe.update()
+                self._pulse_timer.stop()
+        
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(_tick)
+        self._pulse_timer.start(100)
+    
     def _show_error(self, message):
         """Show error indicator with message."""
         self._error_indicator.set_text(message)
@@ -615,6 +676,10 @@ to avoid clipping issues and enable proper text rendering.
             self.is_processing = False
             self.record_button.set_recording_state(True)
             self._hide_error()
+            # Lock lobes during recording
+            self.mic_lobe.set_locked(True)
+            self.system_lobe.set_locked(True)
+            logging.debug("Lobes locked (RECORDING)")
             
             # Show floating transcript panel when recording starts
             if self._floating_transcript_panel:
@@ -628,8 +693,10 @@ to avoid clipping issues and enable proper text rendering.
                 self._floating_transcript_panel._tab_widget.setCurrentIndex(0)
             
         elif state == ControllerState.STARTING:
-            # No visual change during startup — wait for RECORDING or ERROR
-            pass
+            # Lock lobes during startup phase too
+            self.mic_lobe.set_locked(True)
+            self.system_lobe.set_locked(True)
+            logging.debug("Lobes locked (STARTING)")
             
         elif state == ControllerState.STOPPING:
             self.is_recording = False
@@ -642,15 +709,20 @@ to avoid clipping issues and enable proper text rendering.
             self.is_processing = False
             self.record_button.set_recording_state(False)
             self.record_button.set_processing_state(False)
-            
-            # Keep transcript panel visible for review
-            # User can manually close it or it will be cleared on next recording
+            # Unlock lobes when idle
+            self.mic_lobe.set_locked(False)
+            self.system_lobe.set_locked(False)
+            logging.debug("Lobes unlocked (IDLE)")
             
         elif state == ControllerState.ERROR:
             self.is_recording = False
             self.is_processing = False
             self.record_button.set_recording_state(False)
             self.record_button.set_processing_state(False)
+            # Unlock lobes on error so user can adjust
+            self.mic_lobe.set_locked(False)
+            self.system_lobe.set_locked(False)
+            logging.debug("Lobes unlocked (ERROR)")
         
         # Forward state to tray icon manager
         if self._tray_manager is not None:
@@ -784,6 +856,7 @@ to avoid clipping issues and enable proper text rendering.
         sources = self._get_selected_sources()
         
         if not sources:
+            self._pulse_lobes()
             self._show_error("Select mic or system audio first")
             return
         
@@ -1037,6 +1110,9 @@ class ToggleLobeItem(QGraphicsEllipseItem):
         self.lobe_type = lobe_type
         self.parent_widget = parent_widget
         self.is_active = False
+        self._is_locked: bool = False
+        self._is_unavailable: bool = False
+        self._pulse_opacity: float = 1.0
         
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1058,53 +1134,84 @@ class ToggleLobeItem(QGraphicsEllipseItem):
         super().hoverLeaveEvent(event)
     
     def paint(self, painter, option, widget=None):
-        """Paint the lobe with hover glow effect."""
+        """Paint the lobe with hover glow effect.
+
+        Rendering priority: unavailable > locked > normal (active/inactive).
+        When pulsing, all alphas are multiplied by ``_pulse_opacity``.
+        """
         rect = self.rect()
         
-        # Hover glow (subtle outer ring)
-        if self._hovered:
+        # Hover glow (subtle outer ring) — suppressed for unavailable
+        if self._hovered and not self._is_unavailable:
             for i in range(2, 0, -1):
                 glow_alpha = 40 if self.is_active else 25
                 painter.setBrush(QBrush(QColor(255, 255, 255, glow_alpha // i)))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(rect.adjusted(-i * 3, -i * 3, i * 3, i * 3))
         
-        if self.is_active:
+        # --- State-dependent rendering (priority: unavailable > locked > normal) ---
+        if self._is_unavailable:
+            # Dim reddish tint with pulse scaling
+            fill_alpha = int(100 * self._pulse_opacity)
+            border_alpha = int(140 * self._pulse_opacity)
+            painter.setBrush(QBrush(QColor(120, 80, 80, fill_alpha)))
+            painter.setPen(QPen(QColor(160, 100, 100, border_alpha), 2))
+            painter.drawEllipse(rect)
+            # Diagonal line through icon area
+            painter.setPen(QPen(QColor(255, 80, 80, int(180 * self._pulse_opacity)), 2))
+            painter.drawLine(int(rect.left() + 10), int(rect.top() + 10),
+                             int(rect.right() - 10), int(rect.bottom() - 10))
+        elif self._is_locked:
+            # Locked — dimmed via reduced opacity
+            painter.save()
+            painter.setOpacity(0.4)
+            if self.is_active:
+                painter.setBrush(QBrush(QColor(100, 200, 100, 200)))
+                painter.setPen(QPen(QColor(150, 255, 150, 255), 2))
+            else:
+                painter.setBrush(QBrush(QColor(100, 100, 100, 150)))
+                painter.setPen(QPen(QColor(150, 150, 150, 200), 2))
+            painter.drawEllipse(rect)
+            painter.restore()
+        elif self.is_active:
             # Active state - bright, boosted on hover
-            fill_alpha = 230 if self._hovered else 200
+            fill_alpha = int((230 if self._hovered else 200) * self._pulse_opacity)
+            border_alpha = int(255 * self._pulse_opacity)
             painter.setBrush(QBrush(QColor(100, 200, 100, fill_alpha)))
-            painter.setPen(QPen(QColor(150, 255, 150, 255), 2))
+            painter.setPen(QPen(QColor(150, 255, 150, border_alpha), 2))
+            painter.drawEllipse(rect)
         else:
             # Inactive state - dim, brightened on hover
-            fill_alpha = 190 if self._hovered else 150
-            border_alpha = 240 if self._hovered else 200
+            fill_alpha = int((190 if self._hovered else 150) * self._pulse_opacity)
+            border_alpha = int((240 if self._hovered else 200) * self._pulse_opacity)
             fill_val = 140 if self._hovered else 100
             border_val = 200 if self._hovered else 150
             painter.setBrush(QBrush(QColor(fill_val, fill_val, fill_val, fill_alpha)))
             painter.setPen(QPen(QColor(border_val, border_val, border_val, border_alpha), 2))
+            painter.drawEllipse(rect)
         
-        painter.drawEllipse(rect)
-        
-        # Draw icon
-        painter.setPen(QPen(QColor(255, 255, 255, 255), 2))
-        center = rect.center()
-        
-        if self.lobe_type == "microphone":
-            # Simple mic icon
-            painter.drawLine(int(center.x()), int(center.y() - 8), 
-                           int(center.x()), int(center.y() + 4))
-            painter.drawArc(int(center.x() - 6), int(center.y() - 4), 12, 12, 
-                          0, 180 * 16)
-        else:
-            # Simple speaker icon
-            painter.drawPolygon([
-                QPointF(center.x() - 4, center.y() - 6),
-                QPointF(center.x() + 2, center.y() - 6),
-                QPointF(center.x() + 6, center.y() - 10),
-                QPointF(center.x() + 6, center.y() + 10),
-                QPointF(center.x() + 2, center.y() + 6),
-                QPointF(center.x() - 4, center.y() + 6)
-            ])
+        # Draw icon — suppressed for unavailable (diagonal line replaces it)
+        if not self._is_unavailable:
+            icon_alpha = int(255 * self._pulse_opacity) if not self._is_locked else int(255 * 0.4)
+            painter.setPen(QPen(QColor(255, 255, 255, icon_alpha), 2))
+            center = rect.center()
+            
+            if self.lobe_type == "microphone":
+                # Simple mic icon
+                painter.drawLine(int(center.x()), int(center.y() - 8), 
+                               int(center.x()), int(center.y() + 4))
+                painter.drawArc(int(center.x() - 6), int(center.y() - 4), 12, 12, 
+                              0, 180 * 16)
+            else:
+                # Simple speaker icon
+                painter.drawPolygon([
+                    QPointF(center.x() - 4, center.y() - 6),
+                    QPointF(center.x() + 2, center.y() - 6),
+                    QPointF(center.x() + 6, center.y() - 10),
+                    QPointF(center.x() + 6, center.y() + 10),
+                    QPointF(center.x() + 2, center.y() + 6),
+                    QPointF(center.x() - 4, center.y() + 6)
+                ])
     
     def mousePressEvent(self, event):
         """Accept press to get release event — action fires on release."""
@@ -1114,11 +1221,33 @@ class ToggleLobeItem(QGraphicsEllipseItem):
     def mouseReleaseEvent(self, event):
         """Toggle on release, only if this wasn't a drag."""
         if event.button() == Qt.MouseButton.LeftButton:
+            # Prevent toggle when locked or unavailable
+            if self._is_locked or self._is_unavailable:
+                event.accept()
+                return
             if not self.parent_widget.is_dragging and not self.parent_widget._click_consumed:
                 self.is_active = not self.is_active
                 self.update()
                 self.parent_widget._on_lobe_toggled()
             event.accept()
+
+    def set_locked(self, locked: bool) -> None:
+        """Set the locked state (dimmed, non-interactive during recording)."""
+        self._is_locked = locked
+        self.setCursor(
+            Qt.CursorShape.ForbiddenCursor if locked
+            else Qt.CursorShape.PointingHandCursor
+        )
+        self.update()
+
+    def set_unavailable(self, unavailable: bool) -> None:
+        """Set the unavailable state (reddish tint, no loopback device)."""
+        self._is_unavailable = unavailable
+        self.setCursor(
+            Qt.CursorShape.ForbiddenCursor if unavailable
+            else Qt.CursorShape.PointingHandCursor
+        )
+        self.update()
 
 
 class SettingsLobeItem(QGraphicsEllipseItem):
