@@ -146,7 +146,7 @@ to avoid clipping issues and enable proper text rendering.
 
         # Docking state
         self.is_docked = False
-        self.dock_edge = None  # 'left', 'right', 'top', 'bottom'
+        self.dock_edge = None  # 'left', 'right'
         self._slide_state = _SlideState()
         
         # Recording controller
