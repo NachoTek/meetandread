@@ -2,6 +2,12 @@
 
 Provides directory resolution and filename generation for audio recordings.
 Uses platform-agnostic paths via pathlib.
+
+Directory layout under ~/Documents/metamemory/:
+    recordings/      — WAV files and PCM parts
+    transcripts/     — Markdown transcript files
+    speaker_signatures.db — Voice signature database (in recordings/)
+    debug/           — Debug audio dumps
 """
 
 from datetime import datetime
@@ -12,33 +18,60 @@ from typing import Optional
 # Default subdirectory name within user's Documents folder
 DEFAULT_RECORDINGS_SUBDIR = "metamemory"
 
+# Subdirectory names within the base data directory
+RECORDINGS_SUBDIR = "recordings"
+TRANSCRIPTS_SUBDIR = "transcripts"
 
-def get_recordings_dir(base_dir: Optional[Path] = None) -> Path:
-    """Resolve and create the recordings directory.
+
+def get_data_dir(base_dir: Optional[Path] = None) -> Path:
+    """Resolve and create the base data directory.
 
     Args:
         base_dir: Optional override for the base directory. If None, uses
             ~/Documents/{DEFAULT_RECORDINGS_SUBDIR}.
 
     Returns:
-        Path to the recordings directory (created if it didn't exist).
-
-    Examples:
-        >>> # Default behavior - creates ~/Documents/metamemory/
-        >>> recordings_dir = get_recordings_dir()
-        >>>
-        >>> # Test override - use temporary directory
-        >>> from pathlib import Path
-        >>> recordings_dir = get_recordings_dir(base_dir=Path("/tmp/test"))
+        Path to the base data directory (created if it didn't exist).
     """
     if base_dir is None:
-        # Use user's Documents folder
         base_dir = Path.home() / "Documents"
     
-    recordings_dir = base_dir / DEFAULT_RECORDINGS_SUBDIR
-    recordings_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = base_dir / DEFAULT_RECORDINGS_SUBDIR
+    data_dir.mkdir(parents=True, exist_ok=True)
     
+    return data_dir
+
+
+def get_recordings_dir(base_dir: Optional[Path] = None) -> Path:
+    """Resolve and create the recordings subdirectory.
+
+    Args:
+        base_dir: Optional override for the base directory. If None, uses
+            ~/Documents/{DEFAULT_RECORDINGS_SUBDIR}/{RECORDINGS_SUBDIR}.
+
+    Returns:
+        Path to the recordings directory (created if it didn't exist).
+    """
+    data_dir = get_data_dir(base_dir)
+    recordings_dir = data_dir / RECORDINGS_SUBDIR
+    recordings_dir.mkdir(parents=True, exist_ok=True)
     return recordings_dir
+
+
+def get_transcripts_dir(base_dir: Optional[Path] = None) -> Path:
+    """Resolve and create the transcripts subdirectory.
+
+    Args:
+        base_dir: Optional override for the base directory. If None, uses
+            ~/Documents/{DEFAULT_RECORDINGS_SUBDIR}/{TRANSCRIPTS_SUBDIR}.
+
+    Returns:
+        Path to the transcripts directory (created if it didn't exist).
+    """
+    data_dir = get_data_dir(base_dir)
+    transcripts_dir = data_dir / TRANSCRIPTS_SUBDIR
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    return transcripts_dir
 
 
 def new_recording_stem(now: Optional[datetime] = None) -> str:

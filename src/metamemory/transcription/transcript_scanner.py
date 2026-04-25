@@ -136,20 +136,22 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
 
 
 def scan_recordings(recordings_dir: Optional[Path] = None) -> List[RecordingMeta]:
-    """Scan the recordings directory for saved transcript files.
+    """Scan the transcripts directory for saved transcript files.
 
     Glob for ``*.md`` files, skip any ``*_enhanced.md`` (backwards compat),
     parse each one, and return a list sorted newest-first by recording_time.
 
     Args:
         recordings_dir: Directory to scan. Defaults to
-            ``get_recordings_dir()`` when None.
+            ``get_transcripts_dir()`` when None.
 
     Returns:
         List of RecordingMeta sorted by recording_time descending.
     """
+    from metamemory.audio.storage.paths import get_transcripts_dir
+    
     if recordings_dir is None:
-        recordings_dir = get_recordings_dir()
+        recordings_dir = get_transcripts_dir()
 
     if not recordings_dir.exists():
         logger.info("Recordings directory does not exist: %s", recordings_dir)

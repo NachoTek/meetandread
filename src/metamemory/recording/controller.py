@@ -298,11 +298,12 @@ class RecordingController:
             
             # Schedule post-processing with stronger model
             if self._post_processor and self._last_wav_path and self._transcript_store:
+                from metamemory.audio.storage.paths import get_transcripts_dir
                 print("DEBUG: Scheduling post-processing job...")
                 job = self._post_processor.schedule_post_process(
                     audio_file=self._last_wav_path,
                     realtime_transcript=self._transcript_store,
-                    output_dir=self._last_wav_path.parent
+                    output_dir=get_transcripts_dir()
                 )
                 self._post_process_job_id = job.job_id
                 print(f"DEBUG: Post-processing job scheduled: {job.job_id}")
@@ -587,6 +588,7 @@ class RecordingController:
         try:
             from metamemory.speaker.diarizer import Diarizer
             from metamemory.speaker.signatures import VoiceSignatureStore
+            from metamemory.audio.storage.paths import get_recordings_dir
         except ImportError:
             logger.warning(
                 "sherpa-onnx not installed — speaker diarization skipped. "
@@ -624,7 +626,7 @@ class RecordingController:
             )
 
             # (2) Match speaker embeddings against known signatures
-            db_path = wav_path.parent / "speaker_signatures.db"
+            db_path = get_recordings_dir() / "speaker_signatures.db"
             with VoiceSignatureStore(db_path=db_path) as store:
                 for label, sig in result.signatures.items():
                     match = store.find_match(
@@ -697,9 +699,12 @@ class RecordingController:
             return None
         
         try:
+            from metamemory.audio.storage.paths import get_transcripts_dir
+            
             # Create transcript filename based on WAV filename
             wav_stem = self._last_wav_path.stem
-            transcript_path = self._last_wav_path.parent / f"{wav_stem}.md"
+            transcripts_dir = get_transcripts_dir()
+            transcript_path = transcripts_dir / f"{wav_stem}.md"
             
             # Save as markdown with metadata
             self._transcript_store.save_to_file(transcript_path)
@@ -767,7 +772,8 @@ class RecordingController:
         sig = result.signatures[raw_label]
 
         # Save or update the voice signature in the store
-        db_path = self._last_transcript_path.parent / "speaker_signatures.db"
+        from metamemory.audio.storage.paths import get_recordings_dir
+        db_path = get_recordings_dir() / "speaker_signatures.db"
         try:
             from metamemory.speaker.signatures import VoiceSignatureStore
             with VoiceSignatureStore(db_path=db_path) as store:

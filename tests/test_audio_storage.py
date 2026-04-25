@@ -37,13 +37,13 @@ class TestPathUtilities:
         recordings_dir = get_recordings_dir(base_dir=base_dir)
 
         assert recordings_dir.exists()
-        assert recordings_dir.name == "metamemory"
-        assert recordings_dir.parent == base_dir
+        assert recordings_dir.name == "recordings"
+        assert recordings_dir.parent.name == "metamemory"
 
     def test_get_recordings_dir_returns_existing(self, tmp_path: Path):
         """Existing directory is returned without error."""
         base_dir = tmp_path / "test_docs"
-        expected = base_dir / "metamemory"
+        expected = base_dir / "metamemory" / "recordings"
         expected.mkdir(parents=True)
 
         recordings_dir = get_recordings_dir(base_dir=base_dir)

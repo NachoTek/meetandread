@@ -12,6 +12,7 @@ Key components:
 
 from metamemory.audio.storage.paths import (
     get_recordings_dir,
+    get_transcripts_dir,
     new_recording_stem,
     get_part_filename,
     get_part_metadata_filename,
@@ -37,6 +38,7 @@ from metamemory.audio.storage.recovery import (
 __all__ = [
     # paths
     "get_recordings_dir",
+    "get_transcripts_dir",
     "new_recording_stem",
     "get_part_filename",
     "get_part_metadata_filename",

@@ -612,23 +612,27 @@ class TestControllerPinSpeaker:
 
     def test_pin_speaker_saves_signature(self, tmp_path):
         """pin_speaker_name saves to VoiceSignatureStore and re-tags words."""
-        ctrl = self._make_controller_with_result(tmp_path)
-        ctrl.pin_speaker_name("spk0", "Alice")
+        from unittest import mock
+        
+        # Mock get_recordings_dir to use tmp_path so DB lands in test dir
+        with mock.patch('metamemory.audio.storage.paths.get_recordings_dir', return_value=tmp_path):
+            ctrl = self._make_controller_with_result(tmp_path)
+            ctrl.pin_speaker_name("spk0", "Alice")
 
-        # Words should now be tagged with "Alice"
-        words = ctrl._transcript_store.get_all_words()
-        assert words[0].speaker_id == "Alice"
-        assert words[1].speaker_id == "Alice"
+            # Words should now be tagged with "Alice"
+            words = ctrl._transcript_store.get_all_words()
+            assert words[0].speaker_id == "Alice"
+            assert words[1].speaker_id == "Alice"
 
-        # Check the signature store has Alice
-        db_path = tmp_path / "speaker_signatures.db"
-        assert db_path.exists()
+            # Check the signature store has Alice
+            db_path = tmp_path / "speaker_signatures.db"
+            assert db_path.exists()
 
-        from metamemory.speaker.signatures import VoiceSignatureStore
-        with VoiceSignatureStore(str(db_path)) as store:
-            profiles = store.load_signatures()
-            names = [p.name for p in profiles]
-            assert "Alice" in names
+            from metamemory.speaker.signatures import VoiceSignatureStore
+            with VoiceSignatureStore(str(db_path)) as store:
+                profiles = store.load_signatures()
+                names = [p.name for p in profiles]
+                assert "Alice" in names
 
     def test_pin_speaker_no_result_no_crash(self, tmp_path):
         """pin_speaker_name gracefully handles missing diarization result."""
