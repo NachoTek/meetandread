@@ -1,0 +1,2 @@
+[console_scripts]
+meetandread = metamemory.main:main

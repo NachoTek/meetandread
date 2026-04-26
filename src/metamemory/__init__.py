@@ -4,7 +4,16 @@ Zero information loss during conversations — Users stay fully present
 knowing every word is captured for AI agent processing.
 """
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version, PackageNotFoundError
+
+    try:
+        __version__ = version("meetandread")
+    except PackageNotFoundError:
+        __version__ = "0.1.0"
+except Exception:
+    __version__ = "0.1.0"
+
 __author__ = "Tergi"
 
 # Public API exports

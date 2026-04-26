@@ -1,0 +1,60 @@
+Metadata-Version: 2.4
+Name: meetandread
+Version: 0.1.0
+Summary: Windows Desktop Audio Transcription Widget — zero information loss during conversations
+Author: Tergi
+License: MIT
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: Microsoft :: Windows
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Multimedia :: Sound/Audio
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: PyQt6>=6.4.0
+Requires-Dist: sounddevice>=0.4.6
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: soxr>=0.3.0
+Requires-Dist: comtypes>=1.2.0
+Requires-Dist: pyaudiowpatch>=0.2.12
+Requires-Dist: pywhispercpp>=1.3.0
+Requires-Dist: sherpa-onnx>=1.10.0
+Requires-Dist: psutil>=5.9.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: black>=22.0.0; extra == "dev"
+Requires-Dist: mypy>=1.0.0; extra == "dev"
+
+# meetandread
+
+Windows desktop audio transcription widget with dual-mode enhancement.
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the application
+python -m meetandread.main
+```
+
+## Development
+
+The project uses a widget-style interface built with QGraphicsView for smooth animations
+and complex visual components.
+
+## Project Structure
+
+```
+src/meetandread/
+├── __init__.py
+├── main.py                 # Application entry point
+└── widgets/
+    ├── __init__.py
+    └── main_widget.py      # Main QGraphicsView widget
+```

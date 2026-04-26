@@ -1,0 +1,14 @@
+PyQt6>=6.4.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+soxr>=0.3.0
+comtypes>=1.2.0
+pyaudiowpatch>=0.2.12
+pywhispercpp>=1.3.0
+sherpa-onnx>=1.10.0
+psutil>=5.9.0
+
+[dev]
+pytest>=7.0.0
+black>=22.0.0
+mypy>=1.0.0
