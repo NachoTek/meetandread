@@ -62,13 +62,15 @@ class TeeOutput:
         self.stdout = sys.stdout
         
     def write(self, message):
-        self.stdout.write(message)
-        self.stdout.flush()
+        if self.stdout is not None:
+            self.stdout.write(message)
+            self.stdout.flush()
         if message.strip():
             self.logger.debug(message.rstrip())
     
     def flush(self):
-        self.stdout.flush()
+        if self.stdout is not None:
+            self.stdout.flush()
 
 
 def setup_logging():
