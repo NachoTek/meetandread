@@ -63,10 +63,12 @@ tests/test_benchmark_accuracy.py
 tests/test_cli_fake_duration.py
 tests/test_confidence.py
 tests/test_config.py
+tests/test_config_benchmark_history.py
 tests/test_error_help.py
 tests/test_hardware.py
 tests/test_hardware_warning.py
 tests/test_performance.py
+tests/test_recommender_models.py
 tests/test_resource_warnings.py
 tests/test_speaker_pipeline.py
 tests/test_speaker_reid_benchmark.py

@@ -8,7 +8,7 @@ that floats outside the main widget bounds.
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
-    QSplitter, QTextBrowser, QProgressBar,
+    QSplitter, QTextBrowser, QProgressBar, QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen
@@ -1348,15 +1348,6 @@ class FloatingSettingsPanel(QWidget):
                 color: #ddd;
                 font-size: 12px;
             }
-            QRadioButton {
-                color: #ddd;
-                font-size: 12px;
-                spacing: 6px;
-            }
-            QRadioButton::indicator {
-                width: 14px;
-                height: 14px;
-            }
         """)
         
         # Layout
@@ -1443,30 +1434,57 @@ class FloatingSettingsPanel(QWidget):
         settings_layout.setContentsMargins(6, 6, 6, 6)
         settings_layout.setSpacing(5)
 
-        # Model selection
-        model_label = QLabel("Model Size:")
-        model_label.setStyleSheet(self._SECTION_LABEL_CSS)
-        settings_layout.addWidget(model_label)
-        
-        from PyQt6.QtWidgets import QButtonGroup, QRadioButton
-        
-        self.model_group = QButtonGroup(self)
-        models = [("tiny", "Tiny (fastest)"), ("base", "Base (balanced)"), ("small", "Small (accurate)")]
-        
-        for model_id, model_name in models:
-            btn = QRadioButton(model_name)
-            btn.setStyleSheet("color: #ddd;")
+        # Model selection — Live Model dropdown
+        live_model_label = QLabel("Live Model (real-time display):")
+        live_model_label.setStyleSheet(self._SECTION_LABEL_CSS)
+        settings_layout.addWidget(live_model_label)
 
-            # Emit signal when button is checked (toggled True)
-            btn.toggled.connect(
-                lambda checked, m=model_id: checked and self.model_changed.emit(m)
-            )
+        self._live_model_combo = QComboBox()
+        self._live_model_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #2a2a2a;
+                color: #ddd;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 12px;
+                min-height: 22px;
+            }
+            QComboBox:hover {
+                border-color: #4CAF50;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #aaa;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2a2a2a;
+                color: #ddd;
+                border: 1px solid #555;
+                selection-background-color: #37474F;
+                selection-color: #fff;
+            }
+        """)
+        self._populate_model_dropdown(self._live_model_combo, "realtime_model_size")
+        self._live_model_combo.currentIndexChanged.connect(self._on_live_model_changed)
+        settings_layout.addWidget(self._live_model_combo)
 
-            self.model_group.addButton(btn)
-            settings_layout.addWidget(btn)
+        # Model selection — Post Process Model dropdown
+        postprocess_model_label = QLabel("Post Process Model (archive quality):")
+        postprocess_model_label.setStyleSheet(self._SECTION_LABEL_CSS)
+        settings_layout.addWidget(postprocess_model_label)
 
-            if model_id == "tiny":
-                btn.setChecked(True)
+        self._postprocess_model_combo = QComboBox()
+        self._postprocess_model_combo.setStyleSheet(self._live_model_combo.styleSheet())
+        self._populate_model_dropdown(self._postprocess_model_combo, "postprocess_model_size")
+        self._postprocess_model_combo.currentIndexChanged.connect(self._on_postprocess_model_changed)
+        settings_layout.addWidget(self._postprocess_model_combo)
 
         # Hardware detection section
         hardware_label = QLabel("Hardware:")
@@ -1990,6 +2008,119 @@ class FloatingSettingsPanel(QWidget):
             "Benchmark complete: WER=%.3f, throughput=%.1fx, latency=%.2fs",
             result.wer, result.throughput_ratio, result.total_latency_s,
         )
+
+    # ------------------------------------------------------------------
+    # Model dropdown helpers
+    # ------------------------------------------------------------------
+
+    def _populate_model_dropdown(self, combo: QComboBox, config_key: str) -> None:
+        """Populate a model dropdown with all 5 models and WER annotations.
+
+        Reads benchmark_history from config and MODEL_SPECS for model info.
+        Sets the current selection from the config value.
+
+        Args:
+            combo: QComboBox to populate.
+            config_key: Config key within transcription settings
+                ('realtime_model_size' or 'postprocess_model_size').
+        """
+        combo.blockSignals(True)
+        combo.clear()
+
+        try:
+            from meetandread.config import get_config
+            settings = get_config()
+            benchmark_history = settings.transcription.benchmark_history
+            current_model = getattr(settings.transcription, config_key, "tiny")
+        except Exception:
+            benchmark_history = {}
+            current_model = "tiny"
+
+        model_order = ["tiny", "base", "small", "medium", "large"]
+        select_index = 0
+
+        for i, model_name in enumerate(model_order):
+            entry = benchmark_history.get(model_name)
+            if entry and "wer" in entry:
+                wer_pct = entry["wer"] * 100
+                item_text = f"{model_name} — WER: {wer_pct:.1f}%"
+            else:
+                item_text = f"{model_name} (not benchmarked)"
+
+            combo.addItem(item_text, model_name)
+
+            if model_name == current_model:
+                select_index = i
+
+        combo.setCurrentIndex(select_index)
+        combo.blockSignals(False)
+
+    def _on_live_model_changed(self, index: int) -> None:
+        """Handle Live Model dropdown selection change.
+
+        Updates config and emits model_changed signal.
+        """
+        model_size = self._live_model_combo.currentData()
+        if model_size is None:
+            return
+
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("transcription.realtime_model_size", model_size)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save live model selection: %s", exc)
+
+        self.model_changed.emit(model_size)
+        logger.info("Live model changed to: %s", model_size)
+
+    def _on_postprocess_model_changed(self, index: int) -> None:
+        """Handle Post Process Model dropdown selection change.
+
+        Updates config (no model_changed signal — that's for live model only).
+        """
+        model_size = self._postprocess_model_combo.currentData()
+        if model_size is None:
+            return
+
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("transcription.postprocess_model_size", model_size)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save post-process model selection: %s", exc)
+
+        logger.info("Post-process model changed to: %s", model_size)
+
+    def _refresh_dropdown_wer(self) -> None:
+        """Update all dropdown item texts with latest WER from config."""
+        self._populate_model_dropdown(self._live_model_combo, "realtime_model_size")
+        self._populate_model_dropdown(self._postprocess_model_combo, "postprocess_model_size")
+
+    def update_benchmark_display(self, wer_by_model: dict) -> None:
+        """Refresh both model dropdowns after benchmark completes.
+
+        Writes WER results to config and refreshes dropdown text.
+
+        Args:
+            wer_by_model: Dict mapping model_size -> WER float (0.0-1.0).
+        """
+        try:
+            from meetandread.config import get_config, set_config, save_config
+            settings = get_config()
+            history = dict(settings.transcription.benchmark_history)
+
+            from datetime import datetime
+            now = datetime.now().isoformat()
+            for model_size, wer in wer_by_model.items():
+                history[model_size] = {"wer": wer, "timestamp": now}
+
+            set_config("transcription.benchmark_history", history)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to update benchmark history in config: %s", exc)
+
+        self._refresh_dropdown_wer()
 
     def closeEvent(self, event):
         """Handle close event."""
