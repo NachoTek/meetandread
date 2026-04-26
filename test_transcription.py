@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, 'src')
 
 import numpy as np
-from metamemory.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult
+from meetandread.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult
 
 def test_segment_filtering():
     """Test the segment filtering logic."""

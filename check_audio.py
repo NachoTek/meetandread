@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, 'src')
 
 import numpy as np
-from metamemory.audio import AudioSession, SessionConfig, SourceConfig
+from meetandread.audio import AudioSession, SessionConfig, SourceConfig
 
 def check_audio_levels():
     """Check audio input levels from microphone."""

@@ -1,4 +1,4 @@
-# Metamemory Project Issues Log
+# MeetAndRead Project Issues Log
 
 ## Active Issues
 
@@ -22,7 +22,7 @@ After recording completion, the non-enhanced version of the transcript file cont
 - This affects the non-enhanced/raw version of the transcript
 
 #### Technical Details
-- Location: Transcript files saved in `~/Documents/metamemory/`
+- Location: Transcript files saved in `~/Documents/meetandread/`
 - File format: Markdown with timestamp
 - Related components:
   - `TranscriptStore` class
@@ -66,7 +66,7 @@ When `phrase_start=True` with "[BLANK_AUDIO]", the code returned early BEFORE cr
 Reordered the logic in `update_segment()` to create the phrase structure BEFORE checking for blank audio content.
 
 #### Changes Made
-- `src/metamemory/widgets/floating_panels.py`: Fixed phrase creation order in `update_segment()`
+- `src/meetandread/widgets/floating_panels.py`: Fixed phrase creation order in `update_segment()`
 - Added PyQt signal threading for thread-safe UI updates
 - Fixed segment indexing to properly track phrases
 

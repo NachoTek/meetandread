@@ -66,15 +66,15 @@ binaries += _collect(
 
 hiddenimports = [
     # Application
-    'metamemory',
-    'metamemory.main',
-    'metamemory.widgets.main_widget',
-    'metamemory.widgets.tray_icon',
-    'metamemory.audio',
-    'metamemory.config',
-    'metamemory.hardware',
-    'metamemory.hardware.detector',
-    'metamemory.hardware.recommender',
+    'meetandread',
+    'meetandread.main',
+    'meetandread.widgets.main_widget',
+    'meetandread.widgets.tray_icon',
+    'meetandread.audio',
+    'meetandread.config',
+    'meetandread.hardware',
+    'meetandread.hardware.detector',
+    'meetandread.hardware.recommender',
     # Native packages
     'pywhispercpp',
     'pywhispercpp.model',
@@ -93,7 +93,7 @@ hiddenimports = [
 # --- Analysis ---------------------------------------------------------------
 
 a = Analysis(
-    [os.path.join('src', 'metamemory', '__main__.py')],
+    [os.path.join('src', 'meetandread', '__main__.py')],
     pathex=[],
     binaries=binaries,
     datas=[],

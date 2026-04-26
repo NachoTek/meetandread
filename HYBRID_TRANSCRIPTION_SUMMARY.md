@@ -25,7 +25,7 @@ Successfully implemented the hybrid transcription system for meetings with:
 
 ### 1. AccumulatingTranscriptionProcessor
 
-**Location:** `src/metamemory/transcription/accumulating_processor.py`
+**Location:** `src/meetandread/transcription/accumulating_processor.py`
 
 **Key Features:**
 - **60-second window** for meeting context (configurable)
@@ -59,7 +59,7 @@ class PhraseResult:
 
 ### 2. Floating Panels (QWidget-based)
 
-**Location:** `src/metamemory/widgets/main_widget.py`
+**Location:** `src/meetandread/widgets/main_widget.py`
 
 **Improvement over QGraphicsItem panels:**
 - No clipping by main widget bounds
@@ -82,7 +82,7 @@ panel.update_line(text, confidence, is_final)
 
 ### 3. Controller Wiring
 
-**Location:** `src/metamemory/recording/controller.py`
+**Location:** `src/meetandread/recording/controller.py`
 
 **Architecture:**
 - Uses `AccumulatingTranscriptionProcessor` instead of `RealTimeTranscriptionProcessor`
@@ -152,16 +152,16 @@ Save enhanced transcript to recording-XXXX-enhanced.md
 ## Files Modified
 
 ### Core Implementation
-1. `src/metamemory/transcription/accumulating_processor.py` - Complete rewrite with 60s window
-2. `src/metamemory/transcription/__init__.py` - Added exports for new components
-3. `src/metamemory/transcription/engine.py` - Added progress_callback parameter
-4. `src/metamemory/widgets/main_widget.py` - Replaced graphics panels with floating panels
-5. `src/metamemory/recording/controller.py` - Wired accumulating transcription processor
+1. `src/meetandread/transcription/accumulating_processor.py` - Complete rewrite with 60s window
+2. `src/meetandread/transcription/__init__.py` - Added exports for new components
+3. `src/meetandread/transcription/engine.py` - Added progress_callback parameter
+4. `src/meetandread/widgets/main_widget.py` - Replaced graphics panels with floating panels
+5. `src/meetandread/recording/controller.py` - Wired accumulating transcription processor
 
 ### Existing Components (No Changes Needed)
-- `src/metamemory/transcription/transcript_store.py` - Already compatible with Word objects
-- `src/metamemory/transcription/post_processor.py` - Works with controller
-- `src/metamemory/widgets/floating_panels.py` - Already implemented, used by main_widget
+- `src/meetandread/transcription/transcript_store.py` - Already compatible with Word objects
+- `src/meetandread/transcription/post_processor.py` - Works with controller
+- `src/meetandread/widgets/floating_panels.py` - Already implemented, used by main_widget
 
 ## Deviations from Original Task
 

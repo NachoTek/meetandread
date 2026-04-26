@@ -11,7 +11,7 @@ Fixed:
 - Using local variable ensures correct tracking of new phrase starts
 
 How to verify:
-  1. Run: python -m metamemory
+  1. Run: python -m meetandread
   2. Speak: "Hello world"
   3. Wait 3+ seconds (silence)
   4. Speak: "This is new"

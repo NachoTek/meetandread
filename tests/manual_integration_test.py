@@ -293,7 +293,7 @@ def test_latency_measurement():
 
 
 if __name__ == "__main__":
-    print("\nMetamemory Transcription Pipeline Test")
+    print("\nMeetAndRead Transcription Pipeline Test")
     print("======================================\n")
     
     # Run tests

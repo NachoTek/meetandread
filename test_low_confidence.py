@@ -28,7 +28,7 @@ import sys
 FakeAudioModule = None
 if not '--guide-only' in sys.argv:
     sys.path.insert(0, str(Path(__file__).parent / 'src'))
-    from metamemory.audio.capture.fake_module import FakeAudioModule
+    from meetandread.audio.capture.fake_module import FakeAudioModule
     import queue
     import time
 
@@ -78,7 +78,7 @@ def test_noise_levels(wav_path: str) -> None:
     """
     Test different noise levels to see confidence scores.
     
-    This requires metamemory to be running with FakeAudioModule.
+    This requires meetandread to be running with FakeAudioModule.
     """
     print("\n" + "="*70)
     print("NOISE LEVEL GUIDE FOR LOW CONFIDENCE TESTING")
@@ -92,9 +92,9 @@ def test_noise_levels(wav_path: str) -> None:
     print("0.7 (high)    | 20-40%          | Heavy enhancement")
     print("1.0 (extreme) | <30%              | Near-complete enhancement")
     print()
-    print("USAGE IN METAMEMORY:")
+    print("USAGE IN MEETANDREAD:")
     print("-" * 70)
-    print("1. Start metamemory with FakeAudioModule enabled")
+    print("1. Start meetandread with FakeAudioModule enabled")
     print("2. Use settings panel to verify enhancement is enabled")
     print("3. Check enhancement threshold (default: 70%)")
     print("4. Speak naturally to generate baseline confidence")
@@ -186,7 +186,7 @@ def main():
         print(f"  {key}: {value}")
     
     print(f"\nExpected confidence range: {int(70 - args.noise * 70)}% - {int(100 - args.noise * 30)}%")
-    print(f"\nNote: To use with metamemory, modify the code to instantiate")
+    print(f"\nNote: To use with meetandread, modify the code to instantiate")
     print(f"      FakeAudioModule with noise_level parameter.")
 
 
