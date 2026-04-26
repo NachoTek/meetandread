@@ -8,7 +8,7 @@ that floats outside the main widget bounds.
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
-    QSplitter, QTextBrowser, QProgressBar, QComboBox,
+    QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen
@@ -299,9 +299,61 @@ class FloatingTranscriptPanel(QWidget):
             }
         """)
         self._history_list.itemClicked.connect(self._on_history_item_clicked)
+        # Enable context menu on history items
+        self._history_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._history_list.customContextMenuRequested.connect(self._on_history_context_menu)
         splitter.addWidget(self._history_list)
 
-        # Bottom: transcript viewer (read-only, supports anchor clicks)
+        # Bottom section: detail header bar + transcript viewer
+        viewer_container = QWidget()
+        viewer_layout = QVBoxLayout(viewer_container)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
+        viewer_layout.setSpacing(0)
+
+        # Detail header bar with Delete button (hidden until selection)
+        self._detail_header = QFrame()
+        self._detail_header.setStyleSheet("""
+            QFrame {
+                background-color: #252525;
+                border-bottom: 1px solid #444;
+                border-radius: 0px;
+            }
+        """)
+        detail_header_layout = QHBoxLayout(self._detail_header)
+        detail_header_layout.setContentsMargins(6, 2, 6, 2)
+        detail_header_layout.setSpacing(4)
+
+        detail_header_layout.addStretch()
+
+        self._delete_btn = QPushButton("🗑 Delete")
+        self._delete_btn.setFixedHeight(26)
+        self._delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a1a1a;
+                color: #F44336;
+                border: 1px solid #6a2a2a;
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #4a1a1a;
+                border-color: #F44336;
+            }
+            QPushButton:pressed {
+                background-color: #2a1010;
+            }
+        """)
+        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setToolTip("Delete this recording")
+        self._delete_btn.clicked.connect(self._on_delete_btn_clicked)
+        detail_header_layout.addWidget(self._delete_btn)
+
+        self._detail_header.hide()
+        viewer_layout.addWidget(self._detail_header)
+
+        # Transcript viewer (read-only, supports anchor clicks)
         self._history_viewer = QTextBrowser()
         self._history_viewer.setReadOnly(True)
         self._history_viewer.setStyleSheet("""
@@ -320,7 +372,9 @@ class FloatingTranscriptPanel(QWidget):
         self._history_viewer.setOpenExternalLinks(False)
         self._history_viewer.setOpenLinks(False)
         self._history_viewer.anchorClicked.connect(self._on_history_anchor_clicked)
-        splitter.addWidget(self._history_viewer)
+        viewer_layout.addWidget(self._history_viewer)
+
+        splitter.addWidget(viewer_container)
 
         # 40% list / 60% viewer
         splitter.setSizes([160, 240])
@@ -781,9 +835,11 @@ class FloatingTranscriptPanel(QWidget):
         if not md_path.exists():
             self._current_history_md_path = None
             self._history_viewer.setPlainText(f"(File not found: {md_path})")
+            self._detail_header.show()
             return
 
         self._current_history_md_path = md_path
+        self._detail_header.show()
         html = self._render_history_transcript(md_path)
         if html is not None:
             self._history_viewer.setHtml(html)
@@ -799,6 +855,118 @@ class FloatingTranscriptPanel(QWidget):
             if marker_idx != -1:
                 content = content[:marker_idx]
             self._history_viewer.setMarkdown(content)
+
+    # ------------------------------------------------------------------
+    # History delete functionality
+    # ------------------------------------------------------------------
+
+    def _on_history_context_menu(self, pos) -> None:
+        """Show context menu on history list items.
+
+        Args:
+            pos: Position relative to the history list widget.
+        """
+        item = self._history_list.itemAt(pos)
+        if item is None:
+            return
+
+        menu = QMenu(self._history_list)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2a2a2a;
+                color: #ddd;
+                border: 1px solid #555;
+                border-radius: 5px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 20px;
+                border-radius: 3px;
+            }
+            QMenu::item:selected {
+                background-color: #3a1a1a;
+                color: #F44336;
+            }
+        """)
+
+        delete_action = menu.addAction("🗑  Delete Recording")
+        delete_action.triggered.connect(lambda: self._delete_recording(item))
+        menu.exec(self._history_list.mapToGlobal(pos))
+
+    def _on_delete_btn_clicked(self) -> None:
+        """Handle Delete button click in the detail header."""
+        current = self._history_list.currentItem()
+        if current is None:
+            return
+        self._delete_recording(current)
+
+    def _delete_recording(self, item: QListWidgetItem) -> None:
+        """Delete a recording after user confirmation.
+
+        Extracts the .md path from the item, enumerates associated files,
+        shows a confirmation dialog, and performs the deletion.
+
+        Args:
+            item: The QListWidgetItem representing the recording.
+        """
+        md_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+
+        md_path = Path(md_path_str)
+        stem = md_path.stem  # filename without .md
+
+        # Build a human-readable name from the item display text
+        recording_name = item.text().split("|")[0].strip()
+
+        # Enumerate files to show count in confirmation
+        try:
+            from meetandread.recording.management import enumerate_recording_files, delete_recording
+            files = enumerate_recording_files(stem)
+        except Exception as exc:
+            logger.error("Failed to enumerate recording files: %s", exc)
+            files = []
+
+        file_count = len(files)
+
+        # Show confirmation dialog
+        parent = self.parent() if self.parent() else self
+        reply = QMessageBox.question(
+            parent,
+            "Delete Recording",
+            f"Delete '{recording_name}'?\n\n"
+            f"This will permanently remove {file_count} file{'s' if file_count != 1 else ''}.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        # Perform deletion
+        try:
+            count, deleted = delete_recording(stem)
+            logger.info(
+                "Deleted recording '%s': %d files removed",
+                recording_name, count,
+            )
+        except Exception as exc:
+            logger.error("Failed to delete recording '%s': %s", recording_name, exc)
+            QMessageBox.warning(
+                parent,
+                "Delete Failed",
+                f"Could not delete recording '{recording_name}'.\n\n{exc}",
+            )
+            return
+
+        # Clear viewer state
+        self._current_history_md_path = None
+        self._history_viewer.clear()
+        self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
+        self._detail_header.hide()
+
+        # Refresh the history list
+        self._refresh_history()
 
     # ------------------------------------------------------------------
     # History transcript rendering with clickable speaker anchors
