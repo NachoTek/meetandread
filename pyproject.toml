@@ -51,6 +51,7 @@ meetandread = "metamemory.main:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow (requires model download, deselect with '-m \"not slow\"')",
