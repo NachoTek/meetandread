@@ -1472,8 +1472,23 @@ class FloatingTranscriptPanel(QWidget):
         self._refresh_after_scrub()
 
     def _refresh_after_scrub(self) -> None:
-        """Refresh the history viewer after accept/reject."""
+        """Refresh the history list and viewer after accept/reject.
+
+        After accept the canonical transcript changes (word count may differ),
+        so the recording list must be repopulated.  After reject the list is
+        refreshed as well (harmless, ensures consistency).  The previously
+        selected item is re-selected so the user stays on the same recording.
+        """
         md_path = self._current_history_md_path
+
+        # Refresh the history list (word count may have changed after accept)
+        self._refresh_history()
+
+        # Re-select the item that was being viewed
+        if md_path is not None:
+            self._reselect_history_item(md_path)
+
+        # Refresh the viewer content
         if md_path is not None and md_path.exists():
             html = self._render_history_transcript(md_path)
             if html is not None:
@@ -1493,6 +1508,23 @@ class FloatingTranscriptPanel(QWidget):
             self._history_viewer.setPlaceholderText(
                 "Select a recording to view its transcript",
             )
+
+    def _reselect_history_item(self, md_path: Path) -> None:
+        """Re-select a history list item by its transcript path.
+
+        Called after the list is repopulated so the user stays on the
+        same recording they were viewing.
+
+        Args:
+            md_path: Path to the transcript .md file to re-select.
+        """
+        md_str = str(md_path)
+        for i in range(self._history_list.count()):
+            item = self._history_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == md_str:
+                self._history_list.setCurrentItem(item)
+                return
+        logger.debug("Could not re-select history item for %s", md_path)
 
     @staticmethod
     def _extract_transcript_body(md_path: Optional[Path]) -> str:

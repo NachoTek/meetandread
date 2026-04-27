@@ -228,3 +228,185 @@ class TestRejectScrub:
     def test_reject_idempotent(self, transcript_path: Path):
         # Sidecar doesn't exist — should not raise
         ScrubRunner.reject_scrub(transcript_path, "small")
+
+
+# ---------------------------------------------------------------------------
+# UI accept/reject workflow — history list refresh
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def qapp():
+    """Provide a QApplication for QWidget tests (one per session)."""
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
+
+
+@pytest.fixture
+def panel(qapp):
+    """Create a FloatingTranscriptPanel for testing."""
+    from meetandread.widgets.floating_panels import FloatingTranscriptPanel
+
+    p = FloatingTranscriptPanel()
+    yield p
+    p.close()
+
+
+class TestAcceptRejectUI:
+    """Test Accept/Reject workflow refreshes the history list and viewer."""
+
+    @staticmethod
+    def _fake_meta(path: Path, word_count: int, recording_time: str = "2026-04-26T12:00:00"):
+        """Build a minimal RecordingMeta-like object for _populate_history_list."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeMeta:
+            path: Path
+            recording_time: str
+            word_count: int
+            speaker_count: int
+            speakers: list
+            duration_seconds: float
+            wav_exists: bool
+
+        return FakeMeta(
+            path=path,
+            recording_time=recording_time,
+            word_count=word_count,
+            speaker_count=1,
+            speakers=["SPK_0"],
+            duration_seconds=30.0,
+            wav_exists=True,
+        )
+
+    def test_accept_updates_history_list_word_count(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """After accept, history list should reflect the new word count.
+
+        Simulates: populate list → select item → accept scrub → list refreshes
+        with updated word count from the new canonical transcript.
+        """
+        from meetandread.transcription.scrub import ScrubRunner
+
+        # Create canonical transcript (original, 2 words)
+        md_path = tmp_path / "recording-2026-04-26-120000.md"
+        md_path.write_text("# Transcript\n\nHello world\n")
+        md_str = str(md_path)
+
+        # Populate list with original word count (2)
+        panel._populate_history_list([self._fake_meta(md_path, word_count=2)])
+        assert panel._history_list.count() == 1
+
+        # Select the item
+        item = panel._history_list.item(0)
+        panel._history_list.setCurrentItem(item)
+        panel._current_history_md_path = md_path
+
+        # Create sidecar with more words (5)
+        sidecar = ScrubRunner.sidecar_path(md_path, "small")
+        sidecar.write_text("# Scrubbed\n\nOne two three four five\n")
+
+        # Set scrub state
+        panel._scrub_model_size = "small"
+        panel._is_comparison_mode = True
+
+        # Perform accept
+        ScrubRunner.accept_scrub(md_path, "small")
+
+        # Simulate the updated scan returning new word count
+        with patch.object(panel, "_refresh_history") as mock_refresh:
+            # Make _refresh_history actually repopulate with new word count
+            def do_refresh():
+                panel._populate_history_list(
+                    [self._fake_meta(md_path, word_count=5)]
+                )
+            mock_refresh.side_effect = do_refresh
+
+            panel._refresh_after_scrub()
+
+        # List should have been refreshed with new word count
+        assert panel._history_list.count() == 1
+        updated_item = panel._history_list.item(0)
+        assert "5 words" in updated_item.text()
+        # Item should be re-selected
+        assert panel._history_list.currentItem() is updated_item
+
+    def test_reject_restores_original_view(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """After reject, the viewer shows the original transcript and
+        the history list is still populated."""
+        from meetandread.transcription.scrub import ScrubRunner
+
+        # Create canonical transcript
+        md_path = tmp_path / "recording-2026-04-26-120000.md"
+        md_path.write_text("# Original\n\nOriginal content here\n")
+
+        # Create sidecar
+        sidecar = ScrubRunner.sidecar_path(md_path, "base")
+        sidecar.write_text("# Scrubbed\n\nScrubbed content\n")
+
+        # Populate and select
+        panel._populate_history_list([self._fake_meta(md_path, word_count=3)])
+        item = panel._history_list.item(0)
+        panel._history_list.setCurrentItem(item)
+        panel._current_history_md_path = md_path
+        panel._scrub_model_size = "base"
+        panel._is_comparison_mode = True
+
+        # Reject
+        ScrubRunner.reject_scrub(md_path, "base")
+
+        # Refresh — list should still be present
+        with patch.object(panel, "_refresh_history") as mock_refresh:
+            def do_refresh():
+                panel._populate_history_list(
+                    [self._fake_meta(md_path, word_count=3)]
+                )
+            mock_refresh.side_effect = do_refresh
+
+            panel._refresh_after_scrub()
+
+        # Original transcript unchanged
+        assert "Original content" in md_path.read_text()
+        # Sidecar gone
+        assert not sidecar.exists()
+        # List still populated and item selected
+        assert panel._history_list.count() == 1
+        assert panel._history_list.currentItem() is not None
+
+    def test_reselect_history_item_finds_matching(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_reselect_history_item selects the item matching the given path."""
+        from PyQt6.QtCore import Qt
+
+        md_path = tmp_path / "rec-abc.md"
+        md_path.write_text("test")
+
+        panel._populate_history_list([self._fake_meta(md_path, word_count=10)])
+        # Initially no selection
+        assert panel._history_list.currentItem() is None
+
+        panel._reselect_history_item(md_path)
+
+        selected = panel._history_list.currentItem()
+        assert selected is not None
+        assert selected.data(Qt.ItemDataRole.UserRole) == str(md_path)
+
+    def test_reselect_history_item_no_match(
+        self, panel, tmp_path: Path
+    ) -> None:
+        """_reselect_history_item is a no-op when path doesn't match any item."""
+        md_path = tmp_path / "nonexistent.md"
+
+        panel._populate_history_list([self._fake_meta(tmp_path / "other.md", word_count=5)])
+        panel._reselect_history_item(md_path)
+
+        # No crash, no selection
+        assert panel._history_list.currentItem() is None
