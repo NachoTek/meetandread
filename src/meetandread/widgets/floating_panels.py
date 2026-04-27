@@ -32,6 +32,7 @@ from meetandread.widgets.theme import (
     text_area_css, status_label_css, splitter_css, list_widget_css,
     detail_header_css, action_button_css, context_menu_css, dialog_css,
     badge_css, resize_grip_css, legend_overlay_css, info_label_css,
+    progress_bar_css, separator_css, combo_box_css,
 )
 
 import logging
@@ -1935,14 +1936,6 @@ class FloatingSettingsPanel(QWidget):
     closed = pyqtSignal()
     model_changed = pyqtSignal(str)  # Emit model name when changed
 
-    # -- shared dark-theme constants for performance widgets --
-    _SECTION_LABEL_CSS = "QLabel { color: #888; font-size: 11px; padding: 3px; }"
-    _BAR_CSS_TEMPLATE = (
-        "QProgressBar {{ border: 1px solid #555; border-radius: 4px;"
-        " background-color: #2a2a2a; text-align: center; color: #ddd; font-size: 11px; height: 16px; }}"
-        "QProgressBar::chunk {{ background-color: {color}; border-radius: 3px; }}"
-    )
-
     def __init__(self, parent: Optional[QWidget] = None,
                  controller: object = None, tray_manager: object = None,
                  main_widget: object = None):
@@ -1985,18 +1978,7 @@ class FloatingSettingsPanel(QWidget):
         self.setMinimumSize(280, 400)
         self.setMaximumSize(500, 800)
         
-        # Style — aligned with FloatingTranscriptPanel dark theme
-        self.setStyleSheet("""
-            FloatingSettingsPanel {
-                background-color: #1a1a1a;
-                border: 2px solid #444;
-                border-radius: 10px;
-            }
-            QLabel {
-                color: #ddd;
-                font-size: 12px;
-            }
-        """)
+        # Style — applied via _apply_theme() at end of __init__
         
         # Layout
         layout = QVBoxLayout(self)
@@ -2007,39 +1989,16 @@ class FloatingSettingsPanel(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setSpacing(5)
         
-        title = QLabel("Settings")
-        title.setStyleSheet("""
-            QLabel {
-                color: #4CAF50;
-                font-weight: bold;
-                font-size: 14px;
-                padding: 5px;
-            }
-        """)
-        header_layout.addWidget(title)
+        self._title_label = QLabel("Settings")
+        header_layout.addWidget(self._title_label)
         header_layout.addStretch()
         
-        close_btn = QPushButton("×")
-        close_btn.setFixedSize(24, 24)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #333;
-                color: #fff;
-                border: 1px solid #555;
-                border-radius: 12px;
-                font-size: 16px;
-                font-weight: bold;
-                padding: 0;
-            }
-            QPushButton:hover {
-                background-color: #F44336;
-                border-color: #F44336;
-            }
-        """)
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setToolTip("Close panel")
-        close_btn.clicked.connect(self.hide_panel)
-        header_layout.addWidget(close_btn)
+        self._close_btn = QPushButton("×")
+        self._close_btn.setFixedSize(24, 24)
+        self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_btn.setToolTip("Close panel")
+        self._close_btn.clicked.connect(self.hide_panel)
+        header_layout.addWidget(self._close_btn)
         
         layout.addLayout(header_layout)
 
@@ -2047,46 +2006,12 @@ class FloatingSettingsPanel(QWidget):
         self._resize_grip = QSizeGrip(self)
         self._resize_grip.setFixedSize(16, 16)
         self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        self._resize_grip.setStyleSheet("""
-            QSizeGrip {
-                background-color: rgba(255, 255, 255, 60);
-                border-radius: 3px;
-            }
-            QSizeGrip:hover {
-                background-color: rgba(255, 255, 255, 120);
-            }
-        """)
         self._resize_grip.show()
 
         # ------------------------------------------------------------------
         # Tab widget — Settings and Performance tabs
         # ------------------------------------------------------------------
         self._tab_widget = QTabWidget()
-        self._tab_widget.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #444;
-                border-radius: 5px;
-                background-color: #1a1a1a;
-            }
-            QTabBar::tab {
-                background-color: #2a2a2a;
-                color: #aaa;
-                padding: 6px 14px;
-                border: 1px solid #444;
-                border-bottom: none;
-                border-top-left-radius: 5px;
-                border-top-right-radius: 5px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background-color: #333;
-                color: #4CAF50;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover {
-                background-color: #3a3a3a;
-            }
-        """)
         layout.addWidget(self._tab_widget)
 
         # ------------------------------------------------------------------
@@ -2098,61 +2023,26 @@ class FloatingSettingsPanel(QWidget):
         settings_layout.setSpacing(5)
 
         # Model selection — Live Model dropdown
-        live_model_label = QLabel("Live Model (real-time display):")
-        live_model_label.setStyleSheet(self._SECTION_LABEL_CSS)
-        settings_layout.addWidget(live_model_label)
+        self._live_model_label = QLabel("Live Model (real-time display):")
+        settings_layout.addWidget(self._live_model_label)
 
         self._live_model_combo = QComboBox()
-        self._live_model_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2a2a2a;
-                color: #ddd;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 12px;
-                min-height: 22px;
-            }
-            QComboBox:hover {
-                border-color: #4CAF50;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid #aaa;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2a2a2a;
-                color: #ddd;
-                border: 1px solid #555;
-                selection-background-color: #37474F;
-                selection-color: #fff;
-            }
-        """)
         self._populate_model_dropdown(self._live_model_combo, "realtime_model_size")
         self._live_model_combo.currentIndexChanged.connect(self._on_live_model_changed)
         settings_layout.addWidget(self._live_model_combo)
 
         # Model selection — Post Process Model dropdown
-        postprocess_model_label = QLabel("Post Process Model (archive quality):")
-        postprocess_model_label.setStyleSheet(self._SECTION_LABEL_CSS)
-        settings_layout.addWidget(postprocess_model_label)
+        self._postprocess_model_label = QLabel("Post Process Model (archive quality):")
+        settings_layout.addWidget(self._postprocess_model_label)
 
         self._postprocess_model_combo = QComboBox()
-        self._postprocess_model_combo.setStyleSheet(self._live_model_combo.styleSheet())
         self._populate_model_dropdown(self._postprocess_model_combo, "postprocess_model_size")
         self._postprocess_model_combo.currentIndexChanged.connect(self._on_postprocess_model_changed)
         settings_layout.addWidget(self._postprocess_model_combo)
 
         # Hardware detection section
-        hardware_label = QLabel("Hardware:")
-        hardware_label.setStyleSheet(self._SECTION_LABEL_CSS)
-        settings_layout.addWidget(hardware_label)
+        self._hardware_label = QLabel("Hardware:")
+        settings_layout.addWidget(self._hardware_label)
 
         self.hardware_detector = HardwareDetector()
         self.model_recommender = ModelRecommender()
@@ -2162,14 +2052,13 @@ class FloatingSettingsPanel(QWidget):
         cpu_freq = self.hardware_detector.get_cpu_frequency()
         recommended = self.model_recommender.get_recommendation()
 
-        ram_label = QLabel(f"RAM: {ram_value:.1f} GB")
-        cpu_label = QLabel(f"CPU: {cpu_cores} cores @ {cpu_freq:.1f} GHz")
-        rec_label = QLabel(f"Recommended: {recommended}")
-        rec_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+        self._ram_label = QLabel(f"RAM: {ram_value:.1f} GB")
+        self._cpu_info_label = QLabel(f"CPU: {cpu_cores} cores @ {cpu_freq:.1f} GHz")
+        self._rec_label = QLabel(f"Recommended: {recommended}")
 
-        settings_layout.addWidget(ram_label)
-        settings_layout.addWidget(cpu_label)
-        settings_layout.addWidget(rec_label)
+        settings_layout.addWidget(self._ram_label)
+        settings_layout.addWidget(self._cpu_info_label)
+        settings_layout.addWidget(self._rec_label)
 
         settings_layout.addStretch()
         self._tab_widget.addTab(settings_tab, "Settings")
@@ -2183,132 +2072,77 @@ class FloatingSettingsPanel(QWidget):
         perf_layout.setSpacing(6)
 
         # --- Resource Usage Section ---
-        resource_header = QLabel("Resource Usage")
-        resource_header.setStyleSheet(
-            "QLabel { color: #4CAF50; font-weight: bold; font-size: 12px; padding: 2px; }"
-        )
-        perf_layout.addWidget(resource_header)
+        self._resource_header = QLabel("Resource Usage")
+        perf_layout.addWidget(self._resource_header)
 
         # RAM bar
         ram_row = QHBoxLayout()
         ram_row.setSpacing(6)
-        ram_lbl = QLabel("RAM:")
-        ram_lbl.setFixedWidth(36)
-        ram_lbl.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
-        ram_row.addWidget(ram_lbl)
+        self._ram_lbl = QLabel("RAM:")
+        self._ram_lbl.setFixedWidth(36)
+        ram_row.addWidget(self._ram_lbl)
         self._ram_bar = BudgetProgressBar(budget_percent=85.0)
         self._ram_bar.setRange(0, 100)
         self._ram_bar.setValue(0)
         self._ram_bar.setFormat("%v%")
-        self._ram_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#4CAF50"))
         ram_row.addWidget(self._ram_bar)
         perf_layout.addLayout(ram_row)
 
         # CPU bar
         cpu_row = QHBoxLayout()
         cpu_row.setSpacing(6)
-        cpu_lbl = QLabel("CPU:")
-        cpu_lbl.setFixedWidth(36)
-        cpu_lbl.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
-        cpu_row.addWidget(cpu_lbl)
+        self._cpu_lbl = QLabel("CPU:")
+        self._cpu_lbl.setFixedWidth(36)
+        cpu_row.addWidget(self._cpu_lbl)
         self._cpu_bar = BudgetProgressBar(budget_percent=80.0)
         self._cpu_bar.setRange(0, 100)
         self._cpu_bar.setValue(0)
         self._cpu_bar.setFormat("%v%")
-        self._cpu_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#2196F3"))
         cpu_row.addWidget(self._cpu_bar)
         perf_layout.addLayout(cpu_row)
 
         # Resource warning indicator (hidden by default)
         self._resource_warning = QLabel("⚠ Low Resource Warning")
-        self._resource_warning.setStyleSheet(
-            "QLabel { color: #FF9800; font-size: 11px; font-weight: bold; padding: 2px; }"
-        )
         self._resource_warning.hide()
         perf_layout.addWidget(self._resource_warning)
 
         # Separator
-        perf_sep = QFrame()
-        perf_sep.setFrameShape(QFrame.Shape.HLine)
-        perf_sep.setStyleSheet("QFrame { background-color: #444; max-height: 1px; border: none; }")
-        perf_layout.addWidget(perf_sep)
+        self._perf_sep = QFrame()
+        self._perf_sep.setFrameShape(QFrame.Shape.HLine)
+        perf_layout.addWidget(self._perf_sep)
 
         # --- Recording Metrics Section ---
-        rec_header = QLabel("Recording Metrics")
-        rec_header.setStyleSheet(
-            "QLabel { color: #4CAF50; font-weight: bold; font-size: 12px; padding: 2px; }"
-        )
-        perf_layout.addWidget(rec_header)
+        self._rec_metrics_header = QLabel("Recording Metrics")
+        perf_layout.addWidget(self._rec_metrics_header)
 
         self._metric_model = QLabel("Model: Not recording")
-        self._metric_model.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
         perf_layout.addWidget(self._metric_model)
 
         self._metric_buffer = QLabel("Buffer: Not recording")
-        self._metric_buffer.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
         perf_layout.addWidget(self._metric_buffer)
 
         self._metric_count = QLabel("Transcriptions: Not recording")
-        self._metric_count.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
         perf_layout.addWidget(self._metric_count)
 
         self._metric_throughput = QLabel("Throughput: Not recording")
-        self._metric_throughput.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
         perf_layout.addWidget(self._metric_throughput)
 
         # Separator
-        perf_sep2 = QFrame()
-        perf_sep2.setFrameShape(QFrame.Shape.HLine)
-        perf_sep2.setStyleSheet("QFrame { background-color: #444; max-height: 1px; border: none; }")
-        perf_layout.addWidget(perf_sep2)
+        self._perf_sep2 = QFrame()
+        self._perf_sep2.setFrameShape(QFrame.Shape.HLine)
+        perf_layout.addWidget(self._perf_sep2)
 
         # --- WER Display ---
         self._wer_label = QLabel("Last recording WER: —")
-        self._wer_label.setStyleSheet(
-            "QLabel { color: #ddd; font-size: 12px; font-weight: bold; padding: 2px; }"
-        )
         perf_layout.addWidget(self._wer_label)
 
         # --- Model Selector for Benchmark ---
         model_row = QHBoxLayout()
         model_row.setSpacing(6)
-        bench_model_lbl = QLabel("Benchmark Model:")
-        bench_model_lbl.setStyleSheet("QLabel { color: #aaa; font-size: 11px; }")
-        model_row.addWidget(bench_model_lbl)
+        self._bench_model_lbl = QLabel("Benchmark Model:")
+        model_row.addWidget(self._bench_model_lbl)
 
         self._benchmark_model_combo = QComboBox()
-        self._benchmark_model_combo.setStyleSheet("""
-            QComboBox {
-                background-color: #2a2a2a;
-                color: #ddd;
-                border: 1px solid #555;
-                border-radius: 4px;
-                padding: 4px 8px;
-                font-size: 11px;
-                min-width: 140px;
-            }
-            QComboBox:hover {
-                border-color: #4CAF50;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 6px solid #888;
-                margin-right: 5px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2a2a2a;
-                color: #ddd;
-                border: 1px solid #555;
-                selection-background-color: #4CAF50;
-                selection-color: #000;
-            }
-        """)
 
         # Populate with all 5 models, default to current live model
         try:
@@ -2338,42 +2172,14 @@ class FloatingSettingsPanel(QWidget):
 
         # --- Benchmark Button ---
         self._benchmark_btn = QPushButton("Run Benchmark")
-        self._benchmark_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #333;
-                color: #4CAF50;
-                border: 1px solid #555;
-                border-radius: 5px;
-                padding: 6px 12px;
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #3a3a3a;
-                border-color: #4CAF50;
-            }
-            QPushButton:pressed {
-                background-color: #2a2a2a;
-            }
-            QPushButton:disabled {
-                color: #666;
-                border-color: #444;
-            }
-        """)
         self._benchmark_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         perf_layout.addWidget(self._benchmark_btn)
 
         # --- Benchmark History ---
-        history_header = QLabel("Benchmark History")
-        history_header.setStyleSheet(
-            "QLabel { color: #888; font-size: 11px; padding: 2px; }"
-        )
-        perf_layout.addWidget(history_header)
+        self._history_header = QLabel("Benchmark History")
+        perf_layout.addWidget(self._history_header)
 
         self._benchmark_history_label = QLabel("No benchmarks yet")
-        self._benchmark_history_label.setStyleSheet(
-            "QLabel { color: #666; font-size: 11px; padding: 2px; }"
-        )
         self._benchmark_history_label.setWordWrap(True)
         perf_layout.addWidget(self._benchmark_history_label)
 
@@ -2390,6 +2196,18 @@ class FloatingSettingsPanel(QWidget):
         self._dragging = False
         self._drag_pos = None
 
+        # Apply initial theme to all widgets
+        self._apply_theme()
+
+        # Connect to desktop theme changes for live re-theming
+        try:
+            from PyQt6.QtGui import QGuiApplication
+            hints = QGuiApplication.styleHints()
+            if hints is not None:
+                hints.colorSchemeChanged.connect(lambda: self._apply_theme())
+        except (ImportError, RuntimeError):
+            pass
+
     def resizeEvent(self, event) -> None:
         """Reposition resize grip on resize."""
         if hasattr(self, '_resize_grip'):
@@ -2398,6 +2216,96 @@ class FloatingSettingsPanel(QWidget):
                 self.height() - self._resize_grip.height(),
             )
         super().resizeEvent(event)
+
+    # ------------------------------------------------------------------
+    # Adaptive theme
+    # ------------------------------------------------------------------
+
+    def _apply_theme(self) -> None:
+        """Apply theme-aware stylesheets to all settings panel widgets.
+
+        Idempotent and cheap — just re-sets stylesheets from the current
+        palette.  Called once at end of __init__ and on desktop theme change.
+        """
+        p = current_palette()
+        self._current_palette = p
+
+        # Panel base
+        self.setStyleSheet(panel_base_css(p, "FloatingSettingsPanel"))
+
+        # Header widgets
+        self._title_label.setStyleSheet(title_css(p))
+        self._close_btn.setStyleSheet(header_button_css(p, "close"))
+
+        # Resize grip
+        self._resize_grip.setStyleSheet(resize_grip_css(p))
+
+        # Tabs
+        self._tab_widget.setStyleSheet(tab_widget_css(p))
+
+        # Settings tab — section labels, combos, hardware labels
+        self._live_model_label.setStyleSheet(status_label_css(p))
+        self._live_model_combo.setStyleSheet(combo_box_css(p))
+        self._postprocess_model_label.setStyleSheet(status_label_css(p))
+        self._postprocess_model_combo.setStyleSheet(combo_box_css(p))
+        self._hardware_label.setStyleSheet(status_label_css(p))
+        self._ram_label.setStyleSheet(info_label_css(p))
+        self._cpu_info_label.setStyleSheet(info_label_css(p))
+        self._rec_label.setStyleSheet(
+            f"QLabel {{ font-weight: bold; color: {p.accent}; }}"
+        )
+
+        # Performance tab — section headers
+        self._resource_header.setStyleSheet(
+            f"QLabel {{ color: {p.accent}; font-weight: bold; font-size: 12px; padding: 2px; }}"
+        )
+
+        # RAM/CPU bar labels
+        self._ram_lbl.setStyleSheet(info_label_css(p))
+        self._cpu_lbl.setStyleSheet(info_label_css(p))
+
+        # Progress bars — semantic chunk colors stay constant
+        self._ram_bar.setStyleSheet(progress_bar_css(p, "#4CAF50"))
+        self._cpu_bar.setStyleSheet(progress_bar_css(p, "#2196F3"))
+
+        # Resource warning — semantic orange stays but text colour adapts
+        self._resource_warning.setStyleSheet(
+            f"QLabel {{ color: #FF9800; font-size: 11px; font-weight: bold; padding: 2px; }}"
+        )
+
+        # Separators
+        self._perf_sep.setStyleSheet(separator_css(p))
+        self._perf_sep2.setStyleSheet(separator_css(p))
+
+        # Recording metrics header
+        self._rec_metrics_header.setStyleSheet(
+            f"QLabel {{ color: {p.accent}; font-weight: bold; font-size: 12px; padding: 2px; }}"
+        )
+
+        # Metric labels
+        self._metric_model.setStyleSheet(info_label_css(p))
+        self._metric_buffer.setStyleSheet(info_label_css(p))
+        self._metric_count.setStyleSheet(info_label_css(p))
+        self._metric_throughput.setStyleSheet(info_label_css(p))
+
+        # WER label
+        self._wer_label.setStyleSheet(
+            f"QLabel {{ color: {p.text}; font-size: 12px; font-weight: bold; padding: 2px; }}"
+        )
+
+        # Benchmark section
+        self._bench_model_lbl.setStyleSheet(info_label_css(p))
+        self._benchmark_model_combo.setStyleSheet(
+            combo_box_css(p, accent_color=p.accent)
+        )
+        self._benchmark_btn.setStyleSheet(action_button_css(p, "benchmark"))
+        self._history_header.setStyleSheet(status_label_css(p))
+        self._benchmark_history_label.setStyleSheet(
+            f"QLabel {{ color: {p.text_disabled}; font-size: 11px; padding: 2px; }}"
+        )
+
+        scheme_name = "dark" if p is DARK_PALETTE else "light"
+        logger.info("Applied %s theme to FloatingSettingsPanel", scheme_name)
 
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""
@@ -2425,6 +2333,8 @@ class FloatingSettingsPanel(QWidget):
         """Animate window opacity from 0 → 1 over 150ms, then show."""
         if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
             self._fade_timer.stop()
+        # Re-apply theme on show (picks up any desktop theme change while hidden)
+        self._apply_theme()
         self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
@@ -2526,21 +2436,24 @@ class FloatingSettingsPanel(QWidget):
         self._ram_bar.setValue(int(snapshot.ram_percent))
         self._cpu_bar.setValue(int(snapshot.cpu_percent))
 
+        # Get current palette for theme-aware progress bar styling
+        p = current_palette()
+
         # Color-code RAM bar: green → orange → red (budget: 85% orange, 90% red)
         if snapshot.ram_percent >= 90:
-            self._ram_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#F44336"))
+            self._ram_bar.setStyleSheet(progress_bar_css(p, "#F44336"))
         elif snapshot.ram_percent >= 85:
-            self._ram_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#FF9800"))
+            self._ram_bar.setStyleSheet(progress_bar_css(p, "#FF9800"))
         else:
-            self._ram_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#4CAF50"))
+            self._ram_bar.setStyleSheet(progress_bar_css(p, "#4CAF50"))
 
         # Color-code CPU bar: blue → orange → red (budget: 80% orange, 90% red)
         if snapshot.cpu_percent >= 90:
-            self._cpu_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#F44336"))
+            self._cpu_bar.setStyleSheet(progress_bar_css(p, "#F44336"))
         elif snapshot.cpu_percent >= 80:
-            self._cpu_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#FF9800"))
+            self._cpu_bar.setStyleSheet(progress_bar_css(p, "#FF9800"))
         else:
-            self._cpu_bar.setStyleSheet(self._BAR_CSS_TEMPLATE.format(color="#2196F3"))
+            self._cpu_bar.setStyleSheet(progress_bar_css(p, "#2196F3"))
 
     def _on_resource_warning(self, resource_name: str, value: float, threshold: float) -> None:
         """Show resource warning indicator and optionally send tray notification.
@@ -2635,8 +2548,12 @@ class FloatingSettingsPanel(QWidget):
         Args:
             wer_value: WER as a float (0.0–1.0+), or None to reset.
         """
+        p = current_palette()
         if wer_value is None:
             self._wer_label.setText("Last recording WER: —")
+            self._wer_label.setStyleSheet(
+                f"QLabel {{ color: {p.text}; font-size: 12px; font-weight: bold; padding: 2px; }}"
+            )
         else:
             pct = wer_value * 100
             if wer_value <= 0.1:
@@ -2705,8 +2622,9 @@ class FloatingSettingsPanel(QWidget):
 
         if result.error:
             self._benchmark_history_label.setText(f"Benchmark failed: {result.error}")
+            p = current_palette()
             self._benchmark_history_label.setStyleSheet(
-                "QLabel { color: #F44336; font-size: 11px; padding: 2px; }"
+                f"QLabel {{ color: {p.danger}; font-size: 11px; padding: 2px; }}"
             )
             return
 
@@ -2768,8 +2686,9 @@ class FloatingSettingsPanel(QWidget):
             lines.append(f"#{i} {m}: WER {w:.1f}% | Speed {t:.1f}x{ts}")
 
         self._benchmark_history_label.setText("\n".join(lines))
+        p = current_palette()
         self._benchmark_history_label.setStyleSheet(
-            "QLabel { color: #aaa; font-size: 11px; padding: 2px; }"
+            f"QLabel {{ color: {p.text_tertiary}; font-size: 11px; padding: 2px; }}"
         )
 
         # Update the benchmark model dropdown to reflect new WER

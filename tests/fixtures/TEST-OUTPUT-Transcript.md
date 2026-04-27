@@ -1,12 +1,12 @@
 # Transcript
 
-**Recorded:** 2026-04-26T22:55:24.277783
+**Recorded:** 2026-04-27T00:53:40.143659
 
 
 ---
 
 <!-- METADATA: {
-  "recording_start_time": "2026-04-26T22:55:24.277783",
+  "recording_start_time": "2026-04-27T00:53:40.143659",
   "word_count": 0,
   "words": [],
   "segments": []

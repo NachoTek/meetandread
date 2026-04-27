@@ -33,6 +33,7 @@ from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config, AppSettings
 from meetandread.hardware.recommender import ModelRecommender, get_model_info
 from meetandread.widgets.floating_panels import FloatingTranscriptPanel, FloatingSettingsPanel
+from meetandread.widgets.theme import context_menu_css, current_palette
 import time as _time
 
 
@@ -211,16 +212,6 @@ to avoid clipping issues and enable proper text rendering.
             MeetAndReadWidget {
                 background: transparent;
                 border: none;
-            }
-            QMenu {
-                background-color: #2a2a2a;
-                color: #ddd;
-                border: 1px solid #555;
-                padding: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #4CAF50;
-                color: #fff;
             }
         """)
         
@@ -1074,7 +1065,9 @@ to avoid clipping issues and enable proper text rendering.
     
     def _show_context_menu(self, position):
         """Show context menu with Exit action."""
+        p = current_palette()
         menu = QMenu(self)
+        menu.setStyleSheet(context_menu_css(p, accent_color='#4CAF50'))
         exit_action = menu.addAction("Exit")
         exit_action.triggered.connect(self._exit_application)
         menu.exec(self.mapToGlobal(position))
