@@ -457,11 +457,17 @@ class FloatingTranscriptPanel(QWidget):
         self._last_scroll_value = 0
         self._is_at_bottom = True
         
+        # Pending content count for badge when auto-scroll is paused
+        self._pending_content_count: int = 0
+        
         # Connect to scrollbar value changed signal to detect manual scroll
         self.text_edit.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
         
         # Confidence legend overlay (initially hidden)
         self._create_legend_overlay()
+        
+        # New-content badge (initially hidden)
+        self._create_new_content_badge()
         
         # Recording duration tracking
         self._recording_start_time: Optional[float] = None
@@ -538,6 +544,56 @@ class FloatingTranscriptPanel(QWidget):
         self._position_legend_overlay()
         self._legend_overlay.hide()
 
+    # ------------------------------------------------------------------
+    # New-content badge (auto-scroll pause indicator)
+    # ------------------------------------------------------------------
+
+    def _create_new_content_badge(self) -> None:
+        """Build the '↓ N new' badge that appears when auto-scroll is paused."""
+        self._new_content_badge = QPushButton("↓ 0 new", self.text_edit)
+        self._new_content_badge.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(30, 30, 30, 210);
+                color: #ffffff;
+                border: 1px solid #666;
+                border-radius: 12px;
+                padding: 4px 14px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: rgba(60, 60, 60, 230);
+                border: 1px solid #888;
+            }
+            QPushButton:pressed {
+                background-color: rgba(80, 80, 80, 240);
+            }
+        """)
+        self._new_content_badge.setFixedSize(120, 32)
+        self._new_content_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_content_badge.clicked.connect(self._on_badge_clicked)
+        self._position_new_content_badge()
+        self._new_content_badge.hide()
+
+    def _position_new_content_badge(self) -> None:
+        """Position the badge at bottom-center of the text edit."""
+        if not hasattr(self, '_new_content_badge'):
+            return
+        te = self.text_edit
+        badge = self._new_content_badge
+        x = (te.width() - badge.width()) // 2
+        y = te.height() - badge.height() - 8
+        badge.move(max(x, 0), max(y, 0))
+
+    def _on_badge_clicked(self) -> None:
+        """Handle badge click: resume auto-scroll and hide badge."""
+        self._auto_scroll_paused = False
+        self._pause_timer.stop()
+        self._pending_content_count = 0
+        self._new_content_badge.hide()
+        self.status_label.setText("Recording...")
+        self._scroll_to_bottom()
+
     def _position_legend_overlay(self) -> None:
         """Position the legend overlay in the bottom-right corner of the text edit."""
         if not hasattr(self, '_legend_overlay'):
@@ -555,12 +611,15 @@ class FloatingTranscriptPanel(QWidget):
         self._legend_overlay.setVisible(visible)
 
     def resizeEvent(self, event) -> None:
-        """Reposition legend overlay on resize."""
+        """Reposition overlays on resize."""
         super().resizeEvent(event)
         if hasattr(self, '_legend_overlay') and self._legend_overlay.isVisible():
             self._position_legend_overlay()
-        """
-        Position panel next to a widget.
+        if hasattr(self, '_new_content_badge') and self._new_content_badge.isVisible():
+            self._position_new_content_badge()
+    
+    def dock_to_widget(self, widget, position: str = "right") -> None:
+        """Position panel next to a widget.
         
         Args:
             widget: The main widget to dock to
@@ -594,6 +653,10 @@ class FloatingTranscriptPanel(QWidget):
         self._recording_start_time = time.time()
         self._duration_timer.start()
         self._update_duration()  # Show "Recording · 00:00" immediately
+        # Reset badge state on panel show
+        self._pending_content_count = 0
+        if hasattr(self, '_new_content_badge'):
+            self._new_content_badge.hide()
     
     def hide_panel(self) -> None:
         """Hide the panel with a 150ms fade-out."""
@@ -738,6 +801,14 @@ class FloatingTranscriptPanel(QWidget):
         
         # Auto-scroll
         self._scroll_to_bottom()
+        
+        # If auto-scroll is paused, increment pending badge
+        if self._auto_scroll_paused:
+            self._pending_content_count += 1
+            if hasattr(self, '_new_content_badge'):
+                self._new_content_badge.setText(f"↓ {self._pending_content_count} new")
+                self._new_content_badge.show()
+                self._position_new_content_badge()
     
     # ------------------------------------------------------------------
     # Speaker label management
@@ -1939,31 +2010,53 @@ class FloatingTranscriptPanel(QWidget):
         """Get color based on confidence score — delegates to canonical thresholds."""
         return get_confidence_color(confidence)
     
+    def _near_bottom_threshold(self) -> int:
+        """Return a proportional bottom-detection threshold in pixels.
+        
+        Uses 10% of the scrollbar page step, with a floor of 10px to
+        avoid degenerate cases on very small viewports. This replaces
+        all hardcoded pixel thresholds for bottom detection.
+        """
+        return max(10, int(self.text_edit.verticalScrollBar().pageStep() * 0.1))
+    
     def _on_scroll_value_changed(self, value: int) -> None:
         """
-        Detect manual scroll and pause auto-scroll.
+        Detect manual scroll and pause/resume auto-scroll.
         
         Called when scrollbar value changes. If user scrolls up from bottom,
-        pause auto-scroll for 10 seconds to allow reading.
+        pause auto-scroll for 10 seconds to allow reading. If the user scrolls
+        back to the bottom while paused, resume auto-scroll immediately.
         """
         scrollbar = self.text_edit.verticalScrollBar()
         maximum = scrollbar.maximum()
+        threshold = self._near_bottom_threshold()
         
-        # Check if user scrolled up from bottom (not at maximum)
-        if maximum > 0 and value < maximum - 10:  # 10 pixel threshold
-            # User scrolled up - pause auto-scroll
+        if maximum > 0 and value < maximum - threshold:
+            # User scrolled up — pause auto-scroll
             if not self._auto_scroll_paused:
                 self._auto_scroll_paused = True
                 self._pause_timer.start(10000)  # 10 seconds
                 self.status_label.setText("Auto-scroll paused (10s)")
+        elif self._auto_scroll_paused and maximum > 0 and value >= maximum - threshold:
+            # User scrolled back to bottom while paused — resume
+            self._auto_scroll_paused = False
+            self._pause_timer.stop()
+            self._pending_content_count = 0
+            if hasattr(self, '_new_content_badge'):
+                self._new_content_badge.hide()
+            self.status_label.setText("Recording...")
+            self._scroll_to_bottom()
         
         # Update tracking
         self._last_scroll_value = value
-        self._is_at_bottom = (value >= maximum - 5)  # Within 5 pixels of bottom
+        self._is_at_bottom = (value >= maximum - threshold)
     
     def _resume_auto_scroll(self) -> None:
         """Resume auto-scroll after pause timer expires."""
         self._auto_scroll_paused = False
+        self._pending_content_count = 0
+        if hasattr(self, '_new_content_badge'):
+            self._new_content_badge.hide()
         self.status_label.setText("Recording...")
         # Immediately scroll to bottom to catch up
         self._scroll_to_bottom()
