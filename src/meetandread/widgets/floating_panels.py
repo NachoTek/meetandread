@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
-    QDialog, QDialogButtonBox, QSizePolicy,
+    QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen
@@ -108,8 +108,9 @@ class FloatingTranscriptPanel(QWidget):
             Qt.WindowType.Tool  # Don't show in taskbar
         )
         
-        # Size — slightly larger to accommodate history view
-        self.setFixedSize(450, 400)
+        # Size — resizable with min/max bounds
+        self.setMinimumSize(350, 300)
+        self.setMaximumSize(800, 900)
         
         # Style
         self.setStyleSheet("""
@@ -575,6 +576,21 @@ class FloatingTranscriptPanel(QWidget):
         self._position_new_content_badge()
         self._new_content_badge.hide()
 
+        # Resize grip — direct child of panel (not in layout) so it stays at bottom-right
+        self._resize_grip = QSizeGrip(self)
+        self._resize_grip.setFixedSize(16, 16)
+        self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self._resize_grip.setStyleSheet("""
+            QSizeGrip {
+                background-color: rgba(255, 255, 255, 60);
+                border-radius: 3px;
+            }
+            QSizeGrip:hover {
+                background-color: rgba(255, 255, 255, 120);
+            }
+        """)
+        self._resize_grip.show()
+
     def _position_new_content_badge(self) -> None:
         """Position the badge at bottom-center of the text edit."""
         if not hasattr(self, '_new_content_badge'):
@@ -611,12 +627,17 @@ class FloatingTranscriptPanel(QWidget):
         self._legend_overlay.setVisible(visible)
 
     def resizeEvent(self, event) -> None:
-        """Reposition overlays on resize."""
-        super().resizeEvent(event)
+        """Reposition overlays and resize grip on resize."""
         if hasattr(self, '_legend_overlay') and self._legend_overlay.isVisible():
             self._position_legend_overlay()
         if hasattr(self, '_new_content_badge') and self._new_content_badge.isVisible():
             self._position_new_content_badge()
+        if hasattr(self, '_resize_grip'):
+            self._resize_grip.move(
+                self.width() - self._resize_grip.width(),
+                self.height() - self._resize_grip.height(),
+            )
+        super().resizeEvent(event)
     
     def dock_to_widget(self, widget, position: str = "right") -> None:
         """Position panel next to a widget.
@@ -2176,8 +2197,9 @@ class FloatingSettingsPanel(QWidget):
             Qt.WindowType.Tool
         )
         
-        # Size — increased to fit Performance tab content
-        self.setFixedSize(300, 520)
+        # Size — resizable with min/max bounds
+        self.setMinimumSize(280, 400)
+        self.setMaximumSize(500, 800)
         
         # Style — aligned with FloatingTranscriptPanel dark theme
         self.setStyleSheet("""
@@ -2236,6 +2258,21 @@ class FloatingSettingsPanel(QWidget):
         header_layout.addWidget(close_btn)
         
         layout.addLayout(header_layout)
+
+        # Resize grip — direct child of panel (not in layout) so it stays at bottom-right
+        self._resize_grip = QSizeGrip(self)
+        self._resize_grip.setFixedSize(16, 16)
+        self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self._resize_grip.setStyleSheet("""
+            QSizeGrip {
+                background-color: rgba(255, 255, 255, 60);
+                border-radius: 3px;
+            }
+            QSizeGrip:hover {
+                background-color: rgba(255, 255, 255, 120);
+            }
+        """)
+        self._resize_grip.show()
 
         # ------------------------------------------------------------------
         # Tab widget — Settings and Performance tabs
@@ -2568,6 +2605,15 @@ class FloatingSettingsPanel(QWidget):
         # Dragging
         self._dragging = False
         self._drag_pos = None
+
+    def resizeEvent(self, event) -> None:
+        """Reposition resize grip on resize."""
+        if hasattr(self, '_resize_grip'):
+            self._resize_grip.move(
+                self.width() - self._resize_grip.width(),
+                self.height() - self._resize_grip.height(),
+            )
+        super().resizeEvent(event)
 
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""
