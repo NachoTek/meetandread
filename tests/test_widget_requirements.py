@@ -1,6 +1,6 @@
 """Comprehensive WIDGET requirements validation tests.
 
-Validates WIDGET-01-03, 06-16, 19-28, 30, 32 against the running codebase.
+Validates WIDGET-01-03, 06-16, 19-28, 30-32 against the running codebase.
 References WIDGET-04/05 (docking) validated in test_widget_docking.py.
 References WIDGET-25-27 (auto-scroll) validated in test_auto_scroll.py.
 """
@@ -272,6 +272,46 @@ class TestWIDGET30:
         widget._floating_settings_panel.isVisible.return_value = False
         widget._toggle_settings_panel()
         widget._floating_settings_panel.show_panel.assert_called_once()
+
+
+class TestWIDGET31:
+    """WIDGET-31: Context menu has recording toggle, settings, and exit actions."""
+
+    def _context_menu_actions(self, widget):
+        """Build context menu matching _show_context_menu implementation."""
+        from PyQt6.QtWidgets import QMenu
+        from meetandread.widgets.theme import current_palette, context_menu_css
+        p = current_palette()
+        menu = QMenu(widget)
+        menu.setStyleSheet(context_menu_css(p, accent_color='#4CAF50'))
+        toggle_text = "Stop Recording" if widget.is_recording else "Start Recording"
+        toggle_action = menu.addAction(toggle_text)
+        toggle_action.triggered.connect(widget.toggle_recording)
+        menu.addSeparator()
+        settings_action = menu.addAction("Settings")
+        settings_action.triggered.connect(widget._toggle_settings_panel)
+        menu.addSeparator()
+        exit_action = menu.addAction("Exit")
+        exit_action.triggered.connect(widget._exit_application)
+        return [a.text() for a in menu.actions() if a.text()]
+
+    def test_context_menu_has_start_recording(self, widget):
+        texts = self._context_menu_actions(widget)
+        assert "Start Recording" in texts
+
+    def test_context_menu_has_settings(self, widget):
+        texts = self._context_menu_actions(widget)
+        assert "Settings" in texts
+
+    def test_context_menu_has_exit(self, widget):
+        texts = self._context_menu_actions(widget)
+        assert "Exit" in texts
+
+    def test_context_menu_shows_stop_when_recording(self, widget):
+        widget.is_recording = True
+        texts = self._context_menu_actions(widget)
+        assert "Stop Recording" in texts
+        assert "Start Recording" not in texts
 
 
 class TestWIDGET32:

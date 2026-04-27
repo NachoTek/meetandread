@@ -1064,12 +1064,28 @@ to avoid clipping issues and enable proper text rendering.
             self._show_error(error.message)
     
     def _show_context_menu(self, position):
-        """Show context menu with Exit action."""
+        """Show context menu with recording toggle, settings, and exit actions."""
         p = current_palette()
         menu = QMenu(self)
         menu.setStyleSheet(context_menu_css(p, accent_color='#4CAF50'))
+
+        # Recording toggle
+        toggle_text = "Stop Recording" if self.is_recording else "Start Recording"
+        toggle_action = menu.addAction(toggle_text)
+        toggle_action.triggered.connect(self.toggle_recording)
+
+        menu.addSeparator()
+
+        # Settings
+        settings_action = menu.addAction("Settings")
+        settings_action.triggered.connect(self._toggle_settings_panel)
+
+        menu.addSeparator()
+
+        # Exit
         exit_action = menu.addAction("Exit")
         exit_action.triggered.connect(self._exit_application)
+
         menu.exec(self.mapToGlobal(position))
     
     def _exit_application(self):
