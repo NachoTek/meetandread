@@ -243,6 +243,9 @@ to avoid clipping issues and enable proper text rendering.
         
         # Visual state machine (idle → recording → processing → idle)
         self._visual_state = _WidgetVisualStateMachine(WidgetVisualState.IDLE)
+
+        # Glass idle appearance — start translucent since initial state is IDLE
+        self.setWindowOpacity(self._IDLE_OPACITY)
         
         # Recording controller
         self._controller = RecordingController()
@@ -472,6 +475,39 @@ to avoid clipping issues and enable proper text rendering.
             )
             self.move(new_x, new_y)
     
+    # -- Glass opacity constants for visual state ----------------------------
+    _IDLE_OPACITY = 0.87      # translucent glass when idle
+    _ACTIVE_OPACITY = 1.0     # fully opaque when recording/processing
+
+    def _update_visual_state_opacity(self):
+        """Interpolate window opacity between IDLE (0.87) and active (1.0).
+
+        Uses the state machine's eased progress so the opacity change is
+        smooth over ~200 ms (6 frames at 33 ms).  Called every frame from
+        ``_update_animations()``.
+        """
+        props = self._visual_state.current_properties()
+        target_state = props["state"]
+        eased_t = props["opacity"]  # 0.0 → 1.0 (eased)
+
+        # Determine which opacity each end maps to
+        prev_state = self._visual_state.previous
+        from_opacity = (self._IDLE_OPACITY
+                        if prev_state == WidgetVisualState.IDLE
+                        else self._ACTIVE_OPACITY)
+        to_opacity = (self._IDLE_OPACITY
+                      if target_state == WidgetVisualState.IDLE
+                      else self._ACTIVE_OPACITY)
+
+        interpolated = from_opacity + (to_opacity - from_opacity) * eased_t
+        self.setWindowOpacity(interpolated)
+
+        if not props["settled"]:
+            logging.debug(
+                "Glass opacity: %.3f (state=%s progress=%.2f)",
+                interpolated, target_state.name, self._visual_state.progress,
+            )
+
     def _update_animations(self):
         """Update animation states."""
         # Advance record button state transitions (~200ms eased cross-fade)
@@ -479,6 +515,9 @@ to avoid clipping issues and enable proper text rendering.
 
         # Advance widget visual state machine (~200ms eased transition)
         self._visual_state.tick()
+
+        # Interpolate window opacity for glass idle effect
+        self._update_visual_state_opacity()
 
         # --- Slide animation (edge docking) ---
         s = self._slide_state
@@ -1050,6 +1089,22 @@ to avoid clipping issues and enable proper text rendering.
         except Exception as e:
             logging.warning("Failed to save position: %s", e)
     
+    def showEvent(self, event):
+        """Reset opacity to match current state when widget reappears."""
+        super().showEvent(event)
+        # Immediately set correct opacity for current state without animation
+        if self._visual_state.current == WidgetVisualState.IDLE:
+            self.setWindowOpacity(self._IDLE_OPACITY)
+        else:
+            self.setWindowOpacity(self._ACTIVE_OPACITY)
+        logging.debug("showEvent: opacity reset for state=%s",
+                      self._visual_state.current.name)
+
+    def hideEvent(self, event):
+        """Reset opacity to 1.0 on hide so reappear isn't stale at low opacity."""
+        super().hideEvent(event)
+        self.setWindowOpacity(1.0)
+
     def closeEvent(self, event):
         """Handle close event — close-to-tray if tray is active, else quit.
 

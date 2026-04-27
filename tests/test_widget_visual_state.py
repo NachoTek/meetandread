@@ -16,6 +16,7 @@ import logging
 import pytest
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QPointF
 
 from meetandread.widgets.main_widget import (
     WidgetVisualState,
@@ -222,3 +223,125 @@ class TestWidgetIntegration:
         assert widget._visual_state.progress == 0.0
         widget._update_animations()
         assert widget._visual_state.progress > 0.0
+
+
+# ---------------------------------------------------------------------------
+# T02: Glass opacity integration
+# ---------------------------------------------------------------------------
+
+class TestGlassOpacity:
+    """Window opacity smoothly transitions between idle (0.87) and active (1.0)."""
+
+    IDLE_OPACITY = 0.87
+    ACTIVE_OPACITY = 1.0
+
+    @pytest.fixture
+    def widget(self, qapp):
+        from unittest.mock import patch, MagicMock
+        from meetandread.widgets.main_widget import MeetAndReadWidget
+
+        fake_geo = _FakeScreenGeometry()
+        fake_screen = MagicMock()
+        fake_screen.geometry.return_value = fake_geo
+        with patch("meetandread.widgets.main_widget.QApplication.primaryScreen",
+                    return_value=fake_screen), \
+             patch("meetandread.widgets.main_widget.QApplication.screens",
+                    return_value=[fake_screen]), \
+             patch("meetandread.widgets.main_widget.get_config", return_value=None), \
+             patch("meetandread.widgets.main_widget.save_config"):
+            w = MeetAndReadWidget()
+        w._floating_transcript_panel = MagicMock()
+        w._floating_transcript_panel.isVisible.return_value = False
+        w._floating_settings_panel = MagicMock()
+        w._floating_settings_panel.isVisible.return_value = False
+        yield w
+        w.close()
+
+    # -- Initial state -------------------------------------------------------
+
+    def test_initial_opacity_is_idle(self, widget):
+        """Widget starts translucent (0.87) since initial state is IDLE."""
+        assert widget.windowOpacity() == pytest.approx(self.IDLE_OPACITY, abs=0.01)
+
+    # -- Idle → Recording transition -----------------------------------------
+
+    def test_idle_to_recording_opacity_starts_at_idle(self, widget):
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        # Before any animation ticks, opacity should still be at idle
+        assert widget.windowOpacity() == pytest.approx(self.IDLE_OPACITY, abs=0.01)
+
+    def test_idle_to_recording_opacity_transitions_toward_active(self, widget):
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        widget._update_animations()  # one tick
+        opacity = widget.windowOpacity()
+        assert self.IDLE_OPACITY < opacity < self.ACTIVE_OPACITY
+
+    def test_idle_to_recording_opacity_converges_to_active(self, widget):
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        for _ in range(20):
+            widget._update_animations()
+        assert widget.windowOpacity() == pytest.approx(self.ACTIVE_OPACITY, abs=0.01)
+
+    # -- Recording → Idle transition -----------------------------------------
+
+    def test_recording_to_idle_opacity_converges_to_idle(self, widget):
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        for _ in range(20):
+            widget._update_animations()
+        # Now go back to idle
+        widget._on_controller_state_change(ControllerState.IDLE)
+        for _ in range(20):
+            widget._update_animations()
+        assert widget.windowOpacity() == pytest.approx(self.IDLE_OPACITY, abs=0.01)
+
+    # -- Processing state opacity --------------------------------------------
+
+    def test_processing_opacity_is_active(self, widget):
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        for _ in range(20):
+            widget._update_animations()
+        widget._on_controller_state_change(ControllerState.STOPPING)
+        for _ in range(20):
+            widget._update_animations()
+        assert widget.windowOpacity() == pytest.approx(self.ACTIVE_OPACITY, abs=0.01)
+
+    # -- showEvent / hideEvent opacity reset ---------------------------------
+
+    def test_hide_event_resets_opacity_to_one(self, widget):
+        """hideEvent sets opacity to 1.0 to avoid stale low-opacity on reappear."""
+        from PyQt6.QtGui import QHideEvent
+        widget.hideEvent(QHideEvent())
+        assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
+
+    def test_show_event_resets_opacity_for_idle_state(self, widget):
+        """showEvent sets correct opacity for current visual state."""
+        from PyQt6.QtGui import QShowEvent
+        # Widget is idle, opacity should be 0.87
+        widget.setWindowOpacity(1.0)  # force wrong value
+        widget.showEvent(QShowEvent())
+        assert widget.windowOpacity() == pytest.approx(self.IDLE_OPACITY, abs=0.01)
+
+    def test_show_event_resets_opacity_for_recording_state(self, widget):
+        """showEvent sets 1.0 opacity if currently recording."""
+        from PyQt6.QtGui import QShowEvent
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        for _ in range(20):
+            widget._update_animations()
+        widget.setWindowOpacity(self.IDLE_OPACITY)  # force wrong value
+        widget.showEvent(QShowEvent())
+        assert widget.windowOpacity() == pytest.approx(self.ACTIVE_OPACITY, abs=0.01)
+
+    # -- Debug logging during transition -------------------------------------
+
+    def test_opacity_transition_logs_debug(self, widget, caplog):
+        from meetandread.recording import ControllerState
+        with caplog.at_level(logging.DEBUG, logger="root"):
+            widget._on_controller_state_change(ControllerState.RECORDING)
+            widget._update_animations()  # one tick, transition not settled
+        assert any("Glass opacity" in r.message for r in caplog.records)
