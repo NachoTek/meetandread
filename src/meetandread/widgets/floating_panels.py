@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
+    QDialog, QDialogButtonBox, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen
@@ -29,6 +30,16 @@ from meetandread.performance.wer import calculate_wer
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _escape_html(text: str) -> str:
+    """Escape HTML special characters for safe embedding in innerHTML."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br>")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +336,36 @@ class FloatingTranscriptPanel(QWidget):
 
         detail_header_layout.addStretch()
 
+        self._scrub_btn = QPushButton("🔄 Scrub")
+        self._scrub_btn.setFixedHeight(26)
+        self._scrub_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a2a3a;
+                color: #4FC3F7;
+                border: 1px solid #2a4a6a;
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2a3a4a;
+                border-color: #4FC3F7;
+            }
+            QPushButton:pressed {
+                background-color: #102030;
+            }
+            QPushButton:disabled {
+                background-color: #222;
+                color: #555;
+                border-color: #333;
+            }
+        """)
+        self._scrub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._scrub_btn.setToolTip("Re-transcribe with a different model")
+        self._scrub_btn.clicked.connect(self._on_scrub_clicked)
+        detail_header_layout.addWidget(self._scrub_btn)
+
         self._delete_btn = QPushButton("🗑 Delete")
         self._delete_btn.setFixedHeight(26)
         self._delete_btn.setStyleSheet("""
@@ -387,6 +428,14 @@ class FloatingTranscriptPanel(QWidget):
 
         # Track the currently-viewed history transcript path (for rename)
         self._current_history_md_path: Optional[Path] = None
+
+        # Scrub state
+        self._scrub_runner: Optional[object] = None  # ScrubRunner instance
+        self._scrub_model_size: Optional[str] = None  # model being scrubbed
+        self._scrub_sidecar_path: Optional[str] = None  # expected sidecar path
+        self._scrub_original_html: Optional[str] = None  # original transcript HTML
+        self._is_scrubbing: bool = False  # True while scrub is in progress
+        self._is_comparison_mode: bool = False  # True when showing side-by-side
         
         # Dragging
         self._dragging = False
@@ -828,6 +877,10 @@ class FloatingTranscriptPanel(QWidget):
 
     def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
         """Load and display the transcript for the clicked history item."""
+        # Reset comparison mode when switching items
+        if self._is_comparison_mode:
+            self._hide_scrub_accept_reject()
+
         md_path_str = item.data(Qt.ItemDataRole.UserRole)
         if not md_path_str:
             return
@@ -889,7 +942,9 @@ class FloatingTranscriptPanel(QWidget):
             }
         """)
 
+        scrub_action = menu.addAction("🔄  Scrub Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
+        scrub_action.triggered.connect(lambda: self._on_scrub_clicked())
         delete_action.triggered.connect(lambda: self._delete_recording(item))
         menu.exec(self._history_list.mapToGlobal(pos))
 
@@ -967,6 +1022,500 @@ class FloatingTranscriptPanel(QWidget):
 
         # Refresh the history list
         self._refresh_history()
+
+    # ------------------------------------------------------------------
+    # Scrub (re-transcribe) functionality
+    # ------------------------------------------------------------------
+
+    def _on_scrub_clicked(self) -> None:
+        """Handle Scrub button / context-menu click.
+
+        Validates that the selected recording has a WAV file, shows a model
+        picker dialog, then starts ScrubRunner in a background thread.
+        """
+        if self._is_scrubbing:
+            return
+
+        current = self._history_list.currentItem()
+        if current is None:
+            return
+
+        md_path_str = current.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+        md_path = Path(md_path_str)
+        stem = md_path.stem
+
+        # Check for WAV file
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            wav_path = get_recordings_dir() / f"{stem}.wav"
+        except Exception:
+            wav_path = md_path.parent.parent / "recordings" / f"{stem}.wav"
+
+        if not wav_path.exists():
+            parent = self.parent() if self.parent() else self
+            QMessageBox.information(
+                parent,
+                "Cannot Scrub",
+                "Cannot scrub — audio file missing.\n\n"
+                "The original .wav recording file is required for re-transcription.",
+            )
+            return
+
+        # Show model picker dialog
+        dialog = self._create_scrub_dialog()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        model_size = dialog._model_combo.currentData()
+        if not model_size:
+            return
+
+        # Start the scrub
+        self._start_scrub(wav_path, md_path, model_size)
+
+    def _create_scrub_dialog(self) -> QDialog:
+        """Create the model picker dialog for scrub.
+
+        Returns a QDialog with a QComboBox showing all 5 Whisper models
+        with WER from benchmark_history. Default selection is the current
+        post-process model from config.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Scrub Recording")
+        dialog.setFixedSize(340, 180)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #1a1a1a;
+            }
+            QLabel {
+                color: #ddd;
+                font-size: 12px;
+            }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Title label
+        title_label = QLabel("Re-transcribe with a different model:")
+        title_label.setStyleSheet("font-weight: bold; color: #4FC3F7; font-size: 13px;")
+        layout.addWidget(title_label)
+
+        # Model combo
+        combo = QComboBox()
+        combo.setStyleSheet("""
+            QComboBox {
+                background-color: #2a2a2a;
+                color: #ddd;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 12px;
+                min-height: 24px;
+            }
+            QComboBox:hover {
+                border-color: #4FC3F7;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #aaa;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2a2a2a;
+                color: #ddd;
+                border: 1px solid #555;
+                selection-background-color: #37474F;
+                selection-color: #fff;
+            }
+        """)
+
+        # Populate with models + WER
+        try:
+            from meetandread.config import get_config
+            _cfg = get_config()
+            _bench_history = _cfg.transcription.benchmark_history
+            _default_model = _cfg.transcription.postprocess_model_size
+        except Exception:
+            _bench_history = {}
+            _default_model = "base"
+
+        _model_order = ["tiny", "base", "small", "medium", "large"]
+        _select_idx = 0
+        for _i, _mn in enumerate(_model_order):
+            _entry = _bench_history.get(_mn)
+            if _entry and "wer" in _entry:
+                _wer_pct = _entry["wer"] * 100
+                _item_text = f"{_mn} — WER: {_wer_pct:.1f}%"
+            else:
+                _item_text = f"{_mn} (not benchmarked)"
+            combo.addItem(_item_text, _mn)
+            if _mn == _default_model:
+                _select_idx = _i
+        combo.setCurrentIndex(_select_idx)
+
+        layout.addWidget(combo)
+        dialog._model_combo = combo  # store reference for caller
+
+        layout.addStretch()
+
+        # OK / Cancel buttons
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+        )
+        btn_box.setStyleSheet("""
+            QPushButton {
+                background-color: #333;
+                color: #ddd;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-size: 12px;
+                min-width: 70px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                border-color: #4FC3F7;
+            }
+            QPushButton:pressed {
+                background-color: #2a2a2a;
+            }
+        """)
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        return dialog
+
+    def _start_scrub(self, wav_path: Path, md_path: Path, model_size: str) -> None:
+        """Start a ScrubRunner background re-transcription.
+
+        Args:
+            wav_path: Path to the source .wav audio file.
+            md_path: Path to the canonical transcript .md file.
+            model_size: Whisper model size (e.g. "small").
+        """
+        from meetandread.transcription.scrub import ScrubRunner
+
+        # Store state
+        self._scrub_model_size = model_size
+        self._is_scrubbing = True
+        self._is_comparison_mode = False
+
+        # Save original transcript HTML for comparison later
+        self._scrub_original_html = self._history_viewer.toHtml()
+
+        # Disable scrub button and update text
+        self._scrub_btn.setEnabled(False)
+        self._scrub_btn.setText("Scrubbing... 0%")
+
+        # Create and start runner
+        self._scrub_runner = ScrubRunner(
+            settings=self._get_app_settings(),
+            on_progress=self._on_scrub_progress,
+            on_complete=self._on_scrub_complete,
+        )
+        self._scrub_sidecar_path = self._scrub_runner.scrub_recording(
+            wav_path, md_path, model_size,
+        )
+
+    def _get_app_settings(self):
+        """Get the current AppSettings from config."""
+        try:
+            from meetandread.config import get_config
+            return get_config()
+        except Exception:
+            from meetandread.config.models import AppSettings
+            return AppSettings()
+
+    def _on_scrub_progress(self, pct: int) -> None:
+        """Update scrub button text with progress percentage.
+
+        Called from the ScrubRunner background thread — uses QMetaObject
+        to marshal the update to the GUI thread.
+        """
+        # Schedule on GUI thread
+        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+        QMetaObject.invokeMethod(
+            self._scrub_btn, "setText",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, f"Scrubbing... {pct}%"),
+        )
+
+    def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """Handle scrub completion — show comparison or error.
+
+        Called from the ScrubRunner background thread — schedules the
+        heavy UI work on the GUI thread via QTimer.singleShot.
+        """
+        # Use QTimer to run on GUI thread
+        QTimer.singleShot(0, lambda: self._handle_scrub_complete(sidecar_path, error))
+
+    def _handle_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """Process scrub completion on the GUI thread."""
+        self._is_scrubbing = False
+        self._scrub_btn.setEnabled(True)
+        self._scrub_btn.setText("🔄 Scrub")
+
+        if error:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Scrub Failed",
+                f"Re-transcription failed:\n\n{error}",
+            )
+            logger.error("Scrub failed: %s", error)
+            return
+
+        # Show side-by-side comparison
+        self._show_scrub_comparison(sidecar_path)
+
+    def _show_scrub_comparison(self, sidecar_path: str) -> None:
+        """Show side-by-side comparison of original vs scrubbed transcript.
+
+        Renders both transcripts in a split view with Accept/Reject buttons.
+
+        Args:
+            sidecar_path: Path to the sidecar .md file with scrub result.
+        """
+        sidecar = Path(sidecar_path)
+        if not sidecar.exists():
+            logger.warning("Sidecar not found for comparison: %s", sidecar_path)
+            return
+
+        self._is_comparison_mode = True
+        self._scrub_sidecar_path = sidecar_path
+
+        # Build the comparison view as HTML in the history viewer
+        original_text = self._extract_transcript_body(
+            self._current_history_md_path
+        )
+        scrubbed_text = self._extract_transcript_body(sidecar)
+
+        # Build HTML with two-column layout
+        html = f"""
+        <html>
+        <head><style>
+            body {{ margin: 0; padding: 4px; background-color: #2a2a2a; color: #fff; font-size: 12px; }}
+            .comparison {{ display: flex; gap: 8px; }}
+            .column {{ flex: 1; }}
+            .column-header {{
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 4px 4px 0 0;
+                font-size: 11px;
+                text-align: center;
+            }}
+            .original .column-header {{ background-color: #37474F; color: #B0BEC5; }}
+            .scrubbed .column-header {{ background-color: #1B5E20; color: #A5D6A7; }}
+            .content {{
+                padding: 6px 8px;
+                background-color: #333;
+                border-radius: 0 0 4px 4px;
+                min-height: 50px;
+                line-height: 1.4;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }}
+        </style></head>
+        <body>
+        <div class="comparison">
+            <div class="column original">
+                <div class="column-header">Original</div>
+                <div class="content">{_escape_html(original_text)}</div>
+            </div>
+            <div class="column scrubbed">
+                <div class="column-header">Scrubbed ({_escape_html(self._scrub_model_size or "?")})</div>
+                <div class="content">{_escape_html(scrubbed_text)}</div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        self._history_viewer.setHtml(html)
+
+        # Show Accept/Reject buttons instead of normal header buttons
+        self._show_scrub_accept_reject()
+
+    def _show_scrub_accept_reject(self) -> None:
+        """Replace the scrub button with Accept/Reject during comparison mode."""
+        self._scrub_btn.hide()
+
+        # Create Accept button
+        if not hasattr(self, '_scrub_accept_btn'):
+            self._scrub_accept_btn = QPushButton("✓ Accept")
+            self._scrub_accept_btn.setFixedHeight(26)
+            self._scrub_accept_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1B5E20;
+                    color: #A5D6A7;
+                    border: 1px solid #2E7D32;
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #2E7D32;
+                    border-color: #4CAF50;
+                }
+                QPushButton:pressed {
+                    background-color: #0D3010;
+                }
+            """)
+            self._scrub_accept_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_accept_btn.clicked.connect(self._on_scrub_accept)
+
+            # Create Reject button
+            self._scrub_reject_btn = QPushButton("✗ Reject")
+            self._scrub_reject_btn.setFixedHeight(26)
+            self._scrub_reject_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3a1a1a;
+                    color: #F44336;
+                    border: 1px solid #6a2a2a;
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #4a1a1a;
+                    border-color: #F44336;
+                }
+                QPushButton:pressed {
+                    background-color: #2a1010;
+                }
+            """)
+            self._scrub_reject_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_reject_btn.clicked.connect(self._on_scrub_reject)
+
+            # Insert into detail header layout (before delete button)
+            header_layout = self._detail_header.layout()
+            delete_idx = header_layout.indexOf(self._delete_btn)
+            header_layout.insertWidget(delete_idx, self._scrub_accept_btn)
+            header_layout.insertWidget(delete_idx + 1, self._scrub_reject_btn)
+        else:
+            self._scrub_accept_btn.show()
+            self._scrub_reject_btn.show()
+
+    def _hide_scrub_accept_reject(self) -> None:
+        """Hide Accept/Reject buttons and show the scrub button again."""
+        if hasattr(self, '_scrub_accept_btn'):
+            self._scrub_accept_btn.hide()
+        if hasattr(self, '_scrub_reject_btn'):
+            self._scrub_reject_btn.hide()
+        self._scrub_btn.show()
+        self._is_comparison_mode = False
+
+    def _on_scrub_accept(self) -> None:
+        """Accept the scrub result — promote sidecar to canonical transcript."""
+        if self._current_history_md_path is None or self._scrub_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.scrub import ScrubRunner
+            ScrubRunner.accept_scrub(
+                self._current_history_md_path, self._scrub_model_size,
+            )
+            logger.info(
+                "Accepted scrub: %s model %s",
+                self._current_history_md_path, self._scrub_model_size,
+            )
+        except FileNotFoundError:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed",
+                "Sidecar file not found. It may have been deleted.",
+            )
+            self._hide_scrub_accept_reject()
+            return
+        except Exception as exc:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed", f"Could not accept scrub result:\n\n{exc}",
+            )
+            self._hide_scrub_accept_reject()
+            return
+
+        # Refresh the viewer with the updated transcript
+        self._hide_scrub_accept_reject()
+        self._refresh_after_scrub()
+
+    def _on_scrub_reject(self) -> None:
+        """Reject the scrub result — delete the sidecar file."""
+        if self._current_history_md_path is None or self._scrub_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.scrub import ScrubRunner
+            ScrubRunner.reject_scrub(
+                self._current_history_md_path, self._scrub_model_size,
+            )
+            logger.info(
+                "Rejected scrub: %s model %s",
+                self._current_history_md_path, self._scrub_model_size,
+            )
+        except Exception as exc:
+            logger.warning("Error rejecting scrub: %s", exc)
+
+        # Restore original view
+        self._hide_scrub_accept_reject()
+        self._refresh_after_scrub()
+
+    def _refresh_after_scrub(self) -> None:
+        """Refresh the history viewer after accept/reject."""
+        md_path = self._current_history_md_path
+        if md_path is not None and md_path.exists():
+            html = self._render_history_transcript(md_path)
+            if html is not None:
+                self._history_viewer.setHtml(html)
+            else:
+                try:
+                    content = md_path.read_text(encoding="utf-8")
+                except OSError:
+                    content = ""
+                footer_marker = "\n---\n\n<!-- METADATA:"
+                marker_idx = content.find(footer_marker)
+                if marker_idx != -1:
+                    content = content[:marker_idx]
+                self._history_viewer.setMarkdown(content)
+        else:
+            self._history_viewer.clear()
+            self._history_viewer.setPlaceholderText(
+                "Select a recording to view its transcript",
+            )
+
+    @staticmethod
+    def _extract_transcript_body(md_path: Optional[Path]) -> str:
+        """Extract the markdown body (before METADATA footer) from a transcript.
+
+        Args:
+            md_path: Path to the transcript .md file.
+
+        Returns:
+            The markdown body text, or an error message string.
+        """
+        if md_path is None or not md_path.exists():
+            return "(file not found)"
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return f"(error reading file: {exc})"
+
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx != -1:
+            content = content[:marker_idx]
+        return content.strip()
 
     # ------------------------------------------------------------------
     # History transcript rendering with clickable speaker anchors
