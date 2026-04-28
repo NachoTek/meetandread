@@ -2,7 +2,7 @@
 SPEAKER RE-IDENTIFICATION BENCHMARK RESULTS
 ======================================================================
 
-Date: 2026-04-28 17:50:40 UTC
+Date: 2026-04-28 18:04:39 UTC
 Embedding dimension: 256
 Default threshold:   0.6
 Total trials:        300
