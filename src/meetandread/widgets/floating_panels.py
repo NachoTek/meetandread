@@ -35,6 +35,9 @@ from meetandread.widgets.theme import (
     progress_bar_css, separator_css, combo_box_css,
     aetheric_settings_shell_css, aetheric_sidebar_css, aetheric_nav_button_css,
     aetheric_dock_bay_css, aetheric_placeholder_css, aetheric_combo_box_css,
+    aetheric_history_list_css, aetheric_history_viewer_css,
+    aetheric_history_splitter_css, aetheric_history_header_css,
+    aetheric_history_action_button_css,
     AETHERIC_RED, AETHERIC_NAV_INACTIVE_TEXT,
 )
 
@@ -2276,26 +2279,90 @@ class FloatingSettingsPanel(QWidget):
         self._content_stack.addWidget(perf_page)
 
         # ------------------------------------------------------------------
-        # Page 2: History placeholder — S02 implements the real list
+        # Page 2: History — recording list, transcript viewer, scrub/delete
         # ------------------------------------------------------------------
         history_page = QWidget()
-        history_page.setObjectName("AethericPlaceholderRow")
+        history_page.setObjectName("AethericHistoryPage")
         history_layout = QVBoxLayout(history_page)
-        history_layout.setContentsMargins(12, 16, 12, 12)
-        history_layout.setSpacing(8)
+        history_layout.setContentsMargins(6, 8, 6, 6)
+        history_layout.setSpacing(0)
 
-        self._history_placeholder_title = QLabel("History")
-        history_layout.addWidget(self._history_placeholder_title)
+        self._history_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._history_splitter.setObjectName("AethericHistorySplitter")
 
-        self._history_placeholder_desc = QLabel(
-            "Recording history will appear here.\n\n"
-            "Browse, view, scrub, and delete past recordings."
-        )
-        self._history_placeholder_desc.setWordWrap(True)
-        history_layout.addWidget(self._history_placeholder_desc)
+        # Top: recording list
+        self._history_list = QListWidget()
+        self._history_list.setObjectName("AethericHistoryList")
+        self._history_list.itemClicked.connect(self._on_history_item_clicked)
+        self._history_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._history_list.customContextMenuRequested.connect(self._on_history_context_menu)
+        self._history_splitter.addWidget(self._history_list)
 
-        history_layout.addStretch()
+        # Bottom: detail header bar + transcript viewer
+        viewer_container = QWidget()
+        viewer_layout = QVBoxLayout(viewer_container)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
+        viewer_layout.setSpacing(0)
+
+        # Detail header bar with Scrub/Delete buttons (hidden until selection)
+        self._history_detail_header = QFrame()
+        self._history_detail_header.setObjectName("AethericHistoryHeader")
+        detail_header_layout = QHBoxLayout(self._history_detail_header)
+        detail_header_layout.setContentsMargins(6, 2, 6, 2)
+        detail_header_layout.setSpacing(4)
+
+        detail_header_layout.addStretch()
+
+        self._scrub_btn = QPushButton("🔄 Scrub")
+        self._scrub_btn.setObjectName("AethericHistoryActionButton")
+        self._scrub_btn.setProperty("action", "scrub")
+        self._scrub_btn.setFixedHeight(26)
+        self._scrub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._scrub_btn.setToolTip("Re-transcribe with a different model")
+        self._scrub_btn.clicked.connect(self._on_scrub_clicked)
+        detail_header_layout.addWidget(self._scrub_btn)
+
+        self._delete_btn = QPushButton("🗑 Delete")
+        self._delete_btn.setObjectName("AethericHistoryActionButton")
+        self._delete_btn.setProperty("action", "delete")
+        self._delete_btn.setFixedHeight(26)
+        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setToolTip("Delete this recording")
+        self._delete_btn.clicked.connect(self._on_delete_btn_clicked)
+        detail_header_layout.addWidget(self._delete_btn)
+
+        self._history_detail_header.hide()
+        viewer_layout.addWidget(self._history_detail_header)
+
+        # Transcript viewer (read-only, supports anchor clicks)
+        self._history_viewer = QTextBrowser()
+        self._history_viewer.setObjectName("AethericHistoryViewer")
+        self._history_viewer.setReadOnly(True)
+        self._history_viewer.setFrameShape(QFrame.Shape.NoFrame)
+        self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
+        self._history_viewer.setOpenExternalLinks(False)
+        self._history_viewer.setOpenLinks(False)
+        self._history_viewer.anchorClicked.connect(self._on_history_anchor_clicked)
+        viewer_layout.addWidget(self._history_viewer)
+
+        self._history_splitter.addWidget(viewer_container)
+
+        # 40% list / 60% viewer
+        self._history_splitter.setSizes([160, 240])
+
+        history_layout.addWidget(self._history_splitter)
         self._content_stack.addWidget(history_page)
+
+        # -- History state attributes --
+        self._current_history_md_path: Optional[Path] = None
+
+        # Scrub state
+        self._scrub_runner: Optional[object] = None
+        self._scrub_model_size: Optional[str] = None
+        self._scrub_sidecar_path: Optional[str] = None
+        self._scrub_original_html: Optional[str] = None
+        self._is_scrubbing: bool = False
+        self._is_comparison_mode: bool = False
 
         # ------------------------------------------------------------------
         # Resize grip — direct child of panel, positioned at bottom-right
@@ -2427,17 +2494,19 @@ class FloatingSettingsPanel(QWidget):
             f"QLabel {{ color: {p.text_disabled}; font-size: 11px; padding: 2px; }}"
         )
 
-        # History placeholder page
-        history_css = aetheric_placeholder_css(p)
+        # History page — Aetheric scoped styles
         history_page = self._content_stack.widget(self._NAV_HISTORY)
         if history_page is not None:
-            history_page.setStyleSheet(history_css)
-        self._history_placeholder_title.setStyleSheet(
-            f"QLabel {{ color: {AETHERIC_RED}; font-weight: bold; font-size: 14px; }}"
-        )
-        self._history_placeholder_desc.setStyleSheet(
-            f"QLabel {{ color: {AETHERIC_NAV_INACTIVE_TEXT}; font-size: 12px; }}"
-        )
+            history_page.setStyleSheet(
+                "QWidget#AethericHistoryPage { background-color: transparent; }"
+            )
+        self._history_splitter.setStyleSheet(aetheric_history_splitter_css(p))
+        self._history_list.setStyleSheet(aetheric_history_list_css(p))
+        self._history_detail_header.setStyleSheet(aetheric_history_header_css(p))
+        history_btn_css = aetheric_history_action_button_css(p)
+        self._scrub_btn.setStyleSheet(history_btn_css)
+        self._delete_btn.setStyleSheet(history_btn_css)
+        self._history_viewer.setStyleSheet(aetheric_history_viewer_css(p))
 
         # Resize grip
         self._resize_grip.setStyleSheet(resize_grip_css(p))
@@ -2670,6 +2739,10 @@ class FloatingSettingsPanel(QWidget):
         else:
             self._stop_resource_monitor()
             self._metrics_timer.stop()
+
+        # Refresh History when navigating to it
+        if page_index == self._NAV_HISTORY:
+            self._refresh_history()
 
         nav_id = self._nav_buttons[page_index].property("nav_id") if page_index < len(self._nav_buttons) else "?"
         logger.info("Settings nav changed to '%s' (index %d)", nav_id, page_index)
@@ -3116,6 +3189,726 @@ class FloatingSettingsPanel(QWidget):
             logger.warning("Failed to update benchmark history in config: %s", exc)
 
         self._refresh_dropdown_wer()
+
+    # ------------------------------------------------------------------
+    # History page methods (adapted from FloatingTranscriptPanel)
+    # ------------------------------------------------------------------
+
+    def _refresh_history(self) -> None:
+        """Re-scan recordings and repopulate the history list."""
+        try:
+            from meetandread.transcription.transcript_scanner import scan_recordings
+        except ImportError:
+            logger.warning("transcript_scanner not available — cannot populate history")
+            return
+        self._populate_history_list(scan_recordings())
+
+    def _populate_history_list(self, recordings: list) -> None:
+        """Populate the history QListWidget from a list of RecordingMeta.
+
+        Args:
+            recordings: List of RecordingMeta objects (expected sorted newest-first).
+        """
+        self._history_list.clear()
+        for meta in recordings:
+            display_date = meta.recording_time
+            if display_date:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(display_date)
+                    display_date = dt.strftime("%Y-%m-%d %H:%M")
+                except (ValueError, TypeError):
+                    pass
+
+            if meta.word_count == 0:
+                display_text = f"{display_date} | (Empty recording)"
+            else:
+                display_text = (
+                    f"{display_date} | {meta.word_count} words"
+                    f" | {meta.speaker_count} speakers"
+                )
+
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, str(meta.path))
+            self._history_list.addItem(item)
+
+    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
+        """Load and display the transcript for the clicked history item."""
+        if self._is_comparison_mode:
+            self._hide_scrub_accept_reject()
+
+        md_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+        md_path = Path(md_path_str)
+        if not md_path.exists():
+            self._current_history_md_path = None
+            self._history_viewer.setPlainText(f"(File not found: {md_path})")
+            self._history_detail_header.show()
+            return
+
+        self._current_history_md_path = md_path
+        self._history_detail_header.show()
+        html = self._render_history_transcript(md_path)
+        if html is not None:
+            self._history_viewer.setHtml(html)
+        else:
+            try:
+                content = md_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                self._history_viewer.setPlainText(f"(Error reading file: {exc})")
+                return
+            footer_marker = "\n---\n\n<!-- METADATA:"
+            marker_idx = content.find(footer_marker)
+            if marker_idx != -1:
+                content = content[:marker_idx]
+            self._history_viewer.setMarkdown(content)
+
+    @staticmethod
+    def _extract_transcript_body(md_path: Optional[Path]) -> str:
+        """Extract the markdown body (before METADATA footer) from a transcript.
+
+        Args:
+            md_path: Path to the transcript .md file.
+
+        Returns:
+            The markdown body text, or an error message string.
+        """
+        if md_path is None or not md_path.exists():
+            return "(file not found)"
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return f"(error reading file: {exc})"
+
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx != -1:
+            content = content[:marker_idx]
+        return content.strip()
+
+    def _render_history_transcript(self, md_path: Path) -> Optional[str]:
+        """Render a transcript .md file as HTML with clickable speaker anchors.
+
+        Reads the .md file, parses the JSON metadata footer to get speakers,
+        and returns HTML where each speaker label is an anchor tag with
+        format ``speaker:{speaker_label}``.
+
+        Args:
+            md_path: Path to the transcript .md file.
+
+        Returns:
+            HTML string for the viewer, or None if no metadata is found.
+        """
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.error("Failed to read transcript for rendering: %s: %s", md_path, exc)
+            return None
+
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx == -1:
+            return None
+
+        md_body = content[:marker_idx]
+
+        metadata_text = content[marker_idx + len(footer_marker):]
+        if metadata_text.strip().endswith(" -->"):
+            metadata_text = metadata_text.strip()[:-len(" -->")]
+
+        try:
+            data = json.loads(metadata_text)
+        except json.JSONDecodeError as exc:
+            logger.warning("Malformed metadata in %s: %s", md_path, exc)
+            return None
+
+        speakers = []
+        seen = set()
+        for word in data.get("words", []):
+            sid = word.get("speaker_id")
+            if sid is not None and sid not in seen:
+                seen.add(sid)
+                speakers.append(sid)
+
+        if not speakers:
+            return None
+
+        html_lines = []
+        for line in md_body.splitlines():
+            match = re.match(r"^\*\*(.+?)\*\*\s*$", line)
+            if match:
+                speaker_label = match.group(1)
+                if speaker_label in seen:
+                    color = speaker_color(speaker_label)
+                    html_lines.append(
+                        f'<p><a href="speaker:{speaker_label}" '
+                        f'style="color:{color}; font-weight:bold; text-decoration:none;">'
+                        f'[{speaker_label}]</a></p>'
+                    )
+                else:
+                    html_lines.append(f"<p><b>{speaker_label}</b></p>")
+            else:
+                escaped = (
+                    line.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                )
+                if escaped.strip():
+                    escaped = re.sub(r"\*(.+?)\*", r"<i>\1</i>", escaped)
+                    html_lines.append(f"<p>{escaped}</p>")
+                elif not escaped:
+                    html_lines.append("<br>")
+
+        return "\n".join(html_lines)
+
+    def _reselect_history_item(self, md_path: Path) -> None:
+        """Re-select a history list item by its transcript path.
+
+        Args:
+            md_path: Path to the transcript .md file to re-select.
+        """
+        md_str = str(md_path)
+        for i in range(self._history_list.count()):
+            item = self._history_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == md_str:
+                self._history_list.setCurrentItem(item)
+                return
+        logger.debug("Could not re-select history item for %s", md_path)
+
+    def _on_history_context_menu(self, pos) -> None:
+        """Show context menu on history list items."""
+        item = self._history_list.itemAt(pos)
+        if item is None:
+            return
+
+        menu = QMenu(self._history_list)
+        p = current_palette()
+        menu.setStyleSheet(context_menu_css(p, accent_color=p.danger))
+
+        scrub_action = menu.addAction("🔄  Scrub Recording")
+        delete_action = menu.addAction("🗑  Delete Recording")
+        scrub_action.triggered.connect(lambda: self._on_scrub_clicked())
+        delete_action.triggered.connect(lambda: self._delete_recording(item))
+        menu.exec(self._history_list.mapToGlobal(pos))
+
+    def _on_delete_btn_clicked(self) -> None:
+        """Handle Delete button click in the detail header."""
+        current = self._history_list.currentItem()
+        if current is None:
+            return
+        self._delete_recording(current)
+
+    def _delete_recording(self, item: QListWidgetItem) -> None:
+        """Delete a recording after user confirmation."""
+        md_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+
+        md_path = Path(md_path_str)
+        stem = md_path.stem
+        recording_name = item.text().split("|")[0].strip()
+
+        try:
+            from meetandread.recording.management import enumerate_recording_files, delete_recording
+            files = enumerate_recording_files(stem)
+        except Exception as exc:
+            logger.error("Failed to enumerate recording files: %s", exc)
+            files = []
+
+        file_count = len(files)
+
+        parent = self.parent() if self.parent() else self
+        reply = QMessageBox.question(
+            parent,
+            "Delete Recording",
+            f"Delete '{recording_name}'?\n\n"
+            f"This will permanently remove {file_count} file{'s' if file_count != 1 else ''}.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            count, deleted = delete_recording(stem)
+            logger.info(
+                "Deleted recording '%s': %d files removed",
+                recording_name, count,
+            )
+        except Exception as exc:
+            logger.error("Failed to delete recording '%s': %s", recording_name, exc)
+            QMessageBox.warning(
+                parent,
+                "Delete Failed",
+                f"Could not delete recording '{recording_name}'.\n\n{exc}",
+            )
+            return
+
+        self._current_history_md_path = None
+        self._history_viewer.clear()
+        self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
+        self._history_detail_header.hide()
+
+        self._refresh_history()
+
+    def _on_history_anchor_clicked(self, url: QUrl) -> None:
+        """Handle clicks on speaker label anchors in the history viewer."""
+        link = url.toString()
+        prefix = "speaker:"
+        if not link.startswith(prefix):
+            return
+
+        old_name = link[len(prefix):]
+        if not old_name:
+            return
+
+        parent = self.parent() if self.parent() else self
+        name, ok = QInputDialog.getText(
+            parent,
+            "Rename Speaker",
+            f"Enter a new name for '{old_name}':",
+            text=old_name if not old_name.startswith("SPK_") else "",
+        )
+        if not ok or not name.strip():
+            return
+
+        new_name = name.strip()
+        if new_name == old_name:
+            return
+
+        md_path = self._current_history_md_path
+        if md_path is None or not md_path.exists():
+            logger.warning("No transcript file selected for rename")
+            return
+
+        try:
+            self._rename_speaker_in_file(md_path, old_name, new_name)
+        except Exception as exc:
+            logger.error(
+                "Failed to rename speaker '%s' -> '%s' in %s: %s",
+                old_name, new_name, md_path, exc,
+            )
+            return
+
+        try:
+            self._propagate_rename_to_signatures(md_path, old_name, new_name)
+        except Exception as exc:
+            logger.error(
+                "Failed to propagate rename to signature store for '%s' -> '%s': %s",
+                old_name, new_name, exc,
+            )
+
+        html = self._render_history_transcript(md_path)
+        if html is not None:
+            self._history_viewer.setHtml(html)
+        else:
+            self._history_viewer.setPlainText("(Error refreshing after rename)")
+
+    def _rename_speaker_in_file(
+        self, md_path: Path, old_name: str, new_name: str
+    ) -> None:
+        """Rename a speaker in a transcript .md file.
+
+        Updates both the JSON metadata (words and segments arrays) and the
+        markdown body speaker labels.
+        """
+        content = md_path.read_text(encoding="utf-8")
+
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx == -1:
+            logger.warning("No metadata footer in %s — cannot rename speaker", md_path)
+            return
+
+        md_body = content[:marker_idx]
+        metadata_text = content[marker_idx + len(footer_marker):]
+        if metadata_text.strip().endswith(" -->"):
+            metadata_text = metadata_text.strip()[:-len(" -->")]
+
+        try:
+            data = json.loads(metadata_text)
+        except json.JSONDecodeError as exc:
+            logger.warning("Malformed metadata in %s: %s", md_path, exc)
+            return
+
+        # Update speaker names in words
+        for word in data.get("words", []):
+            if word.get("speaker_id") == old_name:
+                word["speaker_id"] = new_name
+
+        # Update speaker names in segments
+        for seg in data.get("segments", []):
+            if seg.get("speaker") == old_name:
+                seg["speaker"] = new_name
+
+        # Update speaker names in markdown body
+        md_body = md_body.replace(f"**{old_name}**", f"**{new_name}**")
+
+        # Write back
+        new_content = md_body + footer_marker + json.dumps(data, indent=2) + " -->\n"
+        md_path.write_text(new_content, encoding="utf-8")
+        logger.info("Renamed speaker '%s' -> '%s' in %s", old_name, new_name, md_path)
+
+    def _propagate_rename_to_signatures(
+        self, md_path: Path, old_name: str, new_name: str
+    ) -> None:
+        """Propagate a speaker rename to the signature store (best-effort).
+
+        Reads the transcript metadata to find the recording stem and
+        updates the speaker signature store if available.
+        """
+        try:
+            from meetandread.transcription.speaker_signatures import SpeakerSignatureStore
+        except ImportError:
+            logger.debug("SpeakerSignatureStore not available — skipping propagation")
+            return
+
+        stem = md_path.stem
+        try:
+            store = SpeakerSignatureStore()
+            store.rename_speaker(stem, old_name, new_name)
+            logger.info(
+                "Propagated speaker rename '%s' -> '%s' to signature store for %s",
+                old_name, new_name, stem,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to propagate rename to signature store: %s", exc,
+            )
+
+    def _on_scrub_clicked(self) -> None:
+        """Handle Scrub button click — placeholder for S03 full scrub."""
+        if self._is_scrubbing:
+            return
+
+        current = self._history_list.currentItem()
+        if current is None:
+            return
+
+        md_path_str = current.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+        md_path = Path(md_path_str)
+        stem = md_path.stem
+
+        # Check for WAV file
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            wav_path = get_recordings_dir() / f"{stem}.wav"
+        except Exception:
+            wav_path = md_path.parent.parent / "recordings" / f"{stem}.wav"
+
+        if not wav_path.exists():
+            parent = self.parent() if self.parent() else self
+            QMessageBox.information(
+                parent,
+                "Cannot Scrub",
+                "Cannot scrub — audio file missing.\n\n"
+                "The original .wav recording file is required for re-transcription.",
+            )
+            return
+
+        # Show model picker dialog
+        dialog = self._create_scrub_dialog()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        model_size = dialog._model_combo.currentData()
+        if not model_size:
+            return
+
+        # Start the scrub
+        self._start_scrub(wav_path, md_path, model_size)
+
+    def _create_scrub_dialog(self) -> QDialog:
+        """Create the model picker dialog for scrub."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Scrub Recording")
+        dialog.setFixedSize(340, 180)
+        p = current_palette()
+        dialog.setStyleSheet(dialog_css(p))
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel("Re-transcribe with a different model:")
+        title_label.setStyleSheet(f"font-weight: bold; color: {p.info}; font-size: 13px;")
+        layout.addWidget(title_label)
+
+        combo = QComboBox()
+        combo.setStyleSheet(combo_box_css(p, accent_color=p.info))
+
+        try:
+            from meetandread.config import get_config
+            _cfg = get_config()
+            _bench_history = _cfg.transcription.benchmark_history
+            _default_model = _cfg.transcription.postprocess_model_size
+        except Exception:
+            _bench_history = {}
+            _default_model = "base"
+
+        _model_order = ["tiny", "base", "small", "medium", "large"]
+        _select_idx = 0
+        for _i, _mn in enumerate(_model_order):
+            _entry = _bench_history.get(_mn)
+            if _entry and "wer" in _entry:
+                _wer_pct = _entry["wer"] * 100
+                _item_text = f"{_mn} — WER: {_wer_pct:.1f}%"
+            else:
+                _item_text = f"{_mn} (not benchmarked)"
+            combo.addItem(_item_text, _mn)
+            if _mn == _default_model:
+                _select_idx = _i
+        combo.setCurrentIndex(_select_idx)
+
+        layout.addWidget(combo)
+        dialog._model_combo = combo
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+        )
+        btn_box.setStyleSheet(action_button_css(p, "dialog"))
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        return dialog
+
+    def _start_scrub(self, wav_path: Path, md_path: Path, model_size: str) -> None:
+        """Start a ScrubRunner background re-transcription."""
+        from meetandread.transcription.scrub import ScrubRunner
+
+        self._scrub_model_size = model_size
+        self._is_scrubbing = True
+        self._is_comparison_mode = False
+
+        self._scrub_original_html = self._history_viewer.toHtml()
+
+        self._scrub_btn.setEnabled(False)
+        self._scrub_btn.setText("Scrubbing... 0%")
+
+        self._scrub_runner = ScrubRunner(
+            settings=self._get_app_settings(),
+            on_progress=self._on_scrub_progress,
+            on_complete=self._on_scrub_complete,
+        )
+        self._scrub_sidecar_path = self._scrub_runner.scrub_recording(
+            wav_path, md_path, model_size,
+        )
+
+    def _on_scrub_progress(self, pct: int) -> None:
+        """Update scrub button text with progress percentage."""
+        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+        QMetaObject.invokeMethod(
+            self._scrub_btn, "setText",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, f"Scrubbing... {pct}%"),
+        )
+
+    def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """Handle scrub completion."""
+        QTimer.singleShot(0, lambda: self._handle_scrub_complete(sidecar_path, error))
+
+    def _handle_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """Process scrub completion on the GUI thread."""
+        self._is_scrubbing = False
+        self._scrub_btn.setEnabled(True)
+        self._scrub_btn.setText("🔄 Scrub")
+
+        if error:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Scrub Failed",
+                f"Re-transcription failed:\n\n{error}",
+            )
+            logger.error("Scrub failed: %s", error)
+            return
+
+        self._show_scrub_comparison(sidecar_path)
+
+    def _show_scrub_comparison(self, sidecar_path: str) -> None:
+        """Show side-by-side comparison of original vs scrubbed transcript."""
+        sidecar = Path(sidecar_path)
+        if not sidecar.exists():
+            logger.warning("Sidecar not found for comparison: %s", sidecar_path)
+            return
+
+        self._is_comparison_mode = True
+        self._scrub_sidecar_path = sidecar_path
+
+        original_text = self._extract_transcript_body(
+            self._current_history_md_path
+        )
+        scrubbed_text = self._extract_transcript_body(sidecar)
+
+        html = f"""
+        <html>
+        <head><style>
+            body {{ margin: 0; padding: 4px; background-color: #2a2a2a; color: #fff; font-size: 12px; }}
+            .comparison {{ display: flex; gap: 8px; }}
+            .column {{ flex: 1; }}
+            .column-header {{
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 4px 4px 0 0;
+                font-size: 11px;
+                text-align: center;
+            }}
+            .original .column-header {{ background-color: #37474F; color: #B0BEC5; }}
+            .scrubbed .column-header {{ background-color: #1B5E20; color: #A5D6A7; }}
+            .content {{
+                padding: 6px 8px;
+                background-color: #333;
+                border-radius: 0 0 4px 4px;
+                min-height: 50px;
+                line-height: 1.4;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }}
+        </style></head>
+        <body>
+        <div class="comparison">
+            <div class="column original">
+                <div class="column-header">Original</div>
+                <div class="content">{_escape_html(original_text)}</div>
+            </div>
+            <div class="column scrubbed">
+                <div class="column-header">Scrubbed ({_escape_html(self._scrub_model_size or "?")})</div>
+                <div class="content">{_escape_html(scrubbed_text)}</div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        self._history_viewer.setHtml(html)
+        self._show_scrub_accept_reject()
+
+    def _show_scrub_accept_reject(self) -> None:
+        """Replace the scrub button with Accept/Reject during comparison mode."""
+        self._scrub_btn.hide()
+
+        if not hasattr(self, '_scrub_accept_btn'):
+            self._scrub_accept_btn = QPushButton("✓ Accept")
+            self._scrub_accept_btn.setObjectName("AethericHistoryActionButton")
+            self._scrub_accept_btn.setProperty("action", "accept")
+            self._scrub_accept_btn.setFixedHeight(26)
+            p = current_palette()
+            self._scrub_accept_btn.setStyleSheet(aetheric_history_action_button_css(p))
+            self._scrub_accept_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_accept_btn.clicked.connect(self._on_scrub_accept)
+
+            self._scrub_reject_btn = QPushButton("✗ Reject")
+            self._scrub_reject_btn.setObjectName("AethericHistoryActionButton")
+            self._scrub_reject_btn.setProperty("action", "reject")
+            self._scrub_reject_btn.setFixedHeight(26)
+            self._scrub_reject_btn.setStyleSheet(aetheric_history_action_button_css(p))
+            self._scrub_reject_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_reject_btn.clicked.connect(self._on_scrub_reject)
+
+            header_layout = self._history_detail_header.layout()
+            delete_idx = header_layout.indexOf(self._delete_btn)
+            header_layout.insertWidget(delete_idx, self._scrub_accept_btn)
+            header_layout.insertWidget(delete_idx + 1, self._scrub_reject_btn)
+        else:
+            self._scrub_accept_btn.show()
+            self._scrub_reject_btn.show()
+
+    def _hide_scrub_accept_reject(self) -> None:
+        """Hide Accept/Reject buttons and show the scrub button again."""
+        if hasattr(self, '_scrub_accept_btn'):
+            self._scrub_accept_btn.hide()
+        if hasattr(self, '_scrub_reject_btn'):
+            self._scrub_reject_btn.hide()
+        self._scrub_btn.show()
+        self._is_comparison_mode = False
+
+    def _on_scrub_accept(self) -> None:
+        """Accept the scrub result — promote sidecar to canonical transcript."""
+        if self._current_history_md_path is None or self._scrub_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.scrub import ScrubRunner
+            ScrubRunner.accept_scrub(
+                self._current_history_md_path, self._scrub_model_size,
+            )
+            logger.info(
+                "Accepted scrub: %s model %s",
+                self._current_history_md_path, self._scrub_model_size,
+            )
+        except FileNotFoundError:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed",
+                "Sidecar file not found. It may have been deleted.",
+            )
+            self._hide_scrub_accept_reject()
+            return
+        except Exception as exc:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed", f"Could not accept scrub result:\n\n{exc}",
+            )
+            self._hide_scrub_accept_reject()
+            return
+
+        self._hide_scrub_accept_reject()
+        self._refresh_after_scrub()
+
+    def _on_scrub_reject(self) -> None:
+        """Reject the scrub result — delete the sidecar file."""
+        if self._current_history_md_path is None or self._scrub_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.scrub import ScrubRunner
+            ScrubRunner.reject_scrub(
+                self._current_history_md_path, self._scrub_model_size,
+            )
+            logger.info(
+                "Rejected scrub: %s model %s",
+                self._current_history_md_path, self._scrub_model_size,
+            )
+        except Exception as exc:
+            logger.warning("Error rejecting scrub: %s", exc)
+
+        self._hide_scrub_accept_reject()
+        self._refresh_after_scrub()
+
+    def _refresh_after_scrub(self) -> None:
+        """Refresh the history list and viewer after accept/reject."""
+        md_path = self._current_history_md_path
+
+        self._refresh_history()
+
+        if md_path is not None:
+            self._reselect_history_item(md_path)
+
+        if md_path is not None and md_path.exists():
+            html = self._render_history_transcript(md_path)
+            if html is not None:
+                self._history_viewer.setHtml(html)
+            else:
+                try:
+                    content = md_path.read_text(encoding="utf-8")
+                except OSError:
+                    content = ""
+                footer_marker = "\n---\n\n<!-- METADATA:"
+                marker_idx = content.find(footer_marker)
+                if marker_idx != -1:
+                    content = content[:marker_idx]
+                self._history_viewer.setMarkdown(content)
+        else:
+            self._history_viewer.clear()
+            self._history_viewer.setPlaceholderText(
+                "Select a recording to view its transcript",
+            )
 
     def closeEvent(self, event):
         """Handle close event."""
