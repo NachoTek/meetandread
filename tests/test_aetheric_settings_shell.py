@@ -16,6 +16,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
+from PyQt6.QtWidgets import QApplication, QStackedWidget, QWidget, QPushButton
 
 from meetandread.widgets.theme import (
     AETHERIC_CYAN,
@@ -326,3 +327,196 @@ class TestAethericScopedSelectors:
             assert selector in css, (
                 f"{helper.__name__} missing scoped selector '{selector}'"
             )
+
+
+# ---------------------------------------------------------------------------
+# FloatingSettingsPanel Aetheric sidebar structure tests
+# ---------------------------------------------------------------------------
+
+class TestAethericSidebarStructure:
+    """Verify the Aetheric Glass settings shell has correct widget tree."""
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def settings_panel(self, qapp):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+        p = FloatingSettingsPanel()
+        p.show()
+        qapp.processEvents()
+        yield p
+        p.close()
+
+    def test_shell_has_object_name(self, settings_panel):
+        assert settings_panel.objectName() == "AethericSettingsShell"
+
+    def test_sidebar_has_object_name(self, settings_panel):
+        sidebar = settings_panel.findChild(QWidget, "AethericSidebar")
+        assert sidebar is not None, "Sidebar with objectName 'AethericSidebar' not found"
+
+    def test_content_stack_has_object_name(self, settings_panel):
+        stack = settings_panel.findChild(QStackedWidget, "AethericContentStack")
+        assert stack is not None, "QStackedWidget with objectName 'AethericContentStack' not found"
+
+    def test_content_stack_has_three_pages(self, settings_panel):
+        stack = settings_panel.findChild(QStackedWidget, "AethericContentStack")
+        assert stack is not None
+        assert stack.count() == 3, f"Expected 3 pages, got {stack.count()}"
+
+    def test_dock_bay_has_object_name(self, settings_panel):
+        dock = settings_panel.findChild(QWidget, "AethericDockBay")
+        assert dock is not None, "Dock bay with objectName 'AethericDockBay' not found"
+
+    def test_no_title_label(self, settings_panel):
+        """No _title_label attribute should exist (removed in Aetheric redesign)."""
+        assert not hasattr(settings_panel, "_title_label"), (
+            "FloatingSettingsPanel should not have _title_label in Aetheric shell"
+        )
+
+    def test_no_close_button(self, settings_panel):
+        """No _close_btn attribute should exist (removed in Aetheric redesign)."""
+        assert not hasattr(settings_panel, "_close_btn"), (
+            "FloatingSettingsPanel should not have _close_btn in Aetheric shell"
+        )
+
+    def test_no_tab_widget(self, settings_panel):
+        """No _tab_widget attribute should exist (replaced by QStackedWidget)."""
+        assert not hasattr(settings_panel, "_tab_widget"), (
+            "FloatingSettingsPanel should not have _tab_widget in Aetheric shell"
+        )
+
+
+class TestAethericNavButtons:
+    """Verify sidebar nav buttons have correct object names and behavior."""
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def settings_panel(self, qapp):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+        p = FloatingSettingsPanel()
+        p.show()
+        qapp.processEvents()
+        yield p
+        p.close()
+
+    def test_three_nav_buttons(self, settings_panel):
+        assert len(settings_panel._nav_buttons) == 3
+
+    def test_nav_button_object_names(self, settings_panel):
+        for btn in settings_panel._nav_buttons:
+            assert btn.objectName() == "AethericNavButton"
+
+    def test_nav_button_nav_ids(self, settings_panel):
+        ids = [btn.property("nav_id") for btn in settings_panel._nav_buttons]
+        assert ids == ["settings", "performance", "history"]
+
+    def test_settings_button_initially_checked(self, settings_panel):
+        assert settings_panel._nav_settings_btn.isChecked()
+        assert not settings_panel._nav_performance_btn.isChecked()
+        assert not settings_panel._nav_history_btn.isChecked()
+
+    def test_nav_click_switches_page(self, settings_panel, qapp):
+        """Clicking Performance nav switches content stack to index 1."""
+        settings_panel._nav_performance_btn.click()
+        qapp.processEvents()
+        assert settings_panel._content_stack.currentIndex() == 1
+        assert settings_panel._nav_performance_btn.isChecked()
+        assert not settings_panel._nav_settings_btn.isChecked()
+
+    def test_nav_click_to_history(self, settings_panel, qapp):
+        """Clicking History nav switches content stack to index 2."""
+        settings_panel._nav_history_btn.click()
+        qapp.processEvents()
+        assert settings_panel._content_stack.currentIndex() == 2
+        assert settings_panel._nav_history_btn.isChecked()
+
+    def test_nav_click_back_to_settings(self, settings_panel, qapp):
+        """Switching to Performance and back to Settings works."""
+        settings_panel._nav_performance_btn.click()
+        qapp.processEvents()
+        assert settings_panel._content_stack.currentIndex() == 1
+
+        settings_panel._nav_settings_btn.click()
+        qapp.processEvents()
+        assert settings_panel._content_stack.currentIndex() == 0
+        assert settings_panel._nav_settings_btn.isChecked()
+
+    def test_invalid_nav_index_ignored(self, settings_panel, qapp):
+        """Unknown nav index should not crash or change current page."""
+        current = settings_panel._content_stack.currentIndex()
+        settings_panel._on_nav_clicked(99)
+        qapp.processEvents()
+        assert settings_panel._content_stack.currentIndex() == current
+
+    def test_negative_nav_index_ignored(self, settings_panel, qapp):
+        """Negative nav index should not crash or change current page."""
+        current = settings_panel._content_stack.currentIndex()
+        settings_panel._on_nav_clicked(-1)
+        qapp.processEvents()
+        assert settings_panel._content_stack.currentIndex() == current
+
+
+class TestAethericPerformanceLifecycle:
+    """Verify Performance monitoring lifecycle with sidebar nav."""
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def settings_panel(self, qapp):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+        from unittest.mock import MagicMock
+        p = FloatingSettingsPanel()
+        p._resource_monitor = MagicMock()
+        p._resource_monitor.is_running = False
+        p.show()
+        qapp.processEvents()
+        yield p
+        p.close()
+
+    def test_perf_active_on_performance_nav(self, settings_panel, qapp):
+        """Navigating to Performance sets _perf_tab_active True."""
+        settings_panel._nav_performance_btn.click()
+        qapp.processEvents()
+        assert settings_panel._perf_tab_active is True
+
+    def test_perf_inactive_on_settings_nav(self, settings_panel, qapp):
+        """Navigating away from Performance sets _perf_tab_active False."""
+        settings_panel._nav_performance_btn.click()
+        qapp.processEvents()
+        settings_panel._nav_settings_btn.click()
+        qapp.processEvents()
+        assert settings_panel._perf_tab_active is False
+
+    def test_perf_inactive_on_history_nav(self, settings_panel, qapp):
+        """History nav sets _perf_tab_active False."""
+        settings_panel._nav_performance_btn.click()
+        qapp.processEvents()
+        settings_panel._nav_history_btn.click()
+        qapp.processEvents()
+        assert settings_panel._perf_tab_active is False
+
+    def test_monitor_stops_on_nav_away(self, settings_panel, qapp):
+        """Navigating away from Performance stops the monitor."""
+        settings_panel._nav_performance_btn.click()
+        qapp.processEvents()
+        settings_panel._nav_settings_btn.click()
+        qapp.processEvents()
+        # _stop_resource_monitor should have been called
+        # (mock's stop() is called if monitor.is_running is True)
+        assert settings_panel._perf_tab_active is False

@@ -14,7 +14,7 @@ Covers:
 import pytest
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QSizeGrip, QTabWidget, QTextEdit, QWidget
+from PyQt6.QtWidgets import QApplication, QSizeGrip, QTabWidget, QTextEdit, QWidget, QStackedWidget
 
 from meetandread.widgets.floating_panels import (
     FloatingTranscriptPanel,
@@ -101,13 +101,13 @@ class TestSettingsPanelConstraints:
     """FloatingSettingsPanel min/max size constraints."""
 
     def test_minimum_width(self, settings_panel):
-        assert settings_panel.minimumWidth() == 280
+        assert settings_panel.minimumWidth() == 420
 
     def test_minimum_height(self, settings_panel):
         assert settings_panel.minimumHeight() == 400
 
     def test_maximum_width(self, settings_panel):
-        assert settings_panel.maximumWidth() == 500
+        assert settings_panel.maximumWidth() == 700
 
     def test_maximum_height(self, settings_panel):
         assert settings_panel.maximumHeight() == 800
@@ -180,7 +180,9 @@ class TestGripReposition:
         assert grip.y() == expected_y
 
     def test_settings_grip_position_after_min_size(self, settings_panel, qapp):
-        _resize_and_settle(settings_panel, 280, 400, qapp)
+        min_w = settings_panel.minimumWidth()
+        min_h = settings_panel.minimumHeight()
+        _resize_and_settle(settings_panel, min_w, min_h, qapp)
         grip = settings_panel.findChild(QSizeGrip)
         assert grip is not None
         expected_x = settings_panel.width() - grip.width()
@@ -268,31 +270,31 @@ class TestMinimumSizeEnforced:
 # ---------------------------------------------------------------------------
 
 class TestSettingsPanelContent:
-    """Settings panel QTabWidget should adjust on resize."""
+    """Settings panel content stack should adjust on resize."""
 
-    def test_tab_widget_grows_with_panel(self, settings_panel, qapp):
-        """QTabWidget width should increase when panel is enlarged."""
-        _resize_and_settle(settings_panel, 300, 450, qapp)
-        tab = settings_panel.findChild(QTabWidget)
-        assert tab is not None, "Settings panel should have a QTabWidget"
-        initial_w = tab.width()
+    def test_content_stack_grows_with_panel(self, settings_panel, qapp):
+        """QStackedWidget width should increase when panel is enlarged."""
+        _resize_and_settle(settings_panel, 440, 450, qapp)
+        stack = settings_panel.findChild(QStackedWidget)
+        assert stack is not None, "Settings panel should have a QStackedWidget"
+        initial_w = stack.width()
 
-        _resize_and_settle(settings_panel, 450, 650, qapp)
+        _resize_and_settle(settings_panel, 600, 650, qapp)
         qapp.processEvents()
-        new_w = tab.width()
+        new_w = stack.width()
 
         assert new_w > initial_w, (
-            f"TabWidget width did not grow: {initial_w} -> {new_w}"
+            f"QStackedWidget width did not grow: {initial_w} -> {new_w}"
         )
 
-    def test_tab_widget_fits_within_panel(self, settings_panel, qapp):
-        """TabWidget should never exceed panel dimensions."""
-        _resize_and_settle(settings_panel, 400, 600, qapp)
+    def test_content_stack_fits_within_panel(self, settings_panel, qapp):
+        """QStackedWidget should never exceed panel dimensions."""
+        _resize_and_settle(settings_panel, 500, 600, qapp)
         qapp.processEvents()
-        tab = settings_panel.findChild(QTabWidget)
-        assert tab is not None
-        assert tab.width() <= settings_panel.width()
-        assert tab.height() <= settings_panel.height()
+        stack = settings_panel.findChild(QStackedWidget)
+        assert stack is not None
+        assert stack.width() <= settings_panel.width()
+        assert stack.height() <= settings_panel.height()
 
 
 # ---------------------------------------------------------------------------

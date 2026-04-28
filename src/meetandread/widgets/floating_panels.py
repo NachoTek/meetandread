@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
-    QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip,
+    QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen
@@ -33,6 +33,9 @@ from meetandread.widgets.theme import (
     detail_header_css, action_button_css, context_menu_css, dialog_css,
     badge_css, resize_grip_css, legend_overlay_css, info_label_css,
     progress_bar_css, separator_css, combo_box_css,
+    aetheric_settings_shell_css, aetheric_sidebar_css, aetheric_nav_button_css,
+    aetheric_dock_bay_css, aetheric_placeholder_css, aetheric_combo_box_css,
+    AETHERIC_RED, AETHERIC_NAV_INACTIVE_TEXT,
 )
 
 import logging
@@ -1954,15 +1957,26 @@ class BudgetProgressBar(QProgressBar):
 
 
 class FloatingSettingsPanel(QWidget):
-    """Floating settings panel with model selection and performance monitoring."""
-    
+    """Frameless Aetheric Glass settings shell with sidebar navigation.
+
+    Hosts Settings, Performance, and History sections in a left sidebar +
+    right content stack layout. No internal title bar or close button —
+    the shell is closed via the widget's settings affordance or hide_panel().
+    """
+
     closed = pyqtSignal()
     model_changed = pyqtSignal(str)  # Emit model name when changed
+
+    # Nav page indices — correspond to QStackedWidget indices
+    _NAV_SETTINGS = 0
+    _NAV_PERFORMANCE = 1
+    _NAV_HISTORY = 2
 
     def __init__(self, parent: Optional[QWidget] = None,
                  controller: object = None, tray_manager: object = None,
                  main_widget: object = None):
         super().__init__(parent)
+        self.setObjectName("AethericSettingsShell")
         
         # Store optional references
         self._controller = controller
@@ -1987,7 +2001,7 @@ class FloatingSettingsPanel(QWidget):
         self._benchmark_runner: Optional[BenchmarkRunner] = None
         self._benchmark_history: List[dict] = []  # last 5 results as dicts
 
-        # -- Track whether Performance tab is active --
+        # -- Track whether Performance page is active --
         self._perf_tab_active = False
 
         # Window settings
@@ -1996,60 +2010,97 @@ class FloatingSettingsPanel(QWidget):
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
-        
+
         # Glass pair: translucent background matching the widget's glass aesthetic
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        
+
         # Glass opacity — matches transcript panel
         self.setWindowOpacity(0.87)
-        
-        # Size — resizable with min/max bounds
-        self.setMinimumSize(280, 400)
-        self.setMaximumSize(500, 800)
-        
-        # Style — applied via _apply_theme() at end of __init__
-        
-        # Layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(5)
-        
-        # Header with title and close button (matches transcript panel)
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(5)
-        
-        self._title_label = QLabel("Settings")
-        header_layout.addWidget(self._title_label)
-        header_layout.addStretch()
-        
-        self._close_btn = QPushButton("×")
-        self._close_btn.setFixedSize(24, 24)
-        self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._close_btn.setToolTip("Close panel")
-        self._close_btn.clicked.connect(self.hide_panel)
-        header_layout.addWidget(self._close_btn)
-        
-        layout.addLayout(header_layout)
 
-        # Resize grip — direct child of panel (not in layout) so it stays at bottom-right
-        self._resize_grip = QSizeGrip(self)
-        self._resize_grip.setFixedSize(16, 16)
-        self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        self._resize_grip.show()
+        # Size — wider to accommodate sidebar + content stack
+        self.setMinimumSize(420, 400)
+        self.setMaximumSize(700, 800)
 
         # ------------------------------------------------------------------
-        # Tab widget — Settings and Performance tabs
+        # Root layout: horizontal sidebar + content stack
         # ------------------------------------------------------------------
-        self._tab_widget = QTabWidget()
-        layout.addWidget(self._tab_widget)
+        root_layout = QHBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
         # ------------------------------------------------------------------
-        # Settings tab — existing model selection + hardware info
+        # Left sidebar
         # ------------------------------------------------------------------
-        settings_tab = QWidget()
-        settings_layout = QVBoxLayout(settings_tab)
-        settings_layout.setContentsMargins(6, 6, 6, 6)
+        self._sidebar = QWidget()
+        self._sidebar.setObjectName("AethericSidebar")
+        self._sidebar.setFixedWidth(160)
+        sidebar_layout = QVBoxLayout(self._sidebar)
+        sidebar_layout.setContentsMargins(12, 16, 12, 12)
+        sidebar_layout.setSpacing(6)
+
+        # Navigation buttons
+        self._nav_buttons: List[QPushButton] = []
+
+        # Settings nav
+        self._nav_settings_btn = QPushButton("⚙  Settings")
+        self._nav_settings_btn.setObjectName("AethericNavButton")
+        self._nav_settings_btn.setCheckable(True)
+        self._nav_settings_btn.setChecked(True)
+        self._nav_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_settings_btn.setProperty("nav_id", "settings")
+        self._nav_settings_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_SETTINGS))
+        sidebar_layout.addWidget(self._nav_settings_btn)
+        self._nav_buttons.append(self._nav_settings_btn)
+
+        # Performance nav
+        self._nav_performance_btn = QPushButton("📊  Performance")
+        self._nav_performance_btn.setObjectName("AethericNavButton")
+        self._nav_performance_btn.setCheckable(True)
+        self._nav_performance_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_performance_btn.setProperty("nav_id", "performance")
+        self._nav_performance_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_PERFORMANCE))
+        sidebar_layout.addWidget(self._nav_performance_btn)
+        self._nav_buttons.append(self._nav_performance_btn)
+
+        # History nav (placeholder — S02 builds the real list)
+        self._nav_history_btn = QPushButton("🕐  History")
+        self._nav_history_btn.setObjectName("AethericNavButton")
+        self._nav_history_btn.setCheckable(True)
+        self._nav_history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_history_btn.setProperty("nav_id", "history")
+        self._nav_history_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_HISTORY))
+        sidebar_layout.addWidget(self._nav_history_btn)
+        self._nav_buttons.append(self._nav_history_btn)
+
+        sidebar_layout.addStretch()
+
+        # Dock bay placeholder — T03 will align the real widget over/into this
+        self._dock_bay = QWidget()
+        self._dock_bay.setObjectName("AethericDockBay")
+        self._dock_bay.setFixedHeight(48)
+        dock_bay_layout = QVBoxLayout(self._dock_bay)
+        dock_bay_layout.setContentsMargins(4, 4, 4, 4)
+        self._dock_bay_label = QLabel("Widget Dock")
+        self._dock_bay_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dock_bay_layout.addWidget(self._dock_bay_label)
+        sidebar_layout.addWidget(self._dock_bay)
+
+        root_layout.addWidget(self._sidebar)
+
+        # ------------------------------------------------------------------
+        # Right content stack (QStackedWidget replacing QTabWidget)
+        # ------------------------------------------------------------------
+        self._content_stack = QStackedWidget()
+        self._content_stack.setObjectName("AethericContentStack")
+        root_layout.addWidget(self._content_stack, 1)
+
+        # ------------------------------------------------------------------
+        # Page 0: Settings — model selection + hardware info
+        # ------------------------------------------------------------------
+        settings_page = QWidget()
+        settings_layout = QVBoxLayout(settings_page)
+        settings_layout.setContentsMargins(12, 16, 12, 12)
         settings_layout.setSpacing(5)
 
         # Model selection — Live Model dropdown
@@ -2057,6 +2108,7 @@ class FloatingSettingsPanel(QWidget):
         settings_layout.addWidget(self._live_model_label)
 
         self._live_model_combo = QComboBox()
+        self._live_model_combo.setObjectName("AethericComboBox")
         self._populate_model_dropdown(self._live_model_combo, "realtime_model_size")
         self._live_model_combo.currentIndexChanged.connect(self._on_live_model_changed)
         settings_layout.addWidget(self._live_model_combo)
@@ -2066,6 +2118,7 @@ class FloatingSettingsPanel(QWidget):
         settings_layout.addWidget(self._postprocess_model_label)
 
         self._postprocess_model_combo = QComboBox()
+        self._postprocess_model_combo.setObjectName("AethericComboBox")
         self._populate_model_dropdown(self._postprocess_model_combo, "postprocess_model_size")
         self._postprocess_model_combo.currentIndexChanged.connect(self._on_postprocess_model_changed)
         settings_layout.addWidget(self._postprocess_model_combo)
@@ -2091,14 +2144,14 @@ class FloatingSettingsPanel(QWidget):
         settings_layout.addWidget(self._rec_label)
 
         settings_layout.addStretch()
-        self._tab_widget.addTab(settings_tab, "Settings")
+        self._content_stack.addWidget(settings_page)
 
         # ------------------------------------------------------------------
-        # Performance tab — live resource monitoring + benchmarks
+        # Page 1: Performance — live resource monitoring + benchmarks
         # ------------------------------------------------------------------
-        perf_tab = QWidget()
-        perf_layout = QVBoxLayout(perf_tab)
-        perf_layout.setContentsMargins(6, 6, 6, 6)
+        perf_page = QWidget()
+        perf_layout = QVBoxLayout(perf_page)
+        perf_layout.setContentsMargins(12, 16, 12, 12)
         perf_layout.setSpacing(6)
 
         # --- Resource Usage Section ---
@@ -2173,6 +2226,7 @@ class FloatingSettingsPanel(QWidget):
         model_row.addWidget(self._bench_model_lbl)
 
         self._benchmark_model_combo = QComboBox()
+        self._benchmark_model_combo.setObjectName("AethericComboBox")
 
         # Populate with all 5 models, default to current live model
         try:
@@ -2214,10 +2268,37 @@ class FloatingSettingsPanel(QWidget):
         perf_layout.addWidget(self._benchmark_history_label)
 
         perf_layout.addStretch()
-        self._tab_widget.addTab(perf_tab, "Performance")
+        self._content_stack.addWidget(perf_page)
 
-        # Connect tab change to manage ResourceMonitor lifecycle
-        self._tab_widget.currentChanged.connect(self._on_perf_tab_changed)
+        # ------------------------------------------------------------------
+        # Page 2: History placeholder — S02 implements the real list
+        # ------------------------------------------------------------------
+        history_page = QWidget()
+        history_page.setObjectName("AethericPlaceholderRow")
+        history_layout = QVBoxLayout(history_page)
+        history_layout.setContentsMargins(12, 16, 12, 12)
+        history_layout.setSpacing(8)
+
+        self._history_placeholder_title = QLabel("History")
+        history_layout.addWidget(self._history_placeholder_title)
+
+        self._history_placeholder_desc = QLabel(
+            "Recording history will appear here.\n\n"
+            "Browse, view, scrub, and delete past recordings."
+        )
+        self._history_placeholder_desc.setWordWrap(True)
+        history_layout.addWidget(self._history_placeholder_desc)
+
+        history_layout.addStretch()
+        self._content_stack.addWidget(history_page)
+
+        # ------------------------------------------------------------------
+        # Resize grip — direct child of panel, positioned at bottom-right
+        # ------------------------------------------------------------------
+        self._resize_grip = QSizeGrip(self)
+        self._resize_grip.setFixedSize(16, 16)
+        self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self._resize_grip.show()
 
         # Wire benchmark button
         self._benchmark_btn.clicked.connect(self._on_benchmark_clicked)
@@ -2252,7 +2333,7 @@ class FloatingSettingsPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _apply_theme(self) -> None:
-        """Apply theme-aware stylesheets to all settings panel widgets.
+        """Apply Aetheric Glass theme to all settings panel widgets.
 
         Idempotent and cheap — just re-sets stylesheets from the current
         palette.  Called once at end of __init__ and on desktop theme change.
@@ -2260,24 +2341,33 @@ class FloatingSettingsPanel(QWidget):
         p = current_palette()
         self._current_palette = p
 
-        # Panel base — glass pair style matching transcript panel
-        self.setStyleSheet(glass_panel_css(p, "FloatingSettingsPanel"))
+        # Panel shell — Aetheric Glass
+        self.setStyleSheet(aetheric_settings_shell_css(p))
 
-        # Header widgets
-        self._title_label.setStyleSheet(title_css(p))
-        self._close_btn.setStyleSheet(header_button_css(p, "close"))
+        # Sidebar
+        self._sidebar.setStyleSheet(aetheric_sidebar_css(p))
 
-        # Resize grip
-        self._resize_grip.setStyleSheet(resize_grip_css(p))
+        # Nav buttons
+        nav_css = aetheric_nav_button_css(p)
+        for btn in self._nav_buttons:
+            btn.setStyleSheet(nav_css)
 
-        # Tabs
-        self._tab_widget.setStyleSheet(tab_widget_css(p))
+        # Dock bay
+        self._dock_bay.setStyleSheet(aetheric_dock_bay_css(p))
+        self._dock_bay_label.setStyleSheet(
+            f"QLabel {{ color: {AETHERIC_NAV_INACTIVE_TEXT}; font-size: 10px; }}"
+        )
 
-        # Settings tab — section labels, combos, hardware labels
+        # Content stack — transparent so per-page styles show through
+        self._content_stack.setStyleSheet(
+            "QStackedWidget { background-color: transparent; border: none; }"
+        )
+
+        # Settings page — labels and combos
         self._live_model_label.setStyleSheet(status_label_css(p))
-        self._live_model_combo.setStyleSheet(combo_box_css(p))
+        self._live_model_combo.setStyleSheet(aetheric_combo_box_css(p))
         self._postprocess_model_label.setStyleSheet(status_label_css(p))
-        self._postprocess_model_combo.setStyleSheet(combo_box_css(p))
+        self._postprocess_model_combo.setStyleSheet(aetheric_combo_box_css(p))
         self._hardware_label.setStyleSheet(status_label_css(p))
         self._ram_label.setStyleSheet(info_label_css(p))
         self._cpu_info_label.setStyleSheet(info_label_css(p))
@@ -2285,7 +2375,7 @@ class FloatingSettingsPanel(QWidget):
             f"QLabel {{ font-weight: bold; color: {p.accent}; }}"
         )
 
-        # Performance tab — section headers
+        # Performance page — section headers
         self._resource_header.setStyleSheet(
             f"QLabel {{ color: {p.accent}; font-weight: bold; font-size: 12px; padding: 2px; }}"
         )
@@ -2325,17 +2415,30 @@ class FloatingSettingsPanel(QWidget):
 
         # Benchmark section
         self._bench_model_lbl.setStyleSheet(info_label_css(p))
-        self._benchmark_model_combo.setStyleSheet(
-            combo_box_css(p, accent_color=p.accent)
-        )
+        self._benchmark_model_combo.setStyleSheet(aetheric_combo_box_css(p))
         self._benchmark_btn.setStyleSheet(action_button_css(p, "benchmark"))
         self._history_header.setStyleSheet(status_label_css(p))
         self._benchmark_history_label.setStyleSheet(
             f"QLabel {{ color: {p.text_disabled}; font-size: 11px; padding: 2px; }}"
         )
 
+        # History placeholder page
+        history_css = aetheric_placeholder_css(p)
+        history_page = self._content_stack.widget(self._NAV_HISTORY)
+        if history_page is not None:
+            history_page.setStyleSheet(history_css)
+        self._history_placeholder_title.setStyleSheet(
+            f"QLabel {{ color: {AETHERIC_RED}; font-weight: bold; font-size: 14px; }}"
+        )
+        self._history_placeholder_desc.setStyleSheet(
+            f"QLabel {{ color: {AETHERIC_NAV_INACTIVE_TEXT}; font-size: 12px; }}"
+        )
+
+        # Resize grip
+        self._resize_grip.setStyleSheet(resize_grip_css(p))
+
         scheme_name = "dark" if p is DARK_PALETTE else "light"
-        logger.info("Applied %s theme to FloatingSettingsPanel", scheme_name)
+        logger.info("Applied %s Aetheric theme to FloatingSettingsPanel", scheme_name)
 
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""
@@ -2432,11 +2535,27 @@ class FloatingSettingsPanel(QWidget):
     # Performance tab wiring (T03)
     # ------------------------------------------------------------------
 
-    def _on_perf_tab_changed(self, index: int) -> None:
-        """Handle tab changes — start/stop ResourceMonitor based on Performance tab visibility."""
-        # Performance tab is index 1
-        self._perf_tab_active = (index == 1)
+    def _on_nav_clicked(self, page_index: int) -> None:
+        """Handle sidebar nav clicks — switch page and manage ResourceMonitor.
 
+        Args:
+            page_index: QStackedWidget index (_NAV_SETTINGS, _NAV_PERFORMANCE, _NAV_HISTORY).
+        """
+        if page_index < 0 or page_index >= self._content_stack.count():
+            logger.warning("Invalid nav index %d — ignoring", page_index)
+            return
+
+        # Update checked state on nav buttons (exclusive toggle)
+        for i, btn in enumerate(self._nav_buttons):
+            btn.setChecked(i == page_index)
+
+        # Switch content stack
+        self._content_stack.setCurrentIndex(page_index)
+
+        # Track performance active state
+        self._perf_tab_active = (page_index == self._NAV_PERFORMANCE)
+
+        # Start/stop monitoring based on visibility
         if self._perf_tab_active and self.isVisible():
             self._start_resource_monitor()
             self._metrics_timer.start()
@@ -2444,6 +2563,9 @@ class FloatingSettingsPanel(QWidget):
         else:
             self._stop_resource_monitor()
             self._metrics_timer.stop()
+
+        nav_id = self._nav_buttons[page_index].property("nav_id") if page_index < len(self._nav_buttons) else "?"
+        logger.info("Settings nav changed to '%s' (index %d)", nav_id, page_index)
 
     def _start_resource_monitor(self) -> None:
         """Start the ResourceMonitor if not already running."""
