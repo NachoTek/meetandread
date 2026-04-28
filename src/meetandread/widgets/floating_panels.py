@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
     QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -1983,6 +1983,11 @@ class FloatingSettingsPanel(QWidget):
         self._tray_manager = tray_manager
         self._main_widget = main_widget
 
+        # -- Docked-pair state (T03: recursion-guarded movement sync) --
+        self._docked_widget: Optional[QWidget] = None  # the MeetAndReadWidget
+        self._dock_offset: QPoint = QPoint()  # panel.pos() - widget.pos() at dock time
+        self._syncing_docked_pair: bool = False  # guard flag to prevent recursion
+
         # -- Performance backend instances (wired in T03) --
         self._resource_monitor = ResourceMonitor(
             poll_interval_ms=2000,
@@ -2449,9 +2454,20 @@ class FloatingSettingsPanel(QWidget):
             self._metrics_timer.start()
     
     def hide_panel(self):
-        """Hide the panel with a 150ms fade-out and stop monitoring."""
+        """Hide the panel with a 150ms fade-out and stop monitoring.
+
+        Detaches the dock relation so panel hide doesn't try to sync moves.
+        Notifies the main widget to clear its docked state.
+        """
+        self.detach_dock()
         self._stop_resource_monitor()
         self._metrics_timer.stop()
+        # Notify the main widget to clear its docked state
+        if self._main_widget is not None:
+            try:
+                self._main_widget._settings_docked = False
+            except Exception:
+                pass
         self._start_fade_out()
 
     # ------------------------------------------------------------------
@@ -2505,31 +2521,122 @@ class FloatingSettingsPanel(QWidget):
     
     def dock_to_widget(self, widget: QWidget, position: str = "left") -> None:
         """
-        Position panel next to a widget.
-        
+        Position panel next to a widget, aligning the widget over the
+        sidebar's dock bay for the Aetheric Glass settings shell.
+
+        For the settings panel (objectName AethericSettingsShell), this uses
+        a dedicated dock-bay alignment: the panel is placed so the widget's
+        center overlaps the sidebar's bottom dock bay area.
+
         Args:
             widget: The main widget to dock to
-            position: "left", "right", "top", "bottom"
+            position: "left", "right", "top", "bottom" (used only for
+                      non-settings panels; settings always uses dock-bay mode)
         """
+        if not widget or not widget.isVisible():
+            return
+
         # Get widget position in screen coordinates
         widget_pos = widget.mapToGlobal(widget.rect().topLeft())
         widget_rect = widget.geometry()
-        
-        # Calculate panel position
-        if position == "left":
-            x = widget_pos.x() - self.width() - 10
-            y = widget_pos.y()
-        elif position == "right":
-            x = widget_pos.x() + widget_rect.width() + 10
-            y = widget_pos.y()
-        elif position == "top":
-            x = widget_pos.x()
-            y = widget_pos.y() - self.height() - 10
-        else:  # bottom
-            x = widget_pos.x()
-            y = widget_pos.y() + widget_rect.height() + 10
-        
+        widget_center_x = widget_pos.x() + widget_rect.width() // 2
+        widget_center_y = widget_pos.y() + widget_rect.height() // 2
+
+        panel_w = self.width()
+        panel_h = self.height()
+        sidebar_w = 160  # sidebar fixed width
+
+        # Dock-bay alignment: position the panel so the widget center
+        # falls over the sidebar's dock bay (bottom-left area).
+        # The dock bay is at the bottom of the sidebar, horizontally centered
+        # within the sidebar width.
+        dock_bay_center_x = panel_w - sidebar_w // 2  # right edge of panel (sidebar side)
+        dock_bay_center_y = panel_h - 24  # bottom of panel (dock bay area)
+
+        x = widget_center_x - dock_bay_center_x
+        y = widget_center_y - dock_bay_center_y
+
         self.move(x, y)
+
+        # Record the offset so subsequent moves preserve the alignment
+        widget_screen_pos = widget.pos()
+        self._dock_offset = QPoint(x - widget_screen_pos.x(), y - widget_screen_pos.y())
+
+    # ------------------------------------------------------------------
+    # Docked-pair helpers (T03)
+    # ------------------------------------------------------------------
+
+    def attach_dock(self, widget: QWidget) -> None:
+        """Attach to a widget for docked-pair movement.
+
+        Records the positional offset and logs the attach event.
+        Safe to call multiple times — no-ops if already attached.
+
+        Args:
+            widget: The MeetAndReadWidget to dock with.
+        """
+        if widget is None:
+            return
+        self._docked_widget = widget
+        # Record offset: panel.pos() - widget.pos()
+        self._dock_offset = self.pos() - widget.pos()
+        logger.debug(
+            "Settings dock attached: offset=(%d, %d)",
+            self._dock_offset.x(), self._dock_offset.y(),
+        )
+
+    def detach_dock(self) -> None:
+        """Detach from the docked widget.
+
+        Clears the dock relation. The widget stays at its current position.
+        """
+        if self._docked_widget is not None:
+            logger.debug("Settings dock detached")
+        self._docked_widget = None
+        self._dock_offset = QPoint()
+
+    @property
+    def is_docked(self) -> bool:
+        """True when the panel is actively docked to a widget."""
+        return self._docked_widget is not None and self.isVisible()
+
+    def moveEvent(self, event) -> None:
+        """Sync docked widget position when the panel is moved by the user.
+
+        Applies the stored dock offset to move the widget by the same
+        delta.  The ``_syncing_docked_pair`` guard prevents recursion
+        when the widget's own moveEvent triggers a panel reposition.
+
+        Only syncs when the panel is visible and docked.
+        """
+        super().moveEvent(event)
+
+        if self._syncing_docked_pair:
+            return
+        if not self.is_docked or self._docked_widget is None:
+            return
+        if not self._docked_widget.isVisible():
+            return
+
+        # Calculate new position for widget using stored offset
+        new_widget_pos = self.pos() - self._dock_offset
+
+        # Skip if the widget is already at the target position (no-op guard)
+        current_widget_pos = self._docked_widget.pos()
+        if (new_widget_pos.x() == current_widget_pos.x() and
+                new_widget_pos.y() == current_widget_pos.y()):
+            return
+
+        # Apply the delta under the guard
+        self._syncing_docked_pair = True
+        try:
+            self._docked_widget.move(new_widget_pos)
+            logger.debug(
+                "Panel→Widget sync: widget moved to (%d, %d)",
+                new_widget_pos.x(), new_widget_pos.y(),
+            )
+        finally:
+            self._syncing_docked_pair = False
     
     # ------------------------------------------------------------------
     # Performance tab wiring (T03)

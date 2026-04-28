@@ -232,6 +232,10 @@ to avoid clipping issues and enable proper text rendering.
         self.dock_edge = None  # 'left', 'right'
         self._slide_state = _SlideState()
         
+        # Settings docked-pair state (T03: recursion-guarded movement sync)
+        self._syncing_docked_pair: bool = False  # guard flag to prevent recursion
+        self._settings_docked: bool = False  # True when settings panel is docked
+        
         # Visual state machine (idle → recording → processing → idle)
         self._visual_state = _WidgetVisualStateMachine(WidgetVisualState.IDLE)
 
@@ -388,27 +392,53 @@ to avoid clipping issues and enable proper text rendering.
 
         Only left/right docking is supported — panels open on the side
         opposite the docked edge.
+
+        For the settings panel, when docked it follows the widget using
+        the stored dock offset from FloatingSettingsPanel, guarded by
+        _syncing_docked_pair to prevent recursive move loops.
         """
         if not self._floating_transcript_panel or not self._floating_settings_panel:
             return
 
         if self.dock_edge == 'right':
             transcript_pos = "left"
-            settings_pos = "left"
         elif self.dock_edge == 'left':
             transcript_pos = "right"
-            settings_pos = "right"
         else:
             # Default: panel flows to the left
             transcript_pos = "left"
-            settings_pos = "right"
 
-        # Update panel positions
+        # Update transcript panel position (existing behavior)
         if self._floating_transcript_panel.isVisible():
             self._floating_transcript_panel.dock_to_widget(self, transcript_pos)
 
+        # Update settings panel position — use dock-offset sync when docked
         if self._floating_settings_panel.isVisible():
-            self._floating_settings_panel.dock_to_widget(self, settings_pos)
+            if self._syncing_docked_pair:
+                # Already syncing from panel→widget direction — skip
+                return
+            if self._settings_docked:
+                # Sync panel to widget using stored offset
+                panel = self._floating_settings_panel
+                offset = panel._dock_offset
+                new_panel_pos = self.pos() + offset
+
+                # No-op guard — skip if panel already at target
+                current_panel_pos = panel.pos()
+                if (new_panel_pos.x() == current_panel_pos.x() and
+                        new_panel_pos.y() == current_panel_pos.y()):
+                    return
+
+                # Apply under guard
+                self._syncing_docked_pair = True
+                try:
+                    panel.move(new_panel_pos)
+                finally:
+                    self._syncing_docked_pair = False
+            else:
+                # Fallback: use generic positioning
+                settings_pos = "right" if self.dock_edge == 'left' else "right"
+                self._floating_settings_panel.dock_to_widget(self, settings_pos)
     
     def moveEvent(self, event):
         """Handle widget move - update floating panel positions."""
@@ -1031,12 +1061,27 @@ to avoid clipping issues and enable proper text rendering.
                 self._floating_transcript_panel.show_panel()
     
     def _toggle_settings_panel(self):
-        """Toggle floating settings panel visibility."""
+        """Toggle floating settings panel visibility.
+
+        Opening: docks the settings shell to the widget's current position
+        using dock-bay alignment, then attaches for bidirectional movement.
+        Closing: detaches the dock pair so the widget stays at its position.
+
+        Uses _settings_docked flag rather than isVisible() to avoid race
+        conditions during the 150ms fade-out animation.
+        """
         if self._floating_settings_panel:
-            if self._floating_settings_panel.isVisible():
+            if self._settings_docked:
+                # Currently docked/open → close
                 self._floating_settings_panel.hide_panel()
+                self._settings_docked = False
             else:
+                # Currently closed/undocked → open
+                # Position via dock-bay alignment
                 self._floating_settings_panel.dock_to_widget(self, "right")
+                # Attach for bidirectional docked-pair movement
+                self._floating_settings_panel.attach_dock(self)
+                self._settings_docked = True
                 self._floating_settings_panel.show_panel()
     
     def toggle_recording(self):

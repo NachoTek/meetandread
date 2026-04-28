@@ -304,11 +304,13 @@ class TestWIDGET28:
 class TestWIDGET30:
     def test_hides_when_visible(self, widget):
         widget._floating_settings_panel.isVisible.return_value = True
+        widget._settings_docked = True  # reflect the docked state
         widget._toggle_settings_panel()
         widget._floating_settings_panel.hide_panel.assert_called_once()
 
     def test_shows_when_hidden(self, widget):
         widget._floating_settings_panel.isVisible.return_value = False
+        widget._settings_docked = False  # reflect the undocked state
         widget._toggle_settings_panel()
         widget._floating_settings_panel.show_panel.assert_called_once()
 
