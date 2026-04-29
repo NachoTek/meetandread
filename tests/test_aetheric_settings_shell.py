@@ -32,8 +32,15 @@ from meetandread.widgets.theme import (
     AETHERIC_SIDEBAR_WIDTH,
     AETHERIC_BORDER_LIGHT,
     AETHERIC_BORDER_DARK,
+    # Aetheric CC overlay tokens
+    AETHERIC_CC_BG,
+    AETHERIC_CC_TEXT,
+    AETHERIC_CC_RADIUS,
+    AETHERIC_CC_PADDING,
+    AETHERIC_CC_FONT_SIZE,
     DARK_PALETTE,
     LIGHT_PALETTE,
+    aetheric_cc_overlay_css,
     aetheric_combo_box_css,
     aetheric_dock_bay_css,
     aetheric_history_action_button_css,
@@ -529,6 +536,94 @@ class TestAethericHistoryActionButtonCss:
 
 
 # ---------------------------------------------------------------------------
+# Aetheric CC overlay tokens
+# ---------------------------------------------------------------------------
+
+class TestAethericCCDesignTokens:
+    """Aetheric CC overlay design tokens have expected values."""
+
+    def test_cc_bg_is_semi_transparent_dark(self):
+        """CC background is a semi-transparent dark glass."""
+        assert AETHERIC_CC_BG.startswith("rgba(")
+
+    def test_cc_text_is_light(self):
+        """CC text colour is a light/white rgba for readability on dark bg."""
+        assert AETHERIC_CC_TEXT.startswith("rgba(") or AETHERIC_CC_TEXT.startswith("#")
+
+    def test_cc_radius_is_12px(self):
+        """CC overlay uses the standard 12px Aetheric radius."""
+        assert AETHERIC_CC_RADIUS == "12px"
+
+    def test_cc_padding_defined(self):
+        """CC overlay has a padding token for inner content spacing."""
+        assert AETHERIC_CC_PADDING.endswith("px")
+
+    def test_cc_font_size_defined(self):
+        """CC overlay has a font-size token for transcript text."""
+        assert AETHERIC_CC_FONT_SIZE.endswith("px")
+
+
+# ---------------------------------------------------------------------------
+# aetheric_cc_overlay_css
+# ---------------------------------------------------------------------------
+
+class TestAethericCCOverlayCss:
+    """CC overlay panel QSS contract."""
+
+    @pytest.mark.parametrize("palette", [DARK_PALETTE, LIGHT_PALETTE])
+    def test_does_not_crash_with_either_palette(self, palette):
+        css = aetheric_cc_overlay_css(palette)
+        assert isinstance(css, str)
+        assert len(css) > 0
+
+    def test_uses_object_name_selector(self):
+        """Primary selector must be QWidget#AethericCCOverlay."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        assert "QWidget#AethericCCOverlay" in css
+
+    def test_no_bare_qwidget_selector(self):
+        """No unscoped QWidget styling — must use #AethericCCOverlay."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        lines = css.split("\n")
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("QWidget") and "#" not in stripped:
+                assert False, f"Found bare QWidget selector: {stripped}"
+
+    def test_contains_background_token(self):
+        """CSS must include the AETHERIC_CC_BG background."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        assert AETHERIC_CC_BG in css
+
+    def test_contains_text_colour(self):
+        """CSS must include the AETHERIC_CC_TEXT colour."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        assert AETHERIC_CC_TEXT in css
+
+    def test_contains_12px_radius(self):
+        """CSS must set border-radius to the CC radius token."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        assert f"border-radius: {AETHERIC_CC_RADIUS}" in css
+
+    def test_contains_directional_borders(self):
+        """CC overlay uses light top-left / dark bottom-right border cues."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        assert AETHERIC_BORDER_LIGHT in css
+        assert AETHERIC_BORDER_DARK in css
+
+    def test_child_selectors_use_object_names(self):
+        """Any child selectors (e.g. QLabel) must be scoped via #ObjectName."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        lines = css.split("\n")
+        for line in lines:
+            stripped = line.strip()
+            # If there's a child widget selector like QLabel { ... }, it must
+            # be scoped under #AethericCCOverlay or use an #ObjectName
+            if stripped.startswith("QLabel") and "#" not in stripped:
+                assert False, f"Found unscoped QLabel selector: {stripped}"
+
+
+# ---------------------------------------------------------------------------
 # Scoped selector audit — all helpers use #ObjectNames
 # ---------------------------------------------------------------------------
 
@@ -549,6 +644,7 @@ class TestAethericScopedSelectors:
             (aetheric_history_splitter_css, "QSplitter#AethericHistorySplitter"),
             (aetheric_history_header_css, "QFrame#AethericHistoryHeader"),
             (aetheric_history_action_button_css, "QPushButton#AethericHistoryActionButton"),
+            (aetheric_cc_overlay_css, "QWidget#AethericCCOverlay"),
         ]
         for helper, selector in helpers_and_selectors:
             css = helper(DARK_PALETTE)

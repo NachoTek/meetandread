@@ -775,6 +775,17 @@ AETHERIC_PURPLE = "#c9bfff"  # secondary
 AETHERIC_CYAN = "#00dbe9"  # tertiary
 
 
+# ---------------------------------------------------------------------------
+# Aetheric CC overlay tokens — compact closed-caption live transcript
+# ---------------------------------------------------------------------------
+
+AETHERIC_CC_BG = "rgba(30, 29, 30, 220)"
+AETHERIC_CC_TEXT = "rgba(255, 255, 255, 230)"
+AETHERIC_CC_RADIUS = AETHERIC_RADIUS  # 12px — matches shell radius
+AETHERIC_CC_PADDING = "10px 14px"
+AETHERIC_CC_FONT_SIZE = "14px"
+
+
 def aetheric_settings_shell_css(p: ThemePalette) -> str:
     """Aetheric Glass settings shell — translucent dark panel base.
 
@@ -909,6 +920,49 @@ def aetheric_placeholder_css(p: ThemePalette) -> str:
         }}
         QWidget#AethericPlaceholderRow:hover {{
             border: 1px solid {AETHERIC_RED};
+        }}
+    """
+
+
+# ---------------------------------------------------------------------------
+# Aetheric CC overlay helper — compact closed-caption live transcript
+# ---------------------------------------------------------------------------
+
+def aetheric_cc_overlay_css(p: ThemePalette) -> str:
+    """Aetheric Glass CC overlay — compact closed-caption panel.
+
+    Semi-transparent dark glass background with directional border
+    cues (light on top-left, dark on bottom-right) and a 12px corner
+    radius.  The overlay displays live transcript text in a compact
+    format suitable for recording-lifecycle display.
+
+    Object name selector: ``QWidget#AethericCCOverlay``
+    Child text selector: ``QLabel#AethericCCText``
+
+    Args:
+        p: Active theme palette (used for deterministic output; the CC
+            overlay uses its own colour tokens for consistent dark-glass
+            appearance regardless of system theme).
+
+    Returns:
+        QSS string for the CC overlay container and its child text label.
+    """
+    return f"""
+        QWidget#AethericCCOverlay {{
+            background-color: {AETHERIC_CC_BG};
+            border: 1px solid {AETHERIC_BORDER_LIGHT};
+            border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+            border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+            border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+            border-right: 1px solid {AETHERIC_BORDER_DARK};
+            border-radius: {AETHERIC_CC_RADIUS};
+            padding: {AETHERIC_CC_PADDING};
+        }}
+        QLabel#AethericCCText {{
+            color: {AETHERIC_CC_TEXT};
+            font-size: {AETHERIC_CC_FONT_SIZE};
+            background-color: transparent;
+            border: none;
         }}
     """
 
