@@ -951,6 +951,8 @@ to avoid clipping issues and enable proper text rendering.
                 if not self._cc_overlay._has_been_docked:
                     self._cc_overlay.dock_to_widget(self, self._get_panel_position())
                 self._cc_overlay.show_panel()
+                # Widget must stay on top of child panels
+                self.raise_()
             
             # Show floating transcript panel when recording starts (legacy)
             if self._floating_transcript_panel:
@@ -1147,7 +1149,9 @@ to avoid clipping issues and enable proper text rendering.
                 if not self._cc_overlay._has_been_docked:
                     self._cc_overlay.dock_to_widget(self, self._get_panel_position())
                 self._cc_overlay.show_panel()
-    
+                # Widget must stay on top of child panels
+                self.raise_()
+
     def _toggle_settings_panel(self):
         """Toggle floating settings panel visibility.
 
@@ -1171,6 +1175,8 @@ to avoid clipping issues and enable proper text rendering.
                 self._floating_settings_panel.attach_dock(self)
                 self._settings_docked = True
                 self._floating_settings_panel.show_panel()
+                # Widget must stay on top of the panel it hosts
+                self.raise_()
     
     def toggle_recording(self):
         """Toggle recording state via controller."""
