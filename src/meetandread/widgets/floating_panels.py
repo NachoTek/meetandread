@@ -2514,12 +2514,9 @@ class FloatingSettingsPanel(QWidget):
             Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.Tool
         )
-        # Glass pair: translucent background matching the widget's glass aesthetic
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
-        # Glass opacity — matches transcript panel
-        self.setWindowOpacity(0.87)
+        # Solid background — translucency removed for readability
+        # (WA_TranslucentBackground makes the panel unusable on light desktops)
 
         # Size — wider to accommodate sidebar + content stack
         self.setMinimumSize(420, 400)

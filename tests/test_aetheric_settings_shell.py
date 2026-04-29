@@ -22,6 +22,7 @@ from meetandread.widgets.theme import (
     AETHERIC_CYAN,
     AETHERIC_GLASS_BG,
     AETHERIC_GLASS_ROW_BG,
+    AETHERIC_SETTINGS_BG,
     AETHERIC_NAV_ACTIVE_BG,
     AETHERIC_NAV_ACTIVE_GLOW,
     AETHERIC_NAV_HOVER_BG,
@@ -121,9 +122,9 @@ class TestAethericSettingsShellCss:
         css = aetheric_settings_shell_css(DARK_PALETTE)
         assert "QWidget#AethericSettingsShell" in css
 
-    def test_contains_glass_bg(self):
+    def test_contains_solid_bg(self):
         css = aetheric_settings_shell_css(DARK_PALETTE)
-        assert AETHERIC_GLASS_BG in css
+        assert AETHERIC_SETTINGS_BG in css
 
     def test_contains_12px_radius(self):
         css = aetheric_settings_shell_css(DARK_PALETTE)
@@ -153,9 +154,9 @@ class TestAethericSidebarCss:
         css = aetheric_sidebar_css(DARK_PALETTE)
         assert "QWidget#AethericSidebar" in css
 
-    def test_contains_glass_bg(self):
+    def test_contains_solid_bg(self):
         css = aetheric_sidebar_css(DARK_PALETTE)
-        assert AETHERIC_GLASS_BG in css
+        assert AETHERIC_SETTINGS_BG in css
 
     def test_contains_sidebar_width(self):
         css = aetheric_sidebar_css(DARK_PALETTE)
