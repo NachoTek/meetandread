@@ -508,28 +508,31 @@ to avoid clipping issues and enable proper text rendering.
     def _recover_offscreen_position(self):
         """Recover widget position if it's off all available screens.
 
-        Checks whether the widget's top-left corner is visible on any
-        screen. If not, repositions to the bottom-right of the primary
-        screen. Logs the recovery for diagnostics.
+        Checks whether the widget's center point is visible on any
+        screen. If not, repositions to the center of the primary
+        monitor. Logs the recovery for diagnostics.
         """
         pos = self.pos()
-        widget_point = QPoint(pos.x(), pos.y())
-        
-        # Check if the widget's position is on any available screen
+        widget_center = QPoint(
+            pos.x() + self.width() // 2,
+            pos.y() + self.height() // 2,
+        )
+
+        # Check if the widget's center is on any available screen
         screens = QApplication.screens()
         on_screen = False
         for screen in screens:
-            if screen.geometry().contains(widget_point):
+            if screen.geometry().contains(widget_center):
                 on_screen = True
                 break
-        
+
         if not on_screen:
             primary = QApplication.primaryScreen().geometry()
-            new_x = primary.width() - self.width() - 20
-            new_y = primary.height() - self.height() - 40
+            new_x = primary.x() + (primary.width() - self.width()) // 2
+            new_y = primary.y() + (primary.height() - self.height()) // 2
             logging.getLogger(__name__).info(
                 "Widget position (%d, %d) is off-screen. "
-                "Recovering to (%d, %d).",
+                "Recovering to center of primary monitor (%d, %d).",
                 pos.x(), pos.y(), new_x, new_y,
             )
             self.move(new_x, new_y)

@@ -223,18 +223,6 @@ class TestWIDGET17:
                     f"Lobe positions overlap: {list(positions.keys())[i]} == {list(positions.keys())[j]}"
 
     def test_transcript_lobe_toggles_panel_hide(self, widget):
-<<<<<<< HEAD
-        """Clicking transcript lobe hides panel when visible."""
-        widget._floating_transcript_panel.isVisible.return_value = True
-        widget.toggle_transcript_panel()
-        widget._floating_transcript_panel.hide_panel.assert_called_once()
-
-    def test_transcript_lobe_toggles_panel_show(self, widget):
-        """Clicking transcript lobe shows panel when hidden."""
-        widget._floating_transcript_panel.isVisible.return_value = False
-        widget.toggle_transcript_panel()
-        widget._floating_transcript_panel.show_panel.assert_called_once()
-=======
         """Clicking transcript lobe hides CC overlay when visible."""
         widget._cc_overlay.isVisible.return_value = True
         widget.toggle_transcript_panel()
@@ -245,7 +233,6 @@ class TestWIDGET17:
         widget._cc_overlay.isVisible.return_value = False
         widget.toggle_transcript_panel()
         widget._cc_overlay.show_panel.assert_called_once()
->>>>>>> milestone/M006-mgkqrb
 
 
 class TestWIDGET19:

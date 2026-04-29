@@ -2,11 +2,7 @@
 SPEAKER RE-IDENTIFICATION BENCHMARK RESULTS
 ======================================================================
 
-<<<<<<< HEAD
-Date: 2026-04-27 19:07:02 UTC
-=======
 Date: 2026-04-29 15:39:39 UTC
->>>>>>> milestone/M006-mgkqrb
 Embedding dimension: 256
 Default threshold:   0.6
 Total trials:        300

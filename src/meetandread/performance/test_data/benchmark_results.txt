@@ -15,19 +15,11 @@ MODEL INFORMATION
 PERFORMANCE
 ----------------------------------------
   Audio duration:       150.0s
-<<<<<<< HEAD
-  Processing time:      64.1s
-  Throughput:           2.3x realtime
-  Chunks processed:     30
-  Avg chunk latency:    2.137s
-  Max chunk latency:    2.250s
-=======
   Processing time:      60.6s
   Throughput:           2.5x realtime
   Chunks processed:     30
   Avg chunk latency:    2.021s
   Max chunk latency:    2.094s
->>>>>>> milestone/M006-mgkqrb
 
 WORD ERROR RATE
 ----------------------------------------
