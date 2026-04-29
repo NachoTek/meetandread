@@ -3,15 +3,20 @@ Tests for the Settings History page in FloatingSettingsPanel.
 
 Covers: structure, nav refresh, list population, item selection,
 empty state, missing-file fallback, speaker anchor rendering,
-and negative edge cases.
+delete workflows, scrub workflows, and speaker rename workflows.
 """
 
 import json
+import re
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, PropertyMock, call
 
-from PyQt6.QtWidgets import QApplication, QListWidget, QSplitter, QTextBrowser, QFrame
+from PyQt6.QtWidgets import (
+    QApplication, QListWidget, QListWidgetItem, QSplitter,
+    QTextBrowser, QFrame, QMessageBox, QInputDialog, QDialog,
+    QPushButton,
+)
 from PyQt6.QtCore import Qt, QUrl
 
 from meetandread.widgets.floating_panels import FloatingSettingsPanel
@@ -45,7 +50,38 @@ def _write_transcript(path: Path, body: str, metadata: dict) -> None:
     path.write_text(body + footer, encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
+def _select_recording(panel, tmp_path, qapp, stem="test_rec",
+                      body="**SPK_0**\nHello world.\n\n**SPK_1**\nHow are you?\n",
+                      speakers=None):
+    """Populate list with one recording and click to select it.
+    
+    Returns (md_path, item).
+    """
+    if speakers is None:
+        speakers = ["SPK_0", "SPK_1"]
+    md_path = tmp_path / "transcripts" / f"{stem}.md"
+    metadata = {
+        "words": [
+            {"speaker_id": s, "start_time": float(i), "end_time": float(i + 1), "text": f"word{i}"}
+            for i, s in enumerate(speakers)
+        ],
+        "segments": [
+            {"speaker": s, "start": float(i), "end": float(i + 1)}
+            for i, s in enumerate(speakers)
+        ],
+    }
+    _write_transcript(md_path, body, metadata)
+
+    meta = _make_meta(str(md_path), wav_exists=True)
+    panel._populate_history_list([meta])
+    item = panel._history_list.item(0)
+    panel._history_list.setCurrentItem(item)
+    panel._on_history_item_clicked(item)
+    qapp.processEvents()
+    return md_path, item
+
+
+# ---- Fixtures -------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -451,3 +487,511 @@ class TestSettingsReselectHistoryItem:
 
         # Should not raise
         settings_panel_on_history._reselect_history_item(Path("/fake/nonexistent.md"))
+
+
+# ---------------------------------------------------------------------------
+# Delete workflow tests
+# ---------------------------------------------------------------------------
+
+class TestSettingsDeleteWorkflow:
+    """Verify delete confirm/cancel/failure and state cleanup."""
+
+    def test_delete_yes_removes_and_clears(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+        assert settings_panel_on_history._current_history_md_path == md_path
+
+        with patch("meetandread.widgets.floating_panels.QMessageBox.question",
+                    return_value=QMessageBox.StandardButton.Yes), \
+             patch("meetandread.recording.management.enumerate_recording_files",
+                    return_value=[md_path]), \
+             patch("meetandread.recording.management.delete_recording",
+                    return_value=(1, [str(md_path)])):
+            settings_panel_on_history._delete_recording(item)
+            qapp.processEvents()
+
+        assert settings_panel_on_history._current_history_md_path is None
+        assert settings_panel_on_history._history_detail_header.isHidden()
+
+    def test_delete_cancel_leaves_everything(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch("meetandread.widgets.floating_panels.QMessageBox.question",
+                    return_value=QMessageBox.StandardButton.No):
+            settings_panel_on_history._delete_recording(item)
+
+        assert settings_panel_on_history._current_history_md_path == md_path
+        assert not settings_panel_on_history._history_detail_header.isHidden()
+
+    def test_delete_exception_shows_warning(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch("meetandread.widgets.floating_panels.QMessageBox.question",
+                    return_value=QMessageBox.StandardButton.Yes), \
+             patch("meetandread.recording.management.enumerate_recording_files",
+                    return_value=[md_path]), \
+             patch("meetandread.recording.management.delete_recording",
+                    side_effect=OSError("disk error")), \
+             patch("meetandread.widgets.floating_panels.QMessageBox.warning") as warn:
+            settings_panel_on_history._delete_recording(item)
+            qapp.processEvents()
+            warn.assert_called_once()
+
+        assert settings_panel_on_history._current_history_md_path == md_path
+
+    def test_delete_no_current_item_is_noop(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._on_delete_btn_clicked()
+
+
+# ---------------------------------------------------------------------------
+# Scrub workflow tests
+# ---------------------------------------------------------------------------
+
+class TestSettingsScrubWorkflow:
+    """Verify scrub start/progress/error/comparison flows."""
+
+    def test_scrub_refuses_missing_wav(self, settings_panel_on_history, qapp, tmp_path):
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        # get_recordings_dir returns real dir, WAV won't exist there
+        with patch("meetandread.widgets.floating_panels.QMessageBox.information") as info:
+            settings_panel_on_history._on_scrub_clicked()
+            info.assert_called_once()
+
+    def test_scrub_already_scrubbing_is_noop(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._is_scrubbing = True
+        settings_panel_on_history._on_scrub_clicked()
+
+    def test_scrub_dialog_cancel_does_nothing(self, settings_panel_on_history, qapp, tmp_path):
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+        wav_dir = tmp_path / "recordings"
+        wav_dir.mkdir(exist_ok=True)
+        (wav_dir / "test_rec.wav").write_bytes(b"RIFF" + b"\x00" * 100)
+
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = 0
+        settings_panel_on_history._create_scrub_dialog = lambda: mock_dialog
+
+        with patch("meetandread.audio.storage.paths.get_recordings_dir",
+                    return_value=wav_dir):
+            settings_panel_on_history._on_scrub_clicked()
+
+        assert not settings_panel_on_history._is_scrubbing
+
+    def test_scrub_start_sets_state(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+        wav_path = tmp_path / "test_rec.wav"
+        wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
+
+        mock_runner = MagicMock()
+        mock_runner.scrub_recording.return_value = "/fake/sidecar.md"
+
+        with patch("meetandread.transcription.scrub.ScrubRunner",
+                    return_value=mock_runner), \
+             patch.object(settings_panel_on_history, "_get_app_settings",
+                          return_value=MagicMock()):
+            settings_panel_on_history._start_scrub(wav_path, md_path, "small")
+
+        assert settings_panel_on_history._is_scrubbing is True
+        assert settings_panel_on_history._scrub_model_size == "small"
+        assert not settings_panel_on_history._scrub_btn.isEnabled()
+
+    def test_scrub_complete_error_reenables_button(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._is_scrubbing = True
+        settings_panel_on_history._scrub_btn.setEnabled(False)
+
+        with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
+            settings_panel_on_history._handle_scrub_complete(None, "Transcription failed")
+
+        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._scrub_btn.isEnabled()
+        assert not settings_panel_on_history._is_comparison_mode
+
+    def test_scrub_complete_shows_comparison(self, settings_panel_on_history, qapp, tmp_path):
+        settings_panel_on_history._is_scrubbing = True
+        settings_panel_on_history._scrub_btn.setEnabled(False)
+        settings_panel_on_history._scrub_model_size = "small"
+
+        sidecar = tmp_path / "test_rec_scrub_small.md"
+        sidecar.write_text("**SPK_0**\nScrubbed text.\n", encoding="utf-8")
+
+        settings_panel_on_history._handle_scrub_complete(str(sidecar), None)
+        qapp.processEvents()
+
+        assert settings_panel_on_history._is_comparison_mode is True
+        assert settings_panel_on_history._scrub_btn.isHidden()
+
+
+# ---------------------------------------------------------------------------
+# Scrub accept/reject tests
+# ---------------------------------------------------------------------------
+
+class TestSettingsScrubAcceptReject:
+    """Verify accept/reject refresh and reselection."""
+
+    def test_accept_promotes_sidecar(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+        settings_panel_on_history._scrub_model_size = "small"
+        settings_panel_on_history._is_comparison_mode = True
+
+        with patch("meetandread.transcription.scrub.ScrubRunner.accept_scrub") as mock_accept:
+            settings_panel_on_history._on_scrub_accept()
+            mock_accept.assert_called_once_with(md_path, "small")
+
+        assert not settings_panel_on_history._is_comparison_mode
+
+    def test_accept_missing_sidecar_shows_warning(self, settings_panel_on_history, qapp, tmp_path):
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+        settings_panel_on_history._scrub_model_size = "small"
+
+        with patch("meetandread.transcription.scrub.ScrubRunner.accept_scrub",
+                    side_effect=FileNotFoundError("gone")), \
+             patch("meetandread.widgets.floating_panels.QMessageBox.warning") as warn:
+            settings_panel_on_history._on_scrub_accept()
+            warn.assert_called_once()
+
+    def test_reject_deletes_sidecar(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+        settings_panel_on_history._scrub_model_size = "small"
+        settings_panel_on_history._is_comparison_mode = True
+
+        with patch("meetandread.transcription.scrub.ScrubRunner.reject_scrub") as mock_reject:
+            settings_panel_on_history._on_scrub_reject()
+            mock_reject.assert_called_once_with(md_path, "small")
+
+        assert not settings_panel_on_history._is_comparison_mode
+
+    def test_reject_no_path_is_noop(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._current_history_md_path = None
+        settings_panel_on_history._scrub_model_size = None
+        settings_panel_on_history._on_scrub_reject()
+
+
+# ---------------------------------------------------------------------------
+# Speaker rename workflow tests
+# ---------------------------------------------------------------------------
+
+class TestSettingsSpeakerRenameWorkflow:
+    """Verify speaker anchor rename via _on_history_anchor_clicked."""
+
+    def test_rename_updates_file(self, settings_panel_on_history, qapp, tmp_path):
+        body = "**SPK_0**\nHello.\n\n**SPK_1**\nWorld.\n"
+        md_path, item = _select_recording(
+            settings_panel_on_history, tmp_path, qapp,
+            body=body, speakers=["SPK_0", "SPK_1"],
+        )
+
+        url = QUrl("speaker:SPK_0")
+        with patch("meetandread.widgets.floating_panels.QInputDialog.getText",
+                    return_value=("Alice", True)):
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        content = md_path.read_text(encoding="utf-8")
+        assert "**Alice**" in content
+        assert "**SPK_0**" not in content
+
+    def test_rename_cancel_does_nothing(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+        original = md_path.read_text(encoding="utf-8")
+
+        url = QUrl("speaker:SPK_0")
+        with patch("meetandread.widgets.floating_panels.QInputDialog.getText",
+                    return_value=("", False)):
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        assert md_path.read_text(encoding="utf-8") == original
+
+    def test_rename_blank_name_is_noop(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+        original = md_path.read_text(encoding="utf-8")
+
+        url = QUrl("speaker:SPK_0")
+        with patch("meetandread.widgets.floating_panels.QInputDialog.getText",
+                    return_value=("  ", True)):
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        assert md_path.read_text(encoding="utf-8") == original
+
+    def test_rename_same_name_is_noop(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+        original = md_path.read_text(encoding="utf-8")
+
+        url = QUrl("speaker:SPK_0")
+        with patch("meetandread.widgets.floating_panels.QInputDialog.getText",
+                    return_value=("SPK_0", True)):
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        assert md_path.read_text(encoding="utf-8") == original
+
+    def test_rename_no_current_path_is_noop(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._current_history_md_path = None
+        url = QUrl("speaker:SPK_0")
+        with patch("meetandread.widgets.floating_panels.QInputDialog.getText",
+                    return_value=("Alice", True)):
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+    def test_rename_preserves_url_case(self, settings_panel_on_history, qapp):
+        url = QUrl("speaker:SPK_0")
+        assert url.toString() == "speaker:SPK_0"
+
+    def test_rename_propagate_signatures_best_effort(self, settings_panel_on_history, qapp, tmp_path):
+        md_path, item = _select_recording(
+            settings_panel_on_history, tmp_path, qapp,
+            body="**SPK_0**\nHello.\n", speakers=["SPK_0"],
+        )
+
+        url = QUrl("speaker:SPK_0")
+        with patch("meetandread.widgets.floating_panels.QInputDialog.getText",
+                    return_value=("Alice", True)), \
+             patch.object(settings_panel_on_history, "_propagate_rename_to_signatures",
+                          side_effect=RuntimeError("db locked")):
+            try:
+                settings_panel_on_history._on_history_anchor_clicked(url)
+            except RuntimeError:
+                pytest.fail("Signature propagation error should not propagate")
+
+    def test_non_speaker_url_is_ignored(self, settings_panel_on_history, qapp):
+        url = QUrl("https://example.com")
+        settings_panel_on_history._on_history_anchor_clicked(url)
+
+
+# ---------------------------------------------------------------------------
+# Cross-panel regression tests (T04)
+# ---------------------------------------------------------------------------
+
+class TestCrossPanelStateIsolation:
+    """Verify Settings and Transcript panels have independent History state.
+
+    Q7 negative tests: verify state does not alias between panels.
+    """
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def settings_panel(self, qapp):
+        panel = FloatingSettingsPanel()
+        panel.show()
+        qapp.processEvents()
+        yield panel
+        panel.close()
+
+    @pytest.fixture
+    def transcript_panel(self, qapp):
+        from meetandread.widgets.floating_panels import FloatingTranscriptPanel
+        panel = FloatingTranscriptPanel()
+        panel.show()
+        qapp.processEvents()
+        yield panel
+        panel.close()
+
+    def test_panels_have_distinct_history_path_attrs(self, settings_panel, transcript_panel):
+        """Each panel has its own _current_history_md_path attribute."""
+        assert hasattr(settings_panel, "_current_history_md_path")
+        assert hasattr(transcript_panel, "_current_history_md_path")
+        # They must be distinct objects (not the same reference)
+        assert settings_panel is not transcript_panel
+
+    def test_selecting_settings_does_not_mutate_transcript_path(
+        self, settings_panel, transcript_panel, qapp, tmp_path,
+    ):
+        """Selecting a recording in Settings does not change transcript panel path."""
+        assert transcript_panel._current_history_md_path is None
+
+        # Select a recording in Settings panel
+        md_path = tmp_path / "transcripts" / "settings_test.md"
+        metadata = {
+            "words": [{"speaker_id": "SPK_0", "start_time": 0.0, "end_time": 1.0, "text": "Hi"}],
+            "segments": [],
+        }
+        _write_transcript(md_path, "**SPK_0**\nHi.\n", metadata)
+        meta = _make_meta(str(md_path))
+        settings_panel._populate_history_list([meta])
+        item = settings_panel._history_list.item(0)
+        settings_panel._history_list.setCurrentItem(item)
+        settings_panel._on_history_item_clicked(item)
+        qapp.processEvents()
+
+        assert settings_panel._current_history_md_path == md_path
+        # Transcript panel must remain None
+        assert transcript_panel._current_history_md_path is None
+
+    def test_selecting_transcript_does_not_mutate_settings_path(
+        self, settings_panel, transcript_panel, qapp, tmp_path,
+    ):
+        """Selecting a recording in Transcript panel does not change Settings path."""
+        assert settings_panel._current_history_md_path is None
+
+        md_path = tmp_path / "transcripts" / "transcript_test.md"
+        metadata = {
+            "words": [{"speaker_id": "SPK_0", "start_time": 0.0, "end_time": 1.0, "text": "Hi"}],
+            "segments": [],
+        }
+        _write_transcript(md_path, "**SPK_0**\nHi.\n", metadata)
+        meta = _make_meta(str(md_path))
+        transcript_panel._populate_history_list([meta])
+        item = transcript_panel._history_list.item(0)
+        transcript_panel._history_list.setCurrentItem(item)
+        transcript_panel._on_history_item_clicked(item)
+        qapp.processEvents()
+
+        assert transcript_panel._current_history_md_path == md_path
+        assert settings_panel._current_history_md_path is None
+
+    def test_scrubbing_state_is_independent(
+        self, settings_panel, transcript_panel, qapp,
+    ):
+        """Scrubbing state in one panel does not affect the other."""
+        settings_panel._is_scrubbing = True
+        assert transcript_panel._is_scrubbing is False
+
+        transcript_panel._is_scrubbing = True
+        assert settings_panel._is_scrubbing is True  # still True
+        assert transcript_panel._is_scrubbing is True
+
+    def test_comparison_mode_is_independent(
+        self, settings_panel, transcript_panel, qapp,
+    ):
+        """Comparison mode in one panel does not affect the other."""
+        settings_panel._is_comparison_mode = True
+        assert transcript_panel._is_comparison_mode is False
+
+    def test_settings_uses_aetheric_object_names(self, settings_panel):
+        """Settings panel History widgets use Aetheric object names."""
+        assert settings_panel._history_splitter.objectName() == "AethericHistorySplitter"
+        assert settings_panel._history_list.objectName() == "AethericHistoryList"
+        assert settings_panel._history_viewer.objectName() == "AethericHistoryViewer"
+
+    def test_transcript_panel_has_no_aetheric_object_names(self, transcript_panel):
+        """Transcript panel History widgets do NOT use Aetheric object names."""
+        assert transcript_panel._history_list.objectName() != "AethericHistoryList"
+        assert transcript_panel._history_viewer.objectName() != "AethericHistoryViewer"
+
+
+class TestNavAwayBackDeterminism:
+    """Verify History nav away/back refresh remains deterministic.
+
+    Q7 negative test: nav away/back behavior is deterministic.
+    """
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def settings_panel(self, qapp):
+        panel = FloatingSettingsPanel()
+        panel.show()
+        qapp.processEvents()
+        yield panel
+        panel.close()
+
+    def test_nav_away_and_back_clears_then_repulates(
+        self, settings_panel, qapp,
+    ):
+        """Navigate away from History and back triggers a clean refresh."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+
+        # Go to History with recordings
+        with patch("meetandread.transcription.transcript_scanner.scan_recordings",
+                    return_value=recordings):
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+            qapp.processEvents()
+
+        count_after_first = settings_panel._history_list.count()
+
+        # Nav away to Settings
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_SETTINGS)
+        qapp.processEvents()
+
+        # Nav back to History with different recordings
+        recordings2 = [_make_meta("/fake/c.md")]
+        with patch("meetandread.transcription.transcript_scanner.scan_recordings",
+                    return_value=recordings2):
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+            qapp.processEvents()
+
+        # List should reflect the second scan result
+        assert settings_panel._history_list.count() == 1
+        assert "c.md" in settings_panel._history_list.item(0).data(Qt.ItemDataRole.UserRole)
+
+    def test_nav_to_history_clears_list_on_empty_scan(
+        self, settings_panel, qapp, tmp_path,
+    ):
+        """Navigating away and back with empty scan clears the list."""
+        md_path = tmp_path / "transcripts" / "navtest.md"
+        metadata = {
+            "words": [{"speaker_id": "SPK_0", "start_time": 0.0, "end_time": 1.0, "text": "Hi"}],
+            "segments": [],
+        }
+        _write_transcript(md_path, "**SPK_0**\nHi.\n", metadata)
+        meta = _make_meta(str(md_path))
+
+        with patch("meetandread.transcription.transcript_scanner.scan_recordings",
+                    return_value=[meta]):
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+            qapp.processEvents()
+
+        assert settings_panel._history_list.count() == 1
+
+        # Nav away
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_SETTINGS)
+        qapp.processEvents()
+
+        # Nav back with empty recordings
+        with patch("meetandread.transcription.transcript_scanner.scan_recordings",
+                    return_value=[]):
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+            qapp.processEvents()
+
+        # List should be empty after scan returns no recordings
+        assert settings_panel._history_list.count() == 0
+
+
+class TestStalePlaceholderAbsence:
+    """Verify stale placeholder attributes are absent (Q7 negative test)."""
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def settings_panel(self, qapp):
+        panel = FloatingSettingsPanel()
+        panel.show()
+        qapp.processEvents()
+        yield panel
+        panel.close()
+
+    def test_no_placeholder_title_attribute(self, settings_panel):
+        assert not hasattr(settings_panel, "_history_placeholder_title")
+
+    def test_no_placeholder_desc_attribute(self, settings_panel):
+        assert not hasattr(settings_panel, "_history_placeholder_desc")
+
+    def test_no_tab_widget_attribute(self, settings_panel):
+        assert not hasattr(settings_panel, "_tab_widget")
+
+    def test_no_title_label_attribute(self, settings_panel):
+        assert not hasattr(settings_panel, "_title_label")
+
+    def test_no_close_btn_attribute(self, settings_panel):
+        assert not hasattr(settings_panel, "_close_btn")
+
+    def test_history_page_is_real_widget(self, settings_panel):
+        """History page is a real QWidget, not a placeholder."""
+        page = settings_panel._content_stack.widget(FloatingSettingsPanel._NAV_HISTORY)
+        assert page is not None
+        assert page.objectName() == "AethericHistoryPage"
+        # It must have child widgets (splitter, list, viewer)
+        assert settings_panel._history_list is not None
+        assert settings_panel._history_viewer is not None

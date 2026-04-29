@@ -3554,25 +3554,68 @@ class FloatingSettingsPanel(QWidget):
     def _propagate_rename_to_signatures(
         self, md_path: Path, old_name: str, new_name: str
     ) -> None:
-        """Propagate a speaker rename to the signature store (best-effort).
+        """Propagate a speaker rename to the VoiceSignatureStore (best-effort).
 
-        Reads the transcript metadata to find the recording stem and
-        updates the speaker signature store if available.
+        If the old speaker name has a saved embedding in the signature
+        database (located in the same directory as the transcript file),
+        saves the embedding under the new name and deletes the old entry.
         """
         try:
-            from meetandread.transcription.speaker_signatures import SpeakerSignatureStore
+            from meetandread.speaker.signatures import VoiceSignatureStore
         except ImportError:
-            logger.debug("SpeakerSignatureStore not available — skipping propagation")
+            logger.warning(
+                "VoiceSignatureStore not available — skipping rename propagation"
+            )
             return
 
-        stem = md_path.stem
+        db_path = md_path.parent / "speaker_signatures.db"
+        if not db_path.exists():
+            # Try the default data directory
+            try:
+                from meetandread.audio.storage.paths import get_recordings_dir
+                default_db = get_recordings_dir() / "speaker_signatures.db"
+                if default_db.exists():
+                    db_path = default_db
+                else:
+                    logger.info(
+                        "No signature database found — speaker '%s' not in store",
+                        old_name,
+                    )
+                    return
+            except Exception:
+                logger.info(
+                    "No signature database found — speaker '%s' not in store",
+                    old_name,
+                )
+                return
+
         try:
-            store = SpeakerSignatureStore()
-            store.rename_speaker(stem, old_name, new_name)
-            logger.info(
-                "Propagated speaker rename '%s' -> '%s' to signature store for %s",
-                old_name, new_name, stem,
-            )
+            with VoiceSignatureStore(db_path=str(db_path)) as store:
+                profiles = store.load_signatures()
+                old_profile = None
+                for profile in profiles:
+                    if profile.name == old_name:
+                        old_profile = profile
+                        break
+
+                if old_profile is None:
+                    logger.info(
+                        "Speaker '%s' not found in signature store — no propagation needed",
+                        old_name,
+                    )
+                    return
+
+                store.save_signature(
+                    new_name,
+                    old_profile.embedding,
+                    averaged_from_segments=old_profile.num_samples,
+                )
+                store.delete_signature(old_name)
+
+                logger.info(
+                    "Propagated rename '%s' -> '%s' to signature store at %s",
+                    old_name, new_name, db_path,
+                )
         except Exception as exc:
             logger.warning(
                 "Failed to propagate rename to signature store: %s", exc,
@@ -3678,6 +3721,15 @@ class FloatingSettingsPanel(QWidget):
         layout.addWidget(btn_box)
 
         return dialog
+
+    def _get_app_settings(self):
+        """Get the current AppSettings from config."""
+        try:
+            from meetandread.config import get_config
+            return get_config()
+        except Exception:
+            from meetandread.config.models import AppSettings
+            return AppSettings()
 
     def _start_scrub(self, wav_path: Path, md_path: Path, model_size: str) -> None:
         """Start a ScrubRunner background re-transcription."""
