@@ -1983,7 +1983,12 @@ class CCOverlayPanel(QWidget):
         text_edit.objectName() → "AethericCCText"
         isVisible()        → panel visibility state
         _has_content       → whether any transcript text has been received
+        phrases            → list of Phrase objects
+        current_phrase_idx → index of the active phrase being built
     """
+
+    # Signals
+    segment_ready = pyqtSignal(str, int, int, bool, bool)  # text, confidence, segment_index, is_final, phrase_start
 
     # Fade constants (matching FloatingTranscriptPanel)
     _FADE_DURATION_MS = 150
@@ -1997,6 +2002,13 @@ class CCOverlayPanel(QWidget):
 
         # Track content state
         self._has_content: bool = False
+
+        # --- Phrase tracking for live transcript ---
+        self.phrases: List[Phrase] = []
+        self.current_phrase_idx: int = -1
+
+        # --- Speaker display name mapping ---
+        self._speaker_names: Dict[str, str] = {}
 
         # --- Window flags: frameless, tool (no taskbar), always on top ---
         self.setWindowFlags(
@@ -2154,9 +2166,193 @@ class CCOverlayPanel(QWidget):
         self._has_been_docked = True
 
     def clear(self) -> None:
-        """Reset overlay text and content state."""
+        """Reset overlay text, phrases, and content state."""
         self.text_edit.clear()
+        self.phrases.clear()
+        self.current_phrase_idx = -1
         self._has_content = False
+
+    # ------------------------------------------------------------------
+    # Live transcript rendering
+    # ------------------------------------------------------------------
+
+    def update_segment(self, text: str, confidence: int, segment_index: int,
+                       is_final: bool = False, phrase_start: bool = False,
+                       speaker_id: Optional[str] = None) -> None:
+        """Update a single transcript segment in the CC overlay.
+
+        Each segment is part of a phrase (line).  Blank audio is silently
+        filtered.  HTML-unsafe text is escaped before display.
+
+        Args:
+            text: Transcribed text for this segment.
+            confidence: Confidence score (0–100).
+            segment_index: Position of this segment in the current phrase.
+            is_final: If True, this phrase is complete.
+            phrase_start: If True, start a new phrase (new line).
+            speaker_id: Optional speaker label for this phrase.
+        """
+        if text.strip() == "[BLANK_AUDIO]":
+            return
+
+        # Emit signal before display work
+        self.segment_ready.emit(text, confidence, segment_index, is_final, phrase_start)
+
+        # Clear placeholder on first real content
+        if not self._has_content:
+            self._has_content = True
+            self.text_edit.clear()
+
+        # Start new phrase if needed
+        if phrase_start or self.current_phrase_idx < 0:
+            cursor = self.text_edit.textCursor()
+            if self.current_phrase_idx >= 0:
+                cursor.insertBlock()
+
+            self.phrases.append(
+                Phrase(segments=[], confidences=[], is_final=False, speaker_id=speaker_id)
+            )
+            self.current_phrase_idx = len(self.phrases) - 1
+
+            # Insert speaker label if provided
+            if speaker_id:
+                display_name = self._display_speaker_for(speaker_id)
+                self._insert_speaker_label(display_name)
+
+        # Get current phrase
+        phrase = self.phrases[self.current_phrase_idx]
+        phrase.is_final = is_final
+
+        # Update or add segment
+        if segment_index < len(phrase.segments):
+            phrase.segments[segment_index] = text
+            phrase.confidences[segment_index] = confidence
+            self._replace_segment_in_display(
+                self.current_phrase_idx, segment_index, text, confidence
+            )
+        else:
+            phrase.segments.append(text)
+            phrase.confidences.append(confidence)
+            self._append_segment_to_display(text, confidence)
+
+        # Auto-scroll to bottom
+        self.text_edit.ensureCursorVisible()
+
+    # ------------------------------------------------------------------
+    # Speaker name management
+    # ------------------------------------------------------------------
+
+    def set_speaker_names(self, names: Dict[str, str]) -> None:
+        """Set the speaker display name mapping and rebuild the display.
+
+        Args:
+            names: Mapping from raw speaker labels to display names.
+        """
+        self._speaker_names = dict(names)
+        self._rebuild_display()
+
+    def get_speaker_names(self) -> Dict[str, str]:
+        """Return a copy of the current speaker name mapping."""
+        return dict(self._speaker_names)
+
+    def _display_speaker_for(self, raw_label: str) -> str:
+        """Resolve a raw speaker label to its display form."""
+        if raw_label in self._speaker_names:
+            return self._speaker_names[raw_label]
+        return raw_label
+
+    # ------------------------------------------------------------------
+    # Display helpers
+    # ------------------------------------------------------------------
+
+    def _insert_speaker_label(self, speaker_id: str) -> None:
+        """Insert a coloured speaker label at the current cursor position.
+
+        Uses QTextCharFormat with bold, coloured text.  No anchor — the
+        CC overlay does not support speaker name editing.
+        """
+        cursor = self.text_edit.textCursor()
+        color = speaker_color(speaker_id)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        fmt.setFontWeight(QFont.Weight.Bold)
+        cursor.insertText(f"[{speaker_id}] ", fmt)
+
+    def _append_segment_to_display(self, text: str, confidence: int) -> None:
+        """Append escaped text to the current line with confidence colour."""
+        cursor = self.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+
+        # Space between segments
+        if (self.phrases
+                and self.current_phrase_idx >= 0
+                and self.phrases[self.current_phrase_idx].segments
+                and len(self.phrases[self.current_phrase_idx].segments) > 1):
+            cursor.insertText(" ")
+
+        color = self._get_confidence_color(confidence)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        fmt.setFontWeight(QFont.Weight.Normal)
+        cursor.insertText(_escape_html(text), fmt)
+
+    def _replace_segment_in_display(self, phrase_idx: int, segment_idx: int,
+                                    text: str, confidence: int) -> None:
+        """Replace a specific segment in the display without full rebuild."""
+        cursor = self.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+
+        # Navigate to correct phrase block
+        for _ in range(phrase_idx):
+            cursor.movePosition(QTextCursor.MoveOperation.NextBlock)
+
+        # Navigate to correct segment within phrase (segments separated by spaces)
+        for _ in range(segment_idx):
+            cursor.movePosition(QTextCursor.MoveOperation.NextWord)
+
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfWord)
+        if segment_idx < len(self.phrases[phrase_idx].segments) - 1:
+            cursor.movePosition(
+                QTextCursor.MoveOperation.EndOfWord,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+        else:
+            cursor.movePosition(
+                QTextCursor.MoveOperation.EndOfBlock,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+
+        color = self._get_confidence_color(confidence)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        fmt.setFontWeight(QFont.Weight.Normal)
+        cursor.insertText(_escape_html(text), fmt)
+
+    def _rebuild_display(self) -> None:
+        """Rebuild the entire text display from stored phrases."""
+        self.text_edit.clear()
+        for i, phrase in enumerate(self.phrases):
+            if i > 0:
+                cursor = self.text_edit.textCursor()
+                cursor.insertBlock()
+
+            if phrase.speaker_id:
+                display_name = self._display_speaker_for(phrase.speaker_id)
+                self._insert_speaker_label(display_name)
+
+            for seg_idx, (seg_text, seg_conf) in enumerate(
+                zip(phrase.segments, phrase.confidences)
+            ):
+                if seg_idx > 0:
+                    # Insert space between segments
+                    cursor = self.text_edit.textCursor()
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    cursor.insertText(" ")
+                self._append_segment_to_display(seg_text, seg_conf)
+
+    def _get_confidence_color(self, confidence: int) -> str:
+        """Get colour for confidence — delegates to canonical thresholds (MEM027)."""
+        return get_confidence_color(confidence)
 
     # ------------------------------------------------------------------
     # Fade helpers (matching FloatingTranscriptPanel pattern)
