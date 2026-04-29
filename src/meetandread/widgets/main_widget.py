@@ -403,8 +403,8 @@ to avoid clipping issues and enable proper text rendering.
         self.mic_lobe.setPos(50, 10)
         self.system_lobe.setPos(110, 10)
         
-        # Transcript lobe at bottom-left (opposite settings at bottom-right)
-        self.transcript_lobe.setPos(15, 85)
+        # Transcript lobe bottom-left of record button — 50% overlap
+        self.transcript_lobe.setPos(45, 85)
         
         # Settings lobe overlapping bottom of record button (like input lobes on top)
         self.settings_lobe.setPos(85, 85)
@@ -951,20 +951,10 @@ to avoid clipping issues and enable proper text rendering.
                 if not self._cc_overlay._has_been_docked:
                     self._cc_overlay.dock_to_widget(self, self._get_panel_position())
                 self._cc_overlay.show_panel()
-                # Widget must stay on top of child panels
-                self.raise_()
+                # Widget must stay on top of child panels (deferred to run after panel's show)
+                QTimer.singleShot(0, lambda: self.raise_())
             
             # Show floating transcript panel when recording starts (legacy)
-            if self._floating_transcript_panel:
-                logging.debug("Showing floating transcript panel")
-                self._floating_transcript_panel.clear()
-                # Only dock to widget on first show; preserve user position after that
-                if not self._floating_transcript_panel._has_been_docked:
-                    self._floating_transcript_panel.dock_to_widget(self, self._get_panel_position())
-                self._floating_transcript_panel.show_panel()
-                # Switch to Live tab
-                self._floating_transcript_panel._tab_widget.setCurrentIndex(0)
-            
         elif state == ControllerState.STARTING:
             # Lock lobes during startup phase too
             self.mic_lobe.set_locked(True)
@@ -1149,8 +1139,8 @@ to avoid clipping issues and enable proper text rendering.
                 if not self._cc_overlay._has_been_docked:
                     self._cc_overlay.dock_to_widget(self, self._get_panel_position())
                 self._cc_overlay.show_panel()
-                # Widget must stay on top of child panels
-                self.raise_()
+                # Widget must stay on top of child panels (deferred to run after panel's show)
+                QTimer.singleShot(0, lambda: self.raise_())
 
     def _toggle_settings_panel(self):
         """Toggle floating settings panel visibility.
@@ -1175,8 +1165,8 @@ to avoid clipping issues and enable proper text rendering.
                 self._floating_settings_panel.attach_dock(self)
                 self._settings_docked = True
                 self._floating_settings_panel.show_panel()
-                # Widget must stay on top of the panel it hosts
-                self.raise_()
+                # Widget must stay on top of the panel it hosts (deferred)
+                QTimer.singleShot(0, lambda: self.raise_())
     
     def toggle_recording(self):
         """Toggle recording state via controller."""

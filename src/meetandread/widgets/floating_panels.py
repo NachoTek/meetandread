@@ -2044,6 +2044,7 @@ class CCOverlayPanel(QWidget):
         self.text_edit = QTextEdit()
         self.text_edit.setObjectName("AethericCCText")
         self.text_edit.setReadOnly(True)
+        self.text_edit.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         self.text_edit.setFrameShape(QFrame.Shape.NoFrame)
         self.text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -2417,8 +2418,6 @@ class CCOverlayPanel(QWidget):
         self._apply_theme()
         self.setWindowOpacity(0.0)
         self.show()
-        self.raise_()
-        self.activateWindow()
         self._fade_step = 0
         self._fade_direction = 1
         self._fade_timer = QTimer(self)
@@ -3047,8 +3046,6 @@ class FloatingSettingsPanel(QWidget):
         self._apply_theme()
         self.setWindowOpacity(0.0)
         self.show()
-        self.raise_()
-        self.activateWindow()
         self._fade_step = 0
         self._fade_direction = 1  # 1 = fading in
         self._fade_timer = QTimer(self)
@@ -3085,14 +3082,12 @@ class FloatingSettingsPanel(QWidget):
         Position panel next to a widget, aligning the widget over the
         sidebar's dock bay for the Aetheric Glass settings shell.
 
-        For the settings panel (objectName AethericSettingsShell), this uses
-        a dedicated dock-bay alignment: the panel is placed so the widget's
-        center overlaps the sidebar's bottom dock bay area.
+        Uses the actual dock bay widget geometry to compute alignment so
+        the widget center sits over the visible "Widget Dock" area.
 
         Args:
             widget: The main widget to dock to
-            position: "left", "right", "top", "bottom" (used only for
-                      non-settings panels; settings always uses dock-bay mode)
+            position: "left", "right", "top", "bottom" (unused for settings)
         """
         if not widget or not widget.isVisible():
             return
@@ -3103,19 +3098,30 @@ class FloatingSettingsPanel(QWidget):
         widget_center_x = widget_pos.x() + widget_rect.width() // 2
         widget_center_y = widget_pos.y() + widget_rect.height() // 2
 
-        panel_w = self.width()
-        panel_h = self.height()
-        sidebar_w = 160  # sidebar fixed width
+        # Use the actual dock bay widget geometry if available
+        if hasattr(self, '_dock_bay') and self._dock_bay is not None:
+            # Map dock bay center to global coordinates
+            dock_bay_rect = self._dock_bay.rect()
+            dock_bay_global = self._dock_bay.mapToGlobal(dock_bay_rect.center())
+            dock_bay_center_x = dock_bay_global.x()
+            dock_bay_center_y = dock_bay_global.y()
+        else:
+            # Fallback: estimate from panel geometry
+            sidebar_w = 160
+            dock_bay_center_x = panel_w - sidebar_w // 2
+            dock_bay_center_y = panel_h - 24
 
-        # Dock-bay alignment: position the panel so the widget center
-        # falls over the sidebar's dock bay (bottom-left area).
-        # The dock bay is at the bottom of the sidebar, horizontally centered
-        # within the sidebar width.
-        dock_bay_center_x = panel_w - sidebar_w // 2  # right edge of panel (sidebar side)
-        dock_bay_center_y = panel_h - 24  # bottom of panel (dock bay area)
-
-        x = widget_center_x - dock_bay_center_x
-        y = widget_center_y - dock_bay_center_y
+        # Position panel so widget center aligns with dock bay center
+        # Since panel hasn't been positioned yet, we need to estimate
+        # the dock bay position relative to the panel's top-left
+        if hasattr(self, '_dock_bay') and self._dock_bay is not None:
+            # The dock bay is a child widget — get its position relative to panel
+            db_pos = self._dock_bay.mapTo(self, self._dock_bay.rect().center())
+            x = widget_center_x - db_pos.x()
+            y = widget_center_y - db_pos.y()
+        else:
+            x = widget_center_x - dock_bay_center_x
+            y = widget_center_y - dock_bay_center_y
 
         self.move(x, y)
 
