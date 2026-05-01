@@ -23,6 +23,42 @@ import time
 from meetandread.transcription.confidence import get_confidence_color, get_confidence_legend
 from meetandread.hardware.detector import HardwareDetector
 from meetandread.hardware.recommender import ModelRecommender
+
+
+def clamp_to_screen(widget: QWidget, pos: QPoint) -> QPoint:
+    """Clamp *pos* so that *widget* stays within the visible desktop area.
+
+    Allows sliding between monitors but prevents the widget from being
+    fully dragged off-screen.  At least 50 px must remain visible on
+    any edge so the user can always grab it back.
+
+    Returns *pos* unchanged if screen geometry cannot be resolved (test
+    environments, headless CI, etc.).
+    """
+    screens = QApplication.screens()
+    if not screens:
+        return pos
+    try:
+        min_x = min(s.geometry().x() for s in screens)
+        min_y = min(s.geometry().y() for s in screens)
+        max_x = max(s.geometry().x() + s.geometry().width() for s in screens)
+        max_y = max(s.geometry().y() + s.geometry().height() for s in screens)
+    except (AttributeError, TypeError):
+        return pos
+    w, h = widget.width(), widget.height()
+    margin = 50
+    px, py = pos.x(), pos.y()
+    x = max(min_x - w + margin, min(px, max_x - margin))
+    y = max(min_y - h + margin, min(py, max_y - margin))
+    return QPoint(x, y)
+
+
+def ensure_on_screen(widget: QWidget) -> None:
+    """Move *widget* into visible desktop bounds if it is currently off-screen."""
+    try:
+        widget.move(clamp_to_screen(widget, widget.pos()))
+    except (TypeError, AttributeError):
+        pass
 from meetandread.performance.monitor import ResourceMonitor, ResourceSnapshot
 from meetandread.performance.benchmark import BenchmarkRunner, BenchmarkResult
 from meetandread.performance.wer import calculate_wer
@@ -33,13 +69,15 @@ from meetandread.widgets.theme import (
     detail_header_css, action_button_css, context_menu_css, dialog_css,
     badge_css, resize_grip_css, legend_overlay_css, info_label_css,
     progress_bar_css, separator_css, combo_box_css,
-    aetheric_settings_shell_css, aetheric_sidebar_css, aetheric_nav_button_css,
+    aetheric_settings_shell_css, aetheric_sidebar_css, aetheric_title_bar_css, aetheric_nav_button_css,
     aetheric_placeholder_css, aetheric_combo_box_css,
     aetheric_history_list_css, aetheric_history_viewer_css,
     aetheric_history_splitter_css, aetheric_history_header_css,
     aetheric_history_action_button_css,
     aetheric_cc_overlay_css,
     AETHERIC_RED,
+    AETHERIC_SETTINGS_BG,
+    AETHERIC_RADIUS,
 )
 
 import logging
@@ -1994,23 +2032,33 @@ class CCOverlayPanel(QWidget):
             | Qt.WindowType.Tool
         )
 
-        # Translucent background for glass aesthetic
+        # Semi-transparent overlay: translucent window + styled background
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
-        # --- Compact size constraints ---
-        self.setMinimumSize(300, 120)
-        self.setMaximumSize(900, 400)
-        self.resize(480, 200)
+        # --- Compact size constraints (48px font, max 2 visible lines) ---
+        # --- Size: max width spans largest display ---
+        from PyQt6.QtWidgets import QApplication
+        screens = QApplication.screens()
+        max_w = max(s.geometry().width() for s in screens) if screens else 1920
+        self.setMinimumSize(400, 140)
+        self.setMaximumSize(max_w, 400)
+        self.resize(600, 180)
 
-        # --- Layout: single text edit fills the panel ---
+        # --- Layout: text edit fills the panel ---
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # -- Drag state (panel-level, all areas except resize grip) --
+        self._dragging: bool = False
+        self._drag_pos: Optional[QPoint] = None
+
         self.text_edit = QTextEdit()
         self.text_edit.setObjectName("AethericCCText")
         self.text_edit.setReadOnly(True)
+        # Disable interaction so mouse events propagate to panel for drag
+        self.text_edit.setEnabled(False)
         self.text_edit.setFrameShape(QFrame.Shape.NoFrame)
         self.text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -2042,6 +2090,21 @@ class CCOverlayPanel(QWidget):
         self._resize_grip.setStyleSheet(resize_grip_css(p))
 
     # ------------------------------------------------------------------
+    # Paint — manual semi-transparent background (QSS alpha doesn't work
+    # on Windows frameless translucent windows)
+    # ------------------------------------------------------------------
+
+    def paintEvent(self, event) -> None:
+        from PyQt6.QtGui import QPainter, QColor, QPen
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Semi-transparent dark background
+        painter.setBrush(QColor(30, 29, 30, 128))  # 50% opacity
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 12, 12)
+        painter.end()
+
+    # ------------------------------------------------------------------
     # Resize — reposition grip (MEM083 pattern)
     # ------------------------------------------------------------------
 
@@ -2055,22 +2118,24 @@ class CCOverlayPanel(QWidget):
         super().resizeEvent(event)
 
     # ------------------------------------------------------------------
-    # Drag handlers
+    # Drag handlers — entire panel is draggable except resize grip
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Start drag on left-button press."""
+        """Start drag on left-button press (anywhere except resize grip)."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Move panel with mouse during drag."""
+        """Move panel with mouse during drag, clamped to screen boundaries."""
         if self._dragging and self._drag_pos is not None:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            raw_pos = event.globalPosition().toPoint() - self._drag_pos
+            self.move(clamp_to_screen(self, raw_pos))
             event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -2080,6 +2145,7 @@ class CCOverlayPanel(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
             self._drag_pos = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -2317,9 +2383,11 @@ class CCOverlayPanel(QWidget):
         cursor.insertText(_escape_html(text), fmt)
 
     def _rebuild_display(self) -> None:
-        """Rebuild the entire text display from stored phrases."""
+        """Rebuild the text display — only the last 2 phrases (lines)."""
         self.text_edit.clear()
-        for i, phrase in enumerate(self.phrases):
+        # Only show the most recent phrases (max 2 lines)
+        visible = self.phrases[-2:] if len(self.phrases) > 2 else self.phrases
+        for i, phrase in enumerate(visible):
             if i > 0:
                 cursor = self.text_edit.textCursor()
                 cursor.insertBlock()
@@ -2337,6 +2405,11 @@ class CCOverlayPanel(QWidget):
                     cursor.movePosition(QTextCursor.MoveOperation.End)
                     cursor.insertText(" ")
                 self._append_segment_to_display(seg_text, seg_conf)
+
+        # Auto-scroll to bottom so newest text is always visible
+        self.text_edit.verticalScrollBar().setValue(
+            self.text_edit.verticalScrollBar().maximum()
+        )
 
     def _get_confidence_color(self, confidence: int) -> str:
         """Get colour for confidence — delegates to canonical thresholds (MEM027)."""
@@ -2446,23 +2519,49 @@ class FloatingSettingsPanel(QWidget):
             Qt.WindowType.Tool
         )
 
-        # Glass pair: translucent background matching the widget's glass aesthetic
+        # Translucent background so rounded corner pixels are transparent.
+        # Inner widgets (title bar, sidebar, content stack) provide solid bg.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-
-        # Glass opacity — matches transcript panel
-        self.setWindowOpacity(0.87)
 
         # Size — wider to accommodate sidebar + content stack
-        self.setMinimumSize(420, 400)
-        self.setMaximumSize(700, 800)
+        self.setMinimumSize(520, 400)
+        self.setMaximumSize(800, 800)
 
         # ------------------------------------------------------------------
-        # Root layout: horizontal sidebar + content stack
+        # Root layout: vertical (title bar on top, then sidebar + content)
         # ------------------------------------------------------------------
-        root_layout = QHBoxLayout(self)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        # ------------------------------------------------------------------
+        # Title bar — 25px drag handle with "Meet and Read" label
+        # ------------------------------------------------------------------
+        self._title_bar = QWidget()
+        self._title_bar.setObjectName("AethericTitleBar")
+        self._title_bar.setFixedHeight(25)
+        self._title_bar.setCursor(Qt.CursorShape.OpenHandCursor)
+        title_bar_layout = QHBoxLayout(self._title_bar)
+        title_bar_layout.setContentsMargins(12, 0, 12, 0)
+        title_label = QLabel("Meet and Read")
+        title_label.setObjectName("AethericTitleLabel")
+        title_bar_layout.addWidget(title_label)
+        title_bar_layout.addStretch()
+        outer_layout.addWidget(self._title_bar)
+
+        # -- Drag state for title bar --
+        self._title_dragging: bool = False
+        self._title_drag_pos: Optional[QPoint] = None
+        self._title_bar.mousePressEvent = self._title_bar_mouse_press
+        self._title_bar.mouseMoveEvent = self._title_bar_mouse_move
+        self._title_bar.mouseReleaseEvent = self._title_bar_mouse_release
+
+        # ------------------------------------------------------------------
+        # Body layout: horizontal sidebar + content stack
+        # ------------------------------------------------------------------
+        body_layout = QHBoxLayout()
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
 
         # ------------------------------------------------------------------
         # Left sidebar
@@ -2510,14 +2609,15 @@ class FloatingSettingsPanel(QWidget):
 
         sidebar_layout.addStretch()
 
-        root_layout.addWidget(self._sidebar)
+        body_layout.addWidget(self._sidebar)
 
         # ------------------------------------------------------------------
         # Right content stack (QStackedWidget replacing QTabWidget)
         # ------------------------------------------------------------------
         self._content_stack = QStackedWidget()
         self._content_stack.setObjectName("AethericContentStack")
-        root_layout.addWidget(self._content_stack, 1)
+        body_layout.addWidget(self._content_stack, 1)
+        outer_layout.addLayout(body_layout)
 
         # ------------------------------------------------------------------
         # Page 0: Settings — model selection + hardware info
@@ -2832,6 +2932,9 @@ class FloatingSettingsPanel(QWidget):
         # Panel shell — Aetheric Glass
         self.setStyleSheet(aetheric_settings_shell_css(p))
 
+        # Title bar
+        self._title_bar.setStyleSheet(aetheric_title_bar_css(p))
+
         # Sidebar
         self._sidebar.setStyleSheet(aetheric_sidebar_css(p))
 
@@ -2840,9 +2943,9 @@ class FloatingSettingsPanel(QWidget):
         for btn in self._nav_buttons:
             btn.setStyleSheet(nav_css)
 
-        # Content stack — transparent so per-page styles show through
+        # Content stack — solid bg (shell is transparent for rounded corners)
         self._content_stack.setStyleSheet(
-            "QStackedWidget { background-color: transparent; border: none; }"
+            f"QStackedWidget {{ background-color: {AETHERIC_SETTINGS_BG}; border: none; border-bottom-right-radius: {AETHERIC_RADIUS}; }}"
         )
 
         # Settings page — labels and combos
@@ -2923,6 +3026,25 @@ class FloatingSettingsPanel(QWidget):
 
         scheme_name = "dark" if p is DARK_PALETTE else "light"
         logger.info("Applied %s Aetheric theme to FloatingSettingsPanel", scheme_name)
+
+    # -- Title bar drag handlers --
+
+    def _title_bar_mouse_press(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._title_dragging = True
+            self._title_drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._title_bar.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _title_bar_mouse_move(self, event: QMouseEvent) -> None:
+        if self._title_dragging and self._title_drag_pos is not None:
+            raw_pos = event.globalPosition().toPoint() - self._title_drag_pos
+            self.move(clamp_to_screen(self, raw_pos))
+
+    def _title_bar_mouse_release(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._title_dragging = False
+            self._title_drag_pos = None
+            self._title_bar.setCursor(Qt.CursorShape.OpenHandCursor)
 
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""

@@ -123,7 +123,9 @@ class TestSizeConstraints:
         assert cc_panel.minimumHeight() >= 80
 
     def test_maximum_width(self, cc_panel):
-        assert cc_panel.maximumWidth() <= 1000
+        from PyQt6.QtWidgets import QApplication
+        max_screen = max(s.geometry().width() for s in QApplication.screens())
+        assert cc_panel.maximumWidth() >= max_screen
 
     def test_maximum_height(self, cc_panel):
         assert cc_panel.maximumHeight() <= 500
@@ -137,8 +139,8 @@ class TestSizeConstraints:
     def test_compact_default_size(self, cc_panel):
         """Default size should be compact — smaller than transcript panel."""
         # CC overlay should be significantly smaller than FloatingTranscriptPanel
-        # which has minSize(350, 300)
-        assert cc_panel.minimumWidth() < 350
+        # which has minSize(350, 300). Min width accommodates 48px font.
+        assert cc_panel.minimumWidth() <= 400
         assert cc_panel.minimumHeight() < 300
 
 
@@ -192,7 +194,7 @@ class TestGripAnchoring:
 # ---------------------------------------------------------------------------
 
 class TestDragMovement:
-    """Mouse drag on the panel background should move the window."""
+    """Mouse drag anywhere on the panel should move the window."""
 
     def test_drag_moves_panel(self, cc_panel, qapp):
         from PyQt6.QtCore import QPointF
@@ -201,7 +203,7 @@ class TestDragMovement:
         qapp.processEvents()
         initial_pos = cc_panel.pos()
 
-        # Simulate mouse press at center
+        # Simulate mouse press at center of panel
         local = QPointF(cc_panel.width() / 2, cc_panel.height() / 2)
         global_press = QPointF(100 + local.x(), 100 + local.y())
         press = QMouseEvent(

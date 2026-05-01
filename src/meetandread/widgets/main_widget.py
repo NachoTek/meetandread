@@ -4,8 +4,9 @@ Main meetandread widget implementation using QGraphicsView with floating panels.
 This widget provides a borderless, always-on-top interface with:
 - Record button as main body
 - Toggle lobes for audio input selection
-- FloatingTranscriptPanel that appears outside the widget (not clipped)
-- Drag and snap-to-edge functionality
+- CCOverlayPanel for live closed-caption transcription
+- FloatingSettingsPanel for configuration
+- Drag clamped to visible desktop area
 - Real-time transcription display with confidence colors
 
 Key improvement: Uses floating QWidget panels instead of QGraphicsItem panels
@@ -32,28 +33,9 @@ from meetandread.transcription.transcript_store import Word
 from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config, AppSettings
 from meetandread.hardware.recommender import ModelRecommender, get_model_info
-from meetandread.widgets.floating_panels import FloatingTranscriptPanel, FloatingSettingsPanel, CCOverlayPanel
+from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ensure_on_screen
 from meetandread.widgets.theme import context_menu_css, current_palette
-import time as _time
 
-
-class _SlideState:
-    """Tracks an in-progress slide animation from one position to another."""
-
-    __slots__ = ('active', 'start_pos', 'target_pos', 'start_time_ms', 'duration_ms')
-
-    def __init__(self):
-        self.active: bool = False
-        self.start_pos: QPoint = QPoint()
-        self.target_pos: QPoint = QPoint()
-        self.start_time_ms: int = 0
-        self.duration_ms: int = 300
-
-    def __repr__(self):
-        if not self.active:
-            return "<_SlideState inactive>"
-        return (f"<_SlideState {self.start_pos}→{self.target_pos} "
-                f"dur={self.duration_ms}ms>")
 
 
 class _WidgetVisualStateMachine:
@@ -227,9 +209,6 @@ to avoid clipping issues and enable proper text rendering.
         self.widget_start_pos = QPoint()
         self.press_time = QTime.currentTime()
 
-        # Slide animation state (edge snap/peek)
-        self._slide_state = _SlideState()
-        
         # Visual state machine (idle → recording → processing → idle)
         self._visual_state = _WidgetVisualStateMachine(WidgetVisualState.IDLE)
 
@@ -249,7 +228,6 @@ to avoid clipping issues and enable proper text rendering.
         self._error_hide_timer: Optional[QTimer] = None  # Auto-hide timer for errors
         
         # Floating panels (separate windows, not QGraphicsItems)
-        self._floating_transcript_panel: Optional[FloatingTranscriptPanel] = None
         self._floating_settings_panel: Optional[FloatingSettingsPanel] = None
         self._cc_overlay: Optional[CCOverlayPanel] = None
         
@@ -324,15 +302,6 @@ to avoid clipping issues and enable proper text rendering.
     
     def _create_floating_panels(self):
         """Create floating panels (separate QWidgets)."""
-        # Floating transcript panel
-        self._floating_transcript_panel = FloatingTranscriptPanel(self)
-        self._floating_transcript_panel.hide_panel()
-        # Connect segment signal (thread-safe, automatically queues to main thread)
-        self._floating_transcript_panel.segment_ready.connect(self._on_panel_segment)
-        # Connect speaker name pin signal
-        self._floating_transcript_panel.speaker_name_pinned.connect(self._on_speaker_name_pinned)
-        logging.debug("Created floating transcript panel")
-        
         # Floating settings panel — pass controller and tray_manager for Performance tab wiring
         self._floating_settings_panel = FloatingSettingsPanel(
             self,
@@ -353,20 +322,10 @@ to avoid clipping issues and enable proper text rendering.
         # Connect segment signal for thread-safe delivery from _on_phrase_result
         self._cc_overlay.segment_ready.connect(self._on_cc_segment)
         logging.debug("Created CC overlay panel")
-    
+
     def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool):
-        """Handle segment signal from panel (runs on main thread)."""
-        logging.debug("Panel signal: text='%s...' idx=%d phrase_start=%s", text[:30], segment_index, phrase_start)
-        try:
-            self._floating_transcript_panel.update_segment(
-                text=text,
-                confidence=confidence,
-                segment_index=segment_index,
-                is_final=is_final,
-                phrase_start=phrase_start
-            )
-        except Exception as e:
-            logging.error("Panel update via signal failed: %s", e)
+        """Handle segment signal (kept for compatibility — CC overlay handles its own updates)."""
+        pass
 
     def _on_cc_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool):
         """Handle segment signal from CC overlay (runs on main thread).
@@ -397,8 +356,8 @@ to avoid clipping issues and enable proper text rendering.
         self.mic_lobe.setPos(50, 10)
         self.system_lobe.setPos(110, 10)
         
-        # Transcript lobe at bottom-left (opposite settings at bottom-right)
-        self.transcript_lobe.setPos(15, 85)
+        # Transcript lobe center on record button perimeter, ~20° toward mic from bottom-left
+        self.transcript_lobe.setPos(54, 71)
         
         # Settings lobe overlapping bottom of record button (like input lobes on top)
         self.settings_lobe.setPos(85, 85)
@@ -512,23 +471,6 @@ to avoid clipping issues and enable proper text rendering.
         # Interpolate window opacity for glass idle effect
         self._update_visual_state_opacity()
 
-        # --- Slide animation (edge snap/peek) ---
-        s = self._slide_state
-        if s.active:
-            elapsed = int(_time.monotonic() * 1000) - s.start_time_ms
-            progress = min(elapsed / s.duration_ms, 1.0)
-            # Ease-out deceleration: t = 1 - (1 - progress)^2
-            t = 1.0 - (1.0 - progress) ** 2
-            ix = int(s.start_pos.x() + (s.target_pos.x() - s.start_pos.x()) * t)
-            iy = int(s.start_pos.y() + (s.target_pos.y() - s.start_pos.y()) * t)
-            self.move(ix, iy)
-            if progress >= 1.0:
-                s.active = False
-                self.move(s.target_pos)
-                logging.getLogger(__name__).debug(
-                    "Slide complete: widget at %s", s.target_pos
-                )
-        
         if self.is_recording and not self.is_processing:
             self.pulse_phase += 0.05  # ~2s period at 30fps
             self.record_button.pulse_phase = self.pulse_phase
@@ -578,52 +520,12 @@ to avoid clipping issues and enable proper text rendering.
         else:
             super().mousePressEvent(event)
     
-    def _check_drag_edge_snap(self, new_pos):
-        """Check if a drag position is within 20px of left/right screen edge.
-
-        Returns (should_snap, edge) where *edge* is 'left', 'right', or None.
-        When *should_snap* is True the caller should slide to the peek position
-        instead of following the mouse directly.
-        """
-        screen = QApplication.primaryScreen().geometry()
-        snap_threshold = 20
-        if new_pos.x() < snap_threshold:
-            return True, 'left'
-        if new_pos.x() + self.width() > screen.width() - snap_threshold:
-            return True, 'right'
-        return False, None
-
-    def _apply_drag_position(self, new_pos):
-        """Move widget to *new_pos* with live magnet snap on left/right edges.
-
-        Called from ``mouseMoveEvent`` during drag.  When the computed
-        position is within 20 px of a horizontal screen edge the widget
-        snaps to the 1/5th peek position via a smooth slide animation.
-        When the widget leaves the edge zone it unsnaps and follows the
-        mouse freely.
-        """
-        should_snap, edge = self._check_drag_edge_snap(new_pos)
-
-        if should_snap:
-            peek = self._peek_width
-            screen = QApplication.primaryScreen().geometry()
-            if edge == 'left':
-                target = QPoint(-(self.width() - peek), new_pos.y())
-            else:
-                target = QPoint(screen.width() - peek, new_pos.y())
-            self._start_slide_to(target)
-            logging.getLogger(__name__).debug(
-                "Magnet snap: edge=%s, target=%s", edge, target
-            )
-        else:
-            self.move(new_pos)
-
     def mouseMoveEvent(self, event):
-        """Handle dragging from any component with live magnet snap."""
+        """Handle dragging from any component, clamped to visible screen area."""
         if self.is_dragging:
             delta = event.globalPosition().toPoint() - self.drag_start_pos
             new_pos = self.widget_start_pos + delta
-            self._apply_drag_position(new_pos)
+            self.move(self._clamp_to_desktop(new_pos))
             event.accept()
         elif event.buttons() & Qt.MouseButton.LeftButton:
             current_pos = event.globalPosition().toPoint()
@@ -634,7 +536,7 @@ to avoid clipping issues and enable proper text rendering.
                 self._click_consumed = True
                 delta = current_pos - self.drag_start_pos
                 new_pos = self.widget_start_pos + delta
-                self._apply_drag_position(new_pos)
+                self.move(self._clamp_to_desktop(new_pos))
                 event.accept()
         else:
             super().mouseMoveEvent(event)
@@ -644,7 +546,6 @@ to avoid clipping issues and enable proper text rendering.
         if event.button() == Qt.MouseButton.LeftButton:
             if self.is_dragging:
                 self.is_dragging = False
-                self._check_snap_to_edge()
                 event.accept()
             elif self._click_consumed:
                 event.accept()
@@ -654,56 +555,23 @@ to avoid clipping issues and enable proper text rendering.
         else:
             super().mouseReleaseEvent(event)
     
-    
-    def _check_snap_to_edge(self):
-        """Check if widget should snap to left/right screen edge.
 
-        Only horizontal edges are considered — top/bottom docking was
-        removed in favour of left/right only.
-        """
-        screen = QApplication.primaryScreen().geometry()
-        pos = self.pos()
-        snap_threshold = 20
-
-        should_snap = False
-        edge = None
-
-        if pos.x() < snap_threshold:
-            should_snap = True
-            edge = 'left'
-        elif pos.x() + self.width() > screen.width() - snap_threshold:
-            should_snap = True
-            edge = 'right'
-
-        if should_snap:
-            peek = self._peek_width
-            if edge == 'right':
-                target_x = screen.width() - peek
-                self._start_slide_to(QPoint(target_x, self.y()))
-            elif edge == 'left':
-                target_x = -(self.width() - peek)
-                self._start_slide_to(QPoint(target_x, self.y()))
-    
-    @property
-    def _peek_width(self) -> int:
-        """Width of the visible peek strip when snapped to screen edge (1/5th of widget)."""
-        return int(self.width() * 0.2)
-
-    def _start_slide_to(self, target_pos: QPoint):
-        """Begin a smooth slide animation from current position to *target_pos*.
-
-        The animation is driven by the existing ``animation_timer`` at ~30 fps
-        and completes in 300 ms with ease-out deceleration.
-        """
-        s = self._slide_state
-        s.start_pos = self.pos()
-        s.target_pos = target_pos
-        s.start_time_ms = int(_time.monotonic() * 1000)
-        s.duration_ms = 300
-        s.active = True
-        logging.getLogger(__name__).debug(
-            "Slide start: %s → %s", s.start_pos, target_pos
-        )
+    def _clamp_to_desktop(self, pos: QPoint) -> QPoint:
+        """Clamp *pos* so widget stays fully within the visible desktop."""
+        screens = QApplication.screens()
+        if not screens:
+            return pos
+        try:
+            min_x = min(s.geometry().x() for s in screens)
+            min_y = min(s.geometry().y() for s in screens)
+            max_x = max(s.geometry().x() + s.geometry().width() for s in screens)
+            max_y = max(s.geometry().y() + s.geometry().height() for s in screens)
+        except (AttributeError, TypeError):
+            return pos
+        w, h = self.width(), self.height()
+        x = max(min_x, min(pos.x(), max_x - w))
+        y = max(min_y, min(pos.y(), max_y - h))
+        return QPoint(x, y)
 
     def _get_selected_sources(self):
         """Get set of selected audio sources based on lobe states."""
@@ -867,17 +735,13 @@ to avoid clipping issues and enable proper text rendering.
                         if offset_x < screen.left():
                             offset_x = self.x() + self.width() + 10
                         self._cc_overlay.move(offset_x, offset_y)
+                        ensure_on_screen(self._cc_overlay)
                     except (TypeError, AttributeError):
                         pass  # Graceful fallback in test/mock environments
                 self._cc_overlay.show_panel()
-            
+
             # Show floating transcript panel when recording starts (legacy)
-            if self._floating_transcript_panel:
-                logging.debug("Showing floating transcript panel")
-                self._floating_transcript_panel.clear()
-                self._floating_transcript_panel.show_panel()
-                # Switch to Live tab
-                self._floating_transcript_panel._tab_widget.setCurrentIndex(0)
+            # (Removed — CC overlay is the only live transcript surface)
             
         elif state == ControllerState.STARTING:
             # Lock lobes during startup phase too
@@ -948,16 +812,6 @@ to avoid clipping issues and enable proper text rendering.
         logging.debug("Segment: '%s' [conf: %d%%, final: %s, phrase_start: %s]",
                        result.text[:40], result.confidence, result.is_final, phrase_start)
 
-        if self._floating_transcript_panel:
-            # Emit signal (thread-safe, automatically queues to main thread)
-            self._floating_transcript_panel.segment_ready.emit(
-                result.text,
-                result.confidence,
-                result.segment_index,
-                result.is_final,
-                phrase_start
-            )
-
         if self._cc_overlay:
             # Emit signal (thread-safe, automatically queues to main thread)
             self._cc_overlay.segment_ready.emit(
@@ -975,34 +829,14 @@ to avoid clipping issues and enable proper text rendering.
         logging.info("Recording saved to: %s", wav_path)
         if transcript_path:
             logging.info("Transcript saved to: %s", transcript_path)
-        
-        # Update panel status (legacy FloatingTranscriptPanel only)
-        if self._floating_transcript_panel and hasattr(self._floating_transcript_panel, 'status_label'):
-            try:
-                self._floating_transcript_panel.status_label.setText("Recording complete - Post-processing...")
-            except Exception:
-                pass
-    
+
     def _on_post_process_complete(self, job_id, transcript_path):
         """Handle post-processing completion.
 
         Updates WER display in settings panel.  CC overlay lifecycle
-        is handled by STOPPING/IDLE delayed hide — no tab switching here.
-        Legacy FloatingTranscriptPanel tab/status updates are guarded.
+        is handled by STOPPING/IDLE delayed hide.
         """
         logging.info("Post-processing complete! Job: %s, transcript: %s", job_id, transcript_path)
-
-        # Update legacy panel status and switch to History tab
-        if self._floating_transcript_panel and hasattr(self._floating_transcript_panel, '_tab_widget'):
-            try:
-                self._floating_transcript_panel.status_label.setText("Post-processed transcript saved!")
-                # Switch to History tab to show the completed recording
-                self._floating_transcript_panel._tab_widget.setCurrentIndex(1)
-                # Refresh the history list to pick up the new transcript
-                self._floating_transcript_panel._refresh_history()
-                QTimer.singleShot(3000, lambda: self._floating_transcript_panel.status_label.setText("Ready"))
-            except Exception:
-                pass
 
         # Update Performance tab WER display (Settings panel)
         if self._floating_settings_panel:
@@ -1027,13 +861,6 @@ to avoid clipping issues and enable proper text rendering.
         # Save the signature via controller
         self._controller.pin_speaker_name(raw_label, name)
 
-        # Refresh the transcript panel with updated speaker names
-        if self._floating_transcript_panel:
-            # Get the updated speaker names from the controller
-            speaker_names = self._controller.get_speaker_names()
-            if speaker_names:
-                self._floating_transcript_panel.set_speaker_names(speaker_names)
-
         # Also update CC overlay speaker names
         if self._cc_overlay:
             speaker_names = self._controller.get_speaker_names()
@@ -1051,6 +878,7 @@ to avoid clipping issues and enable proper text rendering.
             if self._cc_overlay.isVisible():
                 self._cc_overlay.hide_panel()
             else:
+                ensure_on_screen(self._cc_overlay)
                 self._cc_overlay.show_panel()
     
     def _toggle_settings_panel(self):
@@ -1068,6 +896,7 @@ to avoid clipping issues and enable proper text rendering.
                 offset_x = self.x() + self.width() + 10
                 offset_y = self.y()
                 self._floating_settings_panel.move(offset_x, offset_y)
+                ensure_on_screen(self._floating_settings_panel)
                 self._floating_settings_panel.show_panel()
     
     def toggle_recording(self):
@@ -1130,8 +959,6 @@ to avoid clipping issues and enable proper text rendering.
         """Exit the application cleanly (full quit, even with tray)."""
         self._save_position()
         # Hide all floating panels first
-        if self._floating_transcript_panel:
-            self._floating_transcript_panel.hide()
         if self._floating_settings_panel:
             self._floating_settings_panel.hide()
         if self._cc_overlay:

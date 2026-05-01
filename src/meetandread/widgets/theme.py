@@ -755,6 +755,8 @@ def splitter_css(p: ThemePalette) -> str:
 # Design tokens for the Aetheric Glass design system.
 # See docs/AETHERIC-GLASS-DESIGN-SYSTEM.md for full reference.
 AETHERIC_GLASS_BG = "rgba(30, 29, 30, 200)"
+AETHERIC_SETTINGS_BG = "rgb(30, 29, 30)"  # solid — no translucency for the settings shell
+AETHERIC_SIDEBAR_BG = "#101018"  # dark blue-tinted — visual separation for nav rail
 AETHERIC_GLASS_ROW_BG = "rgba(53, 52, 54, 0.2)"
 AETHERIC_SIDEBAR_WIDTH = "256px"
 AETHERIC_RADIUS = "12px"
@@ -779,18 +781,20 @@ AETHERIC_CYAN = "#00dbe9"  # tertiary
 # Aetheric CC overlay tokens — compact closed-caption live transcript
 # ---------------------------------------------------------------------------
 
-AETHERIC_CC_BG = "rgba(30, 29, 30, 220)"
+AETHERIC_CC_BG = "rgba(30, 29, 30, 128)"  # 50% opacity
 AETHERIC_CC_TEXT = "rgba(255, 255, 255, 230)"
 AETHERIC_CC_RADIUS = AETHERIC_RADIUS  # 12px — matches shell radius
 AETHERIC_CC_PADDING = "10px 14px"
-AETHERIC_CC_FONT_SIZE = "14px"
+AETHERIC_CC_FONT_SIZE = "48px"
+AETHERIC_CC_LINE_COUNT = 2
 
 
 def aetheric_settings_shell_css(p: ThemePalette) -> str:
-    """Aetheric Glass settings shell — translucent dark panel base.
+    """Aetheric Glass settings shell — solid dark panel base.
 
     The shell is a frameless top-level window with directional borders
     (light on top-left, dark on bottom-right) and a 12px corner radius.
+    Uses a solid background (no translucency) for readability.
 
     Object name selector: ``AethericSettingsShell``
 
@@ -802,7 +806,7 @@ def aetheric_settings_shell_css(p: ThemePalette) -> str:
     """
     return f"""
         QWidget#AethericSettingsShell {{
-            background-color: {AETHERIC_GLASS_BG};
+            background-color: transparent;
             border: 1px solid {AETHERIC_BORDER_LIGHT};
             border-top: 1px solid {AETHERIC_BORDER_LIGHT};
             border-left: 1px solid {AETHERIC_BORDER_LIGHT};
@@ -816,7 +820,7 @@ def aetheric_settings_shell_css(p: ThemePalette) -> str:
 def aetheric_sidebar_css(p: ThemePalette) -> str:
     """Aetheric Glass sidebar — dark vertical navigation rail.
 
-    Fixed 256px width with the translucent glass background.
+    Fixed 256px width with a solid dark background.
 
     Object name selector: ``AethericSidebar``
 
@@ -828,12 +832,37 @@ def aetheric_sidebar_css(p: ThemePalette) -> str:
     """
     return f"""
         QWidget#AethericSidebar {{
-            background-color: {AETHERIC_GLASS_BG};
+            background-color: {AETHERIC_SIDEBAR_BG};
             border-right: 1px solid {AETHERIC_BORDER_DARK};
-            border-top-left-radius: {AETHERIC_RADIUS};
+            border-top-left-radius: 0px;
             border-bottom-left-radius: {AETHERIC_RADIUS};
             min-width: {AETHERIC_SIDEBAR_WIDTH};
             max-width: {AETHERIC_SIDEBAR_WIDTH};
+        }}
+    """
+
+
+def aetheric_title_bar_css(p: ThemePalette) -> str:
+    """Aetheric Glass title bar — 25px drag handle at top of settings panel.
+
+    Uses the sidebar dark background for visual cohesion with the nav rail.
+    Label is centered-left with muted text. No window controls.
+
+    Object name selectors: ``AethericTitleBar``, ``AethericTitleLabel``
+    """
+    return f"""
+        QWidget#AethericTitleBar {{
+            background-color: {AETHERIC_SETTINGS_BG};
+            border-top-left-radius: {AETHERIC_RADIUS};
+            border-top-right-radius: {AETHERIC_RADIUS};
+            min-height: 25px;
+            max-height: 25px;
+        }}
+        QLabel#AethericTitleLabel {{
+            color: rgba(255, 255, 255, 120);
+            font-size: 12px;
+            font-weight: bold;
+            letter-spacing: 1px;
         }}
     """
 
@@ -906,36 +935,22 @@ def aetheric_placeholder_css(p: ThemePalette) -> str:
 # ---------------------------------------------------------------------------
 
 def aetheric_cc_overlay_css(p: ThemePalette) -> str:
-    """Aetheric Glass CC overlay — compact closed-caption panel.
+    """CC overlay styling — text appearance only.
 
-    Semi-transparent dark glass background with directional border
-    cues (light on top-left, dark on bottom-right) and a 12px corner
-    radius.  The overlay displays live transcript text in a compact
-    format suitable for recording-lifecycle display.
+    Background is painted manually in paintEvent() because QSS
+    background-color with alpha does not render on Windows
+    frameless translucent windows.
 
     Object name selector: ``QWidget#AethericCCOverlay``
-    Child text selector: ``QLabel#AethericCCText``
-
-    Args:
-        p: Active theme palette (used for deterministic output; the CC
-            overlay uses its own colour tokens for consistent dark-glass
-            appearance regardless of system theme).
-
-    Returns:
-        QSS string for the CC overlay container and its child text label.
+    Child text selector: ``QTextEdit#AethericCCText``
     """
     return f"""
         QWidget#AethericCCOverlay {{
-            background-color: {AETHERIC_CC_BG};
-            border: 1px solid {AETHERIC_BORDER_LIGHT};
-            border-top: 1px solid {AETHERIC_BORDER_LIGHT};
-            border-left: 1px solid {AETHERIC_BORDER_LIGHT};
-            border-bottom: 1px solid {AETHERIC_BORDER_DARK};
-            border-right: 1px solid {AETHERIC_BORDER_DARK};
-            border-radius: {AETHERIC_CC_RADIUS};
+            background-color: transparent;
+            border: none;
             padding: {AETHERIC_CC_PADDING};
         }}
-        QLabel#AethericCCText {{
+        QTextEdit#AethericCCText {{
             color: {AETHERIC_CC_TEXT};
             font-size: {AETHERIC_CC_FONT_SIZE};
             background-color: transparent;
@@ -982,7 +997,7 @@ def aetheric_combo_box_css(p: ThemePalette) -> str:
             border-top: 6px solid {AETHERIC_RED};
         }}
         QComboBox#AethericComboBox QAbstractItemView {{
-            background-color: {AETHERIC_GLASS_BG};
+            background-color: {AETHERIC_SETTINGS_BG};
             color: {AETHERIC_NAV_INACTIVE_TEXT};
             border: 1px solid {AETHERIC_BORDER_DARK};
             border-radius: 8px;

@@ -22,6 +22,8 @@ from meetandread.widgets.theme import (
     AETHERIC_CYAN,
     AETHERIC_GLASS_BG,
     AETHERIC_GLASS_ROW_BG,
+    AETHERIC_SETTINGS_BG,
+    AETHERIC_SIDEBAR_BG,
     AETHERIC_NAV_ACTIVE_BG,
     AETHERIC_NAV_ACTIVE_GLOW,
     AETHERIC_NAV_HOVER_BG,
@@ -120,9 +122,9 @@ class TestAethericSettingsShellCss:
         css = aetheric_settings_shell_css(DARK_PALETTE)
         assert "QWidget#AethericSettingsShell" in css
 
-    def test_contains_glass_bg(self):
+    def test_contains_transparent_bg(self):
         css = aetheric_settings_shell_css(DARK_PALETTE)
-        assert AETHERIC_GLASS_BG in css
+        assert "background-color: transparent" in css
 
     def test_contains_12px_radius(self):
         css = aetheric_settings_shell_css(DARK_PALETTE)
@@ -152,17 +154,17 @@ class TestAethericSidebarCss:
         css = aetheric_sidebar_css(DARK_PALETTE)
         assert "QWidget#AethericSidebar" in css
 
-    def test_contains_glass_bg(self):
+    def test_contains_darker_sidebar_bg(self):
         css = aetheric_sidebar_css(DARK_PALETTE)
-        assert AETHERIC_GLASS_BG in css
+        assert AETHERIC_SIDEBAR_BG in css
 
     def test_contains_sidebar_width(self):
         css = aetheric_sidebar_css(DARK_PALETTE)
         assert AETHERIC_SIDEBAR_WIDTH in css
 
-    def test_has_12px_corner_radius(self):
+    def test_corner_radii(self):
         css = aetheric_sidebar_css(DARK_PALETTE)
-        assert "border-top-left-radius: 12px" in css
+        assert "border-top-left-radius: 0px" in css  # square — title bar fills corner
         assert "border-bottom-left-radius: 12px" in css
 
     def test_dark_right_border(self):
@@ -559,26 +561,26 @@ class TestAethericCCOverlayCss:
             if stripped.startswith("QWidget") and "#" not in stripped:
                 assert False, f"Found bare QWidget selector: {stripped}"
 
-    def test_contains_background_token(self):
-        """CSS must include the AETHERIC_CC_BG background."""
+    def test_has_transparent_container(self):
+        """Container bg is transparent — background painted in paintEvent."""
         css = aetheric_cc_overlay_css(DARK_PALETTE)
-        assert AETHERIC_CC_BG in css
+        assert "background-color: transparent" in css
 
     def test_contains_text_colour(self):
         """CSS must include the AETHERIC_CC_TEXT colour."""
         css = aetheric_cc_overlay_css(DARK_PALETTE)
         assert AETHERIC_CC_TEXT in css
 
-    def test_contains_12px_radius(self):
-        """CSS must set border-radius to the CC radius token."""
+    def test_has_no_border_radius(self):
+        """Border radius handled by paintEvent, not QSS."""
         css = aetheric_cc_overlay_css(DARK_PALETTE)
-        assert f"border-radius: {AETHERIC_CC_RADIUS}" in css
+        assert "border-radius" not in css
 
-    def test_contains_directional_borders(self):
-        """CC overlay uses light top-left / dark bottom-right border cues."""
+    def test_has_no_qss_borders(self):
+        """Borders painted in paintEvent, not QSS."""
         css = aetheric_cc_overlay_css(DARK_PALETTE)
-        assert AETHERIC_BORDER_LIGHT in css
-        assert AETHERIC_BORDER_DARK in css
+        assert AETHERIC_BORDER_LIGHT not in css
+        assert AETHERIC_BORDER_DARK not in css
 
     def test_child_selectors_use_object_names(self):
         """Any child selectors (e.g. QLabel) must be scoped via #ObjectName."""

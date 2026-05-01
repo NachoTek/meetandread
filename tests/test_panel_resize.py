@@ -101,13 +101,13 @@ class TestSettingsPanelConstraints:
     """FloatingSettingsPanel min/max size constraints."""
 
     def test_minimum_width(self, settings_panel):
-        assert settings_panel.minimumWidth() == 420
+        assert settings_panel.minimumWidth() == 520
 
     def test_minimum_height(self, settings_panel):
         assert settings_panel.minimumHeight() == 400
 
     def test_maximum_width(self, settings_panel):
-        assert settings_panel.maximumWidth() == 700
+        assert settings_panel.maximumWidth() == 800
 
     def test_maximum_height(self, settings_panel):
         assert settings_panel.maximumHeight() == 800
