@@ -104,6 +104,37 @@ class TestTranscriptionSettings:
         assert settings.min_chunk_size_sec == 0.5
         assert settings.agreement_threshold == 1
     
+    def test_denoising_default_values(self):
+        """Test denoising settings have correct defaults."""
+        settings = TranscriptionSettings()
+        assert settings.microphone_denoising_enabled is True
+        assert settings.microphone_denoising_provider == "spectral_gate"
+        assert settings.microphone_denoising_latency_budget_ms == 200
+    
+    def test_denoising_roundtrip(self):
+        """Test denoising settings survive serialization roundtrip."""
+        original = TranscriptionSettings(
+            microphone_denoising_enabled=False,
+            microphone_denoising_provider="some_other_provider",
+            microphone_denoising_latency_budget_ms=100,
+        )
+        d = original.to_dict()
+        assert d["microphone_denoising_enabled"] is False
+        assert d["microphone_denoising_provider"] == "some_other_provider"
+        assert d["microphone_denoising_latency_budget_ms"] == 100
+        
+        restored = TranscriptionSettings.from_dict(d)
+        assert restored.microphone_denoising_enabled is False
+        assert restored.microphone_denoising_provider == "some_other_provider"
+        assert restored.microphone_denoising_latency_budget_ms == 100
+    
+    def test_denoising_defaults_from_empty_dict(self):
+        """Test denoising settings get defaults from empty dict."""
+        settings = TranscriptionSettings.from_dict({})
+        assert settings.microphone_denoising_enabled is True
+        assert settings.microphone_denoising_provider == "spectral_gate"
+        assert settings.microphone_denoising_latency_budget_ms == 200
+    
     def test_to_dict_from_dict_roundtrip(self):
         """Test serialization roundtrip."""
         original = TranscriptionSettings(
@@ -199,7 +230,7 @@ class TestAppSettings:
     def test_default_values(self):
         """Test default values and nested settings."""
         settings = AppSettings()
-        assert settings.config_version == 2
+        assert settings.config_version == 4
         assert isinstance(settings.model, ModelSettings)
         assert isinstance(settings.transcription, TranscriptionSettings)
         assert isinstance(settings.hardware, HardwareSettings)
@@ -209,7 +240,7 @@ class TestAppSettings:
         """Test full serialization."""
         settings = AppSettings()
         d = settings.to_dict()
-        assert d["config_version"] == 2
+        assert d["config_version"] == 4
         assert "model" in d
         assert "transcription" in d
         assert "hardware" in d
@@ -288,7 +319,7 @@ class TestSettingsPersistence:
         """Test loading when file doesn't exist returns defaults."""
         loaded = persistence.load_settings()
         assert loaded.model.realtime_model_size == "auto"
-        assert loaded.config_version == 2
+        assert loaded.config_version == 4
     
     def test_load_corrupted_json_returns_defaults(self, persistence):
         """Test loading corrupted file returns defaults."""
@@ -338,7 +369,7 @@ class TestSettingsPersistence:
         assert "path" in info
         assert "exists" in info
         assert info["exists"] is False  # No file yet
-        assert info["current_version"] == 2
+        assert info["current_version"] == 4
     
     def test_config_info_after_save(self, persistence):
         """Test config info after saving."""
@@ -347,7 +378,7 @@ class TestSettingsPersistence:
         
         info = persistence.get_config_info()
         assert info["exists"] is True
-        assert info["version"] == 2
+        assert info["version"] == 4
         assert info["needs_migration"] is False
 
 
@@ -362,22 +393,121 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 0)
-        assert migrated["config_version"] == 2
+        assert migrated["config_version"] == 4
         assert "transcription" in migrated
         assert "hardware" in migrated
         assert "ui" in migrated
         # Original values preserved
         assert migrated["model"]["realtime_model_size"] == "base"
     
+    def test_migration_from_version_2_adds_denoising(self, persistence):
+        """Test migration from version 2 adds denoising settings."""
+        old_config = {
+            "config_version": 2,
+            "model": {"realtime_model_size": "small"},
+            "transcription": {
+                "enabled": True,
+                "confidence_threshold": 0.8,
+                "benchmark_history": {"base": {"wer": 0.17}},
+            },
+        }
+        
+        migrated = persistence.migrate_config(old_config, 2)
+        assert migrated["config_version"] == 4
+        
+        # Denoising defaults added
+        ts = migrated["transcription"]
+        assert ts["microphone_denoising_enabled"] is True
+        assert ts["microphone_denoising_provider"] == "spectral_gate"
+        assert ts["microphone_denoising_latency_budget_ms"] == 200
+        
+        # Existing values preserved
+        assert ts["enabled"] is True
+        assert ts["confidence_threshold"] == 0.8
+        assert ts["benchmark_history"] == {"base": {"wer": 0.17}}
+        assert migrated["model"]["realtime_model_size"] == "small"
+
+        # Speaker min-duration defaults added by v3→v4 migration
+        speaker = migrated["speaker"]
+        assert speaker["min_duration_on"] == 0.3
+        assert speaker["min_duration_off"] == 0.8
+    
+    def test_migration_preserves_existing_denoising_values(self, persistence):
+        """Test migration doesn't clobber existing denoising fields."""
+        old_config = {
+            "config_version": 2,
+            "transcription": {
+                "microphone_denoising_enabled": False,
+                "microphone_denoising_provider": "custom",
+                "microphone_denoising_latency_budget_ms": 50,
+            },
+        }
+        
+        migrated = persistence.migrate_config(old_config, 2)
+        ts = migrated["transcription"]
+        assert ts["microphone_denoising_enabled"] is False
+        assert ts["microphone_denoising_provider"] == "custom"
+        assert ts["microphone_denoising_latency_budget_ms"] == 50
+    
+    def test_migration_from_version_3_adds_speaker_min_duration(self, persistence):
+        """Test v3→v4 migration adds min_duration_on/off to speaker section."""
+        old_config = {
+            "config_version": 3,
+            "speaker": {
+                "enabled": True,
+                "confidence_threshold": 0.7,
+                "clustering_threshold": 0.6,
+            },
+        }
+
+        migrated = persistence.migrate_config(old_config, 3)
+        assert migrated["config_version"] == 4
+
+        speaker = migrated["speaker"]
+        assert speaker["min_duration_on"] == 0.3
+        assert speaker["min_duration_off"] == 0.8
+        # Existing values preserved
+        assert speaker["enabled"] is True
+        assert speaker["confidence_threshold"] == 0.7
+        assert speaker["clustering_threshold"] == 0.6
+
+    def test_migration_from_version_3_preserves_existing_min_duration(self, persistence):
+        """Test v3→v4 migration doesn't clobber existing min_duration fields."""
+        old_config = {
+            "config_version": 3,
+            "speaker": {
+                "enabled": False,
+                "min_duration_on": 0.5,
+                "min_duration_off": 1.2,
+            },
+        }
+
+        migrated = persistence.migrate_config(old_config, 3)
+        speaker = migrated["speaker"]
+        assert speaker["min_duration_on"] == 0.5
+        assert speaker["min_duration_off"] == 1.2
+        assert speaker["enabled"] is False
+
+    def test_migration_from_version_3_missing_speaker_section(self, persistence):
+        """Test v3→v4 migration handles missing speaker section."""
+        old_config = {
+            "config_version": 3,
+        }
+
+        migrated = persistence.migrate_config(old_config, 3)
+        speaker = migrated["speaker"]
+        assert speaker["min_duration_on"] == 0.3
+        assert speaker["min_duration_off"] == 0.8
+    
     def test_no_migration_needed(self, persistence):
         """Test config at current version."""
         current_config = {
-            "config_version": 2,
+            "config_version": 4,
             "model": {"realtime_model_size": "small"}
         }
         
-        migrated = persistence.migrate_config(current_config, 2)
-        assert migrated["config_version"] == 2
+        migrated = persistence.migrate_config(current_config, 4)
+        assert migrated["config_version"] == 4
 
 
 # ============================================================================
@@ -654,6 +784,29 @@ class TestConfigEdgeCases:
         # Setting float on int field should work
         manager.set("transcription.agreement_threshold", 2.0)
         assert manager.get("transcription.agreement_threshold") == 2.0
+    
+    def test_denoising_enabled_get_set(self, manager):
+        """Test get/set for microphone_denoising_enabled."""
+        assert manager.get("transcription.microphone_denoising_enabled") is True
+        manager.set("transcription.microphone_denoising_enabled", False)
+        assert manager.get("transcription.microphone_denoising_enabled") is False
+    
+    def test_denoising_provider_get_set(self, manager):
+        """Test get/set for microphone_denoising_provider."""
+        assert manager.get("transcription.microphone_denoising_provider") == "spectral_gate"
+        manager.set("transcription.microphone_denoising_provider", "other")
+        assert manager.get("transcription.microphone_denoising_provider") == "other"
+    
+    def test_denoising_budget_get_set(self, manager):
+        """Test get/set for microphone_denoising_latency_budget_ms."""
+        assert manager.get("transcription.microphone_denoising_latency_budget_ms") == 200
+        manager.set("transcription.microphone_denoising_latency_budget_ms", 100)
+        assert manager.get("transcription.microphone_denoising_latency_budget_ms") == 100
+    
+    def test_denoising_budget_type_validation(self, manager):
+        """Test type validation for denoising budget."""
+        with pytest.raises(ValueError):
+            manager.set("transcription.microphone_denoising_latency_budget_ms", "not_a_number")
     
     def test_empty_string_path(self, manager):
         """Test empty string path is invalid."""

@@ -162,11 +162,23 @@ class RecordingController:
         """Check if controller is busy (starting, stopping, etc.)."""
         return self._state in (ControllerState.STARTING, ControllerState.STOPPING)
     
-    def start(self, selected_sources: Set[str]) -> Optional[ControllerError]:
+    def start(
+        self,
+        selected_sources: Set[str],
+        *,
+        fake_path: Optional[str] = None,
+        fake_denoise: bool = False,
+        fake_loop: bool = False,
+    ) -> Optional[ControllerError]:
         """Start recording from selected sources.
         
         Args:
             selected_sources: Set of source types ('mic', 'system', 'fake')
+            fake_path: Path to WAV file for fake source (required when
+                'fake' is in selected_sources).
+            fake_denoise: Whether to apply denoising to the fake source.
+                Only meaningful when 'fake' is in selected_sources.
+            fake_loop: Whether to loop the fake source WAV file.
         
         Returns:
             ControllerError if start failed, None on success
@@ -200,7 +212,12 @@ class RecordingController:
                     print(f"Warning: Transcription not available: {error.message}")
             
             # Build source configs
-            source_configs = self._build_source_configs(selected_sources)
+            source_configs = self._build_source_configs(
+                selected_sources,
+                fake_path=fake_path,
+                fake_denoise=fake_denoise,
+                fake_loop=fake_loop,
+            )
             
             if not source_configs:
                 return self._set_error(
@@ -208,8 +225,64 @@ class RecordingController:
                     is_recoverable=True
                 )
             
+            # Read denoising settings from persisted config with safe fallbacks
+            denoise_enabled = True  # safe default
+            denoise_provider = "spectral_gate"  # safe default
+            denoise_budget_ms = 200.0  # safe default
+            try:
+                settings = self._config_manager.get_settings()
+                ts = settings.transcription
+
+                # Validate enabled — must be actual bool
+                raw_enabled = ts.microphone_denoising_enabled
+                denoise_enabled = raw_enabled if isinstance(raw_enabled, bool) else True
+
+                # Validate provider — must be a non-empty string in the allowed set
+                raw_provider = ts.microphone_denoising_provider
+                from meetandread.audio.denoising import VALID_PROVIDER_NAMES
+                if isinstance(raw_provider, str) and raw_provider in VALID_PROVIDER_NAMES:
+                    denoise_provider = raw_provider
+                else:
+                    if raw_provider:
+                        logger.warning(
+                            "Invalid denoising provider '%s' in config, "
+                            "falling back to '%s'",
+                            raw_provider, denoise_provider,
+                        )
+
+                # Validate budget — must be a positive number
+                raw_budget = ts.microphone_denoising_latency_budget_ms
+                if isinstance(raw_budget, (int, float)) and raw_budget > 0:
+                    denoise_budget_ms = float(raw_budget)
+                else:
+                    if raw_budget is not None and raw_budget != 200:
+                        logger.warning(
+                            "Invalid denoising latency budget %r in config, "
+                            "falling back to %.0fms",
+                            raw_budget, denoise_budget_ms,
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to read denoising config, using defaults: %s", exc
+                )
+
+            # Tag mic sources with denoise=True when denoising is enabled
+            if denoise_enabled:
+                for sc in source_configs:
+                    if sc.type == "mic" and sc.denoise is None:
+                        sc.denoise = True
+
             # Create and start session
-            config = SessionConfig(sources=source_configs)
+            config = SessionConfig(
+                sources=source_configs,
+                enable_microphone_denoising=denoise_enabled,
+                denoising_provider_name=denoise_provider if denoise_enabled else None,
+                denoising_latency_budget_ms=denoise_budget_ms,
+            )
+            logger.info(
+                "Denoising config: enabled=%s provider=%s budget=%.0fms",
+                denoise_enabled, denoise_provider, denoise_budget_ms,
+            )
             # Wire audio callback to feed transcription processor
             if self.enable_transcription and self._transcription_processor:
                 config.on_audio_frame = self.feed_audio_for_transcription
@@ -607,7 +680,17 @@ class RecordingController:
             logger.info("Running speaker diarization on %s", wav_path.name)
 
             # (1) Run diarization
-            diarizer = Diarizer(clustering_threshold=speaker_cfg.clustering_threshold)
+            diarizer = Diarizer(
+                clustering_threshold=speaker_cfg.clustering_threshold,
+                min_duration_on=speaker_cfg.min_duration_on,
+                min_duration_off=speaker_cfg.min_duration_off,
+            )
+            logger.info(
+                "Diarization config: clustering=%.2f min_duration_on=%.2f min_duration_off=%.2f",
+                speaker_cfg.clustering_threshold,
+                speaker_cfg.min_duration_on,
+                speaker_cfg.min_duration_off,
+            )
             result = diarizer.diarize(wav_path)
 
             if not result.succeeded:
@@ -624,6 +707,18 @@ class RecordingController:
                 "Diarized %s: %d segments, %d speakers",
                 wav_path.name, len(result.segments), result.num_speakers,
             )
+
+            # --- Clean up noisy over-segmentation ---
+            from meetandread.speaker.diarizer import cleanup_diarization_segments
+            pre_cleanup_count = len(result.segments)
+            result.segments = cleanup_diarization_segments(result.segments)
+            if len(result.segments) != pre_cleanup_count:
+                logger.info(
+                    "Diarization cleanup in controller: %d -> %d segments "
+                    "(gap_threshold=%.2fs, short_threshold=%.2fs)",
+                    pre_cleanup_count, len(result.segments),
+                    0.2, 0.5,
+                )
 
             # (2) Match speaker embeddings against known signatures
             db_path = get_recordings_dir() / "speaker_signatures.db"
@@ -715,8 +810,25 @@ class RecordingController:
             print(f"Failed to save transcript: {e}")
             return None
     
-    def _build_source_configs(self, selected_sources: Set[str]) -> List[SourceConfig]:
-        """Build SourceConfig list from selected source types."""
+    def _build_source_configs(
+        self,
+        selected_sources: Set[str],
+        *,
+        fake_path: Optional[str] = None,
+        fake_denoise: bool = False,
+        fake_loop: bool = False,
+    ) -> List[SourceConfig]:
+        """Build SourceConfig list from selected source types.
+        
+        Args:
+            selected_sources: Set of source type strings.
+            fake_path: Path to WAV file (required for 'fake' source).
+            fake_denoise: Apply denoising to the fake source.
+            fake_loop: Loop the fake source WAV file.
+        
+        Returns:
+            List of SourceConfig objects for valid sources.
+        """
         configs = []
         
         for source_type in selected_sources:
@@ -727,8 +839,15 @@ class RecordingController:
             elif source_type == 'system':
                 configs.append(SourceConfig(type='system', gain=0.8))
             elif source_type == 'fake':
-                # For testing - handled separately in test scenarios
-                pass
+                if not fake_path:
+                    logger.warning("Fake source requested without fake_path — skipping")
+                    continue
+                configs.append(SourceConfig(
+                    type='fake',
+                    fake_path=fake_path,
+                    loop=fake_loop,
+                    denoise=True if fake_denoise else None,
+                ))
         
         return configs
     
@@ -841,3 +960,92 @@ class RecordingController:
             WER as float (0.0–1.0+) or None if not yet computed.
         """
         return self._last_wer
+
+    def get_diagnostics(self) -> dict:
+        """Return sanitized controller diagnostics for testing/inspection.
+
+        Exposes controller state, recording paths, session stats (including
+        denoising stats), VAD/transcription stats when present, and
+        diarization result metadata. Does NOT expose raw audio, transcript
+        text, embeddings, or secrets.
+
+        Returns:
+            Dict of sanitized diagnostic key/value pairs.
+        """
+        diag: dict = {
+            "state": self._state.name,
+            "last_wav_path": str(self._last_wav_path) if self._last_wav_path else None,
+            "last_transcript_path": str(self._last_transcript_path) if self._last_transcript_path else None,
+        }
+
+        # Session stats
+        try:
+            stats = self._session.get_stats()
+            diag["session"] = {
+                "frames_recorded": stats.frames_recorded,
+                "frames_dropped": stats.frames_dropped,
+                "duration_seconds": stats.duration_seconds,
+                "source_stats": stats.source_stats,
+                "denoising": {
+                    "provider": stats.denoising.provider,
+                    "enabled": stats.denoising.enabled,
+                    "active": stats.denoising.active,
+                    "processed_frame_count": stats.denoising.processed_frame_count,
+                    "fallback_count": stats.denoising.fallback_count,
+                    "avg_latency_ms": stats.denoising.avg_latency_ms,
+                    "max_latency_ms": stats.denoising.max_latency_ms,
+                    "budget_exceeded_count": stats.denoising.budget_exceeded_count,
+                    "last_error_class": stats.denoising.last_error_class,
+                },
+            }
+        except Exception:
+            pass
+
+        # Transcription / VAD stats
+        if self._transcription_processor:
+            try:
+                ts = self._transcription_processor.get_stats()
+                diag["transcription"] = {
+                    "buffer_duration": ts.get("buffer_duration"),
+                    "segments_processed": ts.get("segments_processed"),
+                }
+                # VAD stats if available
+                vad = getattr(self._transcription_processor, "get_vad_stats", None)
+                if callable(vad):
+                    vs = vad()
+                    diag["vad"] = vs
+            except Exception:
+                pass
+
+        # Transcript store stats
+        if self._transcript_store:
+            try:
+                words = self._transcript_store.get_all_words()
+                diag["transcript"] = {
+                    "word_count": len(words),
+                    "words_with_speaker": sum(1 for w in words if w.speaker_id is not None),
+                }
+            except Exception:
+                pass
+
+        # Diarization result metadata
+        if self._last_diarization_result:
+            try:
+                result = self._last_diarization_result
+                diag["diarization"] = {
+                    "succeeded": result.succeeded,
+                    "num_speakers": result.num_speakers,
+                    "segment_count": len(result.segments),
+                    "error": result.error,
+                }
+            except Exception:
+                pass
+
+        # Error info
+        if self._error:
+            diag["error"] = {
+                "message": self._error.message,
+                "is_recoverable": self._error.is_recoverable,
+            }
+
+        return diag

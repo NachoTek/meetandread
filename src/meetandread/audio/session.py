@@ -28,6 +28,7 @@ Example:
     wav_path = session.stop()
 """
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -52,6 +53,13 @@ from meetandread.audio.capture import (
     FakeAudioModule,
     AudioSourceError,
 )
+from meetandread.audio.denoising import (
+    DenoisingProvider,
+    DenoisingResult,
+    create_provider,
+)
+
+_log = logging.getLogger(__name__)
 
 
 class SessionState(Enum):
@@ -84,12 +92,16 @@ class SourceConfig:
         gain: Gain multiplier (1.0 = unity, 0.5 = half, 2.0 = double)
         fake_path: Path to WAV file (only for type='fake')
         loop: Whether to loop fake audio source (only for type='fake', default: False)
+        denoise: Per-source denoising override. None means "denoise only real mic
+            sources" (i.e. type='mic'). True forces denoising on (for test fake
+            sources simulating mic). False forces denoising off.
     """
     type: str  # 'mic', 'system', 'fake'
     device_id: Optional[int] = None
     gain: float = 1.0
     fake_path: Optional[str] = None
     loop: bool = False
+    denoise: Optional[bool] = None
 
 
 @dataclass
@@ -108,6 +120,12 @@ class SessionConfig:
             Calculated as: int(round(seconds * sample_rate))
         on_audio_frame: Optional callback for mixed audio frames (float32).
             Called from the consumer thread with each mixed audio chunk.
+        enable_microphone_denoising: Whether to denoise mic-like sources.
+        denoising_provider_name: Provider name (e.g. 'spectral_gate').
+        denoising_latency_budget_ms: Per-chunk latency budget in ms.
+        denoising_provider_factory: Optional callable returning a
+            DenoisingProvider. Used by tests to inject a mock/broken provider.
+            If None, create_provider() is used.
     """
     sources: List[SourceConfig] = field(default_factory=list)
     output_dir: Optional[Path] = None
@@ -115,6 +133,56 @@ class SessionConfig:
     channels: int = 1
     max_frames: Optional[int] = None
     on_audio_frame: Optional[Callable[[np.ndarray], None]] = None
+    enable_microphone_denoising: bool = False
+    denoising_provider_name: Optional[str] = None
+    denoising_latency_budget_ms: float = 200.0
+    denoising_provider_factory: Optional[Callable[[], DenoisingProvider]] = None
+
+
+@dataclass
+class DenoisingStats:
+    """Per-session denoising diagnostics.
+
+    All fields are sanitized — no raw audio content or secrets.
+    """
+    provider: str = ""
+    enabled: bool = False
+    active: bool = False
+    fallback: bool = False
+    processed_frame_count: int = 0
+    fallback_count: int = 0
+    avg_latency_ms: float = 0.0
+    max_latency_ms: float = 0.0
+    budget_exceeded_count: int = 0
+    last_error_class: str = ""
+    last_error_message: str = ""
+
+    def record_success(self, latency_ms: float, budget_ms: float) -> None:
+        """Record a successful denoising pass."""
+        self.processed_frame_count += 1
+        total_ms = self.avg_latency_ms * (self.processed_frame_count - 1) + latency_ms
+        self.avg_latency_ms = total_ms / self.processed_frame_count
+        if latency_ms > self.max_latency_ms:
+            self.max_latency_ms = latency_ms
+        if latency_ms > budget_ms:
+            self.budget_exceeded_count += 1
+
+    def record_fallback(self, latency_ms: float, error: Optional[str] = None) -> None:
+        """Record a fallback event."""
+        self.fallback_count += 1
+        self.fallback = True
+        if error:
+            parts = error.split(": ", 1)
+            self.last_error_class = parts[0] if parts else error
+            self.last_error_message = parts[1] if len(parts) > 1 else ""
+        # Still track latency for fallback frames
+        if self.processed_frame_count > 0:
+            total_ms = self.avg_latency_ms * self.processed_frame_count + latency_ms
+            self.avg_latency_ms = total_ms / (self.processed_frame_count + 1)
+        else:
+            self.avg_latency_ms = latency_ms
+        if latency_ms > self.max_latency_ms:
+            self.max_latency_ms = latency_ms
 
 
 @dataclass
@@ -126,11 +194,13 @@ class SessionStats:
         frames_dropped: Frames dropped due to queue overflow
         duration_seconds: Actual recording duration
         source_stats: Per-source statistics
+        denoising: Denoising diagnostics (empty when disabled)
     """
     frames_recorded: int = 0
     frames_dropped: int = 0
     duration_seconds: float = 0.0
     source_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    denoising: DenoisingStats = field(default_factory=DenoisingStats)
 
 
 class AudioSourceWrapper:
@@ -164,6 +234,17 @@ class AudioSourceWrapper:
             )
         else:
             self._resampler = None
+
+    @property
+    def should_denoise(self) -> bool:
+        """Whether this source's frames should be denoised.
+
+        Logic: if SourceConfig.denoise is explicitly set, use that.
+        Otherwise denoise only real mic sources (type='mic').
+        """
+        if self.config.denoise is not None:
+            return self.config.denoise
+        return self.config.type == 'mic'
     
     def read_and_process(self, timeout: Optional[float] = 0.1) -> Optional[np.ndarray]:
         """Read frames from source and process them.
@@ -247,6 +328,9 @@ class AudioSession:
         self._start_time: Optional[float] = None
         self._stats = SessionStats()
         self._error: Optional[Exception] = None
+        # Denoising state
+        self._denoising_provider: Optional[DenoisingProvider] = None
+        self._denoising_disabled: bool = False  # True after init/process failure
     
     def start(self, config: SessionConfig) -> None:
         """Start a recording session.
@@ -268,10 +352,16 @@ class AudioSession:
         self._state = SessionState.STARTING
         self._stats = SessionStats()
         self._error = None
+        self._denoising_provider = None
+        self._denoising_disabled = False
         
         try:
             # Create sources
             self._sources = self._create_sources(config)
+
+            # Create denoising provider if enabled
+            if config.enable_microphone_denoising:
+                self._init_denoising_provider(config)
             
             # Create writer
             self._stem = new_recording_stem()
@@ -409,6 +499,108 @@ class AudioSession:
             )
         
         return wrappers
+
+    def _init_denoising_provider(self, config: SessionConfig) -> None:
+        """Initialize the denoising provider, fail-open on error.
+
+        Creates the provider and updates stats. On failure, logs a sanitized
+        warning and sets _denoising_disabled so the consumer loop feeds raw audio.
+        """
+        try:
+            if config.denoising_provider_factory:
+                provider = config.denoising_provider_factory()
+            else:
+                provider = create_provider(config.denoising_provider_name)
+
+            self._denoising_provider = provider
+            self._stats.denoising.enabled = True
+            self._stats.denoising.active = True
+            self._stats.denoising.provider = provider.name
+
+            _log.info(
+                "Denoising provider initialized: name=%s, budget_ms=%.1f",
+                provider.name,
+                config.denoising_latency_budget_ms,
+            )
+        except Exception as exc:
+            self._denoising_disabled = True
+            self._stats.denoising.enabled = True
+            self._stats.denoising.fallback = True
+            self._stats.denoising.last_error_class = type(exc).__name__
+            self._stats.denoising.last_error_message = str(exc)[:200]
+
+            _log.warning(
+                "Denoising provider init failed, continuing raw: error_class=%s",
+                type(exc).__name__,
+            )
+
+    def _apply_denoising(
+        self,
+        frames: np.ndarray,
+        wrapper: AudioSourceWrapper,
+    ) -> np.ndarray:
+        """Apply denoising to a single source's frames before mixing.
+
+        Returns denoised frames or raw frames on fallback. Never raises.
+        Updates self._stats.denoising diagnostics.
+        """
+        # Fast path: not a denoise-enabled source
+        if not wrapper.should_denoise:
+            return frames
+
+        # Fast path: denoising disabled (init failure or already hard-disabled)
+        if self._denoising_disabled or self._denoising_provider is None:
+            return frames
+
+        try:
+            # Flatten to 1-D for provider (which expects mono float32)
+            flat = frames.flatten().astype(np.float32)
+            result: DenoisingResult = self._denoising_provider.process(flat)
+
+            if result.fallback:
+                self._stats.denoising.record_fallback(result.latency_ms, result.error)
+            else:
+                self._stats.denoising.record_success(
+                    result.latency_ms, self._config.denoising_latency_budget_ms
+                )
+
+            # Budget warning (not a hard failure)
+            if result.latency_ms > self._config.denoising_latency_budget_ms:
+                _log.info(
+                    "Denoising latency exceeded budget: %.1fms > %.1fms",
+                    result.latency_ms,
+                    self._config.denoising_latency_budget_ms,
+                )
+
+            # Validate output shape
+            output = result.audio
+            if output.shape != flat.shape:
+                _log.warning(
+                    "Denoising output shape mismatch: expected %s got %s, using raw",
+                    flat.shape,
+                    output.shape,
+                )
+                self._stats.denoising.record_fallback(
+                    result.latency_ms, "OutputShapeMismatch"
+                )
+                return frames
+
+            # Reshape back to match input ndim
+            if frames.ndim > 1:
+                output = output.reshape(frames.shape)
+            return output
+
+        except Exception as exc:
+            # Hard-disable on exception — continue raw for rest of session
+            self._denoising_disabled = True
+            self._stats.denoising.active = False
+            self._stats.denoising.record_fallback(0.0, f"{type(exc).__name__}: {exc}")
+
+            _log.warning(
+                "Denoising process error, hard-disabling for session: error_class=%s",
+                type(exc).__name__,
+            )
+            return frames
     
     def _consumer_loop(self) -> None:
         """Background thread that reads from sources and writes to disk."""
@@ -420,11 +612,13 @@ class AudioSession:
             if not self._writer:
                 break
 
-            # Read from all sources
+            # Read from all sources, applying denoising per-source before mixing
             frames_list = []
             for wrapper in self._sources:
                 frames = wrapper.read_and_process(timeout=0.05)
                 if frames is not None:
+                    # Apply denoising to denoise-enabled sources before mixing
+                    frames = self._apply_denoising(frames, wrapper)
                     frames_list.append(frames)
 
             if not frames_list:
@@ -482,6 +676,7 @@ class AudioSession:
             for wrapper in self._sources:
                 frames = wrapper.read_and_process(timeout=0.01)
                 if frames is not None:
+                    frames = self._apply_denoising(frames, wrapper)
                     frames_list.append(frames)
 
             if not frames_list:

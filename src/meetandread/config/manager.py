@@ -265,6 +265,10 @@ class ConfigManager:
             "ui.widget_position",
             "ui.widget_dock_edge",
             "ui.audio_sources",
+            # Transcription denoising settings
+            "transcription.microphone_denoising_enabled",
+            "transcription.microphone_denoising_provider",
+            "transcription.microphone_denoising_latency_budget_ms",
         }
     
     def get_config_path(self) -> str:

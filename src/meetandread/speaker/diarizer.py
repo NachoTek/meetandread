@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 
@@ -22,6 +22,127 @@ from meetandread.speaker.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Segment cleanup (post-diarization noise reduction)
+# ---------------------------------------------------------------------------
+
+# Default thresholds for cleanup_diarization_segments()
+DEFAULT_GAP_MERGE_THRESHOLD = 0.2   # seconds — same-speaker gaps ≤ this merge
+DEFAULT_SHORT_SEGMENT_THRESHOLD = 0.5  # seconds — segments shorter absorb if safe
+
+
+def cleanup_diarization_segments(
+    segments: List[SpeakerSegment],
+    gap_merge_threshold: float = DEFAULT_GAP_MERGE_THRESHOLD,
+    short_segment_threshold: float = DEFAULT_SHORT_SEGMENT_THRESHOLD,
+) -> List[SpeakerSegment]:
+    """Clean up noisy diarization over-segmentation.
+
+    Applies two conservative passes:
+
+    1. **Gap merge**: Adjacent same-speaker segments separated by a gap
+       ≤ *gap_merge_threshold* seconds are merged into one continuous
+       segment.
+
+    2. **Short-segment absorption**: A same-speaker segment shorter than
+       *short_segment_threshold* that sits between two longer same-speaker
+       segments is absorbed (the gap on both sides is bridged). This is
+       only applied when the neighbours are the *same* speaker as the
+       short segment and at least one neighbour is longer than the
+       threshold (so we don't merge truly alternating speakers).
+
+    The function is safe on malformed inputs — empty lists, out-of-order
+    segments, or negative durations are handled without raising. Segments
+    are sorted by start time as a defensive first step.
+
+    Args:
+        segments: Raw diarization segments (may be noisy).
+        gap_merge_threshold: Maximum gap (seconds) between same-speaker
+            segments to merge. Default 0.2.
+        short_segment_threshold: Segments shorter than this (seconds) are
+            candidates for absorption. Default 0.5.
+
+    Returns:
+        Cleaned list of SpeakerSegment, sorted by start time.
+    """
+    if not segments:
+        return []
+
+    # Defensive sort by start time
+    try:
+        segments = sorted(segments, key=lambda s: s.start)
+    except (TypeError, AttributeError):
+        # Malformed segments — return as-is rather than crash
+        logger.warning("cleanup_diarization_segments: failed to sort segments, returning unchanged")
+        return list(segments)
+
+    # --- Pass 1: merge adjacent same-speaker gaps -------------------------
+    merged: list[SpeakerSegment] = []
+    for seg in segments:
+        # Skip segments with invalid time ranges
+        if seg.end < seg.start:
+            logger.debug(
+                "cleanup: skipping negative-duration segment %.3f–%.3f (%s)",
+                seg.start, seg.end, seg.speaker,
+            )
+            continue
+        if not merged:
+            merged.append(seg)
+            continue
+
+        prev = merged[-1]
+        gap = seg.start - prev.end
+        if prev.speaker == seg.speaker and 0 <= gap <= gap_merge_threshold:
+            # Extend previous segment to cover the gap + new segment
+            merged[-1] = SpeakerSegment(
+                start=prev.start,
+                end=max(prev.end, seg.end),
+                speaker=prev.speaker,
+            )
+        else:
+            merged.append(seg)
+
+    if len(merged) <= 2:
+        # Not enough segments for short-segment absorption
+        return merged
+
+    # --- Pass 2: absorb same-speaker short noise splits -------------------
+    result: list[SpeakerSegment] = []
+    i = 0
+    while i < len(merged):
+        seg = merged[i]
+
+        # Try to absorb current short segment into surrounding same-speaker
+        if (
+            seg.duration < short_segment_threshold
+            and result
+            and i + 1 < len(merged)
+        ):
+            prev = result[-1]
+            nxt = merged[i + 1]
+
+            # Only absorb when both neighbours are the same speaker
+            # AND at least one neighbour is a "real" (long) segment.
+            if (
+                prev.speaker == seg.speaker == nxt.speaker
+                and (prev.duration >= short_segment_threshold
+                     or nxt.duration >= short_segment_threshold)
+            ):
+                # Merge prev + short + next into one segment
+                result[-1] = SpeakerSegment(
+                    start=prev.start,
+                    end=max(prev.end, nxt.end),
+                    speaker=prev.speaker,
+                )
+                # Skip the next segment too — it's been absorbed
+                i += 2
+                continue
+
+        result.append(seg)
+        i += 1
+
+    return result
 
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -125,6 +246,17 @@ class Diarizer:
                 SpeakerSegment(start=seg.start, end=seg.end, speaker=seg.speaker)
                 for seg in sorted_segments
             ]
+
+            # --- Clean up noisy over-segmentation -----------------------------
+            pre_count = len(segments)
+            segments = cleanup_diarization_segments(segments)
+            if len(segments) != pre_count:
+                logger.info(
+                    "Diarization cleanup: %d -> %d segments "
+                    "(gap_threshold=%.2fs, short_threshold=%.2fs)",
+                    pre_count, len(segments),
+                    DEFAULT_GAP_MERGE_THRESHOLD, DEFAULT_SHORT_SEGMENT_THRESHOLD,
+                )
 
             # --- Extract per-speaker embeddings --------------------------------
             signatures = self._extract_speaker_embeddings(audio, sr, segments)

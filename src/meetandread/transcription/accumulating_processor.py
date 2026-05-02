@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from queue import Queue, Empty
 
+from meetandread.transcription.vad import VoiceActivityDetector, VADStats
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,6 +132,12 @@ class AccumulatingTranscriptionProcessor:
         # Segment index tracking to prevent duplicate emission
         # Tracks the last segment index that was emitted to the UI
         self._last_emitted_segment_index = -1  # -1 means nothing emitted yet
+
+        # Voice Activity Detector (noise-aware speech boundary)
+        self._vad: Optional[VoiceActivityDetector] = None
+
+        # VAD speech/silence transition tracking for sanitized logging
+        self._last_vad_speech_state: Optional[bool] = None
     
     def load_model(self, progress_callback: Optional[Callable[[int], None]] = None) -> None:
         """Load the Whisper model."""
@@ -163,6 +171,11 @@ class AccumulatingTranscriptionProcessor:
         self._last_phrase_start_time = None  # Reset phrase timing
         self._last_emitted_segment_index = -1  # Reset segment tracking for new session
         self._last_emitted_text = ""  # Reset text tracking for new session
+
+        # Create/reset VAD detector for this session
+        self._vad = VoiceActivityDetector()
+        self._last_vad_speech_state = None
+        logger.info("VAD detector created for new transcription session")
         
         # Start processing thread
         self._processing_thread = threading.Thread(
@@ -196,38 +209,52 @@ class AccumulatingTranscriptionProcessor:
         """
         Feed audio data to be accumulated.
         
+        Uses VoiceActivityDetector for noise-aware speech/silence decisions.
+        Only updates ``_last_audio_time`` on VAD-confirmed speech, so noisy
+        silence does not keep the phrase alive.
+        
         Args:
             audio_chunk: Audio samples as float32 numpy array (mono, 16kHz)
         """
-        # Calculate audio energy (RMS) for speech detection
-        if len(audio_chunk) > 0:
-            energy = np.sqrt(np.mean(audio_chunk ** 2))
+        # --- VAD-based speech detection ---
+        vad_is_speech = False
+        if self._vad is not None:
+            try:
+                vad_result = self._vad.process_chunk(audio_chunk)
+                vad_is_speech = vad_result.is_speech
+            except Exception as exc:
+                # VAD must never raise into the audio callback.
+                # Fall back to energy-based decision.
+                logger.warning(
+                    "VAD exception in feed_audio, falling back to energy: %s: %s",
+                    type(exc).__name__, exc,
+                )
+                if len(audio_chunk) > 0:
+                    energy = float(np.sqrt(np.mean(audio_chunk.astype(np.float64) ** 2)))
+                    vad_is_speech = energy > 0.005
         else:
-            energy = 0
-        
-        # Threshold for speech detection (tune this value based on testing)
-        # Lowered to 0.005 for better sensitivity with quiet microphones
-        SPEECH_THRESHOLD = 0.005
-        is_speech = energy > SPEECH_THRESHOLD
-        
-        # Only update last_audio_time if speech detected (fixes silence timeout bug)
-        if is_speech:
+            # No VAD instance (shouldn't happen after start(), but be safe)
+            if len(audio_chunk) > 0:
+                energy = float(np.sqrt(np.mean(audio_chunk.astype(np.float64) ** 2)))
+                vad_is_speech = energy > 0.005
+
+        # Only update last_audio_time if speech detected by VAD
+        if vad_is_speech:
             self._last_audio_time = datetime.utcnow()
-            if not hasattr(self, '_last_speech_debug'):
-                self._last_speech_debug = False
-            if not self._last_speech_debug:
-                print(f"DEBUG: Speech detected (energy: {energy:.4f})")
-            self._last_speech_debug = True
-        else:
-            if not hasattr(self, '_last_speech_debug'):
-                self._last_speech_debug = True
-            if self._last_speech_debug:
-                print(f"DEBUG: Silence detected (energy: {energy:.4f})")
-            self._last_speech_debug = False
+
+        # Log sanitized speech/silence transitions (no raw audio values)
+        if self._last_vad_speech_state is None or self._last_vad_speech_state != vad_is_speech:
+            self._last_vad_speech_state = vad_is_speech
+            if vad_is_speech:
+                logger.info("VAD transition: silence -> speech")
+            else:
+                logger.info("VAD transition: speech -> silence")
         
         # Convert float32 to int16 bytes (what whisper.cpp expects)
         if audio_chunk.dtype == np.float32:
-            audio_int16 = (audio_chunk * 32767).astype(np.int16)
+            # Sanitize NaN/Inf before conversion to avoid RuntimeWarning
+            sanitized = np.where(np.isfinite(audio_chunk), audio_chunk, 0.0)
+            audio_int16 = (sanitized * 32767).astype(np.int16)
         elif audio_chunk.dtype == np.int16:
             audio_int16 = audio_chunk
         else:
@@ -242,13 +269,14 @@ class AccumulatingTranscriptionProcessor:
         # Debug: log every 50 chunks and every 10 seconds of audio
         if self._audio_chunks_fed % 50 == 0:
             buffer_duration = len(self._phrase_bytes) / (16000 * 2)  # bytes / (samples/sec * bytes/sample)
-            print(f"DEBUG: Fed audio chunk #{self._audio_chunks_fed}: {len(audio_chunk)} samples, buffer: {buffer_duration:.1f}s")
+            logger.debug("Fed chunk #%d: %d samples, buffer: %.1fs",
+                         self._audio_chunks_fed, len(audio_chunk), buffer_duration)
         
         # Trim buffer if it exceeds window size (keep most recent audio)
         if len(self._phrase_bytes) > self._max_buffer_bytes:
             excess = len(self._phrase_bytes) - self._max_buffer_bytes
             self._phrase_bytes = self._phrase_bytes[excess:]
-            print(f"DEBUG: Trimmed buffer to maintain {self.window_size}s window")
+            logger.debug("Trimmed buffer to maintain %ds window", self.window_size)
     
     def _processing_loop(self) -> None:
         """Main processing loop - runs in background thread."""
@@ -472,6 +500,17 @@ class AccumulatingTranscriptionProcessor:
             "transcription_count": self._transcription_count,
             "pending_results": self._result_queue.qsize(),
         }
+
+    def get_vad_stats(self) -> Optional[VADStats]:
+        """Return sanitized VAD diagnostics, or None if VAD is not initialized.
+
+        Exposes backend name, fallback count/error, decision counts,
+        processed frame count, and latency/budget signals without any
+        raw audio content or transcripts.
+        """
+        if self._vad is None:
+            return None
+        return self._vad.get_stats()
 
 
 # Example usage

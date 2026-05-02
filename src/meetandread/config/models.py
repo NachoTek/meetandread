@@ -97,6 +97,20 @@ class TranscriptionSettings:
         default_factory=dict,
         metadata={"description": "Per-model benchmark results: {model_size: {wer: float, timestamp: str}}"}
     )
+    
+    # MICROPHONE DENOISING SETTINGS
+    microphone_denoising_enabled: bool = field(
+        default=True,
+        metadata={"description": "Whether microphone denoising is enabled"}
+    )
+    microphone_denoising_provider: str = field(
+        default="spectral_gate",
+        metadata={"description": "Denoising provider name (e.g. 'spectral_gate'). Invalid names fall back to default at runtime."}
+    )
+    microphone_denoising_latency_budget_ms: int = field(
+        default=200,
+        metadata={"description": "Maximum allowed latency in ms per denoising call (diagnostic, not enforced)"}
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -113,7 +127,10 @@ class TranscriptionSettings:
             realtime_model_size=data.get("realtime_model_size", cls.realtime_model_size),
             postprocess_model_size=data.get("postprocess_model_size", cls.postprocess_model_size),
             enable_postprocessing=data.get("enable_postprocessing", cls.enable_postprocessing),
-            benchmark_history=data.get("benchmark_history", {})
+            benchmark_history=data.get("benchmark_history", {}),
+            microphone_denoising_enabled=data.get("microphone_denoising_enabled", True),
+            microphone_denoising_provider=data.get("microphone_denoising_provider", "spectral_gate"),
+            microphone_denoising_latency_budget_ms=data.get("microphone_denoising_latency_budget_ms", 200),
         )
 
 
@@ -241,6 +258,11 @@ class SpeakerSettings:
             known speaker (0.0–1.0). Default: 0.6
         clustering_threshold: Threshold for fast clustering in diarization
             (0–1). Higher values produce more speakers. Default: 0.5
+        min_duration_on: Minimum speech segment duration in seconds.
+            Shorter segments are discarded. Default: 0.3
+        min_duration_off: Minimum silence gap between speakers in seconds.
+            Shorter gaps are merged, reducing false splits in noisy rooms.
+            Default: 0.8 (tuned for noisy meeting environments)
     """
     enabled: bool = field(
         default=True,
@@ -254,6 +276,27 @@ class SpeakerSettings:
         default=0.5,
         metadata={"description": "Clustering threshold for diarization (higher = more speakers)"}
     )
+    min_duration_on: float = field(
+        default=0.3,
+        metadata={"description": "Minimum speech segment duration in seconds (shorter segments discarded)"}
+    )
+    min_duration_off: float = field(
+        default=0.8,
+        metadata={"description": "Minimum silence gap between speakers in seconds (reduces false splits in noisy rooms)"}
+    )
+
+    @staticmethod
+    def _coerce_float(value: object, fallback: float, min_val: float = 0.0, max_val: float = 60.0) -> float:
+        """Coerce a value to float, clamping to [min_val, max_val] with fallback."""
+        if not isinstance(value, (int, float)):
+            return fallback
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        if f < min_val or f > max_val:
+            return fallback
+        return f
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -261,11 +304,22 @@ class SpeakerSettings:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SpeakerSettings":
-        """Create from dictionary, using defaults for missing fields."""
+        """Create from dictionary, using defaults for missing fields.
+
+        Non-numeric, negative, or out-of-range min_duration values are
+        silently replaced with safe defaults rather than raising.
+        """
+        raw_on = data.get("min_duration_on", cls.min_duration_on)
+        raw_off = data.get("min_duration_off", cls.min_duration_off)
+        safe_on = cls._coerce_float(raw_on, cls.min_duration_on, min_val=0.0, max_val=30.0)
+        safe_off = cls._coerce_float(raw_off, cls.min_duration_off, min_val=0.0, max_val=30.0)
+
         return cls(
             enabled=data.get("enabled", cls.enabled),
             confidence_threshold=data.get("confidence_threshold", cls.confidence_threshold),
             clustering_threshold=data.get("clustering_threshold", cls.clustering_threshold),
+            min_duration_on=safe_on,
+            min_duration_off=safe_off,
         )
 
 
@@ -285,7 +339,7 @@ class AppSettings:
         ui: UI behavior and appearance settings.
     """
     config_version: int = field(
-        default=2,
+        default=4,
         metadata={"description": "Configuration schema version for migrations"}
     )
     model: ModelSettings = field(default_factory=ModelSettings)

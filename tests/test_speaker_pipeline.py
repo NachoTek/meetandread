@@ -9,6 +9,7 @@ The test is gated behind the --run-slow flag since model downloads
 are ~30 MB and diarization takes several seconds on CPU.
 """
 
+import logging
 import struct
 import tempfile
 import wave
@@ -361,6 +362,8 @@ class TestSpeakerSettings:
         assert s.enabled is True
         assert s.confidence_threshold == 0.6
         assert s.clustering_threshold == 0.5
+        assert s.min_duration_on == 0.3
+        assert s.min_duration_off == 0.8
 
     def test_roundtrip(self):
         from meetandread.config.models import AppSettings
@@ -368,13 +371,19 @@ class TestSpeakerSettings:
         app = AppSettings()
         app.speaker.enabled = False
         app.speaker.confidence_threshold = 0.8
+        app.speaker.min_duration_on = 0.5
+        app.speaker.min_duration_off = 1.2
         d = app.to_dict()
         assert d["speaker"]["enabled"] is False
         assert d["speaker"]["confidence_threshold"] == 0.8
+        assert d["speaker"]["min_duration_on"] == 0.5
+        assert d["speaker"]["min_duration_off"] == 1.2
 
         app2 = AppSettings.from_dict(d)
         assert app2.speaker.enabled is False
         assert app2.speaker.confidence_threshold == 0.8
+        assert app2.speaker.min_duration_on == 0.5
+        assert app2.speaker.min_duration_off == 1.2
 
     def test_missing_speaker_key_uses_defaults(self):
         from meetandread.config.models import AppSettings
@@ -384,6 +393,8 @@ class TestSpeakerSettings:
         app = AppSettings.from_dict(d)
         assert app.speaker.enabled is True
         assert app.speaker.confidence_threshold == 0.6
+        assert app.speaker.min_duration_on == 0.3
+        assert app.speaker.min_duration_off == 0.8
 
     def test_from_dict_partial(self):
         from meetandread.config.models import SpeakerSettings
@@ -392,6 +403,38 @@ class TestSpeakerSettings:
         assert s.enabled is False
         assert s.confidence_threshold == 0.6  # default
         assert s.clustering_threshold == 0.5  # default
+        assert s.min_duration_on == 0.3  # default
+        assert s.min_duration_off == 0.8  # default
+
+    def test_from_dict_invalid_min_duration_uses_defaults(self):
+        """Non-numeric, negative, or excessively large values fall back to defaults."""
+        from meetandread.config.models import SpeakerSettings
+
+        # String values → fallback
+        s = SpeakerSettings.from_dict({"min_duration_on": "bad", "min_duration_off": "nope"})
+        assert s.min_duration_on == 0.3
+        assert s.min_duration_off == 0.8
+
+        # Negative values → fallback
+        s = SpeakerSettings.from_dict({"min_duration_on": -1.0, "min_duration_off": -0.5})
+        assert s.min_duration_on == 0.3
+        assert s.min_duration_off == 0.8
+
+        # Excessively large values → fallback
+        s = SpeakerSettings.from_dict({"min_duration_on": 999.0, "min_duration_off": 100.0})
+        assert s.min_duration_on == 0.3
+        assert s.min_duration_off == 0.8
+
+    def test_from_dict_valid_custom_values(self):
+        """Custom valid values are preserved."""
+        from meetandread.config.models import SpeakerSettings
+
+        s = SpeakerSettings.from_dict({
+            "min_duration_on": 0.5,
+            "min_duration_off": 1.2,
+        })
+        assert s.min_duration_on == 0.5
+        assert s.min_duration_off == 1.2
 
 
 class TestApplySpeakerLabels:
@@ -484,6 +527,87 @@ class TestApplySpeakerLabels:
         with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_diarizer_cls:
             ctrl._run_diarization(Path("test.wav"))
             mock_diarizer_cls.assert_not_called()
+
+
+class TestDiarizerConstructionParams:
+    """Tests verifying the controller passes all configured params to Diarizer."""
+
+    def _make_controller_with_speaker_config(self, speaker_settings):
+        """Create a controller with specific speaker settings."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = speaker_settings
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+        return ctrl
+
+    def test_diarizer_receives_configured_params(self):
+        """Controller passes clustering_threshold, min_duration_on, min_duration_off to Diarizer."""
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        speaker_cfg = SpeakerSettings(
+            enabled=True,
+            clustering_threshold=0.7,
+            min_duration_on=0.4,
+            min_duration_off=1.0,
+        )
+        ctrl = self._make_controller_with_speaker_config(speaker_cfg)
+
+        mock_result = mock.MagicMock()
+        mock_result.succeeded = False
+        mock_result.segments = []
+
+        with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_diarizer_cls:
+            mock_diarizer_cls.return_value.diarize.return_value = mock_result
+            ctrl._run_diarization(Path("test.wav"))
+
+            mock_diarizer_cls.assert_called_once_with(
+                clustering_threshold=0.7,
+                min_duration_on=0.4,
+                min_duration_off=1.0,
+            )
+
+    def test_diarizer_receives_default_params(self):
+        """Controller passes default SpeakerSettings values when config uses defaults."""
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        speaker_cfg = SpeakerSettings()  # all defaults
+        ctrl = self._make_controller_with_speaker_config(speaker_cfg)
+
+        mock_result = mock.MagicMock()
+        mock_result.succeeded = False
+        mock_result.segments = []
+
+        with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_diarizer_cls:
+            mock_diarizer_cls.return_value.diarize.return_value = mock_result
+            ctrl._run_diarization(Path("test.wav"))
+
+            mock_diarizer_cls.assert_called_once_with(
+                clustering_threshold=0.5,
+                min_duration_on=0.3,
+                min_duration_off=0.8,
+            )
+
+    def test_diarizer_construction_failure_logged(self, caplog):
+        """If Diarizer construction fails, the error is logged and no crash."""
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        speaker_cfg = SpeakerSettings(enabled=True)
+        ctrl = self._make_controller_with_speaker_config(speaker_cfg)
+
+        with mock.patch("meetandread.speaker.diarizer.Diarizer", side_effect=RuntimeError("model not found")):
+            with caplog.at_level(logging.ERROR):
+                ctrl._run_diarization(Path("test.wav"))
+                assert any("model not found" in r.message.lower() or "diarization" in r.message.lower() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -653,3 +777,328 @@ class TestControllerPinSpeaker:
         ctrl.pin_speaker_name("spk0", "Alice")
         names = ctrl.get_speaker_names()
         assert names["spk0"] == "Alice"
+
+
+# ---------------------------------------------------------------------------
+# T04: Diarization segment cleanup tests
+# ---------------------------------------------------------------------------
+
+class TestCleanupDiarizationSegments:
+    """Tests for cleanup_diarization_segments() noise reduction."""
+
+    @staticmethod
+    def _seg(start: float, end: float, speaker: str) -> "SpeakerSegment":
+        from meetandread.speaker.models import SpeakerSegment
+        return SpeakerSegment(start=start, end=end, speaker=speaker)
+
+    # --- Empty / trivial inputs -------------------------------------------
+
+    def test_empty_list_returns_empty(self):
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        assert cleanup_diarization_segments([]) == []
+
+    def test_single_segment_unchanged(self):
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [self._seg(0.0, 1.0, "spk0")]
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 1
+        assert result[0].start == 0.0
+        assert result[0].end == 1.0
+
+    def test_two_segments_different_speakers_unchanged(self):
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.5, 3.0, "spk1"),
+        ]
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 2
+
+    # --- Gap merge (pass 1) -----------------------------------------------
+
+    def test_same_speaker_tiny_gap_merged(self):
+        """Adjacent same-speaker segments with gap < 0.2s merge."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.1, 2.0, "spk0"),  # 0.1s gap
+        ]
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 1
+        assert result[0].start == 0.0
+        assert result[0].end == 2.0
+
+    def test_same_speaker_exact_gap_threshold_merged(self):
+        """Gap exactly at 0.2s should merge (<=)."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.2, 2.0, "spk0"),  # exactly 0.2s gap
+        ]
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 1
+
+    def test_same_speaker_just_over_gap_threshold_not_merged(self):
+        """Gap just over 0.2s should NOT merge."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.21, 2.0, "spk0"),  # 0.21s gap
+        ]
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 2
+
+    def test_different_speaker_tiny_gap_not_merged(self):
+        """Adjacent different-speaker segments with tiny gap stay separate."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.05, 2.0, "spk1"),  # 0.05s gap, different speaker
+        ]
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 2
+
+    # --- Short-segment absorption (pass 2) --------------------------------
+
+    def test_short_same_speaker_noise_split_absorbed(self):
+        """Short same-speaker segment between longer same-speaker is absorbed."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 2.0, "spk0"),   # 2s — long
+            self._seg(2.1, 2.3, "spk0"),   # 0.2s — short, same speaker
+            self._seg(2.4, 4.0, "spk0"),   # 1.6s — long
+        ]
+        result = cleanup_diarization_segments(segs)
+        # Gap merge should combine them all into one
+        assert len(result) == 1
+        assert result[0].start == 0.0
+        assert result[0].end == 4.0
+
+    def test_short_segment_at_boundaries_preserved(self):
+        """Short segment at the beginning or end stays if no neighbours to absorb."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 0.3, "spk0"),   # 0.3s — short, at start
+            self._seg(0.5, 2.0, "spk1"),   # different speaker
+            self._seg(2.5, 2.8, "spk0"),   # 0.3s — short, at end
+        ]
+        result = cleanup_diarization_segments(segs)
+        # All different speakers or isolated shorts — should stay
+        assert len(result) == 3
+
+    def test_no_overmerge_of_alternating_speakers(self):
+        """Alternating speakers must NOT be merged even with short segments."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.2, 1.5, "spk1"),   # 0.3s — short but different speaker
+            self._seg(1.7, 3.0, "spk0"),
+            self._seg(3.2, 3.5, "spk1"),   # 0.3s — short but different speaker
+            self._seg(3.7, 5.0, "spk0"),
+        ]
+        result = cleanup_diarization_segments(segs)
+        # No same-speaker absorption should happen — all speakers alternate
+        assert len(result) == 5
+
+    def test_short_segment_between_two_short_same_speaker_not_absorbed(self):
+        """Short segment between two short same-speaker segments is NOT absorbed
+        when neither neighbour is a long (>0.5s) segment."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 0.3, "spk0"),   # 0.3s — short
+            self._seg(0.4, 0.6, "spk0"),   # 0.2s — short
+            self._seg(0.7, 1.0, "spk0"),   # 0.3s — short
+        ]
+        result = cleanup_diarization_segments(segs)
+        # Gap merge should combine these (all <0.2s gaps, same speaker)
+        # into one segment, but pass-2 absorption won't fire because all
+        # are short. Pass 1 should merge them though.
+        assert len(result) == 1
+        assert result[0].start == 0.0
+        assert result[0].end == 1.0
+
+    # --- Malformed inputs -------------------------------------------------
+
+    def test_out_of_order_segments_sorted(self):
+        """Out-of-order segments are sorted before processing."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(2.0, 3.0, "spk0"),
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.2, 2.0, "spk0"),
+        ]
+        result = cleanup_diarization_segments(segs)
+        # After sorting: 0-1, 1.2-2, 2-3 — gap merge should produce one segment
+        assert len(result) == 1
+        assert result[0].start == 0.0
+        assert result[0].end == 3.0
+
+    def test_negative_duration_segment_skipped(self):
+        """Segments where end < start are skipped."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(2.0, 1.5, "spk0"),  # negative duration — skipped
+            self._seg(1.1, 2.0, "spk0"),  # 0.1s gap from first segment
+        ]
+        result = cleanup_diarization_segments(segs)
+        # After skip: [0-1, 1.1-2] — gap 0.1s -> merged
+        assert len(result) == 1
+        assert result[0].start == 0.0
+        assert result[0].end == 2.0
+
+    # --- True speaker change preserved ------------------------------------
+
+    def test_true_speaker_change_over_half_second_preserved(self):
+        """True speaker turns with >0.5s gap are fully preserved."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 2.0, "spk0"),
+            self._seg(3.0, 5.0, "spk1"),   # 1s gap — true turn
+            self._seg(6.0, 8.0, "spk0"),   # 1s gap — true turn
+        ]
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 3
+
+    def test_realistic_noisy_segments(self):
+        """Realistic pattern: same speaker with noise splits and a true change."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 3.0, "spk0"),
+            self._seg(3.05, 3.2, "spk0"),  # tiny gap, same speaker
+            self._seg(3.3, 5.0, "spk0"),
+            self._seg(5.5, 8.0, "spk1"),   # true turn
+            self._seg(8.5, 10.0, "spk0"),  # true turn back
+        ]
+        result = cleanup_diarization_segments(segs)
+        # First 3 segments should merge into one, last 2 stay separate
+        assert len(result) == 3
+        assert result[0].start == 0.0
+        assert result[0].end == 5.0
+        assert result[0].speaker == "spk0"
+        assert result[1].speaker == "spk1"
+        assert result[2].speaker == "spk0"
+
+    # --- Boundary conditions at exact thresholds --------------------------
+
+    def test_exact_short_threshold_0_5s(self):
+        """Segment exactly 0.5s is NOT short (<0.5 not <=0.5)."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 2.0, "spk0"),
+            self._seg(2.1, 2.6, "spk0"),   # exactly 0.5s — not short (< not <=)
+            self._seg(2.7, 4.0, "spk0"),
+        ]
+        result = cleanup_diarization_segments(segs)
+        # Gap merge should combine all three (gaps < 0.2s)
+        assert len(result) == 1
+
+    def test_custom_thresholds(self):
+        """Custom gap and short thresholds are respected."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        segs = [
+            self._seg(0.0, 1.0, "spk0"),
+            self._seg(1.5, 2.0, "spk0"),  # 0.5s gap — too wide for default 0.2
+        ]
+        # Default gap threshold 0.2 — should NOT merge
+        result = cleanup_diarization_segments(segs)
+        assert len(result) == 2
+
+        # Wider gap threshold 0.6 — should merge
+        result = cleanup_diarization_segments(segs, gap_merge_threshold=0.6)
+        assert len(result) == 1
+
+
+class TestControllerCleanupIntegration:
+    """Tests verifying controller wires cleanup into _run_diarization."""
+
+    def test_cleanup_called_in_diarization_path(self, caplog):
+        """When diarization succeeds, cleanup is applied to result segments."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature,
+        )
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._transcript_store.add_words([
+            Word(text="hello", start_time=0.0, end_time=0.5, confidence=90),
+        ])
+
+        from meetandread.config.models import SpeakerSettings
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Mock diarizer to return segments that should be cleaned up
+        noisy_segments = [
+            SpeakerSegment(start=0.0, end=1.0, speaker="spk0"),
+            SpeakerSegment(start=1.05, end=1.2, speaker="spk0"),  # tiny gap same speaker
+            SpeakerSegment(start=1.3, end=2.0, speaker="spk0"),
+        ]
+        embedding = np.ones(256, dtype=np.float32)
+        embedding /= np.linalg.norm(embedding)
+        mock_result = DiarizationResult(
+            segments=noisy_segments,
+            signatures={"spk0": VoiceSignature(embedding=embedding, speaker_label="spk0")},
+            duration_seconds=2.0,
+            num_speakers=1,
+        )
+
+        with caplog.at_level(logging.INFO):
+            with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+                mock_cls.return_value.diarize.return_value = mock_result
+                with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore"):
+                    ctrl._run_diarization(Path("test.wav"))
+
+        # The result segments should be cleaned up (3 -> 1)
+        assert ctrl._last_diarization_result is not None
+        assert len(ctrl._last_diarization_result.segments) == 1
+
+    def test_cleanup_log_emits_segment_counts(self, caplog):
+        """Cleanup log shows before/after segment count when segments change."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature,
+        )
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._transcript_store.add_words([
+            Word(text="test", start_time=0.0, end_time=0.5, confidence=90),
+        ])
+
+        from meetandread.config.models import SpeakerSettings
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        noisy_segments = [
+            SpeakerSegment(start=0.0, end=1.0, speaker="spk0"),
+            SpeakerSegment(start=1.05, end=2.0, speaker="spk0"),
+        ]
+        embedding = np.ones(256, dtype=np.float32)
+        embedding /= np.linalg.norm(embedding)
+        mock_result = DiarizationResult(
+            segments=noisy_segments,
+            signatures={"spk0": VoiceSignature(embedding=embedding, speaker_label="spk0")},
+            duration_seconds=2.0,
+            num_speakers=1,
+        )
+
+        with caplog.at_level(logging.INFO):
+            with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+                mock_cls.return_value.diarize.return_value = mock_result
+                with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore"):
+                    ctrl._run_diarization(Path("test.wav"))
+
+        # Check that cleanup log was emitted
+        cleanup_logs = [r for r in caplog.records if "cleanup" in r.message.lower()]
+        assert len(cleanup_logs) >= 1
+        assert any("2 -> 1" in r.message for r in cleanup_logs)

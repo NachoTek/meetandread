@@ -32,12 +32,14 @@ class ConfigVersion:
 
 
 # Current config version - bump this when schema changes
-CURRENT_CONFIG_VERSION = 2
+CURRENT_CONFIG_VERSION = 4
 
 # Version history for migrations
 VERSION_HISTORY: Dict[int, ConfigVersion] = {
     1: ConfigVersion(1, "Initial schema with model, transcription, hardware, UI settings"),
-    2: ConfigVersion(2, "Added benchmark_history to TranscriptionSettings for per-model WER tracking")
+    2: ConfigVersion(2, "Added benchmark_history to TranscriptionSettings for per-model WER tracking"),
+    3: ConfigVersion(3, "Added microphone denoising settings to TranscriptionSettings"),
+    4: ConfigVersion(4, "Added min_duration_on/min_duration_off to SpeakerSettings for noisy-room diarization tuning"),
 }
 
 
@@ -313,6 +315,26 @@ class SettingsPersistence:
             if "benchmark_history" not in transcription:
                 transcription["benchmark_history"] = {}
             config_dict["transcription"] = transcription
+
+        if from_version == 2 and to_version == 3:
+            # Add microphone denoising settings to transcription section
+            transcription = config_dict.get("transcription", {})
+            if "microphone_denoising_enabled" not in transcription:
+                transcription["microphone_denoising_enabled"] = True
+            if "microphone_denoising_provider" not in transcription:
+                transcription["microphone_denoising_provider"] = "spectral_gate"
+            if "microphone_denoising_latency_budget_ms" not in transcription:
+                transcription["microphone_denoising_latency_budget_ms"] = 200
+            config_dict["transcription"] = transcription
+
+        if from_version == 3 and to_version == 4:
+            # Add min_duration_on/min_duration_off to speaker section
+            speaker = config_dict.get("speaker", {})
+            if "min_duration_on" not in speaker:
+                speaker["min_duration_on"] = 0.3
+            if "min_duration_off" not in speaker:
+                speaker["min_duration_off"] = 0.8
+            config_dict["speaker"] = speaker
         
         return config_dict
     
