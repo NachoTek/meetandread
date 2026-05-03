@@ -339,3 +339,61 @@ class TestScanRecordings:
         # Sorted newest first
         assert results[0].wav_exists is True
         assert results[1].wav_exists is False
+
+
+class TestMultiWordEntries:
+    """Tests for word_count when metadata entries contain multi-word text.
+
+    Whisper's word-level output may contain multi-word strings when the
+    model doesn't produce per-word timestamps. The scanner must count
+    actual words by splitting text, not by counting Word objects.
+    """
+
+    def test_multi_word_text_counted_correctly(self, tmp_path: Path) -> None:
+        """word_count splits multi-word text fields instead of counting objects."""
+        _write_transcript_md(
+            tmp_path / "multi-word.md",
+            words=[
+                {"text": "Hello world this is a test", "start_time": 0.0, "end_time": 2.0, "confidence": 90},
+                {"text": "Another sentence here", "start_time": 2.0, "end_time": 4.0, "confidence": 85},
+                {"text": "Third", "start_time": 4.0, "end_time": 5.0, "confidence": 95},
+            ],
+        )
+
+        meta = parse_metadata(tmp_path / "multi-word.md")
+
+        assert meta is not None
+        # 6 + 3 + 1 = 10 actual words, not 3 objects
+        assert meta.word_count == 10
+
+    def test_single_word_entries_unchanged(self, tmp_path: Path) -> None:
+        """word_count matches len(words) when each entry is a single word."""
+        _write_transcript_md(
+            tmp_path / "single-word.md",
+            words=[
+                {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90},
+                {"text": "world", "start_time": 0.5, "end_time": 1.0, "confidence": 85},
+            ],
+        )
+
+        meta = parse_metadata(tmp_path / "single-word.md")
+
+        assert meta is not None
+        assert meta.word_count == 2
+
+    def test_empty_text_entries_ignored(self, tmp_path: Path) -> None:
+        """word_count ignores entries with empty or missing text."""
+        _write_transcript_md(
+            tmp_path / "empty-text.md",
+            words=[
+                {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90},
+                {"text": "", "start_time": 0.5, "end_time": 1.0, "confidence": 85},
+                {"start_time": 1.0, "end_time": 1.5, "confidence": 80},
+                {"text": "world", "start_time": 1.5, "end_time": 2.0, "confidence": 95},
+            ],
+        )
+
+        meta = parse_metadata(tmp_path / "empty-text.md")
+
+        assert meta is not None
+        assert meta.word_count == 2  # Only "Hello" and "world"

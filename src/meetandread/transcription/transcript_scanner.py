@@ -119,12 +119,15 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
         if isinstance(end, (int, float)) and end > max_end_time:
             max_end_time = end
 
-    # Derive word_count from the actual words array rather than trusting
-    # the stored metadata value, which may be stale after post-processing
-    # or re-transcription overwrites the .md file with updated words.
+    # Derive word_count by splitting each entry's text field on whitespace.
+    # Word objects in metadata may contain multi-word text (e.g. when Whisper
+    # returns segment-level data without word-level timestamps), so
+    # len(words) can undercount. Splitting gives the true word count.
     words_data = data.get("words")
-    if isinstance(words_data, list):
-        word_count: int = len(words_data)
+    if isinstance(words_data, list) and words_data:
+        word_count: int = sum(
+            len(w.get("text", "").split()) for w in words_data if w.get("text")
+        )
     else:
         word_count: int = data.get("word_count", 0)
 
