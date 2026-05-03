@@ -401,11 +401,11 @@ to avoid clipping issues and enable proper text rendering.
         self.mic_lobe.setPos(50, 10)
         self.system_lobe.setPos(110, 10)
         
-        # Transcript lobe center on record button perimeter, ~20° toward mic from bottom-left
+        # Transcript lobe center on record button perimeter, lower-left
         self.transcript_lobe.setPos(54, 71)
         
-        # Settings lobe overlapping bottom of record button (like input lobes on top)
-        self.settings_lobe.setPos(85, 85)
+        # Settings lobe mirrored around Y axis from transcript lobe (lower-right)
+        self.settings_lobe.setPos(116, 71)
         
         # Error indicator at bottom
         self._error_indicator.setPos(10, 105)
@@ -1459,12 +1459,12 @@ class TranscriptLobeItem(QGraphicsEllipseItem):
     """Transcript lobe for toggling the transcript panel visibility."""
     
     def __init__(self, parent_widget):
-        super().__init__(0, 0, 30, 30)
+        super().__init__(0, 0, 22, 22)
         self.parent_widget = parent_widget
         
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setTransformOriginPoint(15, 15)  # Center of 30×30
+        self.setTransformOriginPoint(11, 11)  # Center of 22×22
         self._hovered = False
     
     def hoverEnterEvent(self, event):
@@ -1499,20 +1499,20 @@ class TranscriptLobeItem(QGraphicsEllipseItem):
         painter.drawEllipse(rect)
         
         # Draw document/text icon (rectangle with lines)
-        painter.setPen(QPen(QColor(255, 255, 255, 255), 2))
+        painter.setPen(QPen(QColor(255, 255, 255, 255), 1.5))
         center = rect.center()
         # Document body
-        doc_left = int(center.x() - 5)
-        doc_top = int(center.y() - 7)
-        doc_width = 10
-        doc_height = 14
+        doc_left = int(center.x() - 4)
+        doc_top = int(center.y() - 5)
+        doc_width = 8
+        doc_height = 10
         painter.drawRect(doc_left, doc_top, doc_width, doc_height)
         # Text lines inside document
-        line_left = doc_left + 2
-        line_right = doc_left + doc_width - 2
-        painter.drawLine(line_left, int(center.y() - 3), line_right, int(center.y() - 3))
+        line_left = doc_left + 1
+        line_right = doc_left + doc_width - 1
+        painter.drawLine(line_left, int(center.y() - 2), line_right, int(center.y() - 2))
         painter.drawLine(line_left, int(center.y()), line_right, int(center.y()))
-        painter.drawLine(line_left, int(center.y() + 3), line_right, int(center.y() + 3))
+        painter.drawLine(line_left, int(center.y() + 2), line_right, int(center.y() + 2))
     
     def mousePressEvent(self, event):
         """Accept press to get release event — action fires on release."""
