@@ -2417,6 +2417,25 @@ class CCOverlayPanel(QWidget):
         return get_confidence_color(confidence)
 
     # ------------------------------------------------------------------
+    # Font size
+    # ------------------------------------------------------------------
+
+    def set_font_size(self, size_px: int) -> None:
+        """Apply font size to the CC text display immediately.
+
+        Args:
+            size_px: Font size in pixels (clamped to 16–96).
+        """
+        size_px = max(16, min(96, size_px))
+        current_ss = self.text_edit.styleSheet()
+        if current_ss:
+            new_ss = re.sub(r'font-size:\s*\d+px', f'font-size: {size_px}px', current_ss)
+            self.text_edit.setStyleSheet(new_ss)
+        else:
+            self.text_edit.setStyleSheet(f'font-size: {size_px}px;')
+        logger.debug("CC overlay font size set to %dpx", size_px)
+
+    # ------------------------------------------------------------------
     # Fade helpers (matching FloatingTranscriptPanel pattern)
     # ------------------------------------------------------------------
 
@@ -2475,6 +2494,7 @@ class FloatingSettingsPanel(QWidget):
 
     closed = pyqtSignal()
     model_changed = pyqtSignal(str)  # Emit model name when changed
+    cc_font_size_changed = pyqtSignal(int)  # Emit font size in px when changed
 
     # Nav page indices — correspond to QStackedWidget indices
     _NAV_SETTINGS = 0
@@ -2719,6 +2739,74 @@ class FloatingSettingsPanel(QWidget):
         self._noise_filter_note.setStyleSheet("color: #FF9800; font-size: 10px;")
         self._noise_filter_note.setWordWrap(True)
         settings_layout.addWidget(self._noise_filter_note)
+
+        # Separator before CC settings
+        cc_sep = QFrame()
+        cc_sep.setFrameShape(QFrame.Shape.HLine)
+        cc_sep.setObjectName("AethericSeparator")
+        settings_layout.addWidget(cc_sep)
+
+        # CC overlay font size
+        cc_font_row = QHBoxLayout()
+        cc_font_row.setSpacing(8)
+        cc_font_label = QLabel("CC Font Size:")
+        cc_font_label.setStyleSheet("color: #E0E0E0; font-size: 12px;")
+        cc_font_row.addWidget(cc_font_label)
+
+        from PyQt6.QtWidgets import QSpinBox
+        self._cc_font_spin = QSpinBox()
+        self._cc_font_spin.setObjectName("AethericSpinBox")
+        self._cc_font_spin.setRange(16, 96)
+        self._cc_font_spin.setSuffix(" px")
+        self._cc_font_spin.setSingleStep(4)
+        self._cc_font_spin.setStyleSheet("""
+            QSpinBox {
+                color: #E0E0E0;
+                background-color: #2A2A2E;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 12px;
+                min-width: 80px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 20px;
+                border: none;
+                background: #3A3A3E;
+            }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+                background: #4A4A4E;
+            }
+            QSpinBox::up-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-bottom: 5px solid #999;
+                width: 0; height: 0;
+            }
+            QSpinBox::down-arrow {
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #999;
+                width: 0; height: 0;
+            }
+        """)
+        self._cc_font_spin.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _cc_size = get_config("transcription.cc_font_size")
+            if isinstance(_cc_size, (int, float)) and 16 <= _cc_size <= 96:
+                self._cc_font_spin.setValue(int(_cc_size))
+            else:
+                self._cc_font_spin.setValue(48)
+        except Exception:
+            self._cc_font_spin.setValue(48)
+        self._cc_font_spin.valueChanged.connect(self._on_cc_font_size_changed)
+        cc_font_row.addWidget(self._cc_font_spin)
+        cc_font_row.addStretch()
+        settings_layout.addLayout(cc_font_row)
 
         settings_layout.addStretch()
         self._content_stack.addWidget(settings_page)
@@ -3588,6 +3676,20 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.warning("Failed to save noise filter setting: %s", exc)
         logger.info("Background noise filter %s", "enabled" if enabled else "disabled")
+
+    def _on_cc_font_size_changed(self, value: int) -> None:
+        """Handle CC font size spinbox change.
+
+        Persists the setting and applies it immediately to the CC overlay.
+        """
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("transcription.cc_font_size", value)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save CC font size: %s", exc)
+        self.cc_font_size_changed.emit(value)
+        logger.info("CC font size set to %dpx", value)
 
     def _refresh_dropdown_wer(self) -> None:
         """Update all dropdown item texts with latest WER from config."""

@@ -112,6 +112,12 @@ class TranscriptionSettings:
         metadata={"description": "Maximum allowed latency in ms per denoising call (diagnostic, not enforced)"}
     )
 
+    # CC OVERLAY SETTINGS
+    cc_font_size: int = field(
+        default=48,
+        metadata={"description": "CC overlay font size in pixels (range: 16-96)"}
+    )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
@@ -131,6 +137,7 @@ class TranscriptionSettings:
             microphone_denoising_enabled=data.get("microphone_denoising_enabled", False),
             microphone_denoising_provider=data.get("microphone_denoising_provider", "spectral_gate"),
             microphone_denoising_latency_budget_ms=data.get("microphone_denoising_latency_budget_ms", 200),
+            cc_font_size=data.get("cc_font_size", 48),
         )
 
 
@@ -339,7 +346,7 @@ class AppSettings:
         ui: UI behavior and appearance settings.
     """
     config_version: int = field(
-        default=5,
+        default=6,
         metadata={"description": "Configuration schema version for migrations"}
     )
     model: ModelSettings = field(default_factory=ModelSettings)

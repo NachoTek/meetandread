@@ -230,7 +230,7 @@ class TestAppSettings:
     def test_default_values(self):
         """Test default values and nested settings."""
         settings = AppSettings()
-        assert settings.config_version == 5
+        assert settings.config_version == 6
         assert isinstance(settings.model, ModelSettings)
         assert isinstance(settings.transcription, TranscriptionSettings)
         assert isinstance(settings.hardware, HardwareSettings)
@@ -240,7 +240,7 @@ class TestAppSettings:
         """Test full serialization."""
         settings = AppSettings()
         d = settings.to_dict()
-        assert d["config_version"] == 5
+        assert d["config_version"] == 6
         assert "model" in d
         assert "transcription" in d
         assert "hardware" in d
@@ -319,7 +319,7 @@ class TestSettingsPersistence:
         """Test loading when file doesn't exist returns defaults."""
         loaded = persistence.load_settings()
         assert loaded.model.realtime_model_size == "auto"
-        assert loaded.config_version == 5
+        assert loaded.config_version == 6
     
     def test_load_corrupted_json_returns_defaults(self, persistence):
         """Test loading corrupted file returns defaults."""
@@ -369,7 +369,7 @@ class TestSettingsPersistence:
         assert "path" in info
         assert "exists" in info
         assert info["exists"] is False  # No file yet
-        assert info["current_version"] == 5
+        assert info["current_version"] == 6
     
     def test_config_info_after_save(self, persistence):
         """Test config info after saving."""
@@ -378,7 +378,7 @@ class TestSettingsPersistence:
         
         info = persistence.get_config_info()
         assert info["exists"] is True
-        assert info["version"] == 5
+        assert info["version"] == 6
         assert info["needs_migration"] is False
 
 
@@ -393,7 +393,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 0)
-        assert migrated["config_version"] == 5
+        assert migrated["config_version"] == 6
         assert "transcription" in migrated
         assert "hardware" in migrated
         assert "ui" in migrated
@@ -413,7 +413,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 2)
-        assert migrated["config_version"] == 5
+        assert migrated["config_version"] == 6
         
         # Denoising defaults added (disabled by default)
         ts = migrated["transcription"]
@@ -461,7 +461,7 @@ class TestConfigMigration:
         }
 
         migrated = persistence.migrate_config(old_config, 3)
-        assert migrated["config_version"] == 5
+        assert migrated["config_version"] == 6
 
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
@@ -509,7 +509,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(current_config, 5)
-        assert migrated["config_version"] == 5
+        assert migrated["config_version"] == 6
 
 
 # ============================================================================

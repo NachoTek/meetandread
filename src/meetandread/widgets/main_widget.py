@@ -341,11 +341,24 @@ to avoid clipping issues and enable proper text rendering.
         # Connect model_changed signal to save config
         self._floating_settings_panel.model_changed.connect(save_config)
 
+        # Connect CC font size signal to apply font size live
+        self._floating_settings_panel.cc_font_size_changed.connect(
+            self._on_cc_font_size_changed
+        )
+
         logging.debug("Created floating settings panel")
 
         # CC overlay — compact caption panel for live transcript
         self._cc_overlay = CCOverlayPanel()
         self._cc_overlay.hide()
+        # Apply saved CC font size
+        try:
+            from meetandread.config import get_config
+            _saved_size = get_config("transcription.cc_font_size")
+            if isinstance(_saved_size, (int, float)) and 16 <= _saved_size <= 96:
+                self._cc_overlay.set_font_size(int(_saved_size))
+        except Exception:
+            pass
         # Connect segment signal for thread-safe delivery from _on_phrase_result
         self._cc_overlay.segment_ready.connect(self._on_cc_segment)
         logging.debug("Created CC overlay panel")
@@ -373,6 +386,11 @@ to avoid clipping issues and enable proper text rendering.
                 )
         except Exception as e:
             logging.error("CC overlay update failed: %s", e)
+
+    def _on_cc_font_size_changed(self, size_px: int) -> None:
+        """Apply CC overlay font size change immediately."""
+        if self._cc_overlay:
+            self._cc_overlay.set_font_size(size_px)
     
     def _layout_components(self):
         """Position all components."""

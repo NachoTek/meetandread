@@ -32,7 +32,7 @@ class ConfigVersion:
 
 
 # Current config version - bump this when schema changes
-CURRENT_CONFIG_VERSION = 5
+CURRENT_CONFIG_VERSION = 6
 
 # Version history for migrations
 VERSION_HISTORY: Dict[int, ConfigVersion] = {
@@ -343,6 +343,13 @@ class SettingsPersistence:
             # cross-frame state continuity.
             transcription = config_dict.get("transcription", {})
             transcription["microphone_denoising_enabled"] = False
+            config_dict["transcription"] = transcription
+
+        if from_version == 5 and to_version == 6:
+            # Add CC overlay font size setting
+            transcription = config_dict.get("transcription", {})
+            if "cc_font_size" not in transcription:
+                transcription["cc_font_size"] = 48
             config_dict["transcription"] = transcription
         
         return config_dict
