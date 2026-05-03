@@ -542,29 +542,26 @@ class TestSafeHTMLHandling:
 # ---------------------------------------------------------------------------
 
 class TestConfidenceColours:
-    """CC overlay uses canonical confidence colours from confidence module."""
+    """CC overlay uses uniform grey text (no confidence colouring)."""
 
-    def test_high_confidence_color(self, cc_panel, qapp):
-        """High confidence text should have green-ish color."""
+    def test_high_confidence_color_available(self, cc_panel, qapp):
+        """Canonical confidence colors are still available from the module."""
         from meetandread.transcription.confidence import get_confidence_color
         color = get_confidence_color(95)
         assert color  # Must return a valid color string
 
-    def test_low_confidence_color(self, cc_panel, qapp):
-        """Low confidence text should have red-ish color."""
+    def test_low_confidence_color_available(self, cc_panel, qapp):
+        """Canonical confidence colors are still available from the module."""
         from meetandread.transcription.confidence import get_confidence_color
         color = get_confidence_color(30)
         assert color
 
-    def test_panel_uses_canonical_colors(self, cc_panel, qapp):
-        """Panel delegates to get_confidence_color (MEM027)."""
-        cc_panel.update_segment("text", 85, 0, False, True)
-        qapp.processEvents()
-        # The method exists and doesn't crash — detailed colour verification
-        # is covered by the confidence module's own tests
-        color = cc_panel._get_confidence_color(85)
-        from meetandread.transcription.confidence import get_confidence_color
-        assert color == get_confidence_color(85)
+    def test_panel_uses_uniform_grey(self, cc_panel, qapp):
+        """Panel returns uniform grey regardless of confidence (CC-style)."""
+        color_high = cc_panel._get_confidence_color(95)
+        color_low = cc_panel._get_confidence_color(30)
+        assert color_high == color_low, "CC overlay uses uniform grey, not confidence colours"
+        assert color_high == "#b4b4b4"
 
 
 # ---------------------------------------------------------------------------

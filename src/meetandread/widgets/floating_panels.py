@@ -2038,12 +2038,12 @@ class CCOverlayPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
         # --- Compact size constraints (48px font, max 2 visible lines) ---
-        # --- Size: max width spans largest display ---
+        # --- Size: max width = widest display width, height free-form ---
         from PyQt6.QtWidgets import QApplication
         screens = QApplication.screens()
         max_w = max(s.geometry().width() for s in screens) if screens else 1920
         self.setMinimumSize(400, 140)
-        self.setMaximumSize(16777215, 16777215)  # No effective max
+        self.setMaximumSize(max_w, 16777215)  # Width capped to widest display, height free
         self.resize(600, 180)
 
         # --- Layout: text edit fills the panel ---
@@ -2321,20 +2321,19 @@ class CCOverlayPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _insert_speaker_label(self, speaker_id: str) -> None:
-        """Insert a coloured speaker label at the current cursor position.
+        """Insert a speaker label at the current cursor position.
 
-        Uses QTextCharFormat with bold, coloured text.  No anchor — the
+        Uses QTextCharFormat with bold, muted-grey text.  No anchor — the
         CC overlay does not support speaker name editing.
         """
         cursor = self.text_edit.textCursor()
-        color = speaker_color(speaker_id)
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
+        fmt.setForeground(QColor(180, 180, 180))
         fmt.setFontWeight(QFont.Weight.Bold)
         cursor.insertText(f"[{speaker_id}] ", fmt)
 
     def _append_segment_to_display(self, text: str, confidence: int) -> None:
-        """Append escaped text to the current line with confidence colour."""
+        """Append escaped text to the current line — plain grey, no confidence colour."""
         cursor = self.text_edit.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
 
@@ -2345,9 +2344,8 @@ class CCOverlayPanel(QWidget):
                 and len(self.phrases[self.current_phrase_idx].segments) > 1):
             cursor.insertText(" ")
 
-        color = self._get_confidence_color(confidence)
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
+        fmt.setForeground(QColor(180, 180, 180))
         fmt.setFontWeight(QFont.Weight.Normal)
         cursor.insertText(_escape_html(text), fmt)
 
@@ -2377,9 +2375,8 @@ class CCOverlayPanel(QWidget):
                 QTextCursor.MoveMode.KeepAnchor,
             )
 
-        color = self._get_confidence_color(confidence)
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
+        fmt.setForeground(QColor(180, 180, 180))
         fmt.setFontWeight(QFont.Weight.Normal)
         cursor.insertText(_escape_html(text), fmt)
 
@@ -2413,8 +2410,8 @@ class CCOverlayPanel(QWidget):
         )
 
     def _get_confidence_color(self, confidence: int) -> str:
-        """Get colour for confidence — delegates to canonical thresholds (MEM027)."""
-        return get_confidence_color(confidence)
+        """Get text colour — uniform grey for CC-style display (no confidence colouring)."""
+        return "#b4b4b4"  # rgb(180, 180, 180)
 
     # ------------------------------------------------------------------
     # Font size
@@ -2422,6 +2419,9 @@ class CCOverlayPanel(QWidget):
 
     def set_font_size(self, size_px: int) -> None:
         """Apply font size to the CC text display immediately.
+
+        Preserves the monospace font-family from the theme CSS when
+        updating font-size.
 
         Args:
             size_px: Font size in pixels (clamped to 16–96).
@@ -2432,7 +2432,10 @@ class CCOverlayPanel(QWidget):
             new_ss = re.sub(r'font-size:\s*\d+px', f'font-size: {size_px}px', current_ss)
             self.text_edit.setStyleSheet(new_ss)
         else:
-            self.text_edit.setStyleSheet(f'font-size: {size_px}px;')
+            from meetandread.widgets.theme import AETHERIC_CC_FONT_FAMILY
+            self.text_edit.setStyleSheet(
+                f"font-family: {AETHERIC_CC_FONT_FAMILY}; font-size: {size_px}px;"
+            )
         logger.debug("CC overlay font size set to %dpx", size_px)
 
     # ------------------------------------------------------------------

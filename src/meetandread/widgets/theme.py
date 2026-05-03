@@ -782,10 +782,11 @@ AETHERIC_CYAN = "#00dbe9"  # tertiary
 # ---------------------------------------------------------------------------
 
 AETHERIC_CC_BG = "rgba(30, 29, 30, 128)"  # 50% opacity
-AETHERIC_CC_TEXT = "rgba(255, 255, 255, 230)"
+AETHERIC_CC_TEXT = "rgba(180, 180, 180, 230)"  # Grey mono text
 AETHERIC_CC_RADIUS = AETHERIC_RADIUS  # 12px — matches shell radius
 AETHERIC_CC_PADDING = "10px 14px"
 AETHERIC_CC_FONT_SIZE = "48px"
+AETHERIC_CC_FONT_FAMILY = "'Consolas', 'Courier New', monospace"  # CC-style monospace
 AETHERIC_CC_LINE_COUNT = 2
 
 
@@ -935,7 +936,7 @@ def aetheric_placeholder_css(p: ThemePalette) -> str:
 # ---------------------------------------------------------------------------
 
 def aetheric_cc_overlay_css(p: ThemePalette) -> str:
-    """CC overlay styling — text appearance only.
+    """CC overlay styling — monospace grey text, transparent background.
 
     Background is painted manually in paintEvent() because QSS
     background-color with alpha does not render on Windows
@@ -952,6 +953,7 @@ def aetheric_cc_overlay_css(p: ThemePalette) -> str:
         }}
         QTextEdit#AethericCCText {{
             color: {AETHERIC_CC_TEXT};
+            font-family: {AETHERIC_CC_FONT_FAMILY};
             font-size: {AETHERIC_CC_FONT_SIZE};
             background-color: transparent;
             border: none;
