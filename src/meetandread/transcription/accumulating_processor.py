@@ -49,23 +49,24 @@ class AccumulatingTranscriptionProcessor:
     """
     Real-time transcription that accumulates audio and re-transcribes for context.
     
-    Architecture (matching whisper_real_time reference):
-    1. Audio captured continuously
-    2. Accumulated in buffer (phrase_bytes)
-    3. Every 2 seconds or on 3s silence, transcribe accumulated audio
-    4. Display updates in-place (current phrase edited, not new items added)
-    5. After 3s silence, start new phrase
+    Architecture:
+    1. Audio captured continuously into an accumulation buffer
+    2. Every `update_frequency` seconds, the last `transcription_window` seconds
+       of audio are transcribed (fixed-size sliding window, not the full buffer)
+    3. Display updates show the latest transcription result
+    4. After `silence_timeout` seconds of silence, the phrase is finalized
+       and the buffer is cleared for the next phrase
+    
+    The transcription window is fixed at 12 seconds (for tiny model), giving
+    Whisper enough context for accuracy while keeping each transcription pass
+    under 1 second.  The accumulation buffer can grow larger (up to
+    window_size), but only the tail end is sent to Whisper each cycle.
     
     Configuration for meetings:
-    - window_size: 60 seconds (configurable, default for good context)
-    - update_frequency: 2 seconds (responsive updates)
+    - window_size: 60 seconds (max buffer before trimming)
+    - transcription_window: 12 seconds (audio sent to Whisper each pass)
+    - update_frequency: 2 seconds (how often to run transcription)
     - silence_timeout: 3 seconds (natural turn-taking)
-    
-    This provides:
-    - Better accuracy (context from accumulated audio)
-    - Lower latency (only transcribe when needed, not every chunk)
-    - Natural phrase breaks (based on silence detection)
-    - Meets < 2s latency requirement for Phase 2
     """
     
     def __init__(
@@ -89,10 +90,19 @@ class AccumulatingTranscriptionProcessor:
         self.update_frequency = update_frequency
         self.silence_timeout = silence_timeout
         
-        # Maximum bytes in buffer (16kHz, 16-bit = 2 bytes per sample)
+        # Maximum bytes in accumulation buffer (16kHz, 16-bit = 2 bytes per sample)
         self._max_buffer_bytes = int(window_size * 16000 * 2)
         
-        # Accumulated audio buffer (raw bytes)
+        # Fixed transcription window: how many seconds of audio to feed
+        # Whisper each pass.  Chosen so transcription fits well within the
+        # update_frequency interval.  Benchmark results (tiny model, CPU):
+        #   10s -> 0.86s,  15s -> 0.87s,  20s -> 0.88s
+        # Using 12s gives good context for accuracy while keeping
+        # transcription under 1 second, leaving >1s headroom in a 2s cycle.
+        self._transcription_window_sec = min(12.0, window_size)
+        self._transcription_window_bytes = int(self._transcription_window_sec * 16000 * 2)
+        
+        # Accumulated audio buffer (raw bytes) — grows until trimmed
         self._phrase_bytes = bytes()
         
         # Transcription engine
@@ -369,15 +379,26 @@ class AccumulatingTranscriptionProcessor:
             return
         
         try:
-            buffer_duration = len(self._phrase_bytes) / (16000 * 2)
-            print(f"[{_ts()}] DEBUG: Transcribing {buffer_duration:.1f}s accumulated audio...")
+            full_buffer_duration = len(self._phrase_bytes) / (16000 * 2)
+            
+            # Use only the tail of the buffer for transcription — fixed-size
+            # sliding window.  This keeps transcription time constant regardless
+            # of how long the recording has been running.
+            if len(self._phrase_bytes) > self._transcription_window_bytes:
+                bytes_to_transcribe = self._phrase_bytes[-self._transcription_window_bytes:]
+            else:
+                bytes_to_transcribe = self._phrase_bytes
+            
+            window_duration = len(bytes_to_transcribe) / (16000 * 2)
+            print(f"[{_ts()}] DEBUG: Transcribing {window_duration:.1f}s window "
+                  f"(full buffer: {full_buffer_duration:.1f}s)")
             
             # Check if this is the start of a new phrase
             phrase_start = self._new_phrase_started
             self._new_phrase_started = False  # Reset flag after use
             
             # Convert bytes to numpy array
-            audio_np = np.frombuffer(self._phrase_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+            audio_np = np.frombuffer(bytes_to_transcribe, dtype=np.int16).astype(np.float32) / 32768.0
             
             # Transcribe with thread safety
             start_time = _time.time()
@@ -403,7 +424,7 @@ class AccumulatingTranscriptionProcessor:
                 # The CC overlay's _render() rebuilds from scratch on each
                 # update, so re-emitting all segments is safe and cheap.
                 print(f"[{_ts()}] DEBUG: Emitting {len(segments)} segments "
-                      f"(re-transcription of {buffer_duration:.1f}s buffer)")
+                      f"(re-transcription of {window_duration:.1f}s window)")
 
                 for i, seg in enumerate(segments):
                     seg_text = seg.text.strip()
@@ -414,8 +435,8 @@ class AccumulatingTranscriptionProcessor:
 
                     # Calculate timing relative to recording start
                     elapsed = (datetime.utcnow() - self._recording_start_time).total_seconds() if self._recording_start_time else 0
-                    segment_start = elapsed - buffer_duration + seg.start
-                    segment_end = elapsed - buffer_duration + seg.end
+                    segment_start = elapsed - window_duration + seg.start
+                    segment_end = elapsed - window_duration + seg.end
 
                     result = SegmentResult(
                         text=seg_text,
@@ -446,7 +467,7 @@ class AccumulatingTranscriptionProcessor:
                 
                 print(f"[{_ts()}] DEBUG: Transcribed {len(segments)} total segments in {transcribe_time:.2f}s")
             else:
-                print(f"[{_ts()}] DEBUG: No transcription result for {buffer_duration:.1f}s of audio")
+                print(f"[{_ts()}] DEBUG: No transcription result for {window_duration:.1f}s of audio")
                 
         except Exception as e:
             print(f"[{_ts()}] ERROR: Transcription error: {e}")
@@ -471,6 +492,7 @@ class AccumulatingTranscriptionProcessor:
             "is_running": self._is_running,
             "model_size": self.model_size,
             "window_size": self.window_size,
+            "transcription_window": self._transcription_window_sec,
             "buffer_duration": buffer_duration,
             "audio_chunks_fed": self._audio_chunks_fed,
             "total_samples": self._total_samples_processed,
