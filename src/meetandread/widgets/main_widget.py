@@ -405,7 +405,7 @@ to avoid clipping issues and enable proper text rendering.
         self.transcript_lobe.setPos(54, 71)
         
         # Settings lobe mirrored around Y axis from transcript lobe (lower-right)
-        self.settings_lobe.setPos(116, 71)
+        self.settings_lobe.setPos(124, 71)
         
         # Error indicator at bottom
         self._error_indicator.setPos(10, 105)
