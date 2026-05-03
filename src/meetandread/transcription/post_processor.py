@@ -292,7 +292,8 @@ class PostProcessingQueue:
             self._update_progress(job, 80)
             
             # Create post-processed transcript
-            enhanced_store = self._create_post_processed_transcript(segments)
+            audio_duration = len(audio_data) / 16000.0  # 16kHz sample rate
+            enhanced_store = self._create_post_processed_transcript(segments, audio_duration)
             self._update_progress(job, 90)
             
             # Save post-processed transcript (overwrites original .md)
@@ -388,12 +389,19 @@ class PostProcessingQueue:
     
     def _create_post_processed_transcript(
         self, 
-        segments: List[TranscriptionSegment]
+        segments: List[TranscriptionSegment],
+        audio_duration: float = 0.0,
     ) -> TranscriptStore:
         """Create TranscriptStore from transcription segments.
         
+        Splits multi-word Whisper tokens into individual words and rescales
+        timestamps when Whisper's reported duration is significantly shorter
+        than the actual audio duration.
+
         Args:
             segments: Transcription segments from Whisper
+            audio_duration: Actual audio duration in seconds (0 = unknown).
+                Used to rescale Whisper timestamps when they under-report.
         
         Returns:
             TranscriptStore with words
@@ -404,16 +412,36 @@ class PostProcessingQueue:
         words = []
         for segment in segments:
             if hasattr(segment, 'words') and segment.words:
-                # Use word-level data if available
+                # Use word-level data if available, but split multi-word entries
+                # (Whisper may return full sentences as single "word" tokens)
                 for word_info in segment.words:
-                    word = Word(
-                        text=word_info.text if hasattr(word_info, 'text') else str(word_info),
-                        start_time=word_info.start if hasattr(word_info, 'start') else 0.0,
-                        end_time=word_info.end if hasattr(word_info, 'end') else 0.0,
-                        confidence=word_info.confidence if hasattr(word_info, 'confidence') else 85,
-                        speaker_id=None
-                    )
-                    words.append(word)
+                    raw_text = word_info.text if hasattr(word_info, 'text') else str(word_info)
+                    w_start = word_info.start if hasattr(word_info, 'start') else 0.0
+                    w_end = word_info.end if hasattr(word_info, 'end') else 0.0
+                    w_conf = word_info.confidence if hasattr(word_info, 'confidence') else 85
+
+                    parts = raw_text.split()
+                    if len(parts) <= 1:
+                        # Single word — use as-is
+                        words.append(Word(
+                            text=raw_text.strip(),
+                            start_time=w_start,
+                            end_time=w_end,
+                            confidence=w_conf,
+                            speaker_id=None,
+                        ))
+                    else:
+                        # Multi-word text — split and distribute timing evenly
+                        duration = w_end - w_start
+                        per_word = duration / len(parts)
+                        for i, part in enumerate(parts):
+                            words.append(Word(
+                                text=part,
+                                start_time=w_start + i * per_word,
+                                end_time=w_start + (i + 1) * per_word,
+                                confidence=w_conf,
+                                speaker_id=None,
+                            ))
             else:
                 # Create words from segment text
                 segment_words = segment.text.split()
@@ -428,6 +456,20 @@ class PostProcessingQueue:
                         speaker_id=None
                     )
                     words.append(word)
+        
+        # Rescale timestamps if Whisper's reported duration is significantly
+        # shorter than the actual audio duration. This happens when Whisper's
+        # timestamps don't cover the full audio (common with smaller models or
+        # compressed speech). We proportionally stretch the timestamps to fill
+        # the actual audio duration.
+        if words and audio_duration > 0:
+            whisper_end = max(w.end_time for w in words)
+            # Only rescale if Whisper reports less than 80% of the actual duration
+            if whisper_end > 0 and whisper_end < audio_duration * 0.8:
+                scale = audio_duration / whisper_end
+                for w in words:
+                    w.start_time = w.start_time * scale
+                    w.end_time = w.end_time * scale
         
         if words:
             store.add_words(words)
