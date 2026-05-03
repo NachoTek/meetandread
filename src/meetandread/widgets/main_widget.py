@@ -1397,12 +1397,12 @@ class SettingsLobeItem(QGraphicsEllipseItem):
     """Settings lobe for accessing configuration."""
     
     def __init__(self, parent_widget):
-        super().__init__(0, 0, 30, 30)
+        super().__init__(0, 0, 22, 22)
         self.parent_widget = parent_widget
         
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setTransformOriginPoint(15, 15)  # Center of 30×30
+        self.setTransformOriginPoint(11, 11)  # Center of 22×22
         self._hovered = False
     
     def hoverEnterEvent(self, event):
@@ -1437,9 +1437,9 @@ class SettingsLobeItem(QGraphicsEllipseItem):
         painter.drawEllipse(rect)
         
         # Draw gear icon
-        painter.setPen(QPen(QColor(255, 255, 255, 255), 2))
+        painter.setPen(QPen(QColor(255, 255, 255, 255), 1.5))
         center = rect.center()
-        painter.drawEllipse(int(center.x() - 6), int(center.y() - 6), 12, 12)
+        painter.drawEllipse(int(center.x() - 4), int(center.y() - 4), 8, 8)
         painter.drawPoint(int(center.x()), int(center.y()))
     
     def mousePressEvent(self, event):
