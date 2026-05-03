@@ -277,7 +277,7 @@ class TranscriptStore:
         Args:
             path: Path to save the transcript
         """
-        markdown = self.to_markdown()
+        markdown = self.to_markdown(include_confidence=False)
         data = self.to_dict()
         
         with open(path, 'w', encoding='utf-8') as f:

@@ -126,6 +126,20 @@ class Phrase:
     speaker_id: Optional[str] = None  # Speaker label for this phrase
 
 
+def _strip_confidence_percentages(text: str) -> str:
+    """Remove confidence percentage markers like `` (73%)`` from transcript text.
+
+    Older recordings were saved with ``to_markdown(include_confidence=True)``
+    which appends ``(NN%)`` to low-confidence words.  This strips those markers
+    so the history view always shows clean text regardless of when the file
+    was saved.
+
+    Pattern: a space followed by ``(``, 1-3 digits, ``%``, ``)`` — but NOT
+    parenthesised speaker labels like ``(Empty recording)`` which lack ``%``.
+    """
+    return re.sub(r" \(\d{1,3}%\)", "", text)
+
+
 class FloatingTranscriptPanel(QWidget):
     """
     Floating transcript panel that appears outside the main widget.
@@ -906,7 +920,7 @@ class FloatingTranscriptPanel(QWidget):
             marker_idx = content.find(footer_marker)
             if marker_idx != -1:
                 content = content[:marker_idx]
-            self._history_viewer.setMarkdown(content)
+            self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
 
     # ------------------------------------------------------------------
     # History delete functionality
@@ -1416,7 +1430,7 @@ class FloatingTranscriptPanel(QWidget):
                 marker_idx = content.find(footer_marker)
                 if marker_idx != -1:
                     content = content[:marker_idx]
-                self._history_viewer.setMarkdown(content)
+                self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
         else:
             self._history_viewer.clear()
             self._history_viewer.setPlaceholderText(
@@ -1492,7 +1506,7 @@ class FloatingTranscriptPanel(QWidget):
         if marker_idx == -1:
             return None
 
-        md_body = content[:marker_idx]
+        md_body = _strip_confidence_percentages(content[:marker_idx])
 
         # Parse metadata to find speakers
         metadata_text = content[marker_idx + len(footer_marker):]
@@ -3868,7 +3882,7 @@ class FloatingSettingsPanel(QWidget):
             marker_idx = content.find(footer_marker)
             if marker_idx != -1:
                 content = content[:marker_idx]
-            self._history_viewer.setMarkdown(content)
+            self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
 
     @staticmethod
     def _extract_transcript_body(md_path: Optional[Path]) -> str:
@@ -3917,7 +3931,7 @@ class FloatingSettingsPanel(QWidget):
         if marker_idx == -1:
             return None
 
-        md_body = content[:marker_idx]
+        md_body = _strip_confidence_percentages(content[:marker_idx])
 
         metadata_text = content[marker_idx + len(footer_marker):]
         if metadata_text.strip().endswith(" -->"):
@@ -4561,7 +4575,7 @@ class FloatingSettingsPanel(QWidget):
                 marker_idx = content.find(footer_marker)
                 if marker_idx != -1:
                     content = content[:marker_idx]
-                self._history_viewer.setMarkdown(content)
+                self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
         else:
             self._history_viewer.clear()
             self._history_viewer.setPlaceholderText(
