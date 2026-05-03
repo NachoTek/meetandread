@@ -2234,6 +2234,11 @@ class CCOverlayPanel(QWidget):
     # Live transcript rendering
     # ------------------------------------------------------------------
 
+    # Maximum number of phrases kept in memory and rendered.
+    # Old phrases beyond this window are pruned on each new phrase start
+    # to keep the QTextEdit small and updates fast.
+    _MAX_VISIBLE_PHRASES = 3
+
     def update_segment(self, text: str, confidence: int, segment_index: int,
                        is_final: bool = False, phrase_start: bool = False,
                        speaker_id: Optional[str] = None) -> None:
@@ -2241,6 +2246,11 @@ class CCOverlayPanel(QWidget):
 
         Each segment is part of a phrase (line).  Blank audio is silently
         filtered.  HTML-unsafe text is escaped before display.
+
+        To avoid progressive slowdown, this method keeps the QTextEdit
+        document small by pruning old phrases on each new phrase start.
+        Segment updates within the current phrase use a fast append/replace
+        path that avoids O(n) cursor walks through the full document.
 
         Args:
             text: Transcribed text for this segment.
@@ -2260,7 +2270,11 @@ class CCOverlayPanel(QWidget):
 
         # Start new phrase if needed
         if phrase_start or self.current_phrase_idx < 0:
+            # Prune old phrases to keep the document small and fast.
+            self._prune_old_phrases()
+
             cursor = self.text_edit.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
             if self.current_phrase_idx >= 0:
                 cursor.insertBlock()
 
@@ -2280,18 +2294,61 @@ class CCOverlayPanel(QWidget):
 
         # Update or add segment
         if segment_index < len(phrase.segments):
+            # Updating an existing segment — use targeted replacement
+            # within the last block only to avoid O(n) cursor walks.
             phrase.segments[segment_index] = text
             phrase.confidences[segment_index] = confidence
-            self._replace_segment_in_display(
-                self.current_phrase_idx, segment_index, text, confidence
-            )
+            self._replace_current_phrase_segment(segment_index, text, confidence)
         else:
+            # New segment — fast append at end of current block
             phrase.segments.append(text)
             phrase.confidences.append(confidence)
             self._append_segment_to_display(text, confidence)
 
-        # Auto-scroll to bottom
-        self.text_edit.ensureCursorVisible()
+        # Scroll to bottom — setValue(maximum) is much cheaper than
+        # ensureCursorVisible which triggers full layout recalculation.
+        sb = self.text_edit.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _prune_old_phrases(self) -> None:
+        """Remove old phrases beyond the visible window.
+
+        Keeps the most recent (_MAX_VISIBLE_PHRASES - 1) completed phrases
+        so that the QTextEdit document never grows beyond a few blocks.
+        This prevents the O(n) slowdown where cursor navigation walks
+        through a large document on every segment update.
+        """
+        max_keep = self._MAX_VISIBLE_PHRASES - 1  # room for the new phrase
+        if len(self.phrases) <= max_keep:
+            return
+
+        remove_count = len(self.phrases) - max_keep
+        if remove_count <= 0:
+            return
+
+        # Remove from internal tracking
+        self.phrases = self.phrases[remove_count:]
+        self.current_phrase_idx = len(self.phrases) - 1 if self.phrases else -1
+
+        # Remove leading blocks from the QTextEdit by selecting and deleting
+        cursor = self.text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+
+        # Select from start through the last block we want to remove
+        for _ in range(remove_count):
+            cursor.movePosition(
+                QTextCursor.MoveOperation.NextBlock,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+        # Move to start of the first block we want to keep (avoid blank line)
+        cursor.movePosition(
+            QTextCursor.MoveOperation.StartOfBlock,
+            QTextCursor.MoveMode.KeepAnchor,
+        )
+        cursor.removeSelectedText()
+        # Remove the now-empty block separator
+        if not cursor.atEnd():
+            cursor.deleteChar()
 
     # ------------------------------------------------------------------
     # Speaker name management
@@ -2349,22 +2406,29 @@ class CCOverlayPanel(QWidget):
         fmt.setFontWeight(QFont.Weight.Normal)
         cursor.insertText(_escape_html(text), fmt)
 
-    def _replace_segment_in_display(self, phrase_idx: int, segment_idx: int,
-                                    text: str, confidence: int) -> None:
-        """Replace a specific segment in the display without full rebuild."""
+    def _replace_current_phrase_segment(self, segment_idx: int,
+                                        text: str, confidence: int) -> None:
+        """Replace a segment in the current (last) phrase block.
+
+        Unlike the old _replace_segment_in_display which walked from the
+        start of the document through all blocks, this only navigates
+        within the last block — O(segments_in_phrase) instead of
+        O(total_phrases * segments_per_phrase).
+        """
         cursor = self.text_edit.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
 
-        # Navigate to correct phrase block
-        for _ in range(phrase_idx):
-            cursor.movePosition(QTextCursor.MoveOperation.NextBlock)
+        # Move to start of the last (current) block
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
 
-        # Navigate to correct segment within phrase (segments separated by spaces)
+        # Navigate to the correct segment (word) within this block
         for _ in range(segment_idx):
             cursor.movePosition(QTextCursor.MoveOperation.NextWord)
 
         cursor.movePosition(QTextCursor.MoveOperation.StartOfWord)
-        if segment_idx < len(self.phrases[phrase_idx].segments) - 1:
+
+        phrase = self.phrases[self.current_phrase_idx]
+        if segment_idx < len(phrase.segments) - 1:
             cursor.movePosition(
                 QTextCursor.MoveOperation.EndOfWord,
                 QTextCursor.MoveMode.KeepAnchor,
@@ -2381,10 +2445,10 @@ class CCOverlayPanel(QWidget):
         cursor.insertText(_escape_html(text), fmt)
 
     def _rebuild_display(self) -> None:
-        """Rebuild the text display — only the last 2 phrases (lines)."""
+        """Rebuild the text display — only recent phrases to fill the visible area."""
         self.text_edit.clear()
-        # Only show the most recent phrases (max 2 lines)
-        visible = self.phrases[-2:] if len(self.phrases) > 2 else self.phrases
+        # Only show the most recent phrases (bounded window)
+        visible = self.phrases[-self._MAX_VISIBLE_PHRASES:] if len(self.phrases) > self._MAX_VISIBLE_PHRASES else self.phrases
         for i, phrase in enumerate(visible):
             if i > 0:
                 cursor = self.text_edit.textCursor()
@@ -2405,9 +2469,8 @@ class CCOverlayPanel(QWidget):
                 self._append_segment_to_display(seg_text, seg_conf)
 
         # Auto-scroll to bottom so newest text is always visible
-        self.text_edit.verticalScrollBar().setValue(
-            self.text_edit.verticalScrollBar().maximum()
-        )
+        sb = self.text_edit.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _get_confidence_color(self, confidence: int) -> str:
         """Get text colour — uniform grey for CC-style display (no confidence colouring)."""
