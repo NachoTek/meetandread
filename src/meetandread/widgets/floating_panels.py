@@ -2250,6 +2250,12 @@ class CCOverlayPanel(QWidget):
         - Only the most recent phrases are kept visible
         - The display always shows the latest text
 
+        The processor re-transcribes the accumulated buffer every ~2 s and
+        re-emits ALL segments (not just new ones).  This means segment_index
+        0, 1, 2, ... arrive in order for every transcription pass.  When a
+        re-transcription returns fewer segments than before, stale tail
+        segments are trimmed so the display always reflects the latest state.
+
         Args:
             text: Transcribed text for this segment.
             confidence: Confidence score (0–100).
@@ -2289,6 +2295,18 @@ class CCOverlayPanel(QWidget):
         else:
             phrase.segments.append(text)
             phrase.confidences.append(confidence)
+
+        # If this is the first segment of a re-transcription batch, trim
+        # any stale tail segments from the previous pass.  Whisper may
+        # return fewer segments after re-transcribing with more context.
+        if segment_index == 0 and not phrase_start:
+            # Keep only the segments we're about to update — but we don't
+            # know the final count yet.  Trim conservatively: if segment 0
+            # arrives again and the phrase had N > 0 segments, trim to 1
+            # (just this segment).  Subsequent segments will extend it.
+            if len(phrase.segments) > 1:
+                phrase.segments = phrase.segments[:1]
+                phrase.confidences = phrase.confidences[:1]
 
         # Re-render the display
         self._render()

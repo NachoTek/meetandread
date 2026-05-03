@@ -388,21 +388,28 @@ class AccumulatingTranscriptionProcessor:
             self._transcription_count += 1
             
             if segments:
-                start_idx = self._last_emitted_segment_index + 1
-                new_segments = segments[start_idx:]
+                # Emit ALL segments from this re-transcription.
+                #
+                # The accumulated buffer is re-transcribed in full every
+                # ~2 s.  Whisper may return different segment boundaries
+                # and text on each pass as more audio context becomes
+                # available.  The old dedup-by-index logic assumed segments
+                # were append-only, but they're not — they're wholesale
+                # replaced.  Skipping already-emitted indices caused the
+                # CC overlay to show the first transcription result and
+                # then nothing until phrase completion (the "10-second
+                # gap" bug).
+                #
+                # The CC overlay's _render() rebuilds from scratch on each
+                # update, so re-emitting all segments is safe and cheap.
+                print(f"[{_ts()}] DEBUG: Emitting {len(segments)} segments "
+                      f"(re-transcription of {buffer_duration:.1f}s buffer)")
 
-                if new_segments:
-                    print(f"[{_ts()}] DEBUG: Processing {len(segments)} total segments, emitting {len(new_segments)} new segments")
-                else:
-                    print(f"[{_ts()}] DEBUG: Processing {len(segments)} total segments, no new segments to emit")
-
-                # Output new segments to UI (panel handles updating in place)
-                for i, seg in enumerate(new_segments):
+                for i, seg in enumerate(segments):
                     seg_text = seg.text.strip()
-                    actual_index = start_idx + i
 
                     if not seg_text or seg_text == "[BLANK_AUDIO]":
-                        print(f"[{_ts()}] DEBUG:     Skipping blank/[BLANK_AUDIO] segment {actual_index}")
+                        print(f"[{_ts()}] DEBUG:     Skipping blank/[BLANK_AUDIO] segment {i}")
                         continue
 
                     # Calculate timing relative to recording start
@@ -415,9 +422,9 @@ class AccumulatingTranscriptionProcessor:
                         confidence=int(seg.confidence),
                         start_time=segment_start,
                         end_time=segment_end,
-                        segment_index=actual_index,
+                        segment_index=i,
                         is_final=force_complete,
-                        phrase_start=(actual_index == 0 and phrase_start)
+                        phrase_start=(i == 0 and phrase_start)
                     )
 
                     # Queue for UI
@@ -430,9 +437,11 @@ class AccumulatingTranscriptionProcessor:
                         except Exception as e:
                             print(f"[{_ts()}] ERROR: on_result callback failed: {e}")
 
-                    print(f"[{_ts()}] DEBUG: Segment {actual_index}: '{seg_text}' [conf: {seg.confidence}%, final: {force_complete}]")
+                    print(f"[{_ts()}] DEBUG: Segment {i}: '{seg_text}' "
+                          f"[conf: {seg.confidence}%, final: {force_complete}, "
+                          f"phrase_start: {i == 0 and phrase_start}]")
 
-                # Update last emitted index
+                # Track for stats only — no longer used for dedup
                 self._last_emitted_segment_index = len(segments) - 1
                 
                 print(f"[{_ts()}] DEBUG: Transcribed {len(segments)} total segments in {transcribe_time:.2f}s")
