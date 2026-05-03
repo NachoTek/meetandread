@@ -2231,26 +2231,24 @@ class CCOverlayPanel(QWidget):
         self._has_content = False
 
     # ------------------------------------------------------------------
-    # Live transcript rendering
+    # Live transcript rendering — TV closed-caption style
     # ------------------------------------------------------------------
 
-    # Maximum number of phrases kept in memory and rendered.
-    # Old phrases beyond this window are pruned on each new phrase start
-    # to keep the QTextEdit small and updates fast.
-    _MAX_VISIBLE_PHRASES = 3
+    # Maximum phrases kept in memory.  Old phrases scroll off on each
+    # new phrase start, keeping the display small and updates fast.
+    # ~8 phrases ≈ 30 seconds of speech at ~4 s per phrase.
+    _MAX_VISIBLE_PHRASES = 8
 
     def update_segment(self, text: str, confidence: int, segment_index: int,
                        is_final: bool = False, phrase_start: bool = False,
                        speaker_id: Optional[str] = None) -> None:
         """Update a single transcript segment in the CC overlay.
 
-        Each segment is part of a phrase (line).  Blank audio is silently
-        filtered.  HTML-unsafe text is escaped before display.
-
-        To avoid progressive slowdown, this method keeps the QTextEdit
-        document small by pruning old phrases on each new phrase start.
-        Segment updates within the current phrase use a fast append/replace
-        path that avoids O(n) cursor walks through the full document.
+        Behaviour is modelled on TV closed captions:
+        - New phrases appear as new lines
+        - Old phrases scroll off as new ones arrive
+        - Only the most recent phrases are kept visible
+        - The display always shows the latest text
 
         Args:
             text: Transcribed text for this segment.
@@ -2263,105 +2261,69 @@ class CCOverlayPanel(QWidget):
         if text.strip() == "[BLANK_AUDIO]":
             return
 
-        # Clear placeholder on first real content
         if not self._has_content:
             self._has_content = True
-            self.text_edit.clear()
 
         # Start new phrase if needed
         if phrase_start or self.current_phrase_idx < 0:
-            # Prune old phrases to keep the document small and fast.
-            self._prune_old_phrases()
-
-            cursor = self.text_edit.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            if self.current_phrase_idx >= 0:
-                cursor.insertBlock()
+            # Prune old phrases to keep the list bounded
+            if len(self.phrases) >= self._MAX_VISIBLE_PHRASES:
+                self.phrases = self.phrases[-(self._MAX_VISIBLE_PHRASES - 1):]
+                self.current_phrase_idx = len(self.phrases) - 1
 
             self.phrases.append(
                 Phrase(segments=[], confidences=[], is_final=False, speaker_id=speaker_id)
             )
             self.current_phrase_idx = len(self.phrases) - 1
 
-            # Insert speaker label if provided
-            if speaker_id:
-                display_name = self._display_speaker_for(speaker_id)
-                self._insert_speaker_label(display_name)
-
-        # Get current phrase
+        # Update current phrase
         phrase = self.phrases[self.current_phrase_idx]
         phrase.is_final = is_final
+        if speaker_id and not phrase.speaker_id:
+            phrase.speaker_id = speaker_id
 
         # Update or add segment
         if segment_index < len(phrase.segments):
-            # Updating an existing segment — use targeted replacement
-            # within the last block only to avoid O(n) cursor walks.
             phrase.segments[segment_index] = text
             phrase.confidences[segment_index] = confidence
-            self._replace_current_phrase_segment(segment_index, text, confidence)
         else:
-            # New segment — fast append at end of current block
             phrase.segments.append(text)
             phrase.confidences.append(confidence)
-            self._append_segment_to_display(text, confidence)
 
-        # Scroll to bottom — setValue(maximum) is much cheaper than
-        # ensureCursorVisible which triggers full layout recalculation.
+        # Re-render the display
+        self._render()
+
+    def _render(self) -> None:
+        """Rebuild the display from scratch — TV closed-caption style.
+
+        Joins the most recent phrases into plain text and sets it on the
+        QTextEdit in one operation.  No cursor manipulation, no incremental
+        updates — just a clean rebuild each time.  This is safe because
+        the transcription update frequency (~2 s) makes full rebuilds
+        trivially cheap for a small number of lines.
+        """
+        visible = self.phrases[-self._MAX_VISIBLE_PHRASES:]
+        lines: List[str] = []
+        for phrase in visible:
+            text = " ".join(phrase.segments).strip()
+            if not text:
+                continue
+            if phrase.speaker_id:
+                name = self._display_speaker_for(phrase.speaker_id)
+                text = f"[{name}] {text}"
+            lines.append(text)
+        self.text_edit.setPlainText("\n".join(lines))
         sb = self.text_edit.verticalScrollBar()
         sb.setValue(sb.maximum())
-
-    def _prune_old_phrases(self) -> None:
-        """Remove old phrases beyond the visible window.
-
-        Keeps the most recent (_MAX_VISIBLE_PHRASES - 1) completed phrases
-        so that the QTextEdit document never grows beyond a few blocks.
-        This prevents the O(n) slowdown where cursor navigation walks
-        through a large document on every segment update.
-        """
-        max_keep = self._MAX_VISIBLE_PHRASES - 1  # room for the new phrase
-        if len(self.phrases) <= max_keep:
-            return
-
-        remove_count = len(self.phrases) - max_keep
-        if remove_count <= 0:
-            return
-
-        # Remove from internal tracking
-        self.phrases = self.phrases[remove_count:]
-        self.current_phrase_idx = len(self.phrases) - 1 if self.phrases else -1
-
-        # Remove leading blocks from the QTextEdit by selecting and deleting
-        cursor = self.text_edit.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-
-        # Select from start through the last block we want to remove
-        for _ in range(remove_count):
-            cursor.movePosition(
-                QTextCursor.MoveOperation.NextBlock,
-                QTextCursor.MoveMode.KeepAnchor,
-            )
-        # Move to start of the first block we want to keep (avoid blank line)
-        cursor.movePosition(
-            QTextCursor.MoveOperation.StartOfBlock,
-            QTextCursor.MoveMode.KeepAnchor,
-        )
-        cursor.removeSelectedText()
-        # Remove the now-empty block separator
-        if not cursor.atEnd():
-            cursor.deleteChar()
 
     # ------------------------------------------------------------------
     # Speaker name management
     # ------------------------------------------------------------------
 
     def set_speaker_names(self, names: Dict[str, str]) -> None:
-        """Set the speaker display name mapping and rebuild the display.
-
-        Args:
-            names: Mapping from raw speaker labels to display names.
-        """
+        """Set the speaker display name mapping and refresh the display."""
         self._speaker_names = dict(names)
-        self._rebuild_display()
+        self._render()
 
     def get_speaker_names(self) -> Dict[str, str]:
         """Return a copy of the current speaker name mapping."""
@@ -2372,105 +2334,6 @@ class CCOverlayPanel(QWidget):
         if raw_label in self._speaker_names:
             return self._speaker_names[raw_label]
         return raw_label
-
-    # ------------------------------------------------------------------
-    # Display helpers
-    # ------------------------------------------------------------------
-
-    def _insert_speaker_label(self, speaker_id: str) -> None:
-        """Insert a speaker label at the current cursor position.
-
-        Uses QTextCharFormat with bold, muted-grey text.  No anchor — the
-        CC overlay does not support speaker name editing.
-        """
-        cursor = self.text_edit.textCursor()
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(180, 180, 180))
-        fmt.setFontWeight(QFont.Weight.Bold)
-        cursor.insertText(f"[{speaker_id}] ", fmt)
-
-    def _append_segment_to_display(self, text: str, confidence: int) -> None:
-        """Append escaped text to the current line — plain grey, no confidence colour."""
-        cursor = self.text_edit.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-
-        # Space between segments
-        if (self.phrases
-                and self.current_phrase_idx >= 0
-                and self.phrases[self.current_phrase_idx].segments
-                and len(self.phrases[self.current_phrase_idx].segments) > 1):
-            cursor.insertText(" ")
-
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(180, 180, 180))
-        fmt.setFontWeight(QFont.Weight.Normal)
-        cursor.insertText(_escape_html(text), fmt)
-
-    def _replace_current_phrase_segment(self, segment_idx: int,
-                                        text: str, confidence: int) -> None:
-        """Replace a segment in the current (last) phrase block.
-
-        Unlike the old _replace_segment_in_display which walked from the
-        start of the document through all blocks, this only navigates
-        within the last block — O(segments_in_phrase) instead of
-        O(total_phrases * segments_per_phrase).
-        """
-        cursor = self.text_edit.textCursor()
-
-        # Move to start of the last (current) block
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        cursor.movePosition(QTextCursor.MoveOperation.StartOfBlock)
-
-        # Navigate to the correct segment (word) within this block
-        for _ in range(segment_idx):
-            cursor.movePosition(QTextCursor.MoveOperation.NextWord)
-
-        cursor.movePosition(QTextCursor.MoveOperation.StartOfWord)
-
-        phrase = self.phrases[self.current_phrase_idx]
-        if segment_idx < len(phrase.segments) - 1:
-            cursor.movePosition(
-                QTextCursor.MoveOperation.EndOfWord,
-                QTextCursor.MoveMode.KeepAnchor,
-            )
-        else:
-            cursor.movePosition(
-                QTextCursor.MoveOperation.EndOfBlock,
-                QTextCursor.MoveMode.KeepAnchor,
-            )
-
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(180, 180, 180))
-        fmt.setFontWeight(QFont.Weight.Normal)
-        cursor.insertText(_escape_html(text), fmt)
-
-    def _rebuild_display(self) -> None:
-        """Rebuild the text display — only recent phrases to fill the visible area."""
-        self.text_edit.clear()
-        # Only show the most recent phrases (bounded window)
-        visible = self.phrases[-self._MAX_VISIBLE_PHRASES:] if len(self.phrases) > self._MAX_VISIBLE_PHRASES else self.phrases
-        for i, phrase in enumerate(visible):
-            if i > 0:
-                cursor = self.text_edit.textCursor()
-                cursor.insertBlock()
-
-            if phrase.speaker_id:
-                display_name = self._display_speaker_for(phrase.speaker_id)
-                self._insert_speaker_label(display_name)
-
-            for seg_idx, (seg_text, seg_conf) in enumerate(
-                zip(phrase.segments, phrase.confidences)
-            ):
-                if seg_idx > 0:
-                    # Insert space between segments
-                    cursor = self.text_edit.textCursor()
-                    cursor.movePosition(QTextCursor.MoveOperation.End)
-                    cursor.insertText(" ")
-                self._append_segment_to_display(seg_text, seg_conf)
-
-        # Auto-scroll to bottom so newest text is always visible
-        sb = self.text_edit.verticalScrollBar()
-        sb.setValue(sb.maximum())
 
     def _get_confidence_color(self, confidence: int) -> str:
         """Get text colour — uniform grey for CC-style display (no confidence colouring)."""
