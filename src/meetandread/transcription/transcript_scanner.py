@@ -104,7 +104,6 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
 
     # Extract fields
     recording_time: str = data.get("recording_start_time") or ""
-    word_count: int = data.get("word_count", 0)
 
     # Collect unique speakers from words array
     speakers: List[str] = []
@@ -119,6 +118,15 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
         end = word.get("end_time", 0.0)
         if isinstance(end, (int, float)) and end > max_end_time:
             max_end_time = end
+
+    # Derive word_count from the actual words array rather than trusting
+    # the stored metadata value, which may be stale after post-processing
+    # or re-transcription overwrites the .md file with updated words.
+    words_data = data.get("words")
+    if isinstance(words_data, list):
+        word_count: int = len(words_data)
+    else:
+        word_count: int = data.get("word_count", 0)
 
     # Check companion .wav file
     wav_path = md_path.with_suffix(".wav")

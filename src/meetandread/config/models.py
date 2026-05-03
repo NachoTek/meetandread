@@ -117,6 +117,10 @@ class TranscriptionSettings:
         default=48,
         metadata={"description": "CC overlay font size in pixels (range: 16-96)"}
     )
+    cc_auto_open: bool = field(
+        default=True,
+        metadata={"description": "Whether the CC overlay automatically opens when recording starts"}
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -138,6 +142,7 @@ class TranscriptionSettings:
             microphone_denoising_provider=data.get("microphone_denoising_provider", "spectral_gate"),
             microphone_denoising_latency_budget_ms=data.get("microphone_denoising_latency_budget_ms", 200),
             cc_font_size=data.get("cc_font_size", 48),
+            cc_auto_open=data.get("cc_auto_open", True),
         )
 
 
@@ -229,6 +234,10 @@ class UISettings:
         default=None,
         metadata={"description": "Persisted audio source selection: list of 'mic' and/or 'system'"}
     )
+    cc_panel_geometry: Optional[Tuple[int, int, int, int]] = field(
+        default=None,
+        metadata={"description": "CC overlay position and size as (x, y, width, height)"}
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -236,6 +245,8 @@ class UISettings:
         # Handle tuple serialization
         if result.get("widget_position") is not None:
             result["widget_position"] = list(result["widget_position"])
+        if result.get("cc_panel_geometry") is not None:
+            result["cc_panel_geometry"] = list(result["cc_panel_geometry"])
         return result
 
     @classmethod
@@ -251,6 +262,7 @@ class UISettings:
             widget_position=pos,
             widget_dock_edge=data.get("widget_dock_edge"),
             audio_sources=data.get("audio_sources"),
+            cc_panel_geometry=tuple(data["cc_panel_geometry"]) if data.get("cc_panel_geometry") else None,
         )
 
 

@@ -2078,6 +2078,9 @@ class CCOverlayPanel(QWidget):
         # Apply initial theme
         self._apply_theme()
 
+        # Restore persisted geometry (position + size)
+        self._restore_geometry()
+
         logger.debug("CCOverlayPanel created (parent=%s)", type(parent).__name__ if parent else "None")
 
     # ------------------------------------------------------------------
@@ -2116,6 +2119,7 @@ class CCOverlayPanel(QWidget):
                 self.width() - self._resize_grip.width(),
                 self.height() - self._resize_grip.height(),
             )
+        self.save_geometry()
         super().resizeEvent(event)
 
     # ------------------------------------------------------------------
@@ -2170,6 +2174,7 @@ class CCOverlayPanel(QWidget):
         Args:
             immediate: If True, hide instantly. If False, fade out.
         """
+        self.save_geometry()
         if immediate:
             self.hide()
             self.setWindowOpacity(1.0)
@@ -2229,6 +2234,36 @@ class CCOverlayPanel(QWidget):
         self.phrases.clear()
         self.current_phrase_idx = -1
         self._has_content = False
+
+    # ------------------------------------------------------------------
+    # Geometry persistence
+    # ------------------------------------------------------------------
+
+    def _restore_geometry(self) -> None:
+        """Restore CC panel position and size from config."""
+        try:
+            from meetandread.config import get_config
+            geom = get_config("ui.cc_panel_geometry")
+            if geom is not None and len(geom) == 4:
+                x, y, w, h = geom
+                self.resize(w, h)
+                self.move(x, y)
+                ensure_on_screen(self)
+                logger.debug("Restored CC panel geometry: (%d, %d, %d, %d)", x, y, w, h)
+        except Exception as e:
+            logger.warning("Failed to restore CC panel geometry: %s", e)
+
+    def save_geometry(self) -> None:
+        """Save CC panel position and size to config."""
+        try:
+            from meetandread.config import set_config, save_config
+            if self.isVisible():
+                set_config("ui.cc_panel_geometry", (self.x(), self.y(), self.width(), self.height()))
+                save_config()
+                logger.debug("Saved CC panel geometry: (%d, %d, %d, %d)",
+                             self.x(), self.y(), self.width(), self.height())
+        except Exception as e:
+            logger.warning("Failed to save CC panel geometry: %s", e)
 
     # ------------------------------------------------------------------
     # Live transcript rendering — TV closed-caption style
@@ -2754,6 +2789,44 @@ class FloatingSettingsPanel(QWidget):
         cc_font_row.addWidget(self._cc_font_spin)
         cc_font_row.addStretch()
         settings_layout.addLayout(cc_font_row)
+
+        # CC auto-open checkbox
+        self._cc_auto_open_checkbox = QCheckBox("Auto-open CC overlay on recording")
+        self._cc_auto_open_checkbox.setObjectName("AethericCheckBox")
+        self._cc_auto_open_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cc_auto_open_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #E0E0E0;
+                spacing: 8px;
+                font-size: 12px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #666;
+                border-radius: 3px;
+                background: #2A2A2E;
+            }
+            QCheckBox::indicator:checked {
+                background: #4CAF50;
+                border-color: #4CAF50;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #999;
+            }
+        """)
+        self._cc_auto_open_checkbox.setToolTip(
+            "When enabled, the CC overlay panel opens automatically when recording starts."
+        )
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _auto_open = get_config("transcription.cc_auto_open")
+            self._cc_auto_open_checkbox.setChecked(_auto_open if isinstance(_auto_open, bool) else True)
+        except Exception:
+            self._cc_auto_open_checkbox.setChecked(True)
+        self._cc_auto_open_checkbox.stateChanged.connect(self._on_cc_auto_open_toggled)
+        settings_layout.addWidget(self._cc_auto_open_checkbox)
 
         settings_layout.addStretch()
         self._content_stack.addWidget(settings_page)
@@ -3637,6 +3710,21 @@ class FloatingSettingsPanel(QWidget):
             logger.warning("Failed to save CC font size: %s", exc)
         self.cc_font_size_changed.emit(value)
         logger.info("CC font size set to %dpx", value)
+
+    def _on_cc_auto_open_toggled(self, state: int) -> None:
+        """Handle CC auto-open checkbox toggle.
+
+        Persists the setting to config immediately.
+        """
+        from PyQt6.QtCore import Qt
+        enabled = state == Qt.CheckState.Checked.value if hasattr(Qt.CheckState, 'value') else bool(state)
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("transcription.cc_auto_open", enabled)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save CC auto-open setting: %s", exc)
+        logger.info("CC auto-open set to %s", enabled)
 
     def _refresh_dropdown_wer(self) -> None:
         """Update all dropdown item texts with latest WER from config."""

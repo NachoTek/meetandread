@@ -766,24 +766,34 @@ to avoid clipping issues and enable proper text rendering.
             self.system_lobe.set_locked(True)
             logging.debug("Lobes locked (RECORDING)")
             
-            # Show CC overlay for live transcript
+            # Show CC overlay for live transcript (if auto-open enabled)
             if self._cc_overlay:
-                logging.debug("Showing CC overlay for recording")
-                self._cc_overlay.clear()
-                # Position near widget on first show if never positioned
-                if not self._cc_overlay.isVisible():
-                    try:
-                        offset_x = self.x() - self._cc_overlay.width() - 10
-                        offset_y = self.y()
-                        # Ensure it stays on screen
-                        screen = QApplication.primaryScreen().geometry()
-                        if offset_x < screen.left():
-                            offset_x = self.x() + self.width() + 10
-                        self._cc_overlay.move(offset_x, offset_y)
-                        ensure_on_screen(self._cc_overlay)
-                    except (TypeError, AttributeError):
-                        pass  # Graceful fallback in test/mock environments
-                self._cc_overlay.show_panel()
+                try:
+                    from meetandread.config import get_config
+                    auto_open = get_config("transcription.cc_auto_open")
+                    if auto_open is None:
+                        auto_open = True  # Default to True if not set
+                except Exception:
+                    auto_open = True
+                if auto_open:
+                    logging.debug("Showing CC overlay for recording (auto-open)")
+                    self._cc_overlay.clear()
+                    # Position near widget on first show if never positioned
+                    if not self._cc_overlay.isVisible():
+                        try:
+                            offset_x = self.x() - self._cc_overlay.width() - 10
+                            offset_y = self.y()
+                            # Ensure it stays on screen
+                            screen = QApplication.primaryScreen().geometry()
+                            if offset_x < screen.left():
+                                offset_x = self.x() + self.width() + 10
+                            self._cc_overlay.move(offset_x, offset_y)
+                            ensure_on_screen(self._cc_overlay)
+                        except (TypeError, AttributeError):
+                            pass  # Graceful fallback in test/mock environments
+                    self._cc_overlay.show_panel()
+                else:
+                    logging.debug("CC overlay auto-open disabled by setting")
 
             # Show floating transcript panel when recording starts (legacy)
             # (Removed — CC overlay is the only live transcript surface)
@@ -1007,6 +1017,7 @@ to avoid clipping issues and enable proper text rendering.
         if self._floating_settings_panel:
             self._floating_settings_panel.hide()
         if self._cc_overlay:
+            self._cc_overlay.save_geometry()
             self._cc_overlay.hide()
         if self._tray_manager is not None:
             self._tray_manager.hide()
