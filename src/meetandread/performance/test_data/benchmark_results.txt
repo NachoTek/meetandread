@@ -15,11 +15,11 @@ MODEL INFORMATION
 PERFORMANCE
 ----------------------------------------
   Audio duration:       150.0s
-  Processing time:      65.5s
-  Throughput:           2.3x realtime
+  Processing time:      61.6s
+  Throughput:           2.4x realtime
   Chunks processed:     30
-  Avg chunk latency:    2.184s
-  Max chunk latency:    2.250s
+  Avg chunk latency:    2.053s
+  Max chunk latency:    2.172s
 
 WORD ERROR RATE
 ----------------------------------------
