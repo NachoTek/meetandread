@@ -128,7 +128,8 @@ class TestSizeConstraints:
         assert cc_panel.maximumWidth() >= max_screen
 
     def test_maximum_height(self, cc_panel):
-        assert cc_panel.maximumHeight() <= 500
+        # No max height restriction — user can resize freely
+        assert cc_panel.maximumHeight() > cc_panel.minimumHeight()
 
     def test_not_fixed_size(self, cc_panel):
         """Panel should be resizable (min != max)."""

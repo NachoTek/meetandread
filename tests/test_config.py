@@ -107,7 +107,7 @@ class TestTranscriptionSettings:
     def test_denoising_default_values(self):
         """Test denoising settings have correct defaults."""
         settings = TranscriptionSettings()
-        assert settings.microphone_denoising_enabled is True
+        assert settings.microphone_denoising_enabled is False
         assert settings.microphone_denoising_provider == "spectral_gate"
         assert settings.microphone_denoising_latency_budget_ms == 200
     
@@ -131,7 +131,7 @@ class TestTranscriptionSettings:
     def test_denoising_defaults_from_empty_dict(self):
         """Test denoising settings get defaults from empty dict."""
         settings = TranscriptionSettings.from_dict({})
-        assert settings.microphone_denoising_enabled is True
+        assert settings.microphone_denoising_enabled is False
         assert settings.microphone_denoising_provider == "spectral_gate"
         assert settings.microphone_denoising_latency_budget_ms == 200
     
@@ -230,7 +230,7 @@ class TestAppSettings:
     def test_default_values(self):
         """Test default values and nested settings."""
         settings = AppSettings()
-        assert settings.config_version == 4
+        assert settings.config_version == 5
         assert isinstance(settings.model, ModelSettings)
         assert isinstance(settings.transcription, TranscriptionSettings)
         assert isinstance(settings.hardware, HardwareSettings)
@@ -240,7 +240,7 @@ class TestAppSettings:
         """Test full serialization."""
         settings = AppSettings()
         d = settings.to_dict()
-        assert d["config_version"] == 4
+        assert d["config_version"] == 5
         assert "model" in d
         assert "transcription" in d
         assert "hardware" in d
@@ -319,7 +319,7 @@ class TestSettingsPersistence:
         """Test loading when file doesn't exist returns defaults."""
         loaded = persistence.load_settings()
         assert loaded.model.realtime_model_size == "auto"
-        assert loaded.config_version == 4
+        assert loaded.config_version == 5
     
     def test_load_corrupted_json_returns_defaults(self, persistence):
         """Test loading corrupted file returns defaults."""
@@ -369,7 +369,7 @@ class TestSettingsPersistence:
         assert "path" in info
         assert "exists" in info
         assert info["exists"] is False  # No file yet
-        assert info["current_version"] == 4
+        assert info["current_version"] == 5
     
     def test_config_info_after_save(self, persistence):
         """Test config info after saving."""
@@ -378,7 +378,7 @@ class TestSettingsPersistence:
         
         info = persistence.get_config_info()
         assert info["exists"] is True
-        assert info["version"] == 4
+        assert info["version"] == 5
         assert info["needs_migration"] is False
 
 
@@ -393,7 +393,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 0)
-        assert migrated["config_version"] == 4
+        assert migrated["config_version"] == 5
         assert "transcription" in migrated
         assert "hardware" in migrated
         assert "ui" in migrated
@@ -413,11 +413,11 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 2)
-        assert migrated["config_version"] == 4
+        assert migrated["config_version"] == 5
         
-        # Denoising defaults added
+        # Denoising defaults added (disabled by default)
         ts = migrated["transcription"]
-        assert ts["microphone_denoising_enabled"] is True
+        assert ts["microphone_denoising_enabled"] is False
         assert ts["microphone_denoising_provider"] == "spectral_gate"
         assert ts["microphone_denoising_latency_budget_ms"] == 200
         
@@ -450,7 +450,7 @@ class TestConfigMigration:
         assert ts["microphone_denoising_latency_budget_ms"] == 50
     
     def test_migration_from_version_3_adds_speaker_min_duration(self, persistence):
-        """Test v3→v4 migration adds min_duration_on/off to speaker section."""
+        """Test v3→v4→v5 migration adds min_duration_on/off and disables denoising."""
         old_config = {
             "config_version": 3,
             "speaker": {
@@ -461,7 +461,7 @@ class TestConfigMigration:
         }
 
         migrated = persistence.migrate_config(old_config, 3)
-        assert migrated["config_version"] == 4
+        assert migrated["config_version"] == 5
 
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
@@ -470,6 +470,8 @@ class TestConfigMigration:
         assert speaker["enabled"] is True
         assert speaker["confidence_threshold"] == 0.7
         assert speaker["clustering_threshold"] == 0.6
+        # v4→v5 disables denoising
+        assert migrated["transcription"]["microphone_denoising_enabled"] is False
 
     def test_migration_from_version_3_preserves_existing_min_duration(self, persistence):
         """Test v3→v4 migration doesn't clobber existing min_duration fields."""
@@ -500,14 +502,14 @@ class TestConfigMigration:
         assert speaker["min_duration_off"] == 0.8
     
     def test_no_migration_needed(self, persistence):
-        """Test config at current version."""
+        """Test config at current version doesn't change."""
         current_config = {
-            "config_version": 4,
+            "config_version": 5,
             "model": {"realtime_model_size": "small"}
         }
         
-        migrated = persistence.migrate_config(current_config, 4)
-        assert migrated["config_version"] == 4
+        migrated = persistence.migrate_config(current_config, 5)
+        assert migrated["config_version"] == 5
 
 
 # ============================================================================
@@ -787,9 +789,9 @@ class TestConfigEdgeCases:
     
     def test_denoising_enabled_get_set(self, manager):
         """Test get/set for microphone_denoising_enabled."""
-        assert manager.get("transcription.microphone_denoising_enabled") is True
-        manager.set("transcription.microphone_denoising_enabled", False)
         assert manager.get("transcription.microphone_denoising_enabled") is False
+        manager.set("transcription.microphone_denoising_enabled", True)
+        assert manager.get("transcription.microphone_denoising_enabled") is True
     
     def test_denoising_provider_get_set(self, manager):
         """Test get/set for microphone_denoising_provider."""

@@ -8,6 +8,10 @@ and state management for UI integration. Includes hybrid transcription:
 
 import logging
 import threading
+import time as _time
+
+
+def _ts(): return _time.strftime("%H:%M:%S")
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -123,7 +127,7 @@ class RecordingController:
             try:
                 self.on_state_change(state)
             except Exception as e:
-                print(f"ERROR: State change callback failed: {e}")
+                print(f"[{_ts()}] ERROR: State change callback failed: {e}")
     
     def _set_error(self, message: str, is_recoverable: bool = True) -> ControllerError:
         """Set error state and notify listeners."""
@@ -133,7 +137,7 @@ class RecordingController:
             try:
                 self.on_error(self._error)
             except Exception as e:
-                print(f"ERROR: Error callback failed: {e}")
+                print(f"[{_ts()}] ERROR: Error callback failed: {e}")
         return self._error
     
     def clear_error(self) -> None:
@@ -226,7 +230,7 @@ class RecordingController:
                 )
             
             # Read denoising settings from persisted config with safe fallbacks
-            denoise_enabled = True  # safe default
+            denoise_enabled = False  # safe default (disabled due to spectral gate artifacts)
             denoise_provider = "spectral_gate"  # safe default
             denoise_budget_ms = 200.0  # safe default
             try:
@@ -235,7 +239,7 @@ class RecordingController:
 
                 # Validate enabled — must be actual bool
                 raw_enabled = ts.microphone_denoising_enabled
-                denoise_enabled = raw_enabled if isinstance(raw_enabled, bool) else True
+                denoise_enabled = raw_enabled if isinstance(raw_enabled, bool) else False
 
                 # Validate provider — must be a non-empty string in the allowed set
                 raw_provider = ts.microphone_denoising_provider
@@ -272,6 +276,11 @@ class RecordingController:
                     if sc.type == "mic" and sc.denoise is None:
                         sc.denoise = True
 
+            # If fake_denoise was requested, force denoising on at the session
+            # level regardless of persisted config (test harness override)
+            if fake_denoise:
+                denoise_enabled = True
+
             # Create and start session
             config = SessionConfig(
                 sources=source_configs,
@@ -295,8 +304,8 @@ class RecordingController:
             # Start transcription if available
             if self._transcription_processor:
                 print("DEBUG: Starting transcription processor...")
-                print(f"DEBUG: Transcription processor exists: {self._transcription_processor is not None}")
-                print(f"DEBUG: Processor on_result callback: {self._transcription_processor.on_result is not None}")
+                print(f"[{_ts()}] DEBUG: Transcription processor exists: {self._transcription_processor is not None}")
+                print(f"[{_ts()}] DEBUG: Processor on_result callback: {self._transcription_processor.on_result is not None}")
                 self._transcription_processor.start()
                 print("DEBUG: Transcription processor started")
             
@@ -355,7 +364,7 @@ class RecordingController:
             print("DEBUG: Stopping audio session...")
             wav_path = self._session.stop()
             self._last_wav_path = wav_path
-            print(f"DEBUG: Audio saved to: {wav_path}")
+            print(f"[{_ts()}] DEBUG: Audio saved to: {wav_path}")
             
             # --- Speaker diarization (post-processing step) ---
             if self._transcript_store and self._last_wav_path:
@@ -364,10 +373,10 @@ class RecordingController:
             # Save transcript if available
             transcript_path = None
             if self._transcript_store and self._last_wav_path:
-                print(f"DEBUG: Saving transcript ({self._transcript_store.get_word_count()} words)...")
+                print(f"[{_ts()}] DEBUG: Saving transcript ({self._transcript_store.get_word_count()} words)...")
                 transcript_path = self._save_transcript()
                 self._last_transcript_path = transcript_path
-                print(f"DEBUG: Transcript saved to: {transcript_path}")
+                print(f"[{_ts()}] DEBUG: Transcript saved to: {transcript_path}")
             
             # Schedule post-processing with stronger model
             if self._post_processor and self._last_wav_path and self._transcript_store:
@@ -379,7 +388,7 @@ class RecordingController:
                     output_dir=get_transcripts_dir()
                 )
                 self._post_process_job_id = job.job_id
-                print(f"DEBUG: Post-processing job scheduled: {job.job_id}")
+                print(f"[{_ts()}] DEBUG: Post-processing job scheduled: {job.job_id}")
             
             self._set_state(ControllerState.IDLE)
             print("DEBUG: Recording stopped, state set to IDLE")
@@ -389,7 +398,7 @@ class RecordingController:
                 try:
                     self.on_recording_complete(wav_path, transcript_path)
                 except Exception as e:
-                    print(f"ERROR: Recording complete callback failed: {e}")
+                    print(f"[{_ts()}] ERROR: Recording complete callback failed: {e}")
                 
         except Exception as e:
             import traceback
@@ -416,7 +425,7 @@ class RecordingController:
             # HYBRID: Always use tiny for real-time (fastest)
             # Post-processing will use stronger model
             realtime_model = settings.transcription.realtime_model_size
-            print(f"DEBUG: Initializing accumulating transcription with {realtime_model} model")
+            print(f"[{_ts()}] DEBUG: Initializing accumulating transcription with {realtime_model} model")
             
             # Create transcript store
             self._transcript_store = TranscriptStore()
@@ -436,11 +445,11 @@ class RecordingController:
             )
             
             # Load model (tiny takes 1-2 seconds)
-            print(f"DEBUG: Loading {realtime_model} model for real-time transcription...")
+            print(f"[{_ts()}] DEBUG: Loading {realtime_model} model for real-time transcription...")
             self._transcription_processor.load_model(
                 progress_callback=lambda p: print(f"Loading {realtime_model} model: {p}%")
             )
-            print(f"DEBUG: {realtime_model} model loaded successfully")
+            print(f"[{_ts()}] DEBUG: {realtime_model} model loaded successfully")
             
             # Wire up the phrase result callback
             self._transcription_processor.on_result = self._on_phrase_result
@@ -486,7 +495,7 @@ class RecordingController:
             try:
                 self.on_phrase_result(result)
             except Exception as e:
-                print(f"ERROR: Segment result callback failed: {e}")
+                print(f"[{_ts()}] ERROR: Segment result callback failed: {e}")
     
     def _segment_to_words(self, result: SegmentResult) -> List[Word]:
         """Convert a SegmentResult to Word objects.
@@ -529,7 +538,7 @@ class RecordingController:
             job_id: The job identifier
             progress: Progress percentage (0-100)
         """
-        print(f"DEBUG: Post-processing job {job_id}: {progress}%")
+        print(f"[{_ts()}] DEBUG: Post-processing job {job_id}: {progress}%")
     
     def _on_post_process_complete_callback(self, job_id: str, result: dict) -> None:
         """Handle post-processing completion.
@@ -538,10 +547,10 @@ class RecordingController:
             job_id: The job identifier
             result: Result dictionary with transcript_path, etc.
         """
-        print(f"DEBUG: Post-processing job {job_id} completed!")
-        print(f"DEBUG: Post-processed transcript: {result.get('transcript_path')}")
-        print(f"DEBUG: Real-time words: {result.get('realtime_word_count')}")
-        print(f"DEBUG: Post-processed words: {result.get('word_count')}")
+        print(f"[{_ts()}] DEBUG: Post-processing job {job_id} completed!")
+        print(f"[{_ts()}] DEBUG: Post-processed transcript: {result.get('transcript_path')}")
+        print(f"[{_ts()}] DEBUG: Real-time words: {result.get('realtime_word_count')}")
+        print(f"[{_ts()}] DEBUG: Post-processed words: {result.get('word_count')}")
         
         # --- Auto-WER calculation ---
         self._compute_and_store_wer(result)
@@ -553,7 +562,7 @@ class RecordingController:
                 try:
                     self.on_post_process_complete(job_id, transcript_path)
                 except Exception as e:
-                    print(f"ERROR: Post-process complete callback failed: {e}")
+                    print(f"[{_ts()}] ERROR: Post-process complete callback failed: {e}")
 
     def _compute_and_store_wer(self, result: dict) -> None:
         """Compute WER between realtime and post-processed transcripts and append to file.
@@ -646,7 +655,7 @@ class RecordingController:
             self._audio_chunks_fed += 1
             if self._audio_chunks_fed % 100 == 0:
                 stats = self._transcription_processor.get_stats()
-                print(f"DEBUG: Fed {self._audio_chunks_fed} audio chunks, buffer: {stats.get('buffer_duration', 0):.1f}s")
+                print(f"[{_ts()}] DEBUG: Fed {self._audio_chunks_fed} audio chunks, buffer: {stats.get('buffer_duration', 0):.1f}s")
     
     def _run_diarization(self, wav_path: Path) -> None:
         """Run speaker diarization on the saved WAV and tag transcript words.

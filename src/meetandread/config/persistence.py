@@ -32,7 +32,7 @@ class ConfigVersion:
 
 
 # Current config version - bump this when schema changes
-CURRENT_CONFIG_VERSION = 4
+CURRENT_CONFIG_VERSION = 5
 
 # Version history for migrations
 VERSION_HISTORY: Dict[int, ConfigVersion] = {
@@ -40,6 +40,7 @@ VERSION_HISTORY: Dict[int, ConfigVersion] = {
     2: ConfigVersion(2, "Added benchmark_history to TranscriptionSettings for per-model WER tracking"),
     3: ConfigVersion(3, "Added microphone denoising settings to TranscriptionSettings"),
     4: ConfigVersion(4, "Added min_duration_on/min_duration_off to SpeakerSettings for noisy-room diarization tuning"),
+    5: ConfigVersion(5, "Changed microphone denoising default to disabled due to spectral gate artifacts"),
 }
 
 
@@ -320,7 +321,7 @@ class SettingsPersistence:
             # Add microphone denoising settings to transcription section
             transcription = config_dict.get("transcription", {})
             if "microphone_denoising_enabled" not in transcription:
-                transcription["microphone_denoising_enabled"] = True
+                transcription["microphone_denoising_enabled"] = False
             if "microphone_denoising_provider" not in transcription:
                 transcription["microphone_denoising_provider"] = "spectral_gate"
             if "microphone_denoising_latency_budget_ms" not in transcription:
@@ -335,6 +336,14 @@ class SettingsPersistence:
             if "min_duration_off" not in speaker:
                 speaker["min_duration_off"] = 0.8
             config_dict["speaker"] = speaker
+
+        if from_version == 4 and to_version == 5:
+            # Disable microphone denoising by default — spectral gate STFT
+            # causes clicking artifacts from per-frame overlap-add without
+            # cross-frame state continuity.
+            transcription = config_dict.get("transcription", {})
+            transcription["microphone_denoising_enabled"] = False
+            config_dict["transcription"] = transcription
         
         return config_dict
     

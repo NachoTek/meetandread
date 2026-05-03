@@ -129,6 +129,10 @@ class SpectralGateProvider(DenoisingProvider):
         self._frame_count: int = 0
         # Noise spectrum estimate (accumulated during attack phase)
         self._noise_estimate: Optional[np.ndarray] = None
+        # Cross-frame overlap tail: last fft_size samples from previous call,
+        # prepended to the next frame so STFT windows span chunk boundaries.
+        # Eliminates clicking artifacts from per-frame overlap-add discontinuities.
+        self._overlap_tail: Optional[np.ndarray] = None
 
     @property
     def name(self) -> str:
@@ -246,6 +250,10 @@ class SpectralGateProvider(DenoisingProvider):
         median, which correctly handles pure tones, pure noise, and noisy
         speech without multi-frame accumulation. For frames shorter than
         fft_size, falls back to simple time-domain noise gating.
+
+        Cross-frame overlap: prepends the tail of the previous frame so
+        STFT windows span chunk boundaries, eliminating clicking artifacts
+        from per-frame overlap-add discontinuities.
         """
         n = len(frame)
 
@@ -253,13 +261,21 @@ class SpectralGateProvider(DenoisingProvider):
             # Too short for meaningful FFT — use simple energy gate
             return self._simple_gate(frame)
 
-        # ---- Overlap-add STFT ----
+        # ---- Cross-frame overlap ----
+        # Prepend the tail from the previous call so STFT windows bridge
+        # the boundary smoothly. On the first call, use zeros.
+        tail = self._overlap_tail
+        if tail is None:
+            tail = np.zeros(self._fft_size, dtype=np.float32)
+        combined = np.concatenate([tail, frame])
+
+        # ---- Overlap-add STFT on combined signal ----
         window = np.hanning(self._fft_size)
-        # Pad frame so that windows cover the entire signal
-        remainder = (n - self._fft_size) % self._hop_size
-        pad_len = n if remainder == 0 else n + (self._hop_size - remainder)
+        combined_n = len(combined)
+        remainder = (combined_n - self._fft_size) % self._hop_size
+        pad_len = combined_n if remainder == 0 else combined_n + (self._hop_size - remainder)
         padded = np.zeros(pad_len, dtype=np.float32)
-        padded[:n] = frame
+        padded[:combined_n] = combined
 
         num_windows = (pad_len - self._fft_size) // self._hop_size + 1
 
@@ -325,7 +341,12 @@ class SpectralGateProvider(DenoisingProvider):
         window_sum = np.where(window_sum > 1e-8, window_sum, 1.0)
         output = output / window_sum
 
-        return output[:n].astype(np.float32)
+        # Save tail for next call (last fft_size samples of combined input)
+        self._overlap_tail = combined[-self._fft_size:].copy()
+
+        # Return only the output corresponding to the new frame
+        # (skip the fft_size overlap portion from the previous frame)
+        return output[self._fft_size:self._fft_size + n].astype(np.float32)
 
     def _simple_gate(self, frame: np.ndarray) -> np.ndarray:
         """Simple time-domain noise gate for very short frames.

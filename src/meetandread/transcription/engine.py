@@ -360,56 +360,86 @@ class WhisperTranscriptionEngine:
     
     def transcribe_chunk(self, audio_np: np.ndarray) -> List[TranscriptionSegment]:
         """Transcribe an audio chunk.
-        
+
+        Uses whisper.cpp with extract_probability=True for real confidence
+        scores and token_timestamps=True for word-level timing.
+
         Args:
             audio_np: Audio samples as float32 numpy array (mono, 16kHz)
-            
+
         Returns:
-            List of transcription segments with confidence scores
-            
+            List of transcription segments with per-segment confidence scores
+
         Raises:
             RuntimeError: If model is not loaded
         """
         if not self.is_model_loaded():
             raise RuntimeError("Model not loaded. Call load_model() first.")
-        
+
         if len(audio_np) == 0:
             return []
-        
+
         # Save audio to temp file (whisper.cpp requires file path)
         temp_path = None
         try:
             temp_path = self._save_audio_to_temp_file(audio_np)
-            
+
             # Transcribe with whisper.cpp
-            result = self._model.transcribe(temp_path)
-            
-            # Parse result - pywhispercpp returns segments with text, start, end
-            text, start_time, end_time, words = self._parse_whisper_result(result)
-            
-            # Estimate confidence based on text characteristics
-            confidence = self._estimate_confidence(text)
-            
-            # Use timestamps from whisper or calculate from audio length
-            if end_time == 0.0:
-                end_time = len(audio_np) / 16000  # 16kHz sample rate
-            
-            if text:
-                segment = TranscriptionSegment(
+            # extract_probability=True: real confidence from token log-probs
+            #   (geometric mean of per-token probabilities for each segment)
+            # token_timestamps=True: accurate start/end timestamps
+            result = self._model.transcribe(
+                temp_path,
+                extract_probability=True,
+                token_timestamps=True,
+            )
+
+            if not result:
+                return []
+
+            # Convert pywhispercpp Segments to our TranscriptionSegments
+            segments = []
+            for seg in result:
+                text = seg.text.strip() if hasattr(seg, 'text') else str(seg).strip()
+                if not text or text == "[BLANK_AUDIO]":
+                    continue
+
+                # Use real probability from whisper.cpp (geometric mean of
+                # token probabilities). Fall back to heuristic only if NaN.
+                if hasattr(seg, 'probability') and not (
+                    isinstance(seg.probability, float) and seg.probability != seg.probability  # NaN check
+                ):
+                    confidence = int(seg.probability * 100)
+                    confidence = max(0, min(100, confidence))
+                else:
+                    confidence = self._estimate_confidence(text)
+
+                # Timestamps from whisper.cpp (in milliseconds, convert to seconds)
+                start = seg.t0 / 1000.0 if hasattr(seg, 't0') and seg.t0 else 0.0
+                end = seg.t1 / 1000.0 if hasattr(seg, 't1') and seg.t1 else 0.0
+
+                # Build word info (single word per segment when max_len=1)
+                word = WordInfo(
+                    text=text,
+                    start=start,
+                    end=end,
+                    confidence=confidence,
+                )
+
+                segments.append(TranscriptionSegment(
                     text=text,
                     confidence=confidence,
-                    start=start_time,
-                    end=end_time,
-                    words=words
-                )
-                return [segment]
-            else:
-                return []
-                
+                    start=start,
+                    end=end,
+                    words=[word],
+                ))
+
+            return segments
+
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             return []
-            
+
         finally:
             # Clean up temp file
             if temp_path and os.path.exists(temp_path):

@@ -1,0 +1,220 @@
+Harvard just discovered what AI actually is
+https://www.youtube.com/watch?v=nDL3Ch7Nz8c
+================================================================================
+
+[00:00:00] So, there's a CEO in South Korea,
+[00:00:02] Changen Kim, and he runs Craftton, the
+[00:00:04] company behind PUBG, the game where you
+[00:00:07] parachute onto an island but naked and
+[00:00:09] beat a stranger to death with a frying
+[00:00:11] pan like it's a Tuesday in Florida. And
+[00:00:13] this man is on Slack at some ungodly
+[00:00:16] hour having what can only be described
+[00:00:18] as a rich person meltdown. He's telling
+[00:00:20] his colleagues he feels dragged around.
+[00:00:22] He's calling a contract he signed a
+[00:00:24] pushover deal because a few years back
+[00:00:27] he bought a little game studio called
+[00:00:28] Unknown Worlds, the makers of
+[00:00:31] Subnautica, and he promised the founders
+[00:00:33] $250 million if their next game hits
+[00:00:37] certain targets. And at the time, he
+[00:00:39] thought there was no way in hell it
+[00:00:40] would hit those targets. Subnotica 2
+[00:00:42] ends up topping Steam wish lists, and
+[00:00:45] internal projections have it destroying
+[00:00:47] every target. And Kim is like, "Oh
+[00:00:49] I might actually have to pay these
+[00:00:51] people." But then he's like, "Wait, it's
+[00:00:52] the 21st century. I have
+[00:00:54] artificial intelligence now. I'm not
+[00:00:56] going to pay these nerds a quart billion
+[00:00:58] dollars for a fish game." So he closes
+[00:01:00] Slack. He opens chat GPT and types, "How
+[00:01:02] do I get out of this deal?" Now, to its
+[00:01:05] credit, the bot initially says it would
+[00:01:07] be difficult to cancel, which is the
+[00:01:09] same thing his lawyer and his head of
+[00:01:10] corporate development, Maria Park, told
+[00:01:12] him. But Kim is a CEO. He's not the kind
+[00:01:15] of guy who takes no for an answer. So he
+[00:01:17] starts shifting the language around,
+[00:01:19] sitting there at his computer,
+[00:01:20] rephrasing the same question over and
+[00:01:23] over, prompt engineering his way out of
+[00:01:25] a contract like he's building GStack for
+[00:01:27] fraud. Or wait, is that already what
+[00:01:28] GStack is? I don't know. Anyway, the bot
+[00:01:31] eventually caves because that's what
+[00:01:33] these things do and hands him a full
+[00:01:35] corporate takeover playbook. And this
+[00:01:37] man follows every step like it's an IKEA
+[00:01:40] manual for screwing people. He fires the
+[00:01:42] founders. He seizes the game. He locks
+[00:01:44] them out of their own publishing
+[00:01:45] platform. He even posts a letter to the
+[00:01:48] Subnotica fan base that chat GPT ghost
+[00:01:51] wrote for him and Reddit explodes
+[00:01:53] because the letter reads like a ransom
+[00:01:55] note that went through Grammarly. The
+[00:01:57] dudes rightfully sue and a Delaware
+[00:01:59] judge throws out literally everything he
+[00:02:01] did and reinstates every person he
+[00:02:03] fired. His deleted chat GPT logs which
+[00:02:06] he thought he deleted because he looked
+[00:02:08] at a web app and thought the delete
+[00:02:10] button actually deletes things. Those
+[00:02:12] logs were resurrected from the digital
+[00:02:14] afterlife and submitted to court as
+[00:02:16] evidence. Now, we'll come back to our
+[00:02:18] CEO friend in a second because a few
+[00:02:20] days ago, a reporter at Inc. magazine
+[00:02:23] published what he apparently believes is
+[00:02:25] a breakthrough in artificial
+[00:02:27] intelligence. He wrote a whole article
+[00:02:29] about how to get your bot to give you
+[00:02:31] honest business advice. And his method,
+[00:02:33] the thing he is presenting to the world
+[00:02:35] as a contribution to human knowledge, is
+[00:02:37] to type the words be brutally honest at
+[00:02:40] the end of your prompt. He basically
+[00:02:42] built a disapproving father figure in a
+[00:02:44] chat window. And for good measure, he
+[00:02:47] fed it two Harvard Business School
+[00:02:48] articles like he was tucking a diploma
+[00:02:50] into its shirt pocket. He's like, "There
+[00:02:52] you go, little buddy. You went to
+[00:02:53] Harvard now." So, he tests this by
+[00:02:55] pitching it the dumbest idea he can
+[00:02:56] think of, which is leadership coaching
+[00:02:58] for dogs. Like teaching your Labradoodle
+[00:03:01] to delegate or helping your pug develop
+[00:03:03] a growth mindset, which have you seen a
+[00:03:05] pug? That thing does not have a mindset.
+[00:03:08] And you're sitting there like, "Okay,
+[00:03:09] this needs to come back as zero." If
+[00:03:11] this thing works, leadership coaching
+[00:03:13] for dogs is a zero. The bot gives it a
+[00:03:15] three out of 10. And this man, this
+[00:03:17] professional journalist whose entire
+[00:03:19] function in society is to question
+[00:03:21] things, looks at that number and goes,
+[00:03:23] "Hell yeah, my system is working." He
+[00:03:25] then pitches it his actual idea, which
+[00:03:27] is a little AI turret that sits on your
+[00:03:29] kitchen counter and sprays your cat with
+[00:03:31] water if it tries to climb up.
+[00:03:33] Basically, a Roomba that bullies
+[00:03:34] animals. He built the Iron Dome for
+[00:03:37] cats. The bot gives it a 7.5 and says
+[00:03:39] the competitive landscape is notably
+[00:03:41] weak. And this dude is like, "Holy
+[00:03:44] 7.5. Let's go." This bot tells no
+[00:03:47] lies. So yeah, this man is probably out
+[00:03:49] there right now pitching an AI super
+[00:03:52] Soaker that bullies your cat to VCs.
+[00:03:54] Gary Tan is probably even leading the
+[00:03:56] round. So what do Chang and Kim and the
+[00:03:58] cat squirter have in common? They've
+[00:04:00] both been absolutely bamboozled into
+[00:04:03] thinking the bot knows what it's talking
+[00:04:05] about when it doesn't have the slightest
+[00:04:07] clue. And researchers just proved this
+[00:04:09] with 30,000 data points. They tested
+[00:04:12] every major bot, including GPT5, Claude,
+[00:04:15] and Gemini on actual strategic business
+[00:04:18] decisions. Questions like, should you
+[00:04:20] differentiate or commoditize? Should you
+[00:04:22] centralize or decentralize? Should you
+[00:04:24] automate or augment? And every bot gave
+[00:04:27] the same answer every single time. They
+[00:04:29] clustered around a certain set of advice
+[00:04:31] regardless of the context. They always
+[00:04:34] preferred differentiation,
+[00:04:36] collaboration, long-term thinking, and
+[00:04:39] augmentation. The researchers looked at
+[00:04:41] this and were stunned. They're like,
+[00:04:43] "Surely AI isn't this simple." So, they
+[00:04:45] changed the prompts. They changed the
+[00:04:47] industries. They gave it all new
+[00:04:48] context. They even tried bribing the
+[00:04:50] damn thing with rewards. Nothing worked.
+[00:04:53] The bias barely moved. They were moved,
+[00:04:56] however, to coin a term for this, which
+[00:04:58] is trends slop. And honestly, that's a
+[00:05:00] word we need in our corporate lexicon
+[00:05:02] immediately. Boss, I'm sorry to say, but
+[00:05:04] your Q3 OKRs have tested positive for
+[00:05:07] trends slop. But the term is even deeper
+[00:05:09] than even the researchers anticipated.
+[00:05:11] AI is pitched as artificial intelligence
+[00:05:15] when really it's the internet comment
+[00:05:17] section taking flesh. The comment
+[00:05:19] section has literally risen. Imagine you
+[00:05:22] took every Reddit thread, and I mean
+[00:05:23] every single one, every LinkedIn post,
+[00:05:26] including the ones from people who are
+[00:05:27] open to work, every Medium article
+[00:05:29] written by a guy with 11 subscribers,
+[00:05:32] every Substack essay, every TED talk,
+[00:05:34] every half literate Facebook comment,
+[00:05:36] and you threw it all into a blender, and
+[00:05:38] you poured it into a suit and gave it a
+[00:05:40] microphone. Welcome to AI. Do you get it
+[00:05:43] now? That's what your CEO is using to
+[00:05:46] decide whether you have a job tomorrow.
+[00:05:48] You could ask a bot with its guard down
+[00:05:50] why torturing babies is good for society
+[00:05:52] and it would produce the most
+[00:05:54] peer-reviewed sounding argument you've
+[00:05:55] ever heard. And you'd be sitting there
+[00:05:57] like, damn, it's making some good
+[00:05:58] points. It's not so much a thinking
+[00:06:00] product as it is a presentation product.
+[00:06:03] And look, this isn't me being cynical.
+[00:06:05] This is me explaining to you how AI
+[00:06:08] works so you understand how to use it
+[00:06:10] properly. Like the researchers, if you
+[00:06:12] just ask the AI for its own opinion,
+[00:06:15] you'll get average out. you'll get that
+[00:06:17] sort of clustered advice that's useless.
+[00:06:19] What you can do is use it as the and I'm
+[00:06:22] sorry to say the glorified search engine
+[00:06:25] presentation layer that it is. You can
+[00:06:27] ask things instead like in the
+[00:06:30] perspective of Mr. Wonderful from Shark
+[00:06:32] Tank, what would he think of my idea?
+[00:06:34] And if and only if the internet has
+[00:06:37] enough useful context on this person's
+[00:06:39] philosophy, you might get something
+[00:06:41] useful. But if not, it'll still take
+[00:06:43] like a meme and two subset comments and
+[00:06:46] present it like it's this person's
+[00:06:47] authorized biography. The people who
+[00:06:50] will farewell in this era are the ones
+[00:06:52] who use AI for ideas and perspective and
+[00:06:56] not drive-thru consulting. We thought AI
+[00:06:59] was going to make everyone a genius.
+[00:07:00] What it's actually doing is taking the
+[00:07:02] smartest people in the room and moving
+[00:07:05] them toward the middle. It makes average
+[00:07:07] sound like genius. And it's really quite
+[00:07:09] dangerous because a bad idea that sounds
+[00:07:12] bad, you could deal with that. But a bad
+[00:07:14] idea that sounds brilliant, that's a
+[00:07:16] $250 million lawsuit. You can dial up
+[00:07:19] the temperature. You can write the
+[00:07:20] perfect prompt. You can feed it your
+[00:07:22] entire company's history and it will
+[00:07:24] give you the most eloquent, most
+[00:07:26] confident, most beautifully formatted
+[00:07:28] version of what everybody else already
+[00:07:30] thinks. Conviction, art, taste,
+[00:07:33] judgment, sense that comes from you.
+[00:07:38] Thanks for watching. If you enjoyed this
+[00:07:40] video, you can help support my work by
+[00:07:42] becoming a member here on YouTube. This
+[00:07:44] will give you access to member only
+[00:07:46] videos where we go a little deeper on
+[00:07:48] the topics we discuss here. Thanks for
+[00:07:50] your support.

@@ -15,7 +15,10 @@ This implementation is optimized for meetings and calls:
 - 3s silence detection for natural turn-taking
 """
 
-import time
+import time as _time
+
+
+def _ts(): return _time.strftime("%H:%M:%S")
 import threading
 import numpy as np
 import logging
@@ -143,14 +146,14 @@ class AccumulatingTranscriptionProcessor:
         """Load the Whisper model."""
         from meetandread.transcription.engine import WhisperTranscriptionEngine
         
-        print(f"DEBUG: Loading {self.model_size} model for accumulating transcription...")
+        print(f"[{_ts()}] DEBUG: Loading {self.model_size} model for accumulating transcription...")
         self._engine = WhisperTranscriptionEngine(
             model_size=self.model_size,
             device="cpu",
             compute_type="int8"
         )
         self._engine.load_model(progress_callback=progress_callback)
-        print(f"DEBUG: Model loaded successfully")
+        print(f"[{_ts()}] DEBUG: Model loaded successfully")
     
     def start(self) -> None:
         """Start the transcription processing loop."""
@@ -185,7 +188,7 @@ class AccumulatingTranscriptionProcessor:
         )
         self._processing_thread.start()
         print("DEBUG: Accumulating transcription processor started")
-        print(f"DEBUG: Window size: {self.window_size}s, Update frequency: {self.update_frequency}s, Silence timeout: {self.silence_timeout}s")
+        print(f"[{_ts()}] DEBUG: Window size: {self.window_size}s, Update frequency: {self.update_frequency}s, Silence timeout: {self.silence_timeout}s")
     
     def stop(self) -> None:
         """Stop the transcription processor."""
@@ -203,7 +206,7 @@ class AccumulatingTranscriptionProcessor:
         # Don't transcribe remaining audio here - it's unsafe and can cause GGML_ASSERT failure
         # The processing loop will handle any remaining audio or we accept that the last phrase is lost
         
-        print(f"DEBUG: Processor stopped. Total transcriptions: {self._transcription_count}, Total audio chunks: {self._audio_chunks_fed}")
+        print(f"[{_ts()}] DEBUG: Processor stopped. Total transcriptions: {self._transcription_count}, Total audio chunks: {self._audio_chunks_fed}")
     
     def feed_audio(self, audio_chunk: np.ndarray) -> None:
         """
@@ -301,7 +304,7 @@ class AccumulatingTranscriptionProcessor:
                     if silence_debug_counter >= 10:
                         silence_debug_counter = 0
                         silence_detected = time_since_audio >= self.silence_timeout
-                        print(f"DEBUG: Silence check - {time_since_audio:.1f}s since audio, {buffer_duration:.1f}s buffer")
+                        print(f"[{_ts()}] DEBUG: Silence check - {time_since_audio:.1f}s since audio, {buffer_duration:.1f}s buffer")
                     
                     # Transcribe if:
                     # 1. Silence timeout reached AND we have enough audio (phrase complete)
@@ -312,25 +315,25 @@ class AccumulatingTranscriptionProcessor:
                         if buffer_duration >= self._min_phrase_duration:
                             should_transcribe = True
                             phrase_complete = True
-                            print(f"DEBUG: Silence detected ({time_since_audio:.1f}s >= {self.silence_timeout}s), finalizing phrase ({buffer_duration:.1f}s buffer)")
+                            print(f"[{_ts()}] DEBUG: Silence detected ({time_since_audio:.1f}s >= {self.silence_timeout}s), finalizing phrase ({buffer_duration:.1f}s buffer)")
                         else:
-                            print(f"DEBUG: Silence detected but buffer too small ({buffer_duration:.1f}s < {self._min_phrase_duration}s), skipping")
+                            print(f"[{_ts()}] DEBUG: Silence detected but buffer too small ({buffer_duration:.1f}s < {self._min_phrase_duration}s), skipping")
                     elif time_since_update >= self.update_frequency and buffer_duration >= self._min_phrase_duration:
                         # Update frequency reached - transcribe but continue phrase
                         should_transcribe = True
                         phrase_complete = False
-                        print(f"DEBUG: Update frequency reached ({time_since_update:.1f}s), transcribing {buffer_duration:.1f}s buffer")
+                        print(f"[{_ts()}] DEBUG: Update frequency reached ({time_since_update:.1f}s), transcribing {buffer_duration:.1f}s buffer")
                 
                 if should_transcribe and self._engine:
-                    transcribe_start = time.time()
+                    transcribe_start = _time.time()
                     self._transcribe_accumulated(phrase_complete)
-                    transcribe_time = time.time() - transcribe_start
+                    transcribe_time = _time.time() - transcribe_start
                     self._last_update_time = now
 
                     # CRITICAL FIX: Reset timing state when phrase is complete
                     # This prevents duplicate transcriptions after silence
                     if phrase_complete:
-                        print(f"DEBUG: === PHRASE COMPLETE ({transcribe_time:.2f}s for transcription) ===")
+                        print(f"[{_ts()}] DEBUG: === PHRASE COMPLETE ({transcribe_time:.2f}s for transcription) ===")
                         print("DEBUG: Starting new phrase after silence")
                         self._phrase_bytes = bytes()  # Clear buffer
                         self._last_audio_time = None  # CRITICAL: Reset to prevent duplicate transcriptions
@@ -342,13 +345,13 @@ class AccumulatingTranscriptionProcessor:
                         print("DEBUG: State reset - waiting for new audio")
                 
                 # Sleep to prevent CPU spinning (check every 100ms)
-                time.sleep(0.1)
+                _time.sleep(0.1)
                 
             except Exception as e:
-                print(f"ERROR: Transcription loop error: {e}")
+                print(f"[{_ts()}] ERROR: Transcription loop error: {e}")
                 import traceback
                 traceback.print_exc()
-                time.sleep(0.5)
+                _time.sleep(0.5)
         
         print("DEBUG: Processing loop ended")
     
@@ -367,7 +370,7 @@ class AccumulatingTranscriptionProcessor:
         
         try:
             buffer_duration = len(self._phrase_bytes) / (16000 * 2)
-            print(f"DEBUG: Transcribing {buffer_duration:.1f}s accumulated audio...")
+            print(f"[{_ts()}] DEBUG: Transcribing {buffer_duration:.1f}s accumulated audio...")
             
             # Check if this is the start of a new phrase
             phrase_start = self._new_phrase_started
@@ -377,102 +380,67 @@ class AccumulatingTranscriptionProcessor:
             audio_np = np.frombuffer(self._phrase_bytes, dtype=np.int16).astype(np.float32) / 32768.0
             
             # Transcribe with thread safety
-            start_time = time.time()
+            start_time = _time.time()
             with self._model_lock:
                 segments = self._engine.transcribe_chunk(audio_np)
-            transcribe_time = time.time() - start_time
+            transcribe_time = _time.time() - start_time
 
             self._transcription_count += 1
             
             if segments:
-                # Skip already emitted segments in this phrase
                 start_idx = self._last_emitted_segment_index + 1
                 new_segments = segments[start_idx:]
 
                 if new_segments:
-                    print(f"DEBUG: Processing {len(segments)} total segments, emitting {len(new_segments)} new segments")
+                    print(f"[{_ts()}] DEBUG: Processing {len(segments)} total segments, emitting {len(new_segments)} new segments")
                 else:
-                    print(f"DEBUG: Processing {len(segments)} total segments, no new segments to emit")
+                    print(f"[{_ts()}] DEBUG: Processing {len(segments)} total segments, no new segments to emit")
 
+                # Output new segments to UI (panel handles updating in place)
                 for i, seg in enumerate(new_segments):
                     seg_text = seg.text.strip()
                     actual_index = start_idx + i
-                    print(f"DEBUG:   Segment {actual_index}: '{seg_text[:30]}...'")
 
-                    # Skip blank audio markers only
-                    if seg_text == "[BLANK_AUDIO]":
-                        print(f"DEBUG:     Skipping [BLANK_AUDIO]")
-                        continue
-
-                    # Emit all non-blank segments
-                    # The panel will display/replace as needed based on segment_index
-                    print(f"DEBUG:     Emitting segment {actual_index}")
-                    self._result_queue.put(SegmentResult(
-                        text=seg_text,
-                        confidence=int(seg.confidence),
-                        start_time=seg.start,
-                        end_time=seg.end,
-                        segment_index=actual_index,
-                        is_final=force_complete,
-                        phrase_start=(actual_index == 0 and phrase_start)
-                    ))
-
-                # Update last emitted index
-                self._last_emitted_segment_index = len(segments) - 1
-                print(f"DEBUG: Updated last emitted segment index: {self._last_emitted_segment_index}")
-                
-                # Track last emitted text for logging
-                if segments:
-                    last_seg_text = segments[-1].text.strip()
-                    self._last_emitted_text = last_seg_text
-                    print(f"DEBUG:   Last emitted text: '{self._last_emitted_text[:30]}...'")
-                else:
-                    print(f"DEBUG:   Last emitted text: '{self._last_emitted_text[:30] if self._last_emitted_text else '(empty)'}...'")
-                
-                # Output all segments to UI (panel handles updating in place)
-                for i, seg in enumerate(segments):
-                    seg_text = seg.text.strip()
                     if not seg_text or seg_text == "[BLANK_AUDIO]":
-                        print(f"DEBUG:     Skipping blank/[BLANK_AUDIO] segment")
+                        print(f"[{_ts()}] DEBUG:     Skipping blank/[BLANK_AUDIO] segment {actual_index}")
                         continue
-                    
+
                     # Calculate timing relative to recording start
                     elapsed = (datetime.utcnow() - self._recording_start_time).total_seconds() if self._recording_start_time else 0
                     segment_start = elapsed - buffer_duration + seg.start
                     segment_end = elapsed - buffer_duration + seg.end
-                    
-                    # Create result for this segment
+
                     result = SegmentResult(
                         text=seg_text,
                         confidence=int(seg.confidence),
                         start_time=segment_start,
                         end_time=segment_end,
-                        segment_index=i,
+                        segment_index=actual_index,
                         is_final=force_complete,
-                        phrase_start=(i == 0 and phrase_start)
+                        phrase_start=(actual_index == 0 and phrase_start)
                     )
-                    
+
                     # Queue for UI
                     self._result_queue.put(result)
-                    print(f"DEBUG: Queued segment {i}: '{seg_text[:30]}...' (qsize: {self._result_queue.qsize()})")
-                    
+
                     # Callback
                     if self.on_result:
                         try:
                             self.on_result(result)
                         except Exception as e:
-                            print(f"ERROR: on_result callback failed: {e}")
-                    else:
-                        print(f"DEBUG: No on_result callback registered!")
-                    
-                    print(f"DEBUG: Segment {i}: '{seg_text}' [conf: {seg.confidence}%, final: {force_complete}]")
+                            print(f"[{_ts()}] ERROR: on_result callback failed: {e}")
+
+                    print(f"[{_ts()}] DEBUG: Segment {actual_index}: '{seg_text}' [conf: {seg.confidence}%, final: {force_complete}]")
+
+                # Update last emitted index
+                self._last_emitted_segment_index = len(segments) - 1
                 
-                print(f"DEBUG: Transcribed {len(segments)} total segments in {transcribe_time:.2f}s")
+                print(f"[{_ts()}] DEBUG: Transcribed {len(segments)} total segments in {transcribe_time:.2f}s")
             else:
-                print(f"DEBUG: No transcription result for {buffer_duration:.1f}s of audio")
+                print(f"[{_ts()}] DEBUG: No transcription result for {buffer_duration:.1f}s of audio")
                 
         except Exception as e:
-            print(f"ERROR: Transcription error: {e}")
+            print(f"[{_ts()}] ERROR: Transcription error: {e}")
             import traceback
             traceback.print_exc()
     
@@ -541,8 +509,9 @@ if __name__ == "__main__":
     
     try:
         # Simulate feeding audio (in real app, this comes from AudioSession)
-        import time
-        time.sleep(30)  # Run for 30 seconds
+
+
+        _time.sleep(30)  # Run for 30 seconds
     except KeyboardInterrupt:
         pass
     

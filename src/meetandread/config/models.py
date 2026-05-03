@@ -100,7 +100,7 @@ class TranscriptionSettings:
     
     # MICROPHONE DENOISING SETTINGS
     microphone_denoising_enabled: bool = field(
-        default=True,
+        default=False,
         metadata={"description": "Whether microphone denoising is enabled"}
     )
     microphone_denoising_provider: str = field(
@@ -128,7 +128,7 @@ class TranscriptionSettings:
             postprocess_model_size=data.get("postprocess_model_size", cls.postprocess_model_size),
             enable_postprocessing=data.get("enable_postprocessing", cls.enable_postprocessing),
             benchmark_history=data.get("benchmark_history", {}),
-            microphone_denoising_enabled=data.get("microphone_denoising_enabled", True),
+            microphone_denoising_enabled=data.get("microphone_denoising_enabled", False),
             microphone_denoising_provider=data.get("microphone_denoising_provider", "spectral_gate"),
             microphone_denoising_latency_budget_ms=data.get("microphone_denoising_latency_budget_ms", 200),
         )
@@ -339,7 +339,7 @@ class AppSettings:
         ui: UI behavior and appearance settings.
     """
     config_version: int = field(
-        default=4,
+        default=5,
         metadata={"description": "Configuration schema version for migrations"}
     )
     model: ModelSettings = field(default_factory=ModelSettings)

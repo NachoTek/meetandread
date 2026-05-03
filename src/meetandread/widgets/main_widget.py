@@ -37,6 +37,21 @@ from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlay
 from meetandread.widgets.theme import context_menu_css, current_palette
 
 
+class _ControllerBridge(QObject):
+    """Thread-safe signal bridge for controller callbacks.
+
+    Controller callbacks fire from worker threads (stop worker, post-processor).
+    Qt widgets must only be modified from the UI thread. This bridge emits
+    signals that Qt automatically queues to the UI thread's event loop,
+    preventing freezes, deadlocks, and undefined behavior.
+    """
+    state_changed = pyqtSignal(object)       # ControllerState
+    error_occurred = pyqtSignal(object)      # ControllerError
+    recording_complete = pyqtSignal(object, object)  # wav_path, transcript_path
+    post_process_complete = pyqtSignal(str, object)   # job_id, transcript_path
+    phrase_result = pyqtSignal(object)       # SegmentResult
+
+
 
 class _WidgetVisualStateMachine:
     """Owns the widget's current visual state and eased transition progress.
@@ -217,11 +232,23 @@ to avoid clipping issues and enable proper text rendering.
         
         # Recording controller
         self._controller = RecordingController()
-        self._controller.on_state_change = self._on_controller_state_change
-        self._controller.on_error = self._on_controller_error
-        self._controller.on_phrase_result = self._on_phrase_result  # For accumulating processor
-        self._controller.on_recording_complete = self._on_recording_complete
-        self._controller.on_post_process_complete = self._on_post_process_complete
+
+        # Thread-safe signal bridge: controller callbacks fire from worker threads,
+        # but Qt widgets must only be modified from the UI thread. The bridge emits
+        # signals that Qt automatically queues to the UI thread's event loop.
+        self._bridge = _ControllerBridge(self)
+        self._bridge.state_changed.connect(self._on_controller_state_change)
+        self._bridge.error_occurred.connect(self._on_controller_error)
+        self._bridge.recording_complete.connect(self._on_recording_complete)
+        self._bridge.post_process_complete.connect(self._on_post_process_complete)
+        self._bridge.phrase_result.connect(self._on_phrase_result)
+
+        # Controller callbacks emit bridge signals (thread-safe)
+        self._controller.on_state_change = self._bridge.state_changed.emit
+        self._controller.on_error = self._bridge.error_occurred.emit
+        self._controller.on_phrase_result = lambda result: self._bridge.phrase_result.emit(result)
+        self._controller.on_recording_complete = lambda wav, t: self._bridge.recording_complete.emit(wav, t)
+        self._controller.on_post_process_complete = lambda jid, tp: self._bridge.post_process_complete.emit(jid, tp)
         self._error_indicator = None  # For showing errors
         self._warning_indicator = None  # For showing resource warnings
         self._warning_hide_timer: Optional[QTimer] = None  # Auto-hide timer for warnings

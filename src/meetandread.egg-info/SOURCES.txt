@@ -80,10 +80,12 @@ tests/test_config_benchmark_history.py
 tests/test_error_help.py
 tests/test_hardware.py
 tests/test_hardware_warning.py
+tests/test_noisy_diarization_validation.py
 tests/test_offscreen_recovery.py
 tests/test_panel_resize.py
 tests/test_performance.py
 tests/test_recommender_models.py
+tests/test_recording_controller_noisy_audio_e2e.py
 tests/test_recording_management.py
 tests/test_resource_warnings.py
 tests/test_scrub.py

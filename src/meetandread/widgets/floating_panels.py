@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
     QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
+    QCheckBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
@@ -2042,7 +2043,7 @@ class CCOverlayPanel(QWidget):
         screens = QApplication.screens()
         max_w = max(s.geometry().width() for s in screens) if screens else 1920
         self.setMinimumSize(400, 140)
-        self.setMaximumSize(max_w, 400)
+        self.setMaximumSize(16777215, 16777215)  # No effective max
         self.resize(600, 180)
 
         # --- Layout: text edit fills the panel ---
@@ -2524,8 +2525,8 @@ class FloatingSettingsPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         # Size — wider to accommodate sidebar + content stack
-        self.setMinimumSize(520, 400)
-        self.setMaximumSize(800, 800)
+        self.setMinimumSize(545, 425)
+        self.setMaximumSize(825, 825)
 
         # ------------------------------------------------------------------
         # Root layout: vertical (title bar on top, then sidebar + content)
@@ -2666,6 +2667,58 @@ class FloatingSettingsPanel(QWidget):
         settings_layout.addWidget(self._ram_label)
         settings_layout.addWidget(self._cpu_info_label)
         settings_layout.addWidget(self._rec_label)
+
+        # Separator
+        denois_sep = QFrame()
+        denois_sep.setFrameShape(QFrame.Shape.HLine)
+        denois_sep.setObjectName("AethericSeparator")
+        settings_layout.addWidget(denois_sep)
+
+        # Noise filter toggle
+        self._noise_filter_checkbox = QCheckBox("Background Noise Filter")
+        self._noise_filter_checkbox.setObjectName("AethericCheckBox")
+        self._noise_filter_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._noise_filter_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #E0E0E0;
+                spacing: 8px;
+                font-size: 12px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #666;
+                border-radius: 3px;
+                background: #2A2A2E;
+            }
+            QCheckBox::indicator:checked {
+                background: #4CAF50;
+                border-color: #4CAF50;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #999;
+            }
+        """)
+        self._noise_filter_checkbox.setToolTip(
+            "Enable spectral gate noise reduction on microphone input.\n"
+            "May cause audio artifacts on some hardware."
+        )
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _denoise_enabled = get_config("transcription.microphone_denoising_enabled")
+            self._noise_filter_checkbox.setChecked(bool(_denoise_enabled))
+        except Exception:
+            self._noise_filter_checkbox.setChecked(False)
+        self._noise_filter_checkbox.stateChanged.connect(self._on_noise_filter_toggled)
+        settings_layout.addWidget(self._noise_filter_checkbox)
+
+        self._noise_filter_note = QLabel(
+            "⚠ Experimental — may cause clicking artifacts"
+        )
+        self._noise_filter_note.setStyleSheet("color: #FF9800; font-size: 10px;")
+        self._noise_filter_note.setWordWrap(True)
+        settings_layout.addWidget(self._noise_filter_note)
 
         settings_layout.addStretch()
         self._content_stack.addWidget(settings_page)
@@ -3521,6 +3574,20 @@ class FloatingSettingsPanel(QWidget):
             logger.warning("Failed to save post-process model selection: %s", exc)
 
         logger.info("Post-process model changed to: %s", model_size)
+
+    def _on_noise_filter_toggled(self, state: int) -> None:
+        """Handle Background Noise Filter checkbox toggle.
+
+        Persists the setting immediately so the next recording picks it up.
+        """
+        enabled = bool(state)
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("transcription.microphone_denoising_enabled", enabled)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save noise filter setting: %s", exc)
+        logger.info("Background noise filter %s", "enabled" if enabled else "disabled")
 
     def _refresh_dropdown_wer(self) -> None:
         """Update all dropdown item texts with latest WER from config."""

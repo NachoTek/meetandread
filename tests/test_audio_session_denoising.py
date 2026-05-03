@@ -915,14 +915,23 @@ class TestControllerDenoisingWiring:
 
         # Reset ConfigManager singleton between tests to avoid state leakage
         from meetandread.config.manager import ConfigManager
+        from meetandread.config.persistence import SettingsPersistence
         ConfigManager._instance = None
         ConfigManager._initialized = False
+
+        # Use temp config dir to isolate from user's real config
+        import tempfile
+        _tmp_config = Path(tempfile.mkdtemp(prefix="mar_test_config_"))
 
         with (
             _patch("meetandread.recording.controller.AudioSession", mock_session_cls),
             _patch(
                 "meetandread.recording.controller.AccumulatingTranscriptionProcessor",
                 mock_processor_class,
+            ),
+            _patch(
+                "meetandread.config.manager.SettingsPersistence",
+                lambda config_dir=None: SettingsPersistence(config_dir=_tmp_config),
             ),
         ):
             yield
@@ -975,16 +984,16 @@ class TestControllerDenoisingWiring:
         assert cfg.enable_microphone_denoising is False
 
     def test_defaults_used_when_no_config(self):
-        """Fresh config defaults (enabled=True, spectral_gate, 200ms) are used."""
+        """Fresh config defaults (enabled=False, spectral_gate, 200ms) are used."""
         controller = self._make_controller()
 
-        # Don't set any config — use defaults
+        # Don't set any config — use defaults (denoising disabled)
         controller.start({"mic"})
 
         assert len(self._session_configs) == 1
         cfg = self._session_configs[0]
-        assert cfg.enable_microphone_denoising is True
-        assert cfg.denoising_provider_name == "spectral_gate"
+        assert cfg.enable_microphone_denoising is False
+        assert cfg.denoising_provider_name is None  # Not set when disabled
         assert cfg.denoising_latency_budget_ms == 200
 
     def test_explicit_budget_override(self):
@@ -1053,10 +1062,10 @@ class TestControllerDenoisingWiring:
         assert error is None
         assert len(self._session_configs) == 1
         cfg = self._session_configs[0]
-        assert cfg.enable_microphone_denoising is True
+        assert cfg.enable_microphone_denoising is False
 
     def test_malformed_enabled_type_uses_default(self):
-        """Non-bool enabled value falls back to safe default (True)."""
+        """Non-bool enabled value falls back to safe default (False)."""
         controller = self._make_controller()
 
         # Force a bad type via direct settings mutation
@@ -1066,8 +1075,8 @@ class TestControllerDenoisingWiring:
         controller.start({"mic"})
 
         cfg = self._session_configs[0]
-        # Should fall back to True (default)
-        assert cfg.enable_microphone_denoising is True
+        # Should fall back to False (default)
+        assert cfg.enable_microphone_denoising is False
 
     def test_missing_denoising_fields_uses_defaults(self):
         """Missing denoising fields in loaded config use safe defaults."""

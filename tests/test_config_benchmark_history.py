@@ -59,7 +59,7 @@ def test_from_dict_missing_benchmark_history():
 # ---------------------------------------------------------------------------
 
 def test_config_v1_migrates_to_v2(tmp_path):
-    """Loading a v1 config should migrate to v2 with empty benchmark_history."""
+    """Loading a v1 config should migrate to current version with empty benchmark_history."""
     v1_config = {
         "config_version": 1,
         "model": {"realtime_model_size": "auto"},
@@ -79,8 +79,9 @@ def test_config_v1_migrates_to_v2(tmp_path):
     persistence = SettingsPersistence(config_dir=tmp_path)
     settings = persistence.load_settings()
 
-    # Should be migrated to v2
-    assert settings.config_version == 2
+    # Should be migrated to current version
+    from meetandread.config.persistence import CURRENT_CONFIG_VERSION
+    assert settings.config_version == CURRENT_CONFIG_VERSION
     # benchmark_history should exist and be empty
     assert settings.transcription.benchmark_history == {}
     # Existing values should be preserved
@@ -113,7 +114,9 @@ def test_config_v2_loads_directly(tmp_path):
     persistence = SettingsPersistence(config_dir=tmp_path)
     settings = persistence.load_settings()
 
-    assert settings.config_version == 2
+    # Migrated to current version, benchmark_history preserved
+    from meetandread.config.persistence import CURRENT_CONFIG_VERSION
+    assert settings.config_version == CURRENT_CONFIG_VERSION
     assert settings.transcription.benchmark_history["base"]["wer"] == 17.35
     assert settings.transcription.benchmark_history["tiny"]["wer"] == 25.0
     assert settings.transcription.benchmark_history["base"]["timestamp"] == "2026-04-26T19:30:00"
