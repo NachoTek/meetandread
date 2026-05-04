@@ -116,10 +116,10 @@ class TexturedSizeGrip(QSizeGrip):
         # Dot grid that fills a right triangle in the bottom-right corner.
         # A dot at grid position (col, row) is drawn when col + row < cols,
         # producing a triangle that's dense at the corner and tapers off.
-        cols = 3
-        dot_r = 1.3       # dot radius
-        spacing = 3.8      # px between dot centers
-        margin = 3         # px inset from widget edges
+        cols = 5
+        dot_r = 1.2       # dot radius
+        spacing = 2.8      # px between dot centers
+        margin = 2         # px inset from widget edges
 
         for col in range(cols):
             for row in range(cols):
