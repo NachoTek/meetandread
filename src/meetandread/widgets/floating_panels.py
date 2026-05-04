@@ -68,7 +68,7 @@ from meetandread.widgets.theme import (
     panel_base_css, glass_panel_css, title_css, header_button_css, tab_widget_css,
     text_area_css, status_label_css, splitter_css, list_widget_css,
     detail_header_css, action_button_css, context_menu_css, dialog_css,
-    badge_css, resize_grip_css, legend_overlay_css, info_label_css,
+    badge_css, legend_overlay_css, info_label_css,
     progress_bar_css, separator_css, combo_box_css,
     aetheric_settings_shell_css, aetheric_sidebar_css, aetheric_title_bar_css, aetheric_nav_button_css,
     aetheric_placeholder_css, aetheric_combo_box_css,
@@ -86,6 +86,62 @@ from meetandread.widgets.theme import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# TexturedSizeGrip — Windows-style diagonal grip lines in a triangle
+# ---------------------------------------------------------------------------
+
+class TexturedSizeGrip(QSizeGrip):
+    """QSizeGrip that paints a Windows-style textured triangle (diagonal grip lines).
+
+    Draws 3–4 small diagonal lines in the bottom-right corner to visually
+    communicate "drag to resize", matching the standard Windows pattern.
+    """
+
+    def __init__(self, parent: QWidget, color: str = "rgba(255, 255, 255, 80)") -> None:
+        super().__init__(parent)
+        from PyQt6.QtGui import QColor
+        self._color = QColor(color)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from PyQt6.QtGui import QPainter, QPen
+        from PyQt6.QtCore import QRect
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = self.width(), self.height()
+        pen = QPen()
+        pen.setWidthF(1.5)
+        pen.setColor(self._color)
+        painter.setPen(pen)
+
+        # Draw 3 parallel diagonal grip lines in bottom-right corner
+        # Windows-style: short diagonal dashes, evenly spaced
+        pen = QPen()
+        pen.setWidthF(1.5)
+        pen.setColor(self._color)
+        painter.setPen(pen)
+
+        offset = 3  # pixels from the very corner
+        spacing = 3  # gap between lines
+        line_len = 5  # length of each diagonal line
+
+        for i in range(3):
+            # Each line is perpendicular to the diagonal, spaced along it
+            # Line i goes from bottom-right toward center
+            x1 = w - offset - spacing * i - line_len
+            y1 = h - offset - spacing * i
+            x2 = w - offset - spacing * i
+            y2 = h - offset - spacing * i - line_len
+
+            if x1 < 1 or y2 < 1:
+                continue
+
+            painter.drawLine(x1, y1, x2, y2)
+
+        painter.end()
 
 
 def _escape_html(text: str) -> str:
@@ -461,7 +517,7 @@ class FloatingTranscriptPanel(QWidget):
         self._new_content_badge.hide()
 
         # Resize grip — direct child of panel (not in layout) so it stays at bottom-right
-        self._resize_grip = QSizeGrip(self)
+        self._resize_grip = TexturedSizeGrip(self)
         self._resize_grip.setFixedSize(16, 16)
         self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
         self._resize_grip.show()
@@ -614,8 +670,7 @@ class FloatingTranscriptPanel(QWidget):
         # Badge
         self._new_content_badge.setStyleSheet(badge_css(p))
 
-        # Resize grip
-        self._resize_grip.setStyleSheet(resize_grip_css(p))
+        # Resize grip — draws its own textured triangle via paintEvent
 
         # Re-render empty state with updated text colour
         if not self._has_content:
@@ -2082,7 +2137,7 @@ class CCOverlayPanel(QWidget):
         layout.addWidget(self.text_edit)
 
         # --- Resize grip: direct child of panel (MEM083 pattern) ---
-        self._resize_grip = QSizeGrip(self)
+        self._resize_grip = TexturedSizeGrip(self)
         self._resize_grip.setFixedSize(16, 16)
         self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
         self._resize_grip.show()
@@ -2107,7 +2162,7 @@ class CCOverlayPanel(QWidget):
         """Apply Aetheric CC overlay styling."""
         p = current_palette()
         self.setStyleSheet(aetheric_cc_overlay_css(p))
-        self._resize_grip.setStyleSheet(resize_grip_css(p))
+        # Grip draws its own textured triangle via paintEvent
 
     # ------------------------------------------------------------------
     # Paint — manual semi-transparent background (QSS alpha doesn't work
@@ -3098,7 +3153,7 @@ class FloatingSettingsPanel(QWidget):
         # ------------------------------------------------------------------
         # Resize grip — direct child of panel, positioned at bottom-right
         # ------------------------------------------------------------------
-        self._resize_grip = QSizeGrip(self)
+        self._resize_grip = TexturedSizeGrip(self)
         self._resize_grip.setFixedSize(16, 16)
         self._resize_grip.setCursor(Qt.CursorShape.SizeFDiagCursor)
         self._resize_grip.show()
@@ -3236,8 +3291,7 @@ class FloatingSettingsPanel(QWidget):
         self._delete_btn.setStyleSheet(history_btn_css)
         self._history_viewer.setStyleSheet(aetheric_history_viewer_css(p))
 
-        # Resize grip
-        self._resize_grip.setStyleSheet(resize_grip_css(p))
+        # Resize grip — draws its own textured triangle via paintEvent
 
         scheme_name = "dark" if p is DARK_PALETTE else "light"
         logger.info("Applied %s Aetheric theme to FloatingSettingsPanel", scheme_name)
