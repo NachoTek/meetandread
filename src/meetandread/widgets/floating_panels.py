@@ -95,51 +95,68 @@ logger = logging.getLogger(__name__)
 class TexturedSizeGrip(QSizeGrip):
     """QSizeGrip that paints a Windows-style textured triangle (diagonal grip lines).
 
-    Draws 3–4 small diagonal lines in the bottom-right corner to visually
-    communicate "drag to resize", matching the standard Windows pattern.
+    Draws a filled triangle of parallel diagonal lines in the bottom-right
+    corner. Lines nearest the corner are shortest; lines toward the center
+    grow progressively longer — forming the classic resize-handle pattern.
     """
 
-    def __init__(self, parent: QWidget, color: str = "rgba(255, 255, 255, 80)") -> None:
+    def __init__(self, parent: QWidget, color: str = "rgba(255, 255, 255, 160)") -> None:
         super().__init__(parent)
         from PyQt6.QtGui import QColor
         self._color = QColor(color)
 
     def paintEvent(self, event) -> None:  # noqa: N802
         from PyQt6.QtGui import QPainter, QPen
-        from PyQt6.QtCore import QRect
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w, h = self.width(), self.height()
         pen = QPen()
-        pen.setWidthF(1.5)
+        pen.setWidthF(1.2)
         pen.setColor(self._color)
         painter.setPen(pen)
 
-        # Draw 3 parallel diagonal grip lines in bottom-right corner
-        # Windows-style: short diagonal dashes, evenly spaced
-        pen = QPen()
-        pen.setWidthF(1.5)
-        pen.setColor(self._color)
-        painter.setPen(pen)
+        # Fill the bottom-right triangle with parallel diagonal lines.
+        # Lines run perpendicular to the main diagonal (NW-SE).
+        # Line near the corner (i=0) is shortest; each successive line
+        # grows longer, filling the triangular area.
+        margin = 1.5       # px from widget edge
+        spacing = 2        # px between parallel lines
+        max_lines = 7      # enough to fill the triangle
 
-        offset = 3  # pixels from the very corner
-        spacing = 3  # gap between lines
-        line_len = 5  # length of each diagonal line
+        for i in range(max_lines):
+            # Distance of this line from the corner along both axes
+            d = margin + spacing * i
 
-        for i in range(3):
-            # Each line is perpendicular to the diagonal, spaced along it
-            # Line i goes from bottom-right toward center
-            x1 = w - offset - spacing * i - line_len
-            y1 = h - offset - spacing * i
-            x2 = w - offset - spacing * i
-            y2 = h - offset - spacing * i - line_len
+            # Line runs perpendicular to the corner-to-center direction
+            # Length proportional to distance from corner (triangle fill)
+            line_half = d * 0.8
 
-            if x1 < 1 or y2 < 1:
+            # Midpoint of the line is at distance d from both edges
+            mx = w - d
+            my = h - d
+
+            # Perpendicular direction: extend line at 45° to the corner diagonal
+            dx = line_half * 0.7071  # cos(45°)
+            dy = line_half * 0.7071  # sin(45°)
+
+            x1 = mx - dx
+            y1 = my + dy
+            x2 = mx + dx
+            y2 = my - dy
+
+            # Clip to widget bounds
+            if x1 < 1:
+                y1 += (1 - x1); x1 = 1
+            if y2 < 1:
+                x2 -= (1 - y2); y2 = 1
+            if x1 >= x2 or y2 >= y1:
+                continue  # degenerate after clipping
+            if x2 > w - 1 or y1 > h - 1:
                 continue
 
-            painter.drawLine(x1, y1, x2, y2)
+            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
 
         painter.end()
 
