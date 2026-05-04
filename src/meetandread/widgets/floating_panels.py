@@ -2782,37 +2782,38 @@ class FloatingSettingsPanel(QWidget):
         self._cc_font_spin.setStyleSheet("""
             QSpinBox {
                 color: #E0E0E0;
-                background-color: #2A2A2E;
-                border: 1px solid #444;
-                border-radius: 4px;
+                background-color: #1e1d1e;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 8px;
                 padding: 4px 8px;
                 font-size: 12px;
                 min-width: 80px;
+                min-height: 24px;
             }
-            QSpinBox::up-button, QSpinBox::down-button {
+            QSpinBox:hover {
+                border-color: #ff5545;
+            }
+            QSpinBox::up-button {
+                subcontrol-origin: border;
+                subcontrol-position: top right;
                 width: 20px;
                 border: none;
-                background: transparent;
+                border-left: 1px solid rgba(255, 255, 255, 30);
+                border-top-right-radius: 8px;
+            }
+            QSpinBox::up-button:hover {
+                background-color: rgba(255, 255, 255, 20);
+            }
+            QSpinBox::down-button {
                 subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 20px;
+                border: none;
+                border-left: 1px solid rgba(255, 255, 255, 30);
+                border-bottom-right-radius: 8px;
             }
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-                background: rgba(255, 255, 255, 30);
-            }
-            QSpinBox::up-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-bottom: 6px solid #ff5545;
-                width: 10px;
-                height: 6px;
-            }
-            QSpinBox::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid #ff5545;
-                width: 10px;
-                height: 6px;
+            QSpinBox::down-button:hover {
+                background-color: rgba(255, 255, 255, 20);
             }
         """)
         self._cc_font_spin.setCursor(Qt.CursorShape.PointingHandCursor)

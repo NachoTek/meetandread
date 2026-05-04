@@ -972,10 +972,10 @@ def aetheric_cc_overlay_css(p: ThemePalette) -> str:
 
 
 def aetheric_combo_box_css(p: ThemePalette) -> str:
-    """Aetheric Glass combo box with chevron dropdown styling.
+    """Aetheric Glass combo box — modern dropdown styling.
 
-    Extends the base combo_box_css with Aetheric-specific colours,
-    a red accent on hover, and explicit dropdown chevron arrow.
+    Solid readable text, visible dropdown button area with separator,
+    and a clean popup list with hover/selection states.
 
     Object name selector: ``AethericComboBox``
 
@@ -987,11 +987,11 @@ def aetheric_combo_box_css(p: ThemePalette) -> str:
     """
     return f"""
         QComboBox#AethericComboBox {{
-            background-color: {AETHERIC_GLASS_ROW_BG};
-            color: {AETHERIC_NAV_INACTIVE_TEXT};
+            background-color: {AETHERIC_SETTINGS_BG};
+            color: {p.text_secondary};
             border: 1px solid {AETHERIC_BORDER_LIGHT};
             border-radius: 8px;
-            padding: 6px 12px;
+            padding: 6px 32px 6px 12px;
             font-size: 12px;
             min-height: 24px;
         }}
@@ -999,28 +999,35 @@ def aetheric_combo_box_css(p: ThemePalette) -> str:
             border-color: {AETHERIC_RED};
         }}
         QComboBox#AethericComboBox::drop-down {{
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 24px;
             border: none;
             border-left: 1px solid {AETHERIC_BORDER_LIGHT};
-            width: 28px;
-            background-color: rgba(255, 255, 255, 15);
             border-top-right-radius: 8px;
             border-bottom-right-radius: 8px;
         }}
         QComboBox#AethericComboBox::down-arrow {{
-            image: none;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 6px solid {AETHERIC_RED};
-            width: 10px;
-            height: 6px;
+            width: 8px;
+            height: 8px;
         }}
         QComboBox#AethericComboBox QAbstractItemView {{
             background-color: {AETHERIC_SETTINGS_BG};
-            color: {AETHERIC_NAV_INACTIVE_TEXT};
-            border: 1px solid {AETHERIC_BORDER_DARK};
+            color: {p.text_secondary};
+            border: 1px solid {AETHERIC_BORDER_LIGHT};
             border-radius: 8px;
+            padding: 4px;
+            outline: none;
             selection-background-color: {AETHERIC_NAV_ACTIVE_BG};
             selection-color: {AETHERIC_RED};
+        }}
+        QComboBox#AethericComboBox QAbstractItemView::item {{
+            padding: 6px 12px;
+            min-height: 24px;
+            border-radius: 6px;
+        }}
+        QComboBox#AethericComboBox QAbstractItemView::item:hover {{
+            background-color: {AETHERIC_NAV_HOVER_BG};
         }}
     """
 
