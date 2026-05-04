@@ -152,7 +152,7 @@ class TestDarkPalette:
         assert DARK_PALETTE.text_tertiary == "#aaaaaa"
 
     def test_accent(self):
-        assert DARK_PALETTE.accent == "#4CAF50"
+        assert DARK_PALETTE.accent == "#ff5545"
 
     def test_danger(self):
         assert DARK_PALETTE.danger == "#F44336"

@@ -72,6 +72,7 @@ from meetandread.widgets.theme import (
     progress_bar_css, separator_css, combo_box_css,
     aetheric_settings_shell_css, aetheric_sidebar_css, aetheric_title_bar_css, aetheric_nav_button_css,
     aetheric_placeholder_css, aetheric_combo_box_css,
+    aetheric_checkbox_css,
     aetheric_history_list_css, aetheric_history_viewer_css,
     aetheric_history_splitter_css, aetheric_history_header_css,
     aetheric_history_action_button_css,
@@ -81,6 +82,7 @@ from meetandread.widgets.theme import (
     AETHERIC_RADIUS,
     ARROW_UP_SVG,
     ARROW_DOWN_SVG,
+    CHECKMARK_SVG,
 )
 
 import logging
@@ -2777,27 +2779,7 @@ class FloatingSettingsPanel(QWidget):
         self._noise_filter_checkbox = QCheckBox("Background Noise Filter")
         self._noise_filter_checkbox.setObjectName("AethericCheckBox")
         self._noise_filter_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._noise_filter_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #E0E0E0;
-                spacing: 8px;
-                font-size: 12px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #666;
-                border-radius: 3px;
-                background: #2A2A2E;
-            }
-            QCheckBox::indicator:checked {
-                background: #4CAF50;
-                border-color: #4CAF50;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #999;
-            }
-        """)
+        self._noise_filter_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
         self._noise_filter_checkbox.setToolTip(
             "Enable spectral gate noise reduction on microphone input.\n"
             "May cause audio artifacts on some hardware."
@@ -2905,27 +2887,7 @@ class FloatingSettingsPanel(QWidget):
         self._cc_auto_open_checkbox = QCheckBox("Auto-open CC overlay on recording")
         self._cc_auto_open_checkbox.setObjectName("AethericCheckBox")
         self._cc_auto_open_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._cc_auto_open_checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #E0E0E0;
-                spacing: 8px;
-                font-size: 12px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #666;
-                border-radius: 3px;
-                background: #2A2A2E;
-            }
-            QCheckBox::indicator:checked {
-                background: #4CAF50;
-                border-color: #4CAF50;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #999;
-            }
-        """)
+        self._cc_auto_open_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
         self._cc_auto_open_checkbox.setToolTip(
             "When enabled, the CC overlay panel opens automatically when recording starts."
         )
@@ -3188,6 +3150,24 @@ class FloatingSettingsPanel(QWidget):
             )
         super().resizeEvent(event)
 
+    def paintEvent(self, event) -> None:
+        """Draw gradient glow on the sidebar's right inner edge."""
+        from PyQt6.QtGui import QPainter, QLinearGradient, QColor
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        if hasattr(self, '_sidebar'):
+            sx = self._sidebar.x() + self._sidebar.width()
+            sy = self._sidebar.y()
+            sh = self._sidebar.height()
+            gradient = QLinearGradient(sx, sy, sx + 5, sy)
+            gradient.setColorAt(0, QColor(255, 85, 69, 50))
+            gradient.setColorAt(1, QColor(255, 85, 69, 0))
+            painter.fillRect(sx, sy, 5, sh, gradient)
+
+        painter.end()
+        super().paintEvent(event)
+
     # ------------------------------------------------------------------
     # Adaptive theme
     # ------------------------------------------------------------------
@@ -3242,7 +3222,7 @@ class FloatingSettingsPanel(QWidget):
         self._cpu_lbl.setStyleSheet(info_label_css(p))
 
         # Progress bars — semantic chunk colors stay constant
-        self._ram_bar.setStyleSheet(progress_bar_css(p, "#4CAF50"))
+        self._ram_bar.setStyleSheet(progress_bar_css(p, "#ff5545"))
         self._cpu_bar.setStyleSheet(progress_bar_css(p, "#2196F3"))
 
         # Resource warning — semantic orange stays but text colour adapts
@@ -3450,7 +3430,7 @@ class FloatingSettingsPanel(QWidget):
         elif snapshot.ram_percent >= 85:
             self._ram_bar.setStyleSheet(progress_bar_css(p, "#FF9800"))
         else:
-            self._ram_bar.setStyleSheet(progress_bar_css(p, "#4CAF50"))
+            self._ram_bar.setStyleSheet(progress_bar_css(p, "#ff5545"))
 
         # Color-code CPU bar: blue → orange → red (budget: 80% orange, 90% red)
         if snapshot.cpu_percent >= 90:
@@ -3562,7 +3542,7 @@ class FloatingSettingsPanel(QWidget):
         else:
             pct = wer_value * 100
             if wer_value <= 0.1:
-                color = "#4CAF50"  # green — excellent
+                color = "#ff5545"  # red accent — excellent
             elif wer_value <= 0.3:
                 color = "#FFC107"  # yellow — acceptable
             else:

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _WIDGETS_DIR = Path(__file__).resolve().parent
 ARROW_DOWN_SVG = str(_WIDGETS_DIR / "arrow-down.svg").replace("\\", "/")
 ARROW_UP_SVG = str(_WIDGETS_DIR / "arrow-up.svg").replace("\\", "/")
+CHECKMARK_SVG = str(_WIDGETS_DIR / "checkmark.svg").replace("\\", "/")
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ DARK_PALETTE = ThemePalette(
     text_secondary="#dddddd",
     text_tertiary="#aaaaaa",
     text_disabled="#555555",
-    accent="#4CAF50",
+    accent="#ff5545",
     accent_text="#ffffff",
     danger="#F44336",
     info="#4FC3F7",
@@ -852,7 +853,8 @@ def aetheric_sidebar_css(p: ThemePalette) -> str:
     return f"""
         QWidget#AethericSidebar {{
             background-color: {AETHERIC_SIDEBAR_BG};
-            border-right: 1px solid {AETHERIC_BORDER_DARK};
+            border: none;
+            border-right: 2px solid rgba(255, 85, 69, 60);
             border-top-left-radius: 0px;
             border-bottom-left-radius: {AETHERIC_RADIUS};
             min-width: {AETHERIC_SIDEBAR_WIDTH};
@@ -1037,6 +1039,48 @@ def aetheric_combo_box_css(p: ThemePalette) -> str:
         }}
         QComboBox#AethericComboBox QAbstractItemView::item:hover {{
             background-color: {AETHERIC_NAV_HOVER_BG};
+        }}
+    """
+
+
+# ---------------------------------------------------------------------------
+# Aetheric Checkbox — SVG checkmark indicator
+# ---------------------------------------------------------------------------
+
+def aetheric_checkbox_css(p: ThemePalette) -> str:
+    """Aetheric checkbox with SVG checkmark indicator.
+
+    Uses AETHERIC_RED for the checked background and a white SVG
+    checkmark for clear on/off state visibility.
+
+    Object name selector: ``AethericCheckBox``
+
+    Args:
+        p: Active theme palette.
+
+    Returns:
+        QSS string for Aetheric-styled checkboxes.
+    """
+    return f"""
+        QCheckBox#AethericCheckBox {{
+            color: {p.text_secondary};
+            spacing: 8px;
+            font-size: 12px;
+        }}
+        QCheckBox#AethericCheckBox::indicator {{
+            width: 18px;
+            height: 18px;
+            border: 1px solid {AETHERIC_BORDER_LIGHT};
+            border-radius: 4px;
+            background-color: {AETHERIC_SETTINGS_BG};
+        }}
+        QCheckBox#AethericCheckBox::indicator:checked {{
+            background-color: {AETHERIC_RED};
+            border-color: {AETHERIC_RED};
+            image: url({CHECKMARK_SVG});
+        }}
+        QCheckBox#AethericCheckBox::indicator:hover {{
+            border-color: {AETHERIC_RED};
         }}
     """
 

@@ -169,7 +169,8 @@ class TestAethericSidebarCss:
 
     def test_dark_right_border(self):
         css = aetheric_sidebar_css(DARK_PALETTE)
-        assert AETHERIC_BORDER_DARK in css
+        assert "border-right" in css
+        assert "255, 85, 69" in css  # AETHERIC_RED glow
 
 
 # ---------------------------------------------------------------------------
