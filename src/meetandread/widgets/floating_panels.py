@@ -508,28 +508,30 @@ def _link_speaker_identity_in_file(
         logger.warning("Malformed metadata — leaving file unchanged")
         return
 
-    # Update words
+    # Update words — __unknown__ matches speaker_id == None
     words_updated = 0
+    matching_label = None if raw_label == "__unknown__" else raw_label
     for word in data.get("words", []):
-        if word.get("speaker_id") == raw_label:
+        if word.get("speaker_id") == matching_label:
             word["speaker_id"] = identity_name
             words_updated += 1
 
     # Update segments — handle both speaker_id and speaker keys
     segments_updated = 0
     for seg in data.get("segments", []):
-        if seg.get("speaker_id") == raw_label:
+        if seg.get("speaker_id") == matching_label:
             seg["speaker_id"] = identity_name
             segments_updated += 1
-        if seg.get("speaker") == raw_label:
+        if seg.get("speaker") == matching_label:
             seg["speaker"] = identity_name
             # Don't double-count if both keys matched same segment
-            if seg.get("speaker_id") != raw_label:
+            if seg.get("speaker_id") != matching_label:
                 segments_updated += 1
 
     # Update markdown body — exact **label** replacement only
+    display_label = "Unknown Speaker" if raw_label == "__unknown__" else raw_label
     updated_body = re.sub(
-        re.escape(f"**{raw_label}**"),
+        re.escape(f"**{display_label}**"),
         f"**{identity_name}**",
         md_body,
     )
@@ -538,17 +540,18 @@ def _link_speaker_identity_in_file(
     if "speaker_matches" not in data:
         data["speaker_matches"] = {}
 
-    existing = data["speaker_matches"].get(raw_label)
+    match_key = "__unknown__" if raw_label == "__unknown__" else raw_label
+    existing = data["speaker_matches"].get(match_key)
     if isinstance(existing, dict) and "score" in existing and "confidence" in existing:
         # Preserve prior score/confidence, update identity_name
-        data["speaker_matches"][raw_label] = {
+        data["speaker_matches"][match_key] = {
             "identity_name": identity_name,
             "score": existing["score"],
             "confidence": existing["confidence"],
         }
     else:
         # No prior match or null — use manual-link sentinel
-        data["speaker_matches"][raw_label] = {
+        data["speaker_matches"][match_key] = {
             "identity_name": identity_name,
             "score": 1.0,
             "confidence": "manual",
@@ -567,7 +570,9 @@ def _link_speaker_identity_in_file(
     )
 
     # Best-effort signature propagation (PII-safe)
-    _propagate_identity_to_signatures(md_path, raw_label, identity_name)
+    # Skip for __unknown__ — no raw label with an embedding in the signature store
+    if raw_label != "__unknown__":
+        _propagate_identity_to_signatures(md_path, raw_label, identity_name)
 
 
 def _propagate_identity_to_signatures(
@@ -682,8 +687,11 @@ def _open_identity_link_dialog(
     except Exception:
         pass  # dialog works with None store — create-new path still available
 
+    # Use display-friendly label for dialog, keep sentinel for file updates
+    display_label = "Unknown Speaker" if raw_label == "__unknown__" else raw_label
+
     dialog = SpeakerIdentityLinkDialog(
-        current_label=raw_label,
+        current_label=display_label,
         speaker_matches=speaker_matches,
         store=store,
         parent=parent_widget,
@@ -2083,18 +2091,17 @@ class FloatingTranscriptPanel(QWidget):
             logger.warning("Malformed metadata in %s: %s", md_path, exc)
             return None
 
-        # Collect unique speaker IDs from words
+        # Collect unique speaker IDs from words (None counts as "Unknown Speaker")
         speakers = []
         seen = set()
+        has_unknown = False
         for word in data.get("words", []):
             sid = word.get("speaker_id")
             if sid is not None and sid not in seen:
                 seen.add(sid)
                 speakers.append(sid)
-
-        if not speakers:
-            # No speakers — just return the markdown body as-is
-            return None
+            elif sid is None:
+                has_unknown = True
 
         # Build HTML with clickable speaker anchors
         # The markdown body has lines like "**SPK_0**" — make them anchors
@@ -2108,6 +2115,14 @@ class FloatingTranscriptPanel(QWidget):
                     color = speaker_color(speaker_label)
                     html_lines.append(
                         f'<p><a href="speaker:{speaker_label}" '
+                        f'style="color:{color}; font-weight:bold; text-decoration:none;">'
+                        f'[{speaker_label}]</a></p>'
+                    )
+                elif speaker_label == "Unknown Speaker" and has_unknown:
+                    # Make "Unknown Speaker" clickable so user can assign an identity
+                    color = "#888888"
+                    html_lines.append(
+                        f'<p><a href="speaker:__unknown__" '
                         f'style="color:{color}; font-weight:bold; text-decoration:none;">'
                         f'[{speaker_label}]</a></p>'
                     )
@@ -5015,17 +5030,20 @@ class FloatingSettingsPanel(QWidget):
             logger.warning("Malformed metadata in %s: %s", md_path, exc)
             return None
 
+        # Collect unique speaker IDs from words (None counts as "Unknown Speaker")
         speakers = []
         seen = set()
+        has_unknown = False
         for word in data.get("words", []):
             sid = word.get("speaker_id")
             if sid is not None and sid not in seen:
                 seen.add(sid)
                 speakers.append(sid)
+            elif sid is None:
+                has_unknown = True
 
-        if not speakers:
-            return None
-
+        # Build HTML with clickable speaker anchors
+        # The markdown body has lines like "**SPK_0**" — make them anchors
         html_lines = []
         for line in md_body.splitlines():
             match = re.match(r"^\*\*(.+?)\*\*\s*$", line)
@@ -5035,6 +5053,14 @@ class FloatingSettingsPanel(QWidget):
                     color = speaker_color(speaker_label)
                     html_lines.append(
                         f'<p><a href="speaker:{speaker_label}" '
+                        f'style="color:{color}; font-weight:bold; text-decoration:none;">'
+                        f'[{speaker_label}]</a></p>'
+                    )
+                elif speaker_label == "Unknown Speaker" and has_unknown:
+                    # Make "Unknown Speaker" clickable so user can assign an identity
+                    color = "#888888"
+                    html_lines.append(
+                        f'<p><a href="speaker:__unknown__" '
                         f'style="color:{color}; font-weight:bold; text-decoration:none;">'
                         f'[{speaker_label}]</a></p>'
                     )
