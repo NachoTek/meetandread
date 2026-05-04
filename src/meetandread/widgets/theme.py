@@ -13,9 +13,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Arrow image paths for combo box / spinbox (SVG, crisp at any DPI)
+# ---------------------------------------------------------------------------
+_WIDGETS_DIR = Path(__file__).resolve().parent
+ARROW_DOWN_SVG = str(_WIDGETS_DIR / "arrow-down.svg").replace("\\", "/")
+ARROW_UP_SVG = str(_WIDGETS_DIR / "arrow-up.svg").replace("\\", "/")
 
 
 # ---------------------------------------------------------------------------
@@ -1008,8 +1016,9 @@ def aetheric_combo_box_css(p: ThemePalette) -> str:
             border-bottom-right-radius: 8px;
         }}
         QComboBox#AethericComboBox::down-arrow {{
-            width: 8px;
-            height: 8px;
+            image: url({ARROW_DOWN_SVG});
+            width: 12px;
+            height: 12px;
         }}
         QComboBox#AethericComboBox QAbstractItemView {{
             background-color: {AETHERIC_SETTINGS_BG};

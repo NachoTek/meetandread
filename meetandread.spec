@@ -96,7 +96,7 @@ a = Analysis(
     [os.path.join('src', 'meetandread', '__main__.py')],
     pathex=[],
     binaries=binaries,
-    datas=[],
+    datas=[('src/meetandread/widgets/*.svg', 'meetandread/widgets')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

@@ -79,6 +79,8 @@ from meetandread.widgets.theme import (
     AETHERIC_RED,
     AETHERIC_SETTINGS_BG,
     AETHERIC_RADIUS,
+    ARROW_UP_SVG,
+    ARROW_DOWN_SVG,
 )
 
 import logging
@@ -2779,42 +2781,52 @@ class FloatingSettingsPanel(QWidget):
         self._cc_font_spin.setRange(16, 96)
         self._cc_font_spin.setSuffix(" px")
         self._cc_font_spin.setSingleStep(4)
-        self._cc_font_spin.setStyleSheet("""
-            QSpinBox {
+        self._cc_font_spin.setStyleSheet(f"""
+            QSpinBox {{
                 color: #E0E0E0;
                 background-color: #1e1d1e;
                 border: 1px solid rgba(255, 255, 255, 30);
                 border-radius: 8px;
-                padding: 4px 8px;
+                padding: 4px 28px 4px 8px;
                 font-size: 12px;
                 min-width: 80px;
                 min-height: 24px;
-            }
-            QSpinBox:hover {
+            }}
+            QSpinBox:hover {{
                 border-color: #ff5545;
-            }
-            QSpinBox::up-button {
+            }}
+            QSpinBox::up-button {{
                 subcontrol-origin: border;
                 subcontrol-position: top right;
                 width: 20px;
                 border: none;
                 border-left: 1px solid rgba(255, 255, 255, 30);
                 border-top-right-radius: 8px;
-            }
-            QSpinBox::up-button:hover {
+            }}
+            QSpinBox::up-button:hover {{
                 background-color: rgba(255, 255, 255, 20);
-            }
-            QSpinBox::down-button {
+            }}
+            QSpinBox::up-arrow {{
+                image: url({ARROW_UP_SVG});
+                width: 12px;
+                height: 12px;
+            }}
+            QSpinBox::down-button {{
                 subcontrol-origin: border;
                 subcontrol-position: bottom right;
                 width: 20px;
                 border: none;
                 border-left: 1px solid rgba(255, 255, 255, 30);
                 border-bottom-right-radius: 8px;
-            }
-            QSpinBox::down-button:hover {
+            }}
+            QSpinBox::down-button:hover {{
                 background-color: rgba(255, 255, 255, 20);
-            }
+            }}
+            QSpinBox::down-arrow {{
+                image: url({ARROW_DOWN_SVG});
+                width: 12px;
+                height: 12px;
+            }}
         """)
         self._cc_font_spin.setCursor(Qt.CursorShape.PointingHandCursor)
         # Restore from config
