@@ -4534,8 +4534,12 @@ class FloatingSettingsPanel(QWidget):
     def _refresh_identities(self) -> None:
         """Load voice profiles and scan usage metadata, then populate the identity list.
 
+        Merges identity names from two sources:
+        1. VoiceSignatureStore (profiles with embeddings)
+        2. Transcript speaker_matches metadata (identities linked without embeddings)
+
         Failure Modes:
-        - VoiceSignatureStore.load_signatures() error: show empty state, log failure.
+        - VoiceSignatureStore.load_signatures() error: show transcript-discovered names only.
         - scan_identity_usage() error: show profiles with zero usage, keep tab usable.
         """
         self._identity_usage = {}
@@ -4558,20 +4562,52 @@ class FloatingSettingsPanel(QWidget):
                 store.close()
         except Exception as exc:
             logger.info("Identity tab: store load failed: %s", exc)
+
+        # Discover additional identity names from transcript speaker_matches
+        # that were linked through the history dialog but don't have embeddings yet.
+        try:
+            from meetandread.audio.storage.paths import get_transcripts_dir
+            from meetandread.speaker.identity_management import parse_metadata_footer
+
+            transcripts_dir = get_transcripts_dir()
+            if transcripts_dir.is_dir():
+                existing = set(profile_names)
+                discovered = set()
+                for md_path in transcripts_dir.glob("*.md"):
+                    try:
+                        content = md_path.read_text(encoding="utf-8")
+                    except OSError:
+                        continue
+                    data = parse_metadata_footer(content)
+                    if data is None:
+                        continue
+                    for _label, match_info in data.get("speaker_matches", {}).items():
+                        if isinstance(match_info, dict):
+                            name = match_info.get("identity_name")
+                            if name and name not in existing:
+                                discovered.add(name)
+                if discovered:
+                    profile_names = sorted(
+                        set(profile_names) | discovered,
+                        key=lambda n: n.lower(),
+                    )
+        except Exception as exc:
+            logger.info("Identity tab: transcript scan failed: %s", exc)
+
+        if not profile_names:
             self._populate_identity_list(profile_names, {})
             return
 
         # Scan transcript usage
         usage: Dict[str, Any] = {}
-        if profile_names:
-            try:
-                from meetandread.audio.storage.paths import get_transcripts_dir
-                from meetandread.speaker.identity_management import scan_identity_usage
+        try:
+            from meetandread.audio.storage.paths import get_transcripts_dir
+            from meetandread.speaker.identity_management import scan_identity_usage
 
-                transcripts_dir = get_transcripts_dir()
-                usage = scan_identity_usage(transcripts_dir, profile_names)
-            except Exception as exc:
-                logger.info("Identity tab: usage scan failed: %s", exc)
+            transcripts_dir = get_transcripts_dir()
+            usage = scan_identity_usage(transcripts_dir, profile_names)
+        except Exception as exc:
+            logger.info("Identity tab: usage scan failed: %s", exc)
 
         self._identity_usage = usage
         self._populate_identity_list(profile_names, usage)

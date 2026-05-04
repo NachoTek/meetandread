@@ -951,16 +951,59 @@ class TestIdentitiesEmptyState:
         panel._populate_identity_list([], {})
         assert "—" in panel._identity_name_label.text()
 
-    def test_store_load_failure_shows_empty(self, settings_panel_on_identities, qapp):
-        """If VoiceSignatureStore.load_signatures() raises, show empty state."""
+    def test_store_load_failure_still_discovers_transcript_identities(self, settings_panel_on_identities, qapp, tmp_path):
+        """If VoiceSignatureStore fails, transcript-discovered identities still appear."""
         panel = settings_panel_on_identities
+        # Patch get_transcripts_dir to an empty dir so transcript scan finds nothing
         with patch(
             "meetandread.speaker.signatures.VoiceSignatureStore.load_signatures",
             side_effect=RuntimeError("db locked"),
+        ), patch(
+            "meetandread.widgets.floating_panels.Path.is_dir",
+            return_value=False,
         ):
             panel._refresh_identities()
             qapp.processEvents()
+        # With no store profiles and no transcript dir, list should be empty
         assert panel._identity_list.count() == 0
+
+    def test_discovers_identity_from_transcript_metadata(self, settings_panel_on_identities, qapp, tmp_path):
+        """Identities linked in transcripts but missing from VoiceSignatureStore appear in list."""
+        import json
+        panel = settings_panel_on_identities
+
+        # Create a transcript with speaker_matches pointing to an identity
+        # that doesn't exist in VoiceSignatureStore
+        transcript_dir = tmp_path / "transcripts"
+        transcript_dir.mkdir()
+        md_body = "# Transcript\n\n**Alice**\n\nHello world\n"
+        metadata = {
+            "words": [{"text": "Hello", "speaker_id": "Alice"}],
+            "segments": [{"speaker_id": "Alice", "start_time": 0.0, "end_time": 1.0}],
+            "speaker_matches": {
+                "SPK_0": {"identity_name": "Alice", "score": 1.0, "confidence": "manual"}
+            },
+        }
+        content = md_body + "\n---\n\n<!-- METADATA: " + json.dumps(metadata) + " -->\n"
+        (transcript_dir / "test.md").write_text(content, encoding="utf-8")
+
+        # Mock to return empty store and our temp transcripts dir
+        with patch(
+            "meetandread.speaker.signatures.VoiceSignatureStore.load_signatures",
+            return_value=[],
+        ), patch(
+            "meetandread.audio.storage.paths.get_transcripts_dir",
+            return_value=transcript_dir,
+        ), patch(
+            "meetandread.audio.storage.paths.get_recordings_dir",
+            return_value=tmp_path / "recordings",
+        ):
+            panel._refresh_identities()
+            qapp.processEvents()
+
+        # Alice should appear even though she's not in VoiceSignatureStore
+        names = [panel._identity_list.item(i).data(256) for i in range(panel._identity_list.count())]
+        assert "Alice" in names
 
     def test_missing_signature_db_shows_empty(self, settings_panel_on_identities, qapp):
         """If the DB file doesn't exist, show empty state gracefully."""
