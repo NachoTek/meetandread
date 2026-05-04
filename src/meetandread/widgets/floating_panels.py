@@ -2176,7 +2176,7 @@ class CCOverlayPanel(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         # Semi-transparent dark background
-        painter.setBrush(QColor(30, 29, 30, 128))  # 50% opacity
+        painter.setBrush(QColor(30, 29, 30, 179))  # 70% opacity
         painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 12, 12)
         painter.end()
