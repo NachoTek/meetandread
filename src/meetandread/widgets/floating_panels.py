@@ -93,11 +93,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class TexturedSizeGrip(QSizeGrip):
-    """QSizeGrip that paints a Windows-style textured triangle (diagonal grip lines).
+    """QSizeGrip that paints a textured dot-triangle in the bottom-right corner.
 
-    Draws a filled triangle of parallel diagonal lines in the bottom-right
-    corner. Lines nearest the corner are shortest; lines toward the center
-    grow progressively longer — forming the classic resize-handle pattern.
+    Draws dots in a grid pattern, keeping only those within a right triangle
+    whose hypotenuse runs from the top-right to bottom-left. Produces the
+    classic Windows resize-handle appearance.
     """
 
     def __init__(self, parent: QWidget, color: str = "rgba(255, 255, 255, 160)") -> None:
@@ -106,57 +106,42 @@ class TexturedSizeGrip(QSizeGrip):
         self._color = QColor(color)
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        from PyQt6.QtGui import QPainter, QPen
+        from PyQt6.QtGui import QPainter, QRadialGradient, QBrush, QColor
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w, h = self.width(), self.height()
-        pen = QPen()
-        pen.setWidthF(1.2)
-        pen.setColor(self._color)
-        painter.setPen(pen)
 
-        # Fill the bottom-right triangle with parallel diagonal lines.
-        # Lines run perpendicular to the main diagonal (NW-SE).
-        # Line near the corner (i=0) is shortest; each successive line
-        # grows longer, filling the triangular area.
-        margin = 1.5       # px from widget edge
-        spacing = 2        # px between parallel lines
-        max_lines = 7      # enough to fill the triangle
+        # Dot grid that fills a right triangle in the bottom-right corner.
+        # A dot at grid position (col, row) is drawn when col + row < cols,
+        # producing a triangle that's dense at the corner and tapers off.
+        cols = 3
+        dot_r = 1.3       # dot radius
+        spacing = 3.8      # px between dot centers
+        margin = 3         # px inset from widget edges
 
-        for i in range(max_lines):
-            # Distance of this line from the corner along both axes
-            d = margin + spacing * i
+        for col in range(cols):
+            for row in range(cols):
+                if col + row >= cols:
+                    continue  # outside the triangle
 
-            # Line runs perpendicular to the corner-to-center direction
-            # Length proportional to distance from corner (triangle fill)
-            line_half = d * 0.8
+                cx = w - margin - col * spacing
+                cy = h - margin - row * spacing
 
-            # Midpoint of the line is at distance d from both edges
-            mx = w - d
-            my = h - d
+                if cx < margin or cy < margin:
+                    continue
 
-            # Perpendicular direction: extend line at 45° to the corner diagonal
-            dx = line_half * 0.7071  # cos(45°)
-            dy = line_half * 0.7071  # sin(45°)
-
-            x1 = mx - dx
-            y1 = my + dy
-            x2 = mx + dx
-            y2 = my - dy
-
-            # Clip to widget bounds
-            if x1 < 1:
-                y1 += (1 - x1); x1 = 1
-            if y2 < 1:
-                x2 -= (1 - y2); y2 = 1
-            if x1 >= x2 or y2 >= y1:
-                continue  # degenerate after clipping
-            if x2 > w - 1 or y1 > h - 1:
-                continue
-
-            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+                # Soft dot via radial gradient
+                grad = QRadialGradient(cx, cy, dot_r)
+                grad.setColorAt(0, self._color)
+                grad.setColorAt(1, QColor(0, 0, 0, 0))
+                painter.setBrush(QBrush(grad))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(
+                    int(cx - dot_r), int(cy - dot_r),
+                    int(dot_r * 2), int(dot_r * 2),
+                )
 
         painter.end()
 
