@@ -1000,13 +1000,19 @@ def aetheric_combo_box_css(p: ThemePalette) -> str:
         }}
         QComboBox#AethericComboBox::drop-down {{
             border: none;
-            width: 24px;
+            border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+            width: 28px;
+            background-color: rgba(255, 255, 255, 15);
+            border-top-right-radius: 8px;
+            border-bottom-right-radius: 8px;
         }}
         QComboBox#AethericComboBox::down-arrow {{
             image: none;
             border-left: 5px solid transparent;
             border-right: 5px solid transparent;
             border-top: 6px solid {AETHERIC_RED};
+            width: 10px;
+            height: 6px;
         }}
         QComboBox#AethericComboBox QAbstractItemView {{
             background-color: {AETHERIC_SETTINGS_BG};

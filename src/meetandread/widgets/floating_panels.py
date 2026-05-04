@@ -2564,6 +2564,30 @@ class FloatingSettingsPanel(QWidget):
         title_label.setObjectName("AethericTitleLabel")
         title_bar_layout.addWidget(title_label)
         title_bar_layout.addStretch()
+
+        # Close button in title bar
+        self._title_close_btn = QPushButton("×")
+        self._title_close_btn.setObjectName("AethericTitleCloseButton")
+        self._title_close_btn.setFixedSize(20, 20)
+        self._title_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._title_close_btn.setToolTip("Close settings")
+        self._title_close_btn.setStyleSheet("""
+            QPushButton {
+                color: rgba(255, 255, 255, 120);
+                background: transparent;
+                border: none;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                color: #ff5545;
+                background: rgba(255, 85, 69, 40);
+            }
+        """)
+        self._title_close_btn.clicked.connect(self.hide_panel)
+        title_bar_layout.addWidget(self._title_close_btn)
+
         outer_layout.addWidget(self._title_bar)
 
         # -- Drag state for title bar --
@@ -2768,24 +2792,27 @@ class FloatingSettingsPanel(QWidget):
             QSpinBox::up-button, QSpinBox::down-button {
                 width: 20px;
                 border: none;
-                background: #3A3A3E;
+                background: transparent;
+                subcontrol-origin: border;
             }
             QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-                background: #4A4A4E;
+                background: rgba(255, 255, 255, 30);
             }
             QSpinBox::up-arrow {
                 image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-bottom: 5px solid #999;
-                width: 0; height: 0;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-bottom: 6px solid #ff5545;
+                width: 10px;
+                height: 6px;
             }
             QSpinBox::down-arrow {
                 image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #999;
-                width: 0; height: 0;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid #ff5545;
+                width: 10px;
+                height: 6px;
             }
         """)
         self._cc_font_spin.setCursor(Qt.CursorShape.PointingHandCursor)
