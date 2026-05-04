@@ -13,6 +13,7 @@ from PyQt6.QtGui import QAction, QIcon
 
 from meetandread.recording.controller import ControllerState
 from meetandread.widgets.icons import create_app_icon, create_recording_icon
+from meetandread.widgets.theme import context_menu_css, current_palette
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +59,7 @@ class TrayIconManager:
 
         # Build menu
         self._menu = QMenu()
-        self._menu.setStyleSheet("""
-            QMenu {
-                background-color: #2a2a2a;
-                color: #ddd;
-                border: 1px solid #555;
-                padding: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #4CAF50;
-                color: #fff;
-            }
-        """)
+        self._menu.setStyleSheet(context_menu_css(current_palette()))
         self._build_menu()
         self._tray.setContextMenu(self._menu)
 

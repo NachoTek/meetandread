@@ -543,31 +543,41 @@ def progress_bar_css(p: ThemePalette, chunk_color: str | None = None) -> str:
 
 
 def context_menu_css(p: ThemePalette, accent_color: str | None = None) -> str:
-    """QMenu / context menu styling.
+    """QMenu / context menu styling — Aetheric glass design.
+
+    Matches the Aetheric settings shell aesthetic: dark translucent
+    background, rounded corners, AETHERIC_RED accent for selection.
 
     Args:
         p: Active theme palette.
-        accent_color: Override for selected-item background (defaults to accent).
+        accent_color: Override for selected-item background (defaults to
+            AETHERIC_RED in dark mode, p.accent otherwise).
 
     Returns:
         QSS string for menus.
     """
-    accent = accent_color or p.accent
+    accent = accent_color or AETHERIC_RED
     return f"""
         QMenu {{
-            background-color: {p.surface};
+            background-color: {AETHERIC_SETTINGS_BG};
             color: {p.text_secondary};
-            border: 1px solid {p.border_light};
-            border-radius: 5px;
-            padding: 4px;
+            border: 1px solid {AETHERIC_BORDER_LIGHT};
+            border-radius: {AETHERIC_RADIUS};
+            padding: 6px 4px;
         }}
         QMenu::item {{
-            padding: 6px 20px;
-            border-radius: 3px;
+            padding: 8px 24px;
+            border-radius: 8px;
+            color: {p.text_secondary};
         }}
         QMenu::item:selected {{
-            background-color: {accent};
-            color: {p.accent_text};
+            background-color: rgba(255, 85, 69, 0.2);
+            color: {accent};
+        }}
+        QMenu::separator {{
+            height: 1px;
+            background: {AETHERIC_BORDER_LIGHT};
+            margin: 4px 8px;
         }}
     """
 

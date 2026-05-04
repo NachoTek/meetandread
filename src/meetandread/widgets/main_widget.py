@@ -989,7 +989,7 @@ to avoid clipping issues and enable proper text rendering.
         """Show context menu with recording toggle, settings, and exit actions."""
         p = current_palette()
         menu = QMenu(self)
-        menu.setStyleSheet(context_menu_css(p, accent_color='#4CAF50'))
+        menu.setStyleSheet(context_menu_css(p))
 
         # Recording toggle
         toggle_text = "Stop Recording" if self.is_recording else "Start Recording"
