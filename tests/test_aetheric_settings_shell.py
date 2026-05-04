@@ -261,7 +261,7 @@ class TestAethericComboBoxCss:
 
     def test_glass_row_bg(self):
         css = aetheric_combo_box_css(DARK_PALETTE)
-        assert AETHERIC_GLASS_ROW_BG in css
+        assert AETHERIC_SETTINGS_BG in css
 
     def test_hover_uses_red_accent(self):
         css = aetheric_combo_box_css(DARK_PALETTE)
@@ -271,8 +271,8 @@ class TestAethericComboBoxCss:
     def test_has_chevron_arrow(self):
         css = aetheric_combo_box_css(DARK_PALETTE)
         assert "::down-arrow" in css
-        assert "border-top: 6px solid" in css
-        assert AETHERIC_RED in css
+        assert "image: url(" in css  # SVG arrow file reference
+        assert ".svg" in css
 
     def test_dropdown_panel(self):
         css = aetheric_combo_box_css(DARK_PALETTE)
