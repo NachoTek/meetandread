@@ -799,7 +799,7 @@ AETHERIC_CYAN = "#00dbe9"  # tertiary
 # Aetheric CC overlay tokens — compact closed-caption live transcript
 # ---------------------------------------------------------------------------
 
-AETHERIC_CC_BG = "rgba(30, 29, 30, 128)"  # 50% opacity
+AETHERIC_CC_BG = "rgba(30, 29, 30, 179)"  # 70% opacity
 AETHERIC_CC_TEXT = "rgba(180, 180, 180, 230)"  # Grey mono text
 AETHERIC_CC_RADIUS = AETHERIC_RADIUS  # 12px — matches shell radius
 AETHERIC_CC_PADDING = "10px 14px"
