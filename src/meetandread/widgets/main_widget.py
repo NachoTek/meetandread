@@ -363,26 +363,37 @@ to avoid clipping issues and enable proper text rendering.
         self._cc_overlay.segment_ready.connect(self._on_cc_segment)
         logging.debug("Created CC overlay panel")
 
-    def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool):
+    def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool, speaker_id: object = None):
         """Handle segment signal (kept for compatibility — CC overlay handles its own updates)."""
         pass
 
-    def _on_cc_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool):
+    def _on_cc_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool, speaker_id: object = None):
         """Handle segment signal from CC overlay (runs on main thread).
 
         Re-emits to the CC overlay's update_segment for live display.
         The CC overlay is the primary live transcript surface during
         recording; the legacy FloatingTranscriptPanel is retained for
         tests until final cleanup.
+
+        Args:
+            text: Transcribed text
+            confidence: Confidence score (0-100)
+            segment_index: Segment position in phrase
+            is_final: True if phrase is complete
+            phrase_start: True if this starts a new phrase
+            speaker_id: Optional matched speaker identifier (may be None or str)
         """
         try:
             if self._cc_overlay:
+                # Normalize speaker_id: treat non-string/empty values as None
+                safe_speaker_id = speaker_id if isinstance(speaker_id, str) and speaker_id else None
                 self._cc_overlay.update_segment(
                     text=text,
                     confidence=confidence,
                     segment_index=segment_index,
                     is_final=is_final,
                     phrase_start=phrase_start,
+                    speaker_id=safe_speaker_id,
                 )
         except Exception as e:
             logging.error("CC overlay update failed: %s", e)
@@ -863,9 +874,11 @@ to avoid clipping issues and enable proper text rendering.
             result: SegmentResult with text, confidence, and completion status
         """
         phrase_start = getattr(result, 'phrase_start', False)
+        speaker_id = getattr(result, 'speaker_id', None)
 
-        logging.debug("Segment: '%s' [conf: %d%%, final: %s, phrase_start: %s]",
-                       result.text[:40], result.confidence, result.is_final, phrase_start)
+        logging.debug("Segment: '%s' [conf: %d%%, final: %s, phrase_start: %s, speaker_id: %s]",
+                       result.text[:40], result.confidence, result.is_final, phrase_start,
+                       speaker_id if speaker_id else "None")
 
         if self._cc_overlay:
             # Emit signal (thread-safe, automatically queues to main thread)
@@ -874,7 +887,8 @@ to avoid clipping issues and enable proper text rendering.
                 result.confidence,
                 result.segment_index,
                 result.is_final,
-                phrase_start
+                phrase_start,
+                speaker_id
             )
     
     def _on_recording_complete(self, wav_path, transcript_path):

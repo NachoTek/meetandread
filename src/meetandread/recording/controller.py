@@ -118,6 +118,23 @@ class RecordingController:
         
         # Auto-WER from last post-processing (None until computed)
         self._last_wer: Optional[float] = None
+
+        # --- Live speaker matching state ---
+        self._live_audio_buffer = bytearray()  # raw int16 PCM bytes
+        self._live_max_buffer_bytes = 12 * 16000 * 2  # 12s at 16kHz int16 = 384000
+        self._live_extractor = None  # lazily-created SpeakerEmbeddingExtractor
+        self._live_extractor_available: Optional[bool] = None  # None=unchecked, True/False
+        self._live_store_available: Optional[bool] = None
+        self._live_match_attempts = 0
+        self._live_match_hits = 0
+        self._live_match_fallbacks = 0
+        self._live_last_status: str = "disabled"  # sanitized status string
+        self._live_last_error_class: Optional[str] = None
+        self._live_last_error_message: Optional[str] = None
+        self._live_last_attempt_ts: Optional[float] = None
+        self._live_min_audio_bytes = 8 * 16000 * 2  # 8s at 16kHz int16 = 256000
+        self._live_attempt_interval = 2.0  # seconds between match attempts
+        self._live_extractor_lock = threading.Lock()  # serialize extractor use
         
     
     def _set_state(self, state: ControllerState) -> None:
@@ -310,6 +327,7 @@ class RecordingController:
                 print("DEBUG: Transcription processor started")
             
             self._audio_chunks_fed = 0
+            self._reset_live_speaker_state()
             self._set_state(ControllerState.RECORDING)
             print("DEBUG: Recording started successfully")
             return None
@@ -482,6 +500,15 @@ class RecordingController:
             result: SegmentResult with text, confidence, and completion status
         """
         print(f"DEBUG Controller: Segment: '{result.text}' [conf: {result.confidence}%, final: {result.is_final}, idx: {result.segment_index}]")
+        
+        # Attempt live speaker matching (conservative; attaches name only
+        # for high-confidence known-speaker matches)
+        try:
+            name = self._try_live_speaker_match()
+            if name is not None:
+                result.speaker_id = name
+        except Exception:
+            pass  # Never block phrase result delivery
         
         # Convert SegmentResult to Word objects for storage
         if self._transcript_store:
@@ -656,7 +683,197 @@ class RecordingController:
             if self._audio_chunks_fed % 100 == 0:
                 stats = self._transcription_processor.get_stats()
                 print(f"[{_ts()}] DEBUG: Fed {self._audio_chunks_fed} audio chunks, buffer: {stats.get('buffer_duration', 0):.1f}s")
+
+        # Buffer raw PCM for live speaker matching (only while recording)
+        if self._state == ControllerState.RECORDING and audio_chunk is not None:
+            try:
+                import numpy as np
+                chunk = audio_chunk
+                if isinstance(chunk, np.ndarray):
+                    # Convert float32 to int16 PCM bytes for the live buffer
+                    clamped = np.clip(chunk, -1.0, 1.0)
+                    pcm_int16 = (clamped * 32767).astype(np.int16)
+                    self._live_audio_buffer.extend(pcm_int16.tobytes())
+                    # Trim to rolling window
+                    if len(self._live_audio_buffer) > self._live_max_buffer_bytes:
+                        excess = len(self._live_audio_buffer) - self._live_max_buffer_bytes
+                        del self._live_audio_buffer[:excess]
+            except Exception:
+                pass  # Non-critical; matching simply won't have audio
     
+    # ------------------------------------------------------------------
+    # Live speaker matching (conservative, for CC overlay)
+    # ------------------------------------------------------------------
+
+    def _ensure_live_extractor(self) -> bool:
+        """Lazily initialize the speaker embedding extractor for live matching.
+
+        Returns True if the extractor is available (or was successfully
+        created), False otherwise.  Failures are sticky for the session.
+        """
+        if self._live_extractor_available is True:
+            return True
+        if self._live_extractor_available is False:
+            return False
+
+        try:
+            import sherpa_onnx
+            from meetandread.speaker.model_downloader import ensure_embedding_model
+
+            emb_path = ensure_embedding_model()
+            if not emb_path or not emb_path.exists():
+                self._live_extractor_available = False
+                self._live_last_status = "model_unavailable"
+                logger.info("Live speaker matching disabled: embedding model not found")
+                return False
+
+            config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                model=str(emb_path),
+            )
+            if not config.validate():
+                self._live_extractor_available = False
+                self._live_last_status = "model_unavailable"
+                logger.info("Live speaker matching disabled: extractor config invalid")
+                return False
+
+            self._live_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
+            self._live_extractor_available = True
+            self._live_last_status = "enabled"
+            logger.info("Live speaker matching enabled")
+            return True
+
+        except (ImportError, Exception) as exc:
+            self._live_extractor_available = False
+            self._live_last_error_class = type(exc).__name__
+            self._live_last_error_message = str(exc)[:120]
+            self._live_last_status = "extractor_error"
+            logger.info(
+                "Live speaker matching disabled: %s", type(exc).__name__
+            )
+            return False
+
+    def _try_live_speaker_match(self) -> Optional[str]:
+        """Attempt to match buffered live audio against known speakers.
+
+        Returns the matched speaker name for high-confidence matches,
+        or None.  Thread-safe via the extractor lock.  Never raises —
+        all failures degrade to None.
+        """
+        now = _time.monotonic()
+
+        # Rate-limit: don't attempt more than once per interval
+        if (self._live_last_attempt_ts is not None
+                and now - self._live_last_attempt_ts < self._live_attempt_interval):
+            return None
+
+        # Check audio buffer has enough data
+        if len(self._live_audio_buffer) < self._live_min_audio_bytes:
+            self._live_last_status = "insufficient_audio"
+            return None
+
+        # Check speaker settings
+        try:
+            settings = self._config_manager.get_settings()
+            if not settings.speaker.enabled:
+                self._live_last_status = "disabled"
+                return None
+        except Exception:
+            pass  # Default to trying
+
+        # Lazy-init extractor (non-blocking check)
+        if not self._ensure_live_extractor():
+            return None
+
+        # Serialize extraction to avoid concurrent sherpa-onnx use
+        if not self._live_extractor_lock.acquire(blocking=False):
+            return None
+
+        try:
+            self._live_last_attempt_ts = now
+            self._live_match_attempts += 1
+
+            # Convert int16 PCM buffer to mono float32 numpy array
+            import numpy as np
+            raw_bytes = bytes(self._live_audio_buffer)
+            pcm_int16 = np.frombuffer(raw_bytes, dtype=np.int16)
+            audio_float32 = pcm_int16.astype(np.float32) / 32768.0
+
+            # Create stream and compute embedding
+            stream = self._live_extractor.create_stream()
+            stream.accept_waveform(16000, audio_float32)
+            stream.input_finished()
+
+            if not self._live_extractor.is_ready(stream):
+                self._live_last_status = "insufficient_audio"
+                self._live_match_fallbacks += 1
+                return None
+
+            embedding = self._live_extractor.compute(stream)
+
+            if embedding is None or len(embedding) == 0:
+                self._live_last_status = "no_match"
+                self._live_match_fallbacks += 1
+                return None
+
+            # Look up against known signatures
+            from meetandread.speaker.signatures import VoiceSignatureStore
+            from meetandread.audio.storage.paths import get_recordings_dir
+
+            db_path = get_recordings_dir() / "speaker_signatures.db"
+            try:
+                with VoiceSignatureStore(db_path=db_path) as store:
+                    match = store.find_match(
+                        embedding,
+                        threshold=0.75,  # Conservative: no match below this
+                    )
+            except Exception as store_exc:
+                self._live_last_error_class = type(store_exc).__name__
+                self._live_last_error_message = str(store_exc)[:120]
+                self._live_last_status = "store_error"
+                self._live_match_fallbacks += 1
+                return None
+
+            if match is None or match.confidence != "high":
+                self._live_last_status = (
+                    "high_confidence_match_without_name"
+                    if match is not None and match.confidence != "high"
+                    else "no_match"
+                )
+                self._live_match_fallbacks += 1
+                return None
+
+            # High-confidence match found
+            self._live_match_hits += 1
+            self._live_last_status = "matched"
+            return match.name
+
+        except Exception as exc:
+            self._live_last_error_class = type(exc).__name__
+            self._live_last_error_message = str(exc)[:120]
+            self._live_last_status = "extractor_error"
+            self._live_match_fallbacks += 1
+            logger.debug(
+                "Live speaker matching error: %s", type(exc).__name__
+            )
+            return None
+
+        finally:
+            self._live_extractor_lock.release()
+
+    def _reset_live_speaker_state(self) -> None:
+        """Reset live speaker matching state for a new recording."""
+        self._live_audio_buffer = bytearray()
+        self._live_match_attempts = 0
+        self._live_match_hits = 0
+        self._live_match_fallbacks = 0
+        self._live_last_status = "disabled"
+        self._live_last_error_class = None
+        self._live_last_error_message = None
+        self._live_last_attempt_ts = None
+        # Keep extractor available across recordings for efficiency
+        # (don't recreate it for each recording session)
+        pass
+
     def _run_diarization(self, wav_path: Path) -> None:
         """Run speaker diarization on the saved WAV and tag transcript words.
 
@@ -793,9 +1010,52 @@ class RecordingController:
             tagged_count, len(words), len(label_map),
         )
 
+    def _speaker_matches_metadata(self) -> dict:
+        """Build a raw-label-keyed speaker matches map for transcript persistence.
+
+        Returns an empty dict when there is no successful diarization result.
+        Otherwise collects every unique raw label from detected segments and
+        serialises matched ``SpeakerMatch`` objects as
+        ``{"identity_name": ..., "score": ..., "confidence": ...}``; detected-
+        but-unmatched labels are serialised as ``None``.
+
+        Returns:
+            Dict mapping raw labels (e.g. ``"spk0"``) to match dicts or None.
+        """
+        result = self._last_diarization_result
+        if result is None or not getattr(result, "succeeded", False):
+            return {}
+
+        segments = getattr(result, "segments", [])
+        if not segments:
+            return {}
+
+        matches_map: dict = {}
+        # Collect all unique raw labels from segments
+        raw_labels: set[str] = set()
+        for seg in segments:
+            raw_labels.add(seg.speaker)
+
+        for label in sorted(raw_labels):
+            match = getattr(result, "matches", {}).get(label)
+            if match is not None:
+                matches_map[label] = {
+                    "identity_name": match.name,
+                    "score": match.score,
+                    "confidence": match.confidence,
+                }
+            else:
+                matches_map[label] = None
+
+        return matches_map
+
     def _save_transcript(self) -> Optional[Path]:
         """Save transcript to file.
-        
+
+        Persists speaker match metadata alongside transcript words so
+        downstream consumers can resolve raw diarization labels without
+        re-running diarization.
+
         Returns:
             Path to saved transcript file, or None if no transcript
         """
@@ -809,9 +1069,15 @@ class RecordingController:
             wav_stem = self._last_wav_path.stem
             transcripts_dir = get_transcripts_dir()
             transcript_path = transcripts_dir / f"{wav_stem}.md"
+
+            # Build speaker matches metadata from last diarization result
+            speaker_matches = self._speaker_matches_metadata()
             
             # Save as markdown with metadata
-            self._transcript_store.save_to_file(transcript_path)
+            self._transcript_store.save_to_file(
+                transcript_path,
+                speaker_matches=speaker_matches,
+            )
             
             return transcript_path
             
@@ -1041,14 +1307,40 @@ class RecordingController:
         if self._last_diarization_result:
             try:
                 result = self._last_diarization_result
+                raw_labels: set = set()
+                if hasattr(result, "segments"):
+                    for seg in result.segments:
+                        raw_labels.add(seg.speaker)
+                matches = getattr(result, "matches", {})
+                matched_labels = {l for l in raw_labels if l in matches}
                 diag["diarization"] = {
                     "succeeded": result.succeeded,
                     "num_speakers": result.num_speakers,
                     "segment_count": len(result.segments),
                     "error": result.error,
+                    "match_count": len(matched_labels),
+                    "matched_label_count": len(matched_labels),
+                    "labels": sorted(raw_labels),
                 }
             except Exception:
                 pass
+
+        # Live speaker matching diagnostics (sanitized — no names/embeddings)
+        diag["live_speaker_matching"] = {
+            "enabled": self._live_extractor_available is True,
+            "extractor_available": self._live_extractor_available,
+            "store_available": self._live_store_available,
+            "audio_buffer_seconds": round(
+                len(self._live_audio_buffer) / (16000 * 2), 1
+            ),
+            "attempts": self._live_match_attempts,
+            "matches": self._live_match_hits,
+            "fallbacks": self._live_match_fallbacks,
+            "last_status": self._live_last_status,
+            "last_error_class": self._live_last_error_class,
+            "last_error_message": self._live_last_error_message,
+            "last_attempt_ts": self._live_last_attempt_ts,
+        }
 
         # Error info
         if self._error:

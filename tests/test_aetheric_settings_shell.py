@@ -658,10 +658,11 @@ class TestAethericSidebarStructure:
         stack = settings_panel.findChild(QStackedWidget, "AethericContentStack")
         assert stack is not None, "QStackedWidget with objectName 'AethericContentStack' not found"
 
-    def test_content_stack_has_three_pages(self, settings_panel):
+    def test_content_stack_has_four_pages(self, settings_panel):
+        """Settings has 4 pages: General, History, Identities (added in M009-S04), and System."""
         stack = settings_panel.findChild(QStackedWidget, "AethericContentStack")
         assert stack is not None
-        assert stack.count() == 3, f"Expected 3 pages, got {stack.count()}"
+        assert stack.count() == 4, f"Expected 4 pages, got {stack.count()}"
 
     def test_no_dock_bay(self, settings_panel):
         """Dock bay widget was removed in S05 (free-floating panels)."""
@@ -706,8 +707,9 @@ class TestAethericNavButtons:
         yield p
         p.close()
 
-    def test_three_nav_buttons(self, settings_panel):
-        assert len(settings_panel._nav_buttons) == 3
+    def test_four_nav_buttons(self, settings_panel):
+        """Settings has 4 nav buttons: Settings, Performance, History, Identities (added in M009-S04)."""
+        assert len(settings_panel._nav_buttons) == 4
 
     def test_nav_button_object_names(self, settings_panel):
         for btn in settings_panel._nav_buttons:
@@ -715,12 +717,13 @@ class TestAethericNavButtons:
 
     def test_nav_button_nav_ids(self, settings_panel):
         ids = [btn.property("nav_id") for btn in settings_panel._nav_buttons]
-        assert ids == ["settings", "performance", "history"]
+        assert ids == ["settings", "performance", "history", "identities"]
 
     def test_settings_button_initially_checked(self, settings_panel):
         assert settings_panel._nav_settings_btn.isChecked()
         assert not settings_panel._nav_performance_btn.isChecked()
         assert not settings_panel._nav_history_btn.isChecked()
+        assert not settings_panel._nav_identities_btn.isChecked()
 
     def test_nav_click_switches_page(self, settings_panel, qapp):
         """Clicking Performance nav switches content stack to index 1."""

@@ -10,11 +10,11 @@ from PyQt6.QtWidgets import (
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
     QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
-    QCheckBox,
+    QCheckBox, QLineEdit,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
@@ -202,6 +202,509 @@ def _strip_confidence_percentages(text: str) -> str:
     return re.sub(r" \(\d{1,3}%\)", "", text)
 
 
+# ---------------------------------------------------------------------------
+# SpeakerIdentityLinkDialog — identity selection for history speaker labels
+# ---------------------------------------------------------------------------
+
+class SpeakerIdentityLinkDialog(QDialog):
+    """Dialog for linking a raw speaker label to an existing or new identity.
+
+    Loads known identities from a ``VoiceSignatureStore`` (or store-like
+    object) exactly once on construction, then filters the in-memory list
+    per keystroke.  Returns the chosen identity name via
+    ``selected_identity_name()`` without performing any file I/O.
+
+    Args:
+        current_label: The raw speaker label being linked (e.g. ``"SPK_0"``).
+        speaker_matches: Dict mapping raw labels to match dicts or ``None``.
+        store: An object with a ``load_signatures()`` method returning
+               a list of ``SpeakerProfile`` objects.
+        parent: Optional parent widget.
+    """
+
+    def __init__(
+        self,
+        current_label: str,
+        speaker_matches: dict,
+        store: object,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._current_label = current_label
+        self._identity_names: List[str] = []  # cached names from store
+        self._selected_name: Optional[str] = None
+
+        # --- Window setup ---
+        self.setWindowTitle("Link Speaker Identity")
+        self.setMinimumSize(360, 400)
+        self.setMaximumSize(500, 600)
+
+        p = current_palette()
+        self.setStyleSheet(dialog_css(p))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+
+        # --- Current label + match status ---
+        self._current_label_label = QLabel()
+        self._current_label_label.setWordWrap(True)
+        self._current_label_label.setStyleSheet(
+            f"font-weight: bold; font-size: 13px; color: {p.info};"
+        )
+        self._set_label_text(speaker_matches)
+        layout.addWidget(self._current_label_label)
+
+        # --- Status label (for errors/info) ---
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet(f"font-size: 11px; color: {p.text_secondary};")
+        layout.addWidget(self._status_label)
+
+        # --- Filter edit ---
+        self._filter_edit = QLineEdit()
+        self._filter_edit.setPlaceholderText("Filter identities...")
+        self._filter_edit.setStyleSheet(
+            f"background: {p.surface}; color: {p.text}; "
+            f"border: 1px solid {p.border}; border-radius: 4px; padding: 4px 8px;"
+        )
+        self._filter_edit.textChanged.connect(self._on_filter_changed)
+        layout.addWidget(self._filter_edit)
+
+        # --- Identity list ---
+        self._identity_list = QListWidget()
+        self._identity_list.setStyleSheet(list_widget_css(p))
+        self._identity_list.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self._identity_list)
+
+        # --- Create-new section ---
+        new_label = QLabel("Or create a new identity:")
+        new_label.setStyleSheet(f"font-size: 11px; color: {p.text_secondary};")
+        layout.addWidget(new_label)
+
+        self._new_name_edit = QLineEdit()
+        self._new_name_edit.setPlaceholderText("New identity name...")
+        self._new_name_edit.setStyleSheet(
+            f"background: {p.surface}; color: {p.text}; "
+            f"border: 1px solid {p.border}; border-radius: 4px; padding: 4px 8px;"
+        )
+        layout.addWidget(self._new_name_edit)
+
+        # --- Validation label ---
+        self._validation_label = QLabel("")
+        self._validation_label.setStyleSheet(f"font-size: 11px; color: {p.danger};")
+        layout.addWidget(self._validation_label)
+
+        # --- Button box ---
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+        )
+        self._button_box.setStyleSheet(action_button_css(p, "dialog"))
+        self._button_box.accepted.connect(self._on_accept)
+        self._button_box.rejected.connect(self.reject)
+        layout.addWidget(self._button_box)
+
+        # --- Load identities (exactly once) ---
+        self._load_identities(store)
+
+    # ------------------------------------------------------------------
+    # Identity loading
+    # ------------------------------------------------------------------
+
+    def _load_identities(self, store: object) -> None:
+        """Load identity names from the store exactly once.
+
+        On store failure, shows a sanitized status message and keeps
+        the list empty so create-new remains usable.
+        """
+        try:
+            profiles = store.load_signatures()
+        except Exception:
+            self._status_label.setText("Could not load identities from store.")
+            self._identity_names = []
+            return
+
+        self._identity_names = []
+        for profile in profiles:
+            name = getattr(profile, "name", None)
+            if name and isinstance(name, str) and name.strip():
+                self._identity_names.append(name.strip())
+
+        # Populate list widget (sorted, matching store ORDER BY name)
+        self._identity_names.sort()
+        for name in self._identity_names:
+            self._identity_list.addItem(name)
+
+    # ------------------------------------------------------------------
+    # Label/match display
+    # ------------------------------------------------------------------
+
+    def _set_label_text(self, speaker_matches: dict) -> None:
+        """Set the current label display with match status if available."""
+        label_text = f"Speaker: [{self._current_label}]"
+
+        # Safely extract match info
+        match_info = None
+        if isinstance(speaker_matches, dict):
+            match_info = speaker_matches.get(self._current_label)
+
+        if match_info is not None and isinstance(match_info, dict):
+            identity = match_info.get("identity_name", "")
+            score = match_info.get("score", 0)
+            confidence = match_info.get("confidence", "")
+            if identity:
+                label_text += (
+                    f"  \u2192  Currently matched: {identity} "
+                    f"(confidence: {confidence}, score: {score:.2f})"
+                )
+            else:
+                label_text += "  (no current match)"
+        else:
+            label_text += "  (no current match)"
+
+        self._current_label_label.setText(label_text)
+
+    # ------------------------------------------------------------------
+    # Filtering
+    # ------------------------------------------------------------------
+
+    def _on_filter_changed(self, text: str) -> None:
+        """Filter the identity list based on the filter edit text.
+
+        Uses in-memory filtering \u2014 no additional store queries.
+        """
+        filter_text = text.strip().lower()
+        for i in range(self._identity_list.count()):
+            item = self._identity_list.item(i)
+            if not filter_text:
+                item.setHidden(False)
+            else:
+                item.setHidden(filter_text not in item.text().lower())
+
+    # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def selected_identity_name(self) -> Optional[str]:
+        """Return the selected or created identity name.
+
+        Priority:
+        1. Create-new field (if non-empty and non-whitespace)
+        2. Selected list item
+        3. None
+        """
+        new_name = self._new_name_edit.text().strip()
+        if new_name:
+            return new_name
+        current = self._identity_list.currentItem()
+        if current is not None:
+            return current.text()
+        return None
+
+    def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
+        """Accept the dialog on double-click of a list item."""
+        if self._validate_selection():
+            self.accept()
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def _is_duplicate_name(self, name: str) -> bool:
+        """Check whether *name* duplicates an existing identity (case-insensitive)."""
+        return name.lower() in (n.lower() for n in self._identity_names)
+
+    def _validate_selection(self) -> bool:
+        """Validate the current selection / create-new input.
+
+        Returns True if a valid identity is selected/entered and is not
+        a duplicate.  Updates the validation label with an appropriate
+        message on failure.
+        """
+        new_name = self._new_name_edit.text().strip()
+
+        # If create-new is populated, validate it
+        if new_name:
+            if self._is_duplicate_name(new_name):
+                self._validation_label.setText(
+                    "This name already exists as an identity."
+                )
+                return False
+            self._validation_label.setText("")
+            return True
+
+        # Otherwise, check list selection
+        current = self._identity_list.currentItem()
+        if current is not None:
+            self._validation_label.setText("")
+            return True
+
+        self._validation_label.setText("Select an identity or enter a new name.")
+        return False
+
+    def _on_accept(self) -> None:
+        """Handle OK button \u2014 validate before accepting."""
+        if self._validate_selection():
+            self.accept()
+
+
+# ---------------------------------------------------------------------------
+# Module-level identity-link persistence helper
+# ---------------------------------------------------------------------------
+
+
+def _link_speaker_identity_in_file(
+    md_path: Path, raw_label: str, identity_name: str
+) -> None:
+    """Link a raw speaker label to an identity in transcript metadata and body.
+
+    Updates the transcript .md file so that *raw_label* (e.g. ``SPK_0``) is
+    replaced with *identity_name* (e.g. ``Alice``) in the JSON metadata
+    (words, segments), the markdown body headings, and the
+    ``speaker_matches`` map.  Propagates to the ``VoiceSignatureStore``
+    best-effort.
+
+    PII-safe: identity names are never logged.
+
+    Args:
+        md_path: Path to the transcript .md file.
+        raw_label: Raw diarization label to replace (e.g. ``SPK_0``).
+        identity_name: Chosen identity name (e.g. ``Alice``).
+
+    Leaves the file unchanged when:
+        - *identity_name* is empty/whitespace
+        - *identity_name* equals *raw_label*
+        - metadata footer is missing or contains malformed JSON
+    """
+    if not identity_name or not identity_name.strip():
+        return
+
+    identity_name = identity_name.strip()
+
+    if identity_name == raw_label:
+        return
+
+    content = md_path.read_text(encoding="utf-8")
+
+    footer_marker = "\n---\n\n<!-- METADATA:"
+    marker_idx = content.find(footer_marker)
+    if marker_idx == -1:
+        logger.warning("No metadata footer found — cannot link identity")
+        return
+
+    md_body = content[:marker_idx]
+    after_marker = content[marker_idx + len(footer_marker):]
+    space_before_json = ""
+    if after_marker.startswith(" "):
+        space_before_json = " "
+        after_marker = after_marker[1:]
+
+    metadata_text = after_marker
+    if metadata_text.strip().endswith(" -->"):
+        metadata_text = metadata_text.strip()[: -len(" -->")]
+
+    try:
+        data = json.loads(metadata_text)
+    except json.JSONDecodeError:
+        logger.warning("Malformed metadata — leaving file unchanged")
+        return
+
+    # Update words
+    words_updated = 0
+    for word in data.get("words", []):
+        if word.get("speaker_id") == raw_label:
+            word["speaker_id"] = identity_name
+            words_updated += 1
+
+    # Update segments — handle both speaker_id and speaker keys
+    segments_updated = 0
+    for seg in data.get("segments", []):
+        if seg.get("speaker_id") == raw_label:
+            seg["speaker_id"] = identity_name
+            segments_updated += 1
+        if seg.get("speaker") == raw_label:
+            seg["speaker"] = identity_name
+            # Don't double-count if both keys matched same segment
+            if seg.get("speaker_id") != raw_label:
+                segments_updated += 1
+
+    # Update markdown body — exact **label** replacement only
+    updated_body = re.sub(
+        re.escape(f"**{raw_label}**"),
+        f"**{identity_name}**",
+        md_body,
+    )
+
+    # Update or create speaker_matches
+    if "speaker_matches" not in data:
+        data["speaker_matches"] = {}
+
+    existing = data["speaker_matches"].get(raw_label)
+    if isinstance(existing, dict) and "score" in existing and "confidence" in existing:
+        # Preserve prior score/confidence, update identity_name
+        data["speaker_matches"][raw_label] = {
+            "identity_name": identity_name,
+            "score": existing["score"],
+            "confidence": existing["confidence"],
+        }
+    else:
+        # No prior match or null — use manual-link sentinel
+        data["speaker_matches"][raw_label] = {
+            "identity_name": identity_name,
+            "score": 1.0,
+            "confidence": "manual",
+        }
+
+    # Rebuild file
+    updated_json = json.dumps(data, indent=2)
+    new_content = (
+        updated_body + footer_marker + space_before_json + updated_json + " -->\n"
+    )
+    md_path.write_text(new_content, encoding="utf-8")
+
+    logger.info(
+        "Linked identity for raw label in %s (%d words, %d segments)",
+        md_path, words_updated, segments_updated,
+    )
+
+    # Best-effort signature propagation (PII-safe)
+    _propagate_identity_to_signatures(md_path, raw_label, identity_name)
+
+
+def _propagate_identity_to_signatures(
+    md_path: Path, raw_label: str, identity_name: str
+) -> None:
+    """Propagate an identity link to the VoiceSignatureStore (best-effort).
+
+    If a raw speaker profile exists in the signature DB, saves it under the
+    identity name and deletes the raw entry.  Never crashes; all diagnostics
+    are PII-sanitized (no identity names logged).
+    """
+    try:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+    except ImportError:
+        logger.info("VoiceSignatureStore unavailable — skipping propagation")
+        return
+
+    db_path = md_path.parent / "speaker_signatures.db"
+    if not db_path.exists():
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            default_db = get_recordings_dir() / "speaker_signatures.db"
+            if default_db.exists():
+                db_path = default_db
+            else:
+                logger.info("No signature database found — skipping propagation")
+                return
+        except Exception:
+            logger.info("No signature database found — skipping propagation")
+            return
+
+    try:
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            profiles = store.load_signatures()
+            old_profile = None
+            for profile in profiles:
+                if profile.name == raw_label:
+                    old_profile = profile
+                    break
+
+            if old_profile is None:
+                logger.info("Raw speaker not found in signature store — skipping propagation")
+                return
+
+            store.save_signature(
+                identity_name,
+                old_profile.embedding,
+                averaged_from_segments=old_profile.num_samples,
+            )
+            store.delete_signature(raw_label)
+
+            logger.info("Propagated identity link to signature store")
+    except Exception as exc:
+        logger.warning("Failed to propagate identity link to signature store: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Shared identity-link dialog helper for history anchor handlers
+# ---------------------------------------------------------------------------
+
+
+def _open_identity_link_dialog(
+    md_path: Path, raw_label: str, parent_widget: QWidget
+) -> bool:
+    """Open SpeakerIdentityLinkDialog and persist the chosen identity.
+
+    Shared by both FloatingTranscriptPanel and FloatingSettingsPanel anchor
+    handlers so identity-link behaviour stays consistent.
+
+    Returns True if a link was performed (file updated), False otherwise
+    (cancel, validation failure, missing path, etc.).
+
+    PII-safe: identity names are never logged here (delegated to
+    ``_link_speaker_identity_in_file``).
+    """
+    if md_path is None or not md_path.exists():
+        logger.warning("No transcript file selected for identity link")
+        return False
+
+    # Parse speaker_matches from the transcript metadata
+    speaker_matches: dict = {}
+    try:
+        content = md_path.read_text(encoding="utf-8")
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx != -1:
+            metadata_text = content[marker_idx + len(footer_marker):]
+            if metadata_text.strip().endswith(" -->"):
+                metadata_text = metadata_text.strip()[: -len(" -->")]
+            data = json.loads(metadata_text)
+            speaker_matches = data.get("speaker_matches") or {}
+    except (OSError, json.JSONDecodeError):
+        pass  # empty matches is fine — dialog still usable for create-new
+
+    # Construct VoiceSignatureStore (best-effort, dialog still works without)
+    store = None
+    try:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        db_path = md_path.parent / "speaker_signatures.db"
+        if not db_path.exists():
+            try:
+                from meetandread.audio.storage.paths import get_recordings_dir
+                default_db = get_recordings_dir() / "speaker_signatures.db"
+                if default_db.exists():
+                    db_path = default_db
+            except Exception:
+                pass
+
+        if db_path.exists():
+            store = VoiceSignatureStore(db_path=str(db_path))
+    except Exception:
+        pass  # dialog works with None store — create-new path still available
+
+    dialog = SpeakerIdentityLinkDialog(
+        current_label=raw_label,
+        speaker_matches=speaker_matches,
+        store=store,
+        parent=parent_widget,
+    )
+
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return False
+
+    identity_name = dialog.selected_identity_name()
+    if not identity_name or not identity_name.strip():
+        return False
+
+    try:
+        _link_speaker_identity_in_file(md_path, raw_label, identity_name)
+    except Exception as exc:
+        logger.error("Failed to link identity in %s: %s", md_path, exc)
+        return False
+
+    return True
+
+
 class FloatingTranscriptPanel(QWidget):
     """
     Floating transcript panel that appears outside the main widget.
@@ -215,7 +718,7 @@ class FloatingTranscriptPanel(QWidget):
     
     # Signals
     closed = pyqtSignal()  # Emitted when user closes panel
-    segment_ready = pyqtSignal(str, int, int, bool, bool)  # text, confidence, segment_index, is_final, phrase_start
+    segment_ready = pyqtSignal(str, int, int, bool, bool, object)  # text, confidence, segment_index, is_final, phrase_start, speaker_id
     speaker_name_pinned = pyqtSignal(str, str)  # raw_speaker_label, user_chosen_name
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -1634,61 +2137,31 @@ class FloatingTranscriptPanel(QWidget):
     def _on_history_anchor_clicked(self, url: QUrl) -> None:
         """Handle clicks on speaker label anchors in the history viewer.
 
-        Extracts the speaker_id from the ``speaker:{id}`` URL, prompts
-        the user for a new name, and performs the rename.
+        Extracts the speaker_id from the ``speaker:{id}`` URL, opens the
+        identity-link dialog, and persists the chosen identity.
         """
         link = url.toString()
         prefix = "speaker:"
         if not link.startswith(prefix):
             return
 
-        old_name = link[len(prefix):]
-        if not old_name:
+        raw_label = link[len(prefix):]
+        if not raw_label:
             return
 
         parent = self.parent() if self.parent() else self
-        name, ok = QInputDialog.getText(
-            parent,
-            "Rename Speaker",
-            f"Enter a new name for '{old_name}':",
-            text=old_name if not old_name.startswith("SPK_") else "",
-        )
-        if not ok or not name.strip():
-            return
-
-        new_name = name.strip()
-        if new_name == old_name:
-            return
-
         md_path = self._current_history_md_path
-        if md_path is None or not md_path.exists():
-            logger.warning("No transcript file selected for rename")
-            return
 
-        try:
-            self._rename_speaker_in_file(md_path, old_name, new_name)
-        except Exception as exc:
-            logger.error(
-                "Failed to rename speaker '%s' -> '%s' in %s: %s",
-                old_name, new_name, md_path, exc,
-            )
+        linked = _open_identity_link_dialog(md_path, raw_label, parent)
+        if not linked:
             return
-
-        # Propagate to signature store (best-effort)
-        try:
-            self._propagate_rename_to_signatures(md_path, old_name, new_name)
-        except Exception as exc:
-            logger.error(
-                "Failed to propagate rename to signature store for '%s' -> '%s': %s",
-                old_name, new_name, exc,
-            )
 
         # Refresh the viewer
         html = self._render_history_transcript(md_path)
         if html is not None:
             self._history_viewer.setHtml(html)
         else:
-            self._history_viewer.setPlainText("(Error refreshing after rename)")
+            self._history_viewer.setPlainText("(Error refreshing after link)")
 
     def _rename_speaker_in_file(
         self, md_path: Path, old_name: str, new_name: str
@@ -2069,7 +2542,7 @@ class CCOverlayPanel(QWidget):
     """
 
     # Signals
-    segment_ready = pyqtSignal(str, int, int, bool, bool)  # text, confidence, segment_index, is_final, phrase_start
+    segment_ready = pyqtSignal(str, int, int, bool, bool, object)  # text, confidence, segment_index, is_final, phrase_start, speaker_id
 
     # Fade constants (matching FloatingTranscriptPanel)
     _FADE_DURATION_MS = 150
@@ -2557,6 +3030,7 @@ class FloatingSettingsPanel(QWidget):
     _NAV_SETTINGS = 0
     _NAV_PERFORMANCE = 1
     _NAV_HISTORY = 2
+    _NAV_IDENTITIES = 3
 
     def __init__(self, parent: Optional[QWidget] = None,
                  controller: object = None, tray_manager: object = None,
@@ -2708,6 +3182,18 @@ class FloatingSettingsPanel(QWidget):
         self._nav_history_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_HISTORY))
         sidebar_layout.addWidget(self._nav_history_btn)
         self._nav_buttons.append(self._nav_history_btn)
+
+        # Identities nav — T02 wires the real tab
+        self._nav_identities_btn = QPushButton("👤  Identities")
+        self._nav_identities_btn.setObjectName("AethericNavButton")
+        self._nav_identities_btn.setCheckable(True)
+        self._nav_identities_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_identities_btn.setToolTip("Manage stored voice identities")
+        self._nav_identities_btn.setAccessibleName("Identities tab")
+        self._nav_identities_btn.setProperty("nav_id", "identities")
+        self._nav_identities_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_IDENTITIES))
+        sidebar_layout.addWidget(self._nav_identities_btn)
+        self._nav_buttons.append(self._nav_identities_btn)
 
         sidebar_layout.addStretch()
 
@@ -3106,6 +3592,121 @@ class FloatingSettingsPanel(QWidget):
         # -- History state attributes --
         self._current_history_md_path: Optional[Path] = None
 
+        # ------------------------------------------------------------------
+        # Page 3: Identities — voice identity list, detail viewer
+        # ------------------------------------------------------------------
+        identities_page = QWidget()
+        identities_page.setObjectName("AethericIdentitiesPage")
+        identities_layout = QVBoxLayout(identities_page)
+        identities_layout.setContentsMargins(6, 8, 6, 6)
+        identities_layout.setSpacing(0)
+
+        self._identities_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._identities_splitter.setObjectName("AethericIdentitiesSplitter")
+
+        # Top: identity list
+        self._identity_list = QListWidget()
+        self._identity_list.setObjectName("AethericIdentityList")
+        self._identity_list.setAccessibleName("Identity list")
+        self._identity_list.setToolTip("Stored voice identities")
+        self._identity_list.itemClicked.connect(self._on_identity_item_clicked)
+        self._identities_splitter.addWidget(self._identity_list)
+
+        # Bottom: detail header + detail fields
+        identity_detail_container = QWidget()
+        identity_detail_layout = QVBoxLayout(identity_detail_container)
+        identity_detail_layout.setContentsMargins(0, 0, 0, 0)
+        identity_detail_layout.setSpacing(0)
+
+        # Detail header bar (with action buttons, disabled until T03)
+        self._identity_detail_header = QFrame()
+        self._identity_detail_header.setObjectName("AethericIdentityHeader")
+        _id_header_layout = QHBoxLayout(self._identity_detail_header)
+        _id_header_layout.setContentsMargins(6, 2, 6, 2)
+        _id_header_layout.setSpacing(4)
+
+        _id_header_layout.addStretch()
+
+        self._identity_rename_btn = QPushButton("✏  Rename")
+        self._identity_rename_btn.setObjectName("AethericIdentityActionButton")
+        self._identity_rename_btn.setProperty("action", "rename")
+        self._identity_rename_btn.setFixedHeight(26)
+        self._identity_rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._identity_rename_btn.setToolTip("Rename this identity")
+        self._identity_rename_btn.setAccessibleName("Rename identity")
+        self._identity_rename_btn.setEnabled(False)
+        self._identity_rename_btn.clicked.connect(self._on_identity_rename)
+        _id_header_layout.addWidget(self._identity_rename_btn)
+
+        self._identity_merge_btn = QPushButton("🔗  Merge")
+        self._identity_merge_btn.setObjectName("AethericIdentityActionButton")
+        self._identity_merge_btn.setProperty("action", "merge")
+        self._identity_merge_btn.setFixedHeight(26)
+        self._identity_merge_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._identity_merge_btn.setToolTip("Merge into another identity")
+        self._identity_merge_btn.setAccessibleName("Merge identity")
+        self._identity_merge_btn.setEnabled(False)
+        self._identity_merge_btn.clicked.connect(self._on_identity_merge)
+        _id_header_layout.addWidget(self._identity_merge_btn)
+
+        self._identity_delete_btn = QPushButton("🗑  Delete")
+        self._identity_delete_btn.setObjectName("AethericIdentityActionButton")
+        self._identity_delete_btn.setProperty("action", "delete")
+        self._identity_delete_btn.setFixedHeight(26)
+        self._identity_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._identity_delete_btn.setToolTip("Delete this identity")
+        self._identity_delete_btn.setAccessibleName("Delete identity")
+        self._identity_delete_btn.setEnabled(False)
+        self._identity_delete_btn.clicked.connect(self._on_identity_delete)
+        _id_header_layout.addWidget(self._identity_delete_btn)
+
+        self._identity_detail_header.hide()
+        identity_detail_layout.addWidget(self._identity_detail_header)
+
+        # Detail fields (read-only labels)
+        self._identity_detail_widget = QWidget()
+        self._identity_detail_widget.setObjectName("AethericIdentityDetailWidget")
+        _detail_fields_layout = QVBoxLayout(self._identity_detail_widget)
+        _detail_fields_layout.setContentsMargins(8, 8, 8, 8)
+        _detail_fields_layout.setSpacing(4)
+
+        self._identity_name_label = QLabel("Name: —")
+        self._identity_name_label.setObjectName("AethericIdentityDetailLabel")
+        _detail_fields_layout.addWidget(self._identity_name_label)
+
+        self._identity_sample_count_label = QLabel("Samples: —")
+        self._identity_sample_count_label.setObjectName("AethericIdentityDetailLabel")
+        _detail_fields_layout.addWidget(self._identity_sample_count_label)
+
+        self._identity_recording_count_label = QLabel("Recordings: —")
+        self._identity_recording_count_label.setObjectName("AethericIdentityDetailLabel")
+        _detail_fields_layout.addWidget(self._identity_recording_count_label)
+
+        self._identity_last_used_label = QLabel("Last used: —")
+        self._identity_last_used_label.setObjectName("AethericIdentityDetailLabel")
+        _detail_fields_layout.addWidget(self._identity_last_used_label)
+
+        self._identity_recordings_label = QLabel("Associated recordings: —")
+        self._identity_recordings_label.setObjectName("AethericIdentityDetailLabel")
+        self._identity_recordings_label.setWordWrap(True)
+        _detail_fields_layout.addWidget(self._identity_recordings_label)
+
+        _detail_fields_layout.addStretch()
+
+        identity_detail_layout.addWidget(self._identity_detail_widget)
+
+        self._identities_splitter.addWidget(identity_detail_container)
+
+        # 40% list / 60% detail
+        self._identities_splitter.setSizes([160, 240])
+
+        identities_layout.addWidget(self._identities_splitter)
+        self._content_stack.addWidget(identities_page)
+
+        # -- Identities state attributes --
+        self._identity_usage: Dict[str, Any] = {}  # name -> IdentityUsage
+        self._identity_profile_names: List[str] = []  # sorted identity names
+
         # Scrub state
         self._scrub_runner: Optional[object] = None
         self._scrub_model_size: Optional[str] = None
@@ -3273,6 +3874,27 @@ class FloatingSettingsPanel(QWidget):
         self._delete_btn.setStyleSheet(history_btn_css)
         self._history_viewer.setStyleSheet(aetheric_history_viewer_css(p))
 
+        # Identities page — reuse history CSS patterns with Identity object names
+        identities_page = self._content_stack.widget(self._NAV_IDENTITIES)
+        if identities_page is not None:
+            identities_page.setStyleSheet(
+                "QWidget#AethericIdentitiesPage { background-color: transparent; }"
+            )
+        self._identities_splitter.setStyleSheet(aetheric_history_splitter_css(p))
+        self._identity_list.setStyleSheet(aetheric_history_list_css(p))
+        self._identity_detail_header.setStyleSheet(aetheric_history_header_css(p))
+        identity_btn_css = aetheric_history_action_button_css(p)
+        self._identity_rename_btn.setStyleSheet(identity_btn_css)
+        self._identity_merge_btn.setStyleSheet(identity_btn_css)
+        self._identity_delete_btn.setStyleSheet(identity_btn_css)
+        # Detail labels — theme-aware info styling
+        _id_detail_css = info_label_css(p)
+        self._identity_name_label.setStyleSheet(_id_detail_css)
+        self._identity_sample_count_label.setStyleSheet(_id_detail_css)
+        self._identity_recording_count_label.setStyleSheet(_id_detail_css)
+        self._identity_last_used_label.setStyleSheet(_id_detail_css)
+        self._identity_recordings_label.setStyleSheet(_id_detail_css)
+
         # Resize grip — draws its own textured triangle via paintEvent
 
         scheme_name = "dark" if p is DARK_PALETTE else "light"
@@ -3396,6 +4018,10 @@ class FloatingSettingsPanel(QWidget):
         # Refresh History when navigating to it
         if page_index == self._NAV_HISTORY:
             self._refresh_history()
+
+        # Refresh Identities when navigating to it
+        if page_index == self._NAV_IDENTITIES:
+            self._refresh_identities()
 
         nav_id = self._nav_buttons[page_index].property("nav_id") if page_index < len(self._nav_buttons) else "?"
         logger.info("Settings nav changed to '%s' (index %d)", nav_id, page_index)
@@ -3887,6 +4513,376 @@ class FloatingSettingsPanel(QWidget):
         self._refresh_dropdown_wer()
 
     # ------------------------------------------------------------------
+    # Identities page methods
+    # ------------------------------------------------------------------
+
+    def _refresh_identities(self) -> None:
+        """Load voice profiles and scan usage metadata, then populate the identity list.
+
+        Failure Modes:
+        - VoiceSignatureStore.load_signatures() error: show empty state, log failure.
+        - scan_identity_usage() error: show profiles with zero usage, keep tab usable.
+        """
+        self._identity_usage = {}
+        profile_names: List[str] = []
+
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            from meetandread.speaker.signatures import VoiceSignatureStore
+
+            recordings_dir = get_recordings_dir()
+            db_path = recordings_dir / "speaker_signatures.db"
+            store = VoiceSignatureStore(str(db_path))
+            try:
+                profiles = store.load_signatures()
+                profile_names = sorted(
+                    [p.name for p in profiles],
+                    key=lambda n: n.lower(),
+                )
+            finally:
+                store.close()
+        except Exception as exc:
+            logger.info("Identity tab: store load failed: %s", exc)
+            self._populate_identity_list(profile_names, {})
+            return
+
+        # Scan transcript usage
+        usage: Dict[str, Any] = {}
+        if profile_names:
+            try:
+                from meetandread.audio.storage.paths import get_transcripts_dir
+                from meetandread.speaker.identity_management import scan_identity_usage
+
+                transcripts_dir = get_transcripts_dir()
+                usage = scan_identity_usage(transcripts_dir, profile_names)
+            except Exception as exc:
+                logger.info("Identity tab: usage scan failed: %s", exc)
+
+        self._identity_usage = usage
+        self._populate_identity_list(profile_names, usage)
+
+    def _populate_identity_list(
+        self,
+        profile_names: List[str],
+        usage: Dict[str, Any],
+    ) -> None:
+        """Populate the identity list widget from profile names and usage data.
+
+        Args:
+            profile_names: Sorted list of identity names.
+            usage: Mapping from name to IdentityUsage (may be partial/empty).
+        """
+        self._identity_profile_names = list(profile_names)
+        self._identity_list.clear()
+
+        if not profile_names:
+            # Empty state — detail stays hidden
+            self._identity_detail_header.hide()
+            self._clear_identity_detail()
+            return
+
+        for name in profile_names:
+            identity_usage = usage.get(name)
+            rec_count = identity_usage.recording_count if identity_usage else 0
+            display_text = f"{name}  ({rec_count} recording{'s' if rec_count != 1 else ''})"
+            item = QListWidgetItem(display_text)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            self._identity_list.addItem(item)
+
+    def _clear_identity_detail(self) -> None:
+        """Reset identity detail fields to default state and disable action buttons."""
+        self._identity_name_label.setText("Name: —")
+        self._identity_sample_count_label.setText("Samples: —")
+        self._identity_recording_count_label.setText("Recordings: —")
+        self._identity_last_used_label.setText("Last used: —")
+        self._identity_recordings_label.setText("Associated recordings: —")
+        self._identity_rename_btn.setEnabled(False)
+        self._identity_merge_btn.setEnabled(False)
+        self._identity_delete_btn.setEnabled(False)
+
+    def _on_identity_item_clicked(self, item: QListWidgetItem) -> None:
+        """Render the selected identity's details in the detail panel."""
+        name = item.data(Qt.ItemDataRole.UserRole)
+        if not name:
+            return
+
+        # Enable action buttons based on selection and profile count
+        self._identity_rename_btn.setEnabled(True)
+        self._identity_delete_btn.setEnabled(True)
+        # Merge requires at least two identities
+        self._identity_merge_btn.setEnabled(len(self._identity_profile_names) >= 2)
+
+        self._identity_detail_header.show()
+
+        # Look up usage data
+        identity_usage = self._identity_usage.get(name)
+
+        # Look up sample count from the store
+        sample_count = 0
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            from meetandread.speaker.signatures import VoiceSignatureStore
+
+            recordings_dir = get_recordings_dir()
+            db_path = recordings_dir / "speaker_signatures.db"
+            store = VoiceSignatureStore(str(db_path))
+            try:
+                profiles = store.load_signatures()
+                for p in profiles:
+                    if p.name == name:
+                        sample_count = p.num_samples
+                        break
+            finally:
+                store.close()
+        except Exception:
+            pass  # Keep sample_count as 0
+
+        # Update detail fields
+        self._identity_name_label.setText(f"Name: {name}")
+        self._identity_sample_count_label.setText(f"Samples: {sample_count}")
+
+        if identity_usage:
+            rec_count = identity_usage.recording_count
+            self._identity_recording_count_label.setText(f"Recordings: {rec_count}")
+
+            if identity_usage.last_activity:
+                from datetime import datetime
+                try:
+                    dt = datetime.fromtimestamp(identity_usage.last_activity)
+                    self._identity_last_used_label.setText(
+                        f"Last used: {dt.strftime('%Y-%m-%d %H:%M')}"
+                    )
+                except (OSError, ValueError):
+                    self._identity_last_used_label.setText("Last used: —")
+            else:
+                self._identity_last_used_label.setText("Last used: —")
+
+            if identity_usage.recordings:
+                rec_paths = [
+                    r.path.stem for r in identity_usage.recordings[:10]
+                ]
+                extra = (
+                    f" (+{len(identity_usage.recordings) - 10} more)"
+                    if len(identity_usage.recordings) > 10
+                    else ""
+                )
+                self._identity_recordings_label.setText(
+                    f"Associated recordings: {', '.join(rec_paths)}{extra}"
+                )
+            else:
+                self._identity_recordings_label.setText("Associated recordings: none")
+        else:
+            self._identity_recording_count_label.setText("Recordings: 0")
+            self._identity_last_used_label.setText("Last used: —")
+            self._identity_recordings_label.setText("Associated recordings: —")
+
+    # ------------------------------------------------------------------
+    # Identity mutation handlers (T03)
+    # ------------------------------------------------------------------
+
+    def _get_selected_identity_name(self) -> Optional[str]:
+        """Return the name of the currently selected identity, or None."""
+        item = self._identity_list.currentItem()
+        if item is None:
+            return None
+        name = item.data(Qt.ItemDataRole.UserRole)
+        return name if name else None
+
+    def _get_identity_store_and_transcripts_dir(self):
+        """Return (store, transcripts_dir) for identity mutations.
+
+        Raises RuntimeError if either cannot be resolved.
+        """
+        from meetandread.audio.storage.paths import get_recordings_dir, get_transcripts_dir
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        recordings_dir = get_recordings_dir()
+        db_path = recordings_dir / "speaker_signatures.db"
+        store = VoiceSignatureStore(str(db_path))
+        transcripts_dir = get_transcripts_dir()
+        return store, transcripts_dir
+
+    def _refresh_and_reselect(self, target_name: Optional[str] = None) -> None:
+        """Refresh the identity list and optionally reselect a name.
+
+        Uses deterministic reselection by name, never by stale item refs.
+        """
+        self._refresh_identities()
+        if target_name:
+            for i in range(self._identity_list.count()):
+                item = self._identity_list.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == target_name:
+                    self._identity_list.setCurrentItem(item)
+                    self._on_identity_item_clicked(item)
+                    return
+            # target_name no longer exists (e.g. after merge source deleted)
+            self._clear_identity_detail()
+            self._identity_detail_header.hide()
+
+    def _on_identity_rename(self) -> None:
+        """Handle the Rename action: prompt for new name, validate, rename."""
+        old_name = self._get_selected_identity_name()
+        if not old_name:
+            return
+
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Rename Identity",
+            f"New name for identity:",
+            text=old_name,
+        )
+        if not ok:
+            return  # User cancelled
+
+        new_name = new_name.strip()
+        if not new_name:
+            QMessageBox.warning(
+                self, "Rename Failed", "Identity name must not be empty."
+            )
+            return
+
+        if new_name == old_name:
+            QMessageBox.warning(
+                self, "Rename Failed", "New name must differ from the current name."
+            )
+            return
+
+        # Check for duplicate (case-sensitive, since store is case-sensitive)
+        if new_name in self._identity_profile_names:
+            QMessageBox.warning(
+                self, "Rename Failed",
+                f"An identity named \"{new_name}\" already exists."
+            )
+            return
+
+        try:
+            store, transcripts_dir = self._get_identity_store_and_transcripts_dir()
+            try:
+                from meetandread.speaker.identity_management import rename_identity
+                rename_identity(store, transcripts_dir, old_name, new_name)
+            finally:
+                store.close()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Rename Failed", f"Could not rename identity: {exc}"
+            )
+            self._refresh_identities()
+            return
+
+        logger.info("Identity rename completed via Settings UI")
+        self._refresh_and_reselect(target_name=new_name)
+
+    def _on_identity_merge(self) -> None:
+        """Handle the Merge action: pick target, confirm, merge."""
+        source_name = self._get_selected_identity_name()
+        if not source_name:
+            return
+
+        # Build list of potential targets (exclude source)
+        other_names = [n for n in self._identity_profile_names if n != source_name]
+        if not other_names:
+            QMessageBox.information(
+                self, "Merge", "No other identities available to merge into."
+            )
+            return
+
+        # Build a small dialog with a combo box
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Merge Identity")
+        dialog.setMinimumWidth(320)
+        layout = QVBoxLayout(dialog)
+
+        layout.addWidget(QLabel(
+            f"Merge \"{source_name}\" into which identity?\n\n"
+            "Transcripts and voice signatures will be updated."
+        ))
+
+        combo = QComboBox()
+        combo.addItems(other_names)
+        combo.setEditable(False)
+        layout.addWidget(combo)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        target_name = combo.currentText()
+        if not target_name or target_name == source_name:
+            return
+
+        # Confirmation
+        reply = QMessageBox.question(
+            self,
+            "Confirm Merge",
+            f"Merge \"{source_name}\" into \"{target_name}\"?\n\n"
+            "This will update voice signatures and transcript references.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            store, transcripts_dir = self._get_identity_store_and_transcripts_dir()
+            try:
+                from meetandread.speaker.identity_management import merge_identities
+                merge_identities(store, transcripts_dir, source_name, target_name)
+            finally:
+                store.close()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Merge Failed", f"Could not merge identity: {exc}"
+            )
+            self._refresh_identities()
+            return
+
+        logger.info("Identity merge completed via Settings UI")
+        self._refresh_and_reselect(target_name=target_name)
+
+    def _on_identity_delete(self) -> None:
+        """Handle the Delete action: confirm, delete from store, refresh."""
+        name = self._get_selected_identity_name()
+        if not name:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Delete",
+            f"Delete voice identity \"{name}\"?\n\n"
+            "The voice signature will be removed from the database. "
+            "Transcript references will be preserved as historical records.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            store, transcripts_dir = self._get_identity_store_and_transcripts_dir()
+            try:
+                from meetandread.speaker.identity_management import delete_identity
+                delete_identity(store, transcripts_dir, name)
+            finally:
+                store.close()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Delete Failed", f"Could not delete identity: {exc}"
+            )
+            self._refresh_identities()
+            return
+
+        logger.info("Identity delete completed via Settings UI")
+        # After delete, the identity is gone — clear detail and refresh
+        self._refresh_and_reselect(target_name=None)
+
+    # ------------------------------------------------------------------
     # History page methods (adapted from FloatingTranscriptPanel)
     # ------------------------------------------------------------------
 
@@ -4156,51 +5152,22 @@ class FloatingSettingsPanel(QWidget):
         if not link.startswith(prefix):
             return
 
-        old_name = link[len(prefix):]
-        if not old_name:
+        raw_label = link[len(prefix):]
+        if not raw_label:
             return
 
         parent = self.parent() if self.parent() else self
-        name, ok = QInputDialog.getText(
-            parent,
-            "Rename Speaker",
-            f"Enter a new name for '{old_name}':",
-            text=old_name if not old_name.startswith("SPK_") else "",
-        )
-        if not ok or not name.strip():
-            return
-
-        new_name = name.strip()
-        if new_name == old_name:
-            return
-
         md_path = self._current_history_md_path
-        if md_path is None or not md_path.exists():
-            logger.warning("No transcript file selected for rename")
-            return
 
-        try:
-            self._rename_speaker_in_file(md_path, old_name, new_name)
-        except Exception as exc:
-            logger.error(
-                "Failed to rename speaker '%s' -> '%s' in %s: %s",
-                old_name, new_name, md_path, exc,
-            )
+        linked = _open_identity_link_dialog(md_path, raw_label, parent)
+        if not linked:
             return
-
-        try:
-            self._propagate_rename_to_signatures(md_path, old_name, new_name)
-        except Exception as exc:
-            logger.error(
-                "Failed to propagate rename to signature store for '%s' -> '%s': %s",
-                old_name, new_name, exc,
-            )
 
         html = self._render_history_transcript(md_path)
         if html is not None:
             self._history_viewer.setHtml(html)
         else:
-            self._history_viewer.setPlainText("(Error refreshing after rename)")
+            self._history_viewer.setPlainText("(Error refreshing after link)")
 
     def _rename_speaker_in_file(
         self, md_path: Path, old_name: str, new_name: str

@@ -254,32 +254,53 @@ class TranscriptStore:
             
             return "\n".join(lines)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(
+        self,
+        speaker_matches: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+    ) -> Dict[str, Any]:
         """Serialize transcript to dictionary.
-        
+
+        Args:
+            speaker_matches: Optional mapping from raw diarization labels
+                (e.g. ``"spk_0"``) to identity match info dicts with keys
+                ``identity_name``, ``score``, ``confidence`` — or ``None``
+                for unmatched speakers.  When omitted, an empty dict is
+                stored so downstream readers always find the key present.
+
         Returns:
-            Dictionary with all transcript data
+            Dictionary with all transcript data including speaker_matches.
         """
         with self._lock:
-            return {
-                "recording_start_time": self._recording_start_time.isoformat() 
+            result: Dict[str, Any] = {
+                "recording_start_time": self._recording_start_time.isoformat()
                     if self._recording_start_time else None,
                 "word_count": len(self._words),
                 "words": [w.to_dict() for w in self._words],
                 "segments": [s.to_dict() for s in self._get_segments_internal()],
             }
+            # Always include speaker_matches so downstream consumers can
+            # rely on the key existing (empty dict when no matches provided).
+            result["speaker_matches"] = speaker_matches if speaker_matches is not None else {}
+            return result
     
-    def save_to_file(self, path: Path) -> None:
+    def save_to_file(
+        self,
+        path: Path,
+        speaker_matches: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+    ) -> None:
         """Save transcript to a file.
-        
+
         Saves as markdown with embedded JSON metadata.
-        
+
         Args:
-            path: Path to save the transcript
+            path: Path to save the transcript.
+            speaker_matches: Optional mapping from raw diarization labels
+                to identity match dicts (or ``None`` for unmatched).
+                Passed through to :meth:`to_dict`.
         """
         markdown = self.to_markdown(include_confidence=False)
-        data = self.to_dict()
-        
+        data = self.to_dict(speaker_matches=speaker_matches)
+
         with open(path, 'w', encoding='utf-8') as f:
             f.write(markdown)
             f.write("\n\n---\n\n")

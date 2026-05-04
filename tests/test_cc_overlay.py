@@ -584,10 +584,10 @@ class TestSegmentReadySignal:
         """
         received = []
         cc_panel.segment_ready.connect(
-            lambda t, c, si, f, ps: received.append((t, c, si, f, ps))
+            lambda t, c, si, f, ps, sid: received.append((t, c, si, f, ps, sid))
         )
         # Simulate external emission (as _on_phrase_result does)
-        cc_panel.segment_ready.emit("Test", 80, 0, True, True)
+        cc_panel.segment_ready.emit("Test", 80, 0, True, True, None)
         qapp.processEvents()
         assert len(received) == 1
 

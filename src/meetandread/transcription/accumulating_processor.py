@@ -43,6 +43,7 @@ class SegmentResult:
     segment_index: int  # Position in the phrase for UI matching
     is_final: bool  # True if this segment is from a completed phrase
     phrase_start: bool = False  # True if this is the first segment of a new phrase
+    speaker_id: Optional[str] = None  # Matched speaker identifier (live diarization)
 
 
 class AccumulatingTranscriptionProcessor:
