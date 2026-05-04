@@ -100,7 +100,7 @@ class TexturedSizeGrip(QSizeGrip):
     classic Windows resize-handle appearance.
     """
 
-    def __init__(self, parent: QWidget, color: str = "rgba(255, 255, 255, 160)") -> None:
+    def __init__(self, parent: QWidget, color: str = "white") -> None:
         super().__init__(parent)
         from PyQt6.QtGui import QColor
         self._color = QColor(color)
