@@ -494,3 +494,79 @@ class TestSingleLoad:
         dlg._filter_edit.setText("")
         dlg._filter_edit.setText("bob")
         assert call_count == 1
+
+
+class TestExtraIdentityNames:
+    """Verify extra_identity_names are merged into the dialog list."""
+
+    def test_extra_names_appear_in_list(self, qapp):
+        """Transcript-discovered identities appear alongside store profiles."""
+        store = FakeVoiceSignatureStore(profiles=_make_profiles("Alice"))
+        dlg = SpeakerIdentityLinkDialog(
+            current_label="SPK_0",
+            speaker_matches={},
+            store=store,
+            extra_identity_names={"Bob", "Carol"},
+        )
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        assert "Alice" in names
+        assert "Bob" in names
+        assert "Carol" in names
+
+    def test_extra_names_deduplicated_with_store(self, qapp):
+        """If extra name already in store, don't show it twice."""
+        store = FakeVoiceSignatureStore(profiles=_make_profiles("Alice"))
+        dlg = SpeakerIdentityLinkDialog(
+            current_label="SPK_0",
+            speaker_matches={},
+            store=store,
+            extra_identity_names={"Alice", "Bob"},
+        )
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        assert names.count("Alice") == 1
+        assert "Bob" in names
+
+    def test_extra_names_work_with_none_store(self, qapp):
+        """Extra names still populate list when store is None."""
+        dlg = SpeakerIdentityLinkDialog(
+            current_label="SPK_0",
+            speaker_matches={},
+            store=None,
+            extra_identity_names={"Alice"},
+        )
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        assert "Alice" in names
+
+    def test_extra_names_empty_when_none(self, qapp):
+        """Passing no extra names is the same as empty set."""
+        store = FakeVoiceSignatureStore(profiles=_make_profiles("Alice"))
+        dlg = SpeakerIdentityLinkDialog(
+            current_label="SPK_0",
+            speaker_matches={},
+            store=store,
+        )
+        assert dlg._identity_list.count() == 1
+
+    def test_extra_names_sorted_alphabetically(self, qapp):
+        """Extra names are sorted alongside store names."""
+        store = FakeVoiceSignatureStore()
+        dlg = SpeakerIdentityLinkDialog(
+            current_label="SPK_0",
+            speaker_matches={},
+            store=store,
+            extra_identity_names={"Zara", "Alice", "Bob"},
+        )
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        assert names == ["Alice", "Bob", "Zara"]
+
+    def test_extra_names_selectable(self, qapp):
+        """User can select a transcript-discovered identity from the list."""
+        store = FakeVoiceSignatureStore()
+        dlg = SpeakerIdentityLinkDialog(
+            current_label="SPK_0",
+            speaker_matches={},
+            store=store,
+            extra_identity_names={"Alice"},
+        )
+        dlg._identity_list.setCurrentRow(0)
+        assert dlg.selected_identity_name() == "Alice"

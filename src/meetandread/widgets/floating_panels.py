@@ -227,12 +227,14 @@ class SpeakerIdentityLinkDialog(QDialog):
         current_label: str,
         speaker_matches: dict,
         store: object,
+        extra_identity_names: Optional[set] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._current_label = current_label
         self._identity_names: List[str] = []  # cached names from store
         self._selected_name: Optional[str] = None
+        self._extra_identity_names = extra_identity_names or set()
 
         # --- Window setup ---
         self.setWindowTitle("Link Speaker Identity")
@@ -311,26 +313,32 @@ class SpeakerIdentityLinkDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _load_identities(self, store: object) -> None:
-        """Load identity names from the store exactly once.
+        """Load identity names from the store and extra sources, then populate list.
 
-        On store failure, shows a sanitized status message and keeps
-        the list empty so create-new remains usable.
+        On store failure, still populates from extra_identity_names so
+        create-new remains usable alongside transcript-discovered names.
         """
-        try:
-            profiles = store.load_signatures()
-        except Exception:
-            self._status_label.setText("Could not load identities from store.")
-            self._identity_names = []
-            return
-
         self._identity_names = []
-        for profile in profiles:
-            name = getattr(profile, "name", None)
-            if name and isinstance(name, str) and name.strip():
-                self._identity_names.append(name.strip())
 
-        # Populate list widget (sorted, matching store ORDER BY name)
-        self._identity_names.sort()
+        # Load from VoiceSignatureStore
+        if store is not None:
+            try:
+                profiles = store.load_signatures()
+                for profile in profiles:
+                    name = getattr(profile, "name", None)
+                    if name and isinstance(name, str) and name.strip():
+                        self._identity_names.append(name.strip())
+            except Exception:
+                self._status_label.setText("Could not load identities from store.")
+
+        # Merge transcript-discovered names (won't have embeddings)
+        store_names = set(self._identity_names)
+        for name in self._extra_identity_names:
+            if name not in store_names:
+                self._identity_names.append(name)
+
+        # Populate list widget (sorted)
+        self._identity_names.sort(key=lambda n: n.lower())
         for name in self._identity_names:
             self._identity_list.addItem(name)
 
@@ -673,19 +681,42 @@ def _open_identity_link_dialog(
         from meetandread.speaker.signatures import VoiceSignatureStore
 
         db_path = md_path.parent / "speaker_signatures.db"
-        if not db_path.exists():
-            try:
-                from meetandread.audio.storage.paths import get_recordings_dir
-                default_db = get_recordings_dir() / "speaker_signatures.db"
-                if default_db.exists():
-                    db_path = default_db
-            except Exception:
-                pass
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            default_db = get_recordings_dir() / "speaker_signatures.db"
+            # Prefer the default recordings-dir DB (authoritative location)
+            db_path = default_db
+        except Exception:
+            pass
 
-        if db_path.exists():
-            store = VoiceSignatureStore(db_path=str(db_path))
+        store = VoiceSignatureStore(db_path=str(db_path))
     except Exception:
         pass  # dialog works with None store — create-new path still available
+
+    # Discover additional identity names from transcript speaker_matches
+    # that were linked without embeddings (won't appear in VoiceSignatureStore).
+    transcript_identity_names: set = set()
+    try:
+        from meetandread.audio.storage.paths import get_transcripts_dir
+        from meetandread.speaker.identity_management import parse_metadata_footer
+
+        transcripts_dir = get_transcripts_dir()
+        if transcripts_dir.is_dir():
+            for tmd_path in transcripts_dir.glob("*.md"):
+                try:
+                    tcontent = tmd_path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                tdata = parse_metadata_footer(tcontent)
+                if tdata is None:
+                    continue
+                for _label, match_info in tdata.get("speaker_matches", {}).items():
+                    if isinstance(match_info, dict):
+                        tname = match_info.get("identity_name")
+                        if tname:
+                            transcript_identity_names.add(tname)
+    except Exception:
+        pass  # transcript discovery is best-effort
 
     # Use display-friendly label for dialog, keep sentinel for file updates
     display_label = "Unknown Speaker" if raw_label == "__unknown__" else raw_label
@@ -694,6 +725,7 @@ def _open_identity_link_dialog(
         current_label=display_label,
         speaker_matches=speaker_matches,
         store=store,
+        extra_identity_names=transcript_identity_names,
         parent=parent_widget,
     )
 
