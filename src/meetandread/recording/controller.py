@@ -390,8 +390,12 @@ class RecordingController:
                 print(f"[{_ts()}] DEBUG: Running speaker diarization ({word_count} words in transcript)...")
                 self._run_diarization(self._last_wav_path)
                 # Check how many words got speaker labels
-                tagged = sum(1 for w in self._transcript_store.get_all_words() if w.speaker_id is not None)
+                tagged_words = self._transcript_store.get_all_words()
+                tagged = sum(1 for w in tagged_words if w.speaker_id is not None)
                 print(f"[{_ts()}] DEBUG: After diarization: {tagged}/{word_count} words have speaker labels")
+                if tagged_words:
+                    sample = [(w.text, w.speaker_id) for w in tagged_words[:3]]
+                    print(f"[{_ts()}] DEBUG: Sample words: {sample}")
             
             # Save transcript if available
             transcript_path = None

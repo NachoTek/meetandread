@@ -301,6 +301,10 @@ class TranscriptStore:
         markdown = self.to_markdown(include_confidence=False)
         data = self.to_dict(speaker_matches=speaker_matches)
 
+        # Debug: check if speaker_id survived serialization
+        speakers_in_data = set(w.get('speaker_id') for w in data.get('words', []))
+        print(f"[DEBUG save_to_file] speaker_ids in serialized data: {speakers_in_data}")
+
         with open(path, 'w', encoding='utf-8') as f:
             f.write(markdown)
             f.write("\n\n---\n\n")
