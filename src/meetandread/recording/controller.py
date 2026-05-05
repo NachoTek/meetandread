@@ -386,16 +386,7 @@ class RecordingController:
             
             # --- Speaker diarization (post-processing step) ---
             if self._transcript_store and self._last_wav_path:
-                word_count = self._transcript_store.get_word_count()
-                print(f"[{_ts()}] DEBUG: Running speaker diarization ({word_count} words in transcript)...")
                 self._run_diarization(self._last_wav_path)
-                # Check how many words got speaker labels
-                tagged_words = self._transcript_store.get_all_words()
-                tagged = sum(1 for w in tagged_words if w.speaker_id is not None)
-                print(f"[{_ts()}] DEBUG: After diarization: {tagged}/{word_count} words have speaker labels")
-                if tagged_words:
-                    sample = [(w.text, w.speaker_id) for w in tagged_words[:3]]
-                    print(f"[{_ts()}] DEBUG: Sample words: {sample}")
             
             # Save transcript if available
             transcript_path = None
@@ -942,7 +933,6 @@ class RecordingController:
                 "Diarized %s: %d segments, %d speakers",
                 wav_path.name, len(result.segments), result.num_speakers,
             )
-            print(f"[{_ts()}] DEBUG: Diarized {wav_path.name}: {len(result.segments)} segments, {result.num_speakers} speakers")
 
             # --- Clean up noisy over-segmentation ---
             from meetandread.speaker.diarizer import cleanup_diarization_segments
@@ -976,20 +966,31 @@ class RecordingController:
 
             # Store result for pin-to-name UX
             self._last_diarization_result = result
-            print(f"[{_ts()}] DEBUG: Speaker labels applied, result stored")
 
         except Exception as exc:
             logger.error(
                 "Speaker diarization error for %s: %s",
                 wav_path.name, exc, exc_info=True,
             )
-            print(f"[{_ts()}] DEBUG: Speaker diarization FAILED for {wav_path.name}: {exc}")
 
     def _apply_speaker_labels(self, result: "DiarizationResult") -> None:
         """Tag transcript store words with speaker IDs from diarization.
 
-        For each diarized segment, finds words whose time range overlaps
-        and assigns the resolved speaker label (known name or SPK_N).
+        Strategy:
+
+        1. **Midpoint overlap**: For each word, check if its midpoint
+           falls within a diarization segment. Assign the segment's
+           speaker label.
+
+        2. **Single-speaker fill**: When only 1 speaker is detected,
+           the diarization segment often covers only part of the audio
+           (pyannote is conservative on short recordings). In this
+           case, assign ALL words to that single speaker regardless
+           of segment boundaries.
+
+        3. **Nearest-speaker fill**: For multi-speaker recordings,
+           words that fall in gaps between segments are assigned to
+           the temporally nearest segment's speaker.
 
         Args:
             result: A successful DiarizationResult with segments and matches.
@@ -1008,6 +1009,10 @@ class RecordingController:
             if raw not in label_map:
                 label_map[raw] = result.speaker_label_for(raw)
 
+        if not label_map:
+            return
+
+        # --- Pass 1: midpoint overlap ---
         tagged_count = 0
         for word in words:
             word_mid = (word.start_time + word.end_time) / 2
@@ -1016,6 +1021,32 @@ class RecordingController:
                     word.speaker_id = label_map[seg.speaker]
                     tagged_count += 1
                     break
+
+        # --- Pass 2: fill untagged words ---
+        if tagged_count < len(words):
+            if len(label_map) == 1:
+                # Single speaker: assign all words to that speaker
+                single_label = next(iter(label_map.values()))
+                for word in words:
+                    if word.speaker_id is None:
+                        word.speaker_id = single_label
+                        tagged_count += 1
+            else:
+                # Multi-speaker: assign to nearest segment's speaker
+                sorted_segments = sorted(result.segments, key=lambda s: s.start)
+                for word in words:
+                    if word.speaker_id is not None:
+                        continue
+                    word_mid = (word.start_time + word.end_time) / 2
+                    nearest_label = min(
+                        sorted_segments,
+                        key=lambda s: min(
+                            abs(word_mid - s.start),
+                            abs(word_mid - s.end),
+                        ),
+                    ).speaker
+                    word.speaker_id = label_map[nearest_label]
+                    tagged_count += 1
 
         logger.info(
             "Tagged %d/%d words with speaker labels (%d speakers)",
