@@ -386,7 +386,12 @@ class RecordingController:
             
             # --- Speaker diarization (post-processing step) ---
             if self._transcript_store and self._last_wav_path:
+                word_count = self._transcript_store.get_word_count()
+                print(f"[{_ts()}] DEBUG: Running speaker diarization ({word_count} words in transcript)...")
                 self._run_diarization(self._last_wav_path)
+                # Check how many words got speaker labels
+                tagged = sum(1 for w in self._transcript_store.get_all_words() if w.speaker_id is not None)
+                print(f"[{_ts()}] DEBUG: After diarization: {tagged}/{word_count} words have speaker labels")
             
             # Save transcript if available
             transcript_path = None
@@ -933,6 +938,7 @@ class RecordingController:
                 "Diarized %s: %d segments, %d speakers",
                 wav_path.name, len(result.segments), result.num_speakers,
             )
+            print(f"[{_ts()}] DEBUG: Diarized {wav_path.name}: {len(result.segments)} segments, {result.num_speakers} speakers")
 
             # --- Clean up noisy over-segmentation ---
             from meetandread.speaker.diarizer import cleanup_diarization_segments
@@ -966,12 +972,14 @@ class RecordingController:
 
             # Store result for pin-to-name UX
             self._last_diarization_result = result
+            print(f"[{_ts()}] DEBUG: Speaker labels applied, result stored")
 
         except Exception as exc:
             logger.error(
                 "Speaker diarization error for %s: %s",
                 wav_path.name, exc, exc_info=True,
             )
+            print(f"[{_ts()}] DEBUG: Speaker diarization FAILED for {wav_path.name}: {exc}")
 
     def _apply_speaker_labels(self, result: "DiarizationResult") -> None:
         """Tag transcript store words with speaker IDs from diarization.
