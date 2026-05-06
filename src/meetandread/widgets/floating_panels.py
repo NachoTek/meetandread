@@ -589,8 +589,13 @@ def _propagate_identity_to_signatures(
     """Propagate an identity link to the VoiceSignatureStore (best-effort).
 
     If a raw speaker profile exists in the signature DB, saves it under the
-    identity name and deletes the raw entry.  Never crashes; all diagnostics
-    are PII-sanitized (no identity names logged).
+    identity name and deletes the raw entry.
+
+    When *raw_label* is ``"__unknown__"`` (the Unknown Speaker sentinel),
+    resolves the actual SPK_N label(s) from the transcript metadata so the
+    correct embedding can be propagated.
+
+    Never crashes; all diagnostics are PII-sanitized.
     """
     try:
         from meetandread.speaker.signatures import VoiceSignatureStore
@@ -612,29 +617,69 @@ def _propagate_identity_to_signatures(
             logger.info("No signature database found — skipping propagation")
             return
 
+    # Resolve __unknown__ to actual SPK_N label(s) from the transcript
+    resolved_labels: list[str] = []
+    if raw_label == "__unknown__":
+        resolved_labels = _resolve_unknown_speaker_labels(md_path)
+        if not resolved_labels:
+            logger.info("No SPK labels found in transcript for __unknown__ — skipping propagation")
+            return
+    else:
+        resolved_labels = [raw_label]
+
     try:
         with VoiceSignatureStore(db_path=str(db_path)) as store:
             profiles = store.load_signatures()
-            old_profile = None
-            for profile in profiles:
-                if profile.name == raw_label:
-                    old_profile = profile
-                    break
+            profile_map = {p.name: p for p in profiles}
 
-            if old_profile is None:
-                logger.info("Raw speaker not found in signature store — skipping propagation")
-                return
+            for label in resolved_labels:
+                old_profile = profile_map.get(label)
+                if old_profile is None:
+                    logger.info("Raw speaker '%s' not found in signature store — skipping", label)
+                    continue
 
-            store.save_signature(
-                identity_name,
-                old_profile.embedding,
-                averaged_from_segments=old_profile.num_samples,
-            )
-            store.delete_signature(raw_label)
+                store.save_signature(
+                    identity_name,
+                    old_profile.embedding,
+                    averaged_from_segments=old_profile.num_samples,
+                )
+                store.delete_signature(label)
 
-            logger.info("Propagated identity link to signature store")
+                logger.info("Propagated identity link to signature store")
     except Exception as exc:
         logger.warning("Failed to propagate identity link to signature store: %s", exc)
+
+
+def _resolve_unknown_speaker_labels(md_path: Path) -> list[str]:
+    """Resolve __unknown__ to the actual SPK_N labels used in a transcript.
+
+    Reads the transcript metadata and collects all unique non-None speaker IDs
+    from words.  For a single-speaker recording with __unknown__ as the match
+    key, this returns the single SPK_N label that was assigned during
+    diarization.
+
+    Returns:
+        List of SPK_N labels found in the transcript, or empty list.
+    """
+    import json
+
+    try:
+        content = md_path.read_text(encoding="utf-8")
+        marker = "\n---\n\n<!-- METADATA: "
+        idx = content.find(marker)
+        if idx < 0:
+            return []
+        data = json.loads(content[idx + len(marker) :].rstrip(" -->\n"))
+
+        # Collect all unique non-None speaker_ids from words
+        labels: set[str] = set()
+        for w in data.get("words", []):
+            sid = w.get("speaker_id")
+            if sid is not None:
+                labels.add(sid)
+        return sorted(labels)
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------

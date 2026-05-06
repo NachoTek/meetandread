@@ -946,7 +946,14 @@ class RecordingController:
                     0.2, 0.5,
                 )
 
-            # (2) Match speaker embeddings against known signatures
+            # (2) Save diarization embeddings to signature store and match
+            #     against known identities.
+            #
+            #     Every new speaker gets a raw-label profile (SPK_N) so the
+            #     user can later link it to an identity via the history
+            #     dialog.  If the embedding already matches a known
+            #     identity, we skip the raw save and record the match
+            #     instead.
             db_path = get_recordings_dir() / "speaker_signatures.db"
             with VoiceSignatureStore(db_path=db_path) as store:
                 for label, sig in result.signatures.items():
@@ -959,6 +966,21 @@ class RecordingController:
                         logger.debug(
                             "Matched %s -> '%s' (score=%.4f, confidence=%s)",
                             label, match.name, match.score, match.confidence,
+                        )
+                    else:
+                        # Save raw profile so it can be linked later.
+                        # Use the same display label (SPK_N) that
+                        # _apply_speaker_labels will assign to words.
+                        display_label = result.speaker_label_for(label)
+                        emb = np.asarray(sig.embedding, dtype=np.float32)
+                        store.save_signature(
+                            display_label,
+                            emb,
+                            averaged_from_segments=sig.num_segments,
+                        )
+                        logger.debug(
+                            "Saved raw profile '%s' to signature store (no known match)",
+                            display_label,
                         )
 
             # (3) Tag transcript words with speaker labels
