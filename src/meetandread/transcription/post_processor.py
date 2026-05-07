@@ -295,9 +295,33 @@ class PostProcessingQueue:
             audio_duration = len(audio_data) / 16000.0  # 16kHz sample rate
             enhanced_store = self._create_post_processed_transcript(segments, audio_duration)
             self._update_progress(job, 90)
-            
-            # Save post-processed transcript (overwrites original .md)
-            transcript_path = self._save_post_processed_transcript(job, enhanced_store)
+
+            # Transfer speaker labels from realtime transcript to post-processed words.
+            # The realtime transcript has speaker labels from diarization; the
+            # post-processed transcript has better word text/timing from the
+            # stronger model but no speaker info.  Merge by time overlap.
+            if job.realtime_transcript:
+                self._transfer_speaker_labels(job.realtime_transcript, enhanced_store)
+
+            # Save post-processed transcript (overwrites original .md).
+            # Carry forward speaker_matches from the realtime transcript's
+            # diarization result so identity metadata survives the overwrite.
+            speaker_matches = None
+            if job.realtime_transcript:
+                try:
+                    from meetandread.audio.storage.paths import get_recordings_dir
+                    from meetandread.recording.controller import RecordingController
+                    # Read the original file to extract speaker_matches
+                    # (stored by _save_transcript before post-processing)
+                    base_name = job.audio_file.stem
+                    original_path = job.output_dir / f"{base_name}.md"
+                    speaker_matches = self._read_speaker_matches(original_path)
+                except Exception:
+                    pass
+
+            transcript_path = self._save_post_processed_transcript(
+                job, enhanced_store, speaker_matches=speaker_matches,
+            )
             self._update_progress(job, 100)
             
             # Mark complete
@@ -475,8 +499,82 @@ class PostProcessingQueue:
             store.add_words(words)
         
         return store
+
+    def _transfer_speaker_labels(
+        self,
+        realtime_store: TranscriptStore,
+        postproc_store: TranscriptStore,
+    ) -> None:
+        """Transfer speaker labels from realtime to post-processed words.
+
+        Uses time-overlap matching: for each post-processed word, find the
+        realtime word whose time range overlaps most and copy its speaker_id.
+
+        Args:
+            realtime_store: The realtime transcript with speaker labels.
+            postproc_store: The post-processed transcript (no speaker info).
+        """
+        rt_words = realtime_store.get_all_words()
+        pp_words = postproc_store.get_all_words()
+        if not rt_words or not pp_words:
+            return
+
+        # Only transfer if realtime words actually have labels
+        labeled = [w for w in rt_words if w.speaker_id is not None]
+        if not labeled:
+            return
+
+        transferred = 0
+        for pp_word in pp_words:
+            pp_mid = (pp_word.start_time + pp_word.end_time) / 2
+            best_label = None
+            best_overlap = 0.0
+
+            for rt_word in labeled:
+                # Compute overlap
+                overlap_start = max(pp_word.start_time, rt_word.start_time)
+                overlap_end = min(pp_word.end_time, rt_word.end_time)
+                overlap = max(0.0, overlap_end - overlap_start)
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_label = rt_word.speaker_id
+
+            if best_label is not None:
+                pp_word.speaker_id = best_label
+                transferred += 1
+
+        logger.info(
+            "Transferred speaker labels: %d/%d post-processed words",
+            transferred, len(pp_words),
+        )
+
+    @staticmethod
+    def _read_speaker_matches(transcript_path: Path) -> Optional[dict]:
+        """Read speaker_matches from an existing transcript file.
+
+        Args:
+            transcript_path: Path to the .md transcript.
+
+        Returns:
+            The speaker_matches dict, or None if not found.
+        """
+        import json as _json
+
+        try:
+            content = transcript_path.read_text(encoding="utf-8")
+            marker = "\n---\n\n<!-- METADATA: "
+            idx = content.find(marker)
+            if idx < 0:
+                return None
+            data = _json.loads(content[idx + len(marker) :].rstrip(" -->\n"))
+            return data.get("speaker_matches")
+        except Exception:
+            return None
     
-    def _save_post_processed_transcript(self, job: PostProcessJob, store: TranscriptStore) -> Path:
+    def _save_post_processed_transcript(
+        self, job: PostProcessJob, store: TranscriptStore,
+        speaker_matches: Optional[dict] = None,
+    ) -> Path:
         """Save post-processed transcript by overwriting the original .md in-place.
 
         Derives the original transcript path from the audio file stem:
@@ -485,6 +583,8 @@ class PostProcessingQueue:
         Args:
             job: The job being processed
             store: The transcript store to save
+            speaker_matches: Optional speaker match metadata from the
+                realtime transcript's diarization result.
 
         Returns:
             Path to the (over)written transcript file
@@ -501,7 +601,7 @@ class PostProcessingQueue:
                 "Creating new transcript (no prior .md found): %s", transcript_path
             )
 
-        store.save_to_file(transcript_path)
+        store.save_to_file(transcript_path, speaker_matches=speaker_matches)
 
         logger.info(
             "Saved post-processed transcript to %s", transcript_path
