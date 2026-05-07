@@ -507,8 +507,9 @@ class PostProcessingQueue:
     ) -> None:
         """Transfer speaker labels from realtime to post-processed words.
 
-        Uses time-overlap matching: for each post-processed word, find the
-        realtime word whose time range overlaps most and copy its speaker_id.
+        Uses nearest-midpoint matching: for each post-processed word, find
+        the realtime word whose midpoint is closest.  Then fills any still-
+        untagged words with the dominant speaker from the realtime transcript.
 
         Args:
             realtime_store: The realtime transcript with speaker labels.
@@ -524,24 +525,16 @@ class PostProcessingQueue:
         if not labeled:
             return
 
+        # Pre-compute midpoints for labeled realtime words
+        rt_mids = [(w, (w.start_time + w.end_time) / 2) for w in labeled]
+
         transferred = 0
         for pp_word in pp_words:
             pp_mid = (pp_word.start_time + pp_word.end_time) / 2
-            best_label = None
-            best_overlap = 0.0
-
-            for rt_word in labeled:
-                # Compute overlap
-                overlap_start = max(pp_word.start_time, rt_word.start_time)
-                overlap_end = min(pp_word.end_time, rt_word.end_time)
-                overlap = max(0.0, overlap_end - overlap_start)
-                if overlap > best_overlap:
-                    best_overlap = overlap
-                    best_label = rt_word.speaker_id
-
-            if best_label is not None:
-                pp_word.speaker_id = best_label
-                transferred += 1
+            # Find nearest realtime word by midpoint distance
+            nearest = min(rt_mids, key=lambda x: abs(x[1] - pp_mid))
+            pp_word.speaker_id = nearest[0].speaker_id
+            transferred += 1
 
         logger.info(
             "Transferred speaker labels: %d/%d post-processed words",
