@@ -885,6 +885,7 @@ class RecordingController:
             wav_path: Path to the saved WAV file.
         """
         try:
+            import numpy as np
             from meetandread.speaker.diarizer import Diarizer
             from meetandread.speaker.signatures import VoiceSignatureStore
             from meetandread.audio.storage.paths import get_recordings_dir
@@ -957,8 +958,9 @@ class RecordingController:
             db_path = get_recordings_dir() / "speaker_signatures.db"
             with VoiceSignatureStore(db_path=db_path) as store:
                 for label, sig in result.signatures.items():
+                    emb = np.asarray(sig.embedding, dtype=np.float32) if not isinstance(sig.embedding, np.ndarray) else sig.embedding
                     match = store.find_match(
-                        sig.embedding,
+                        emb,
                         threshold=speaker_cfg.confidence_threshold,
                     )
                     if match:
@@ -972,7 +974,6 @@ class RecordingController:
                         # Use the same display label (SPK_N) that
                         # _apply_speaker_labels will assign to words.
                         display_label = result.speaker_label_for(label)
-                        emb = np.asarray(sig.embedding, dtype=np.float32)
                         store.save_signature(
                             display_label,
                             emb,
