@@ -545,13 +545,18 @@ class TestRecordingControllerBoundaryConditions:
         assert words[0].speaker_id is not None
         assert "SPK_0" in words[0].speaker_id or words[0].speaker_id == "spk0"
 
-    def test_words_outside_all_segments_unlabeled(self):
-        """Words outside all segment ranges remain unlabeled."""
+    def test_words_outside_segments_single_speaker_filled(self):
+        """Words outside segments get labeled when only 1 speaker detected.
+
+        Single-speaker fill assigns all words to that speaker, even if
+        the diarization segment doesn't cover the full audio. This handles
+        conservative segment boundaries on short recordings.
+        """
         controller = RecordingController(enable_transcription=False)
         controller._transcript_store = TranscriptStore()
         controller._transcript_store.start_recording()
 
-        # Word at 5.0-5.2s, segment covers 0.0-1.0s
+        # Word at 5.0-5.2s, segment covers 0.0-1.0s — single speaker
         controller._transcript_store.add_words([
             Word(text="orphan", start_time=5.0, end_time=5.2, confidence=90),
         ])
@@ -564,7 +569,7 @@ class TestRecordingControllerBoundaryConditions:
         controller._apply_speaker_labels(result)
 
         words = controller._transcript_store.get_all_words()
-        assert words[0].speaker_id is None
+        assert words[0].speaker_id == "SPK_0"
 
     def test_short_recording_no_diarization_segments(self):
         """Short recording with no diarization segments leaves words unlabeled."""

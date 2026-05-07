@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meetandread"
-version = "0.1.0"
+version = "0.9.0"
 description = "Windows Desktop Audio Transcription Widget — zero information loss during conversations"
 readme = "README.md"
 license = {text = "GPL-3.0-only"}

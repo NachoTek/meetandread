@@ -773,10 +773,12 @@ class TestControllerPinSpeaker:
 
     def test_pin_speaker_updates_speaker_names(self, tmp_path):
         """After pinning, get_speaker_names returns the updated mapping."""
-        ctrl = self._make_controller_with_result(tmp_path)
-        ctrl.pin_speaker_name("spk0", "Alice")
-        names = ctrl.get_speaker_names()
-        assert names["spk0"] == "Alice"
+        from unittest import mock
+        with mock.patch('meetandread.audio.storage.paths.get_recordings_dir', return_value=tmp_path):
+            ctrl = self._make_controller_with_result(tmp_path)
+            ctrl.pin_speaker_name("spk0", "Alice")
+            names = ctrl.get_speaker_names()
+            assert names["spk0"] == "Alice"
 
 
 # ---------------------------------------------------------------------------
