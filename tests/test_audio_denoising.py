@@ -59,6 +59,37 @@ def _make_speech_tone(duration_s: float = 1.0, sr: int = 16000,
     return (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32)
 
 
+def _make_clean_noise_and_noisy(
+    duration_s: float = 2.0, sr: int = 16000,
+    speech_freq: float = 440.0, speech_amplitude: float = 0.5,
+    noise_std: float = 0.15, seed: int = 42,
+) -> tuple:
+    """Create deterministic clean speech, noise, and noisy speech arrays.
+
+    Returns:
+        (clean, noise, noisy) — all float32, same length.
+    """
+    rng = np.random.default_rng(seed)
+    n_samples = int(sr * duration_s)
+    t = np.linspace(0, duration_s, n_samples, endpoint=False)
+    clean = (speech_amplitude * np.sin(2 * np.pi * speech_freq * t)).astype(np.float32)
+    noise = rng.normal(0, noise_std, size=n_samples).astype(np.float32)
+    noisy = (clean + noise).astype(np.float32)
+    return clean, noise, noisy
+
+
+def _compute_snr(signal: np.ndarray, noise: np.ndarray) -> float:
+    """Compute SNR in dB: 10 * log10(signal_power / noise_power).
+
+    Returns -np.inf if noise power is zero.
+    """
+    sig_pow = float(np.mean(signal ** 2))
+    noise_pow = float(np.mean(noise ** 2))
+    if noise_pow < 1e-12:
+        return float("inf")
+    return 10.0 * float(np.log10(sig_pow / noise_pow))
+
+
 # ============================================================================
 # Provider contract: shape, dtype, clipping
 # ============================================================================
@@ -150,6 +181,50 @@ class TestNoiseReduction:
         # Pure noise should be strongly suppressed
         assert rms_output < rms_input * 0.7, (
             f"Pure noise RMS {rms_output:.4f} not suppressed enough vs {rms_input:.4f}"
+        )
+
+    def test_improves_noisy_speech_snr_by_at_least_5db(
+        self, provider: SpectralGateProvider
+    ) -> None:
+        """Denoising should improve SNR by at least 5 dB on noisy speech.
+
+        Uses a clean reference signal and deterministic noise to compute
+        baseline SNR (clean vs injected noise) and denoised SNR (clean vs
+        residual after denoising). Gain-aligns the denoised output to the
+        clean signal to avoid penalizing harmless level changes.
+        """
+        clean, noise, noisy = _make_clean_noise_and_noisy(
+            duration_s=2.0, speech_amplitude=0.5, noise_std=0.15, seed=42
+        )
+
+        # Baseline SNR: clean vs injected noise
+        baseline_snr = _compute_snr(clean, noise)
+
+        # Denoise the noisy signal
+        result = provider.process(noisy)
+        assert result.fallback is False, (
+            f"Provider returned fallback on valid noisy input: {result.error}"
+        )
+
+        denoised = result.audio
+
+        # Gain-align denoised output to clean to avoid penalizing level changes
+        clean_energy = float(np.mean(clean ** 2))
+        denoised_energy = float(np.mean(denoised ** 2))
+        if denoised_energy > 1e-12:
+            gain = float(np.sqrt(clean_energy / denoised_energy))
+            denoised_aligned = denoised * gain
+        else:
+            denoised_aligned = denoised
+
+        # Residual = what's left after subtracting clean from denoised
+        residual = denoised_aligned - clean
+        denoised_snr = _compute_snr(clean, residual)
+
+        snr_improvement = denoised_snr - baseline_snr
+        assert snr_improvement >= 5.0, (
+            f"SNR improvement {snr_improvement:.1f} dB is below 5 dB target "
+            f"(baseline={baseline_snr:.1f} dB, denoised={denoised_snr:.1f} dB)"
         )
 
 

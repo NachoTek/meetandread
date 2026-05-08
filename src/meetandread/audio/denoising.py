@@ -105,10 +105,10 @@ class SpectralGateProvider(DenoisingProvider):
     Parameters:
         fft_size: FFT window size (power of 2). Default 512 (~32ms at 16kHz).
         hop_size: Hop between successive analysis windows. Default 256.
-        noise_floor_db: Noise floor estimate in dB below peak. Default -40.
+        noise_floor_db: Noise floor estimate in dB below peak. Default -35.
         gate_threshold: Multiplicative threshold for the spectral gate.
             Bins with magnitude < noise_estimate * gate_threshold are
-            attenuated. Default 1.5 (conservative).
+            attenuated. Default 1.8.
         attack_frames: Number of initial frames used to estimate noise.
             Default 4.
     """
@@ -117,8 +117,8 @@ class SpectralGateProvider(DenoisingProvider):
         self,
         fft_size: int = 512,
         hop_size: int = 256,
-        noise_floor_db: float = -40.0,
-        gate_threshold: float = 1.5,
+        noise_floor_db: float = -35.0,
+        gate_threshold: float = 1.8,
         attack_frames: int = 4,
     ) -> None:
         self._fft_size = fft_size

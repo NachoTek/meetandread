@@ -601,3 +601,147 @@ def _real_cleanup(segments):
     """Import and run the real cleanup function."""
     from meetandread.speaker.diarizer import cleanup_diarization_segments
     return cleanup_diarization_segments(segments)
+
+
+# ---------------------------------------------------------------------------
+# Test: Full denoising + diarization integration through controller
+# ---------------------------------------------------------------------------
+
+
+class TestRecordingControllerDenoisingDiarizationIntegration:
+    """Integration test: denoising and diarization compose through the
+    real controller stop/finalize path using a deterministic fake recording.
+
+    Only model-dependent work (Whisper, sherpa-onnx) is mocked; the real
+    AudioSession / FakeAudioModule / denoising / WAV finalization pipeline
+    is exercised end-to-end.
+    """
+
+    def test_denoising_diarization_end_to_end(self, tmp_path: Path):
+        """Record a noisy two-speaker fake WAV, finalize, and verify
+        diagnostics expose both denoising activity and diarization metadata.
+        """
+        # --- Step 1: deterministic two-speaker noisy WAV ---
+        wav_path, ground_truth = generate_noisy_multi_speaker_wav(
+            tmp_path / "integration_noisy.wav",
+            duration_per_speaker=2.0,
+            gap_duration=0.3,
+            noise_level=0.15,
+            seed=99,
+            speaker_turns=[("A", 2.0), ("B", 2.0)],
+        )
+        assert wav_path.exists(), "Fixture WAV must exist"
+
+        # --- Step 2: monkeypatch _init_transcription ---
+        controller = RecordingController(enable_transcription=True)
+
+        init_called = threading.Event()
+
+        def _fake_init_transcription(self_ctrl):
+            """Set up TranscriptStore + FakeTranscriptionProcessor, no Whisper."""
+            self_ctrl._transcript_store = TranscriptStore()
+            self_ctrl._transcript_store.start_recording()
+
+            words = _make_synthetic_timed_words(ground_truth)
+            self_ctrl._transcript_store.add_words(words)
+
+            self_ctrl._transcription_processor = FakeTranscriptionProcessor()
+            self_ctrl._post_processor = None
+            init_called.set()
+            return None
+
+        # --- Step 3: monkeypatch _run_diarization ---
+        diarization_invoked_path = [None]
+
+        def _fake_run_diarization(self_ctrl, diar_wav_path):
+            """Assert WAV exists, record path, apply two-speaker result."""
+            assert diar_wav_path is not None, "Diarization received None wav_path"
+            assert Path(diar_wav_path).exists(), (
+                f"Diarization WAV missing: {diar_wav_path}"
+            )
+            diarization_invoked_path[0] = str(diar_wav_path)
+
+            # Build a simple two-speaker DiarizationResult matching ground truth
+            segments = [
+                SpeakerSegment(start=s, end=e, speaker=f"spk{i}")
+                for i, (s, e, _spk) in enumerate(ground_truth.segments)
+            ]
+            result = DiarizationResult(
+                segments=segments,
+                num_speakers=len(ground_truth.speakers),
+                duration_seconds=ground_truth.duration,
+            )
+            self_ctrl._last_diarization_result = result
+            self_ctrl._apply_speaker_labels(result)
+
+        with (
+            patch.object(
+                RecordingController, "_init_transcription",
+                _fake_init_transcription,
+            ),
+            patch.object(
+                RecordingController, "_run_diarization",
+                _fake_run_diarization,
+            ),
+        ):
+            # --- Step 4: start with fake source, stop, join worker ---
+            error = controller.start(
+                {"fake"},
+                fake_path=str(wav_path),
+                fake_denoise=True,
+                fake_loop=False,
+            )
+            assert error is None, f"Start failed: {error.message}"
+            assert init_called.wait(timeout=3.0), "_init_transcription never called"
+
+            # Let the fake source play through (no loop, so it ends on its own)
+            time.sleep(0.6)
+
+            stop_error = controller.stop()
+            assert stop_error is None, f"Stop failed: {stop_error.message}"
+
+            if controller._worker_thread:
+                controller._worker_thread.join(timeout=5.0)
+                assert not controller._worker_thread.is_alive(), (
+                    "Worker thread did not finish within 5s timeout"
+                )
+
+            assert controller.get_state() == ControllerState.IDLE, (
+                f"Expected IDLE, got {controller.get_state().name}"
+            )
+
+            # --- Step 5: assert diagnostics prove integration ---
+            diag = controller.get_diagnostics()
+
+            # Denoising: enabled, processed frames > 0, fallback count 0
+            session = diag.get("session", {})
+            denoising = session.get("denoising", {})
+            assert denoising.get("enabled") is True, (
+                "Denoising should be enabled for fake_denoise=True"
+            )
+            assert denoising.get("processed_frame_count", 0) > 0, (
+                "Expected at least one denoised frame"
+            )
+            assert denoising.get("fallback_count", -1) == 0, (
+                "Happy path: denoising fallback count must be 0"
+            )
+
+            # Diarization: succeeded, 2 speakers, >=2 segments, invoked path
+            diarization = diag.get("diarization", {})
+            assert diarization.get("succeeded") is True, (
+                "Diarization should have succeeded"
+            )
+            assert diarization.get("num_speakers") == 2, (
+                f"Expected 2 speakers, got {diarization.get('num_speakers')}"
+            )
+            assert diarization.get("segment_count", 0) >= 2, (
+                f"Expected >=2 segments, got {diarization.get('segment_count')}"
+            )
+
+            # Invoked diarization path equals last recording path
+            rec_path = controller.get_last_recording_path()
+            assert rec_path is not None, "Last recording path must be set"
+            assert diarization_invoked_path[0] == str(rec_path), (
+                f"Diarization invoked on {diarization_invoked_path[0]}, "
+                f"but last recording is {rec_path}"
+            )

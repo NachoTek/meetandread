@@ -276,12 +276,12 @@ class SpeakerSettings:
         confidence_threshold: Minimum cosine similarity to identify a
             known speaker (0.0–1.0). Default: 0.6
         clustering_threshold: Threshold for fast clustering in diarization
-            (0–1). Higher values produce more speakers. Default: 0.5
+            (0–1). Higher values produce more speakers. Default: 0.6
         min_duration_on: Minimum speech segment duration in seconds.
             Shorter segments are discarded. Default: 0.3
         min_duration_off: Minimum silence gap between speakers in seconds.
             Shorter gaps are merged, reducing false splits in noisy rooms.
-            Default: 0.8 (tuned for noisy meeting environments)
+            Default: 0.5 (tuned for clear turn-taking detection)
     """
     enabled: bool = field(
         default=True,
@@ -292,7 +292,7 @@ class SpeakerSettings:
         metadata={"description": "Min cosine similarity for speaker identification (0.0-1.0)"}
     )
     clustering_threshold: float = field(
-        default=0.5,
+        default=0.6,
         metadata={"description": "Clustering threshold for diarization (higher = more speakers)"}
     )
     min_duration_on: float = field(
@@ -300,7 +300,7 @@ class SpeakerSettings:
         metadata={"description": "Minimum speech segment duration in seconds (shorter segments discarded)"}
     )
     min_duration_off: float = field(
-        default=0.8,
+        default=0.5,
         metadata={"description": "Minimum silence gap between speakers in seconds (reduces false splits in noisy rooms)"}
     )
 

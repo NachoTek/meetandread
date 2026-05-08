@@ -926,6 +926,16 @@ class RecordingController:
                 )
                 return
 
+            # --- Degraded-result fallback: 0 speakers ---
+            if result.num_speakers == 0:
+                logger.warning(
+                    "Diarization returned 0 speakers for %s — falling back to "
+                    "single-speaker labeling",
+                    wav_path.name,
+                )
+                self._fallback_single_speaker_labeling(result)
+                return
+
             if not result.segments:
                 logger.info("No speaker segments detected in %s", wav_path.name)
                 return
@@ -934,6 +944,14 @@ class RecordingController:
                 "Diarized %s: %d segments, %d speakers",
                 wav_path.name, len(result.segments), result.num_speakers,
             )
+
+            # --- Implausible speaker count warning ---
+            if result.num_speakers > 8:
+                logger.warning(
+                    "Diarization detected %d speakers for %s — implausible "
+                    "count, continuing with cleanup and labeling",
+                    result.num_speakers, wav_path.name,
+                )
 
             # --- Clean up noisy over-segmentation ---
             from meetandread.speaker.diarizer import cleanup_diarization_segments
@@ -1074,6 +1092,44 @@ class RecordingController:
         logger.info(
             "Tagged %d/%d words with speaker labels (%d speakers)",
             tagged_count, len(words), len(label_map),
+        )
+
+    def _fallback_single_speaker_labeling(self, result: "DiarizationResult") -> None:
+        """Convert a degraded diarization result into single-speaker labeling.
+
+        Creates a conservative fallback segment spanning the full transcript
+        duration so all words receive a single speaker label. Does not
+        fabricate embeddings — signatures remain empty.
+
+        Args:
+            result: A DiarizationResult with 0 speakers or no usable segments.
+        """
+        from meetandread.speaker.models import SpeakerSegment
+
+        words = self._transcript_store.get_all_words()
+        if not words:
+            return
+
+        duration = result.duration_seconds
+        if duration <= 0:
+            # Derive from transcript word spans
+            duration = max(w.end_time for w in words)
+
+        fallback_segment = SpeakerSegment(
+            start=0.0,
+            end=duration,
+            speaker="spk0",
+        )
+        result.segments = [fallback_segment]
+        result.num_speakers = 1
+
+        self._apply_speaker_labels(result)
+
+        logger.info(
+            "Applied single-speaker fallback for %s (%.1fs, %d words)",
+            getattr(self._last_wav_path, "name", "unknown"),
+            duration,
+            len(words),
         )
 
     def _speaker_matches_metadata(self) -> dict:

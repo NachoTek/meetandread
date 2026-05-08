@@ -430,7 +430,7 @@ class TestConfigMigration:
         # Speaker min-duration defaults added by v3→v4 migration
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
-        assert speaker["min_duration_off"] == 0.8
+        assert speaker["min_duration_off"] == 0.5
     
     def test_migration_preserves_existing_denoising_values(self, persistence):
         """Test migration doesn't clobber existing denoising fields."""
@@ -465,7 +465,7 @@ class TestConfigMigration:
 
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
-        assert speaker["min_duration_off"] == 0.8
+        assert speaker["min_duration_off"] == 0.5
         # Existing values preserved
         assert speaker["enabled"] is True
         assert speaker["confidence_threshold"] == 0.7
@@ -499,7 +499,7 @@ class TestConfigMigration:
         migrated = persistence.migrate_config(old_config, 3)
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
-        assert speaker["min_duration_off"] == 0.8
+        assert speaker["min_duration_off"] == 0.5
     
     def test_no_migration_needed(self, persistence):
         """Test config at current version doesn't change."""
@@ -819,6 +819,77 @@ class TestConfigEdgeCases:
         """Test single part path is invalid."""
         with pytest.raises(ValueError):
             manager.set("model", "value")
+
+
+# ============================================================================
+# Config Persistence Tests (speaker settings round-trip)
+# ============================================================================
+
+class TestConfigPersistence:
+    """Tests verifying speaker settings survive config save/load cycles."""
+
+    def test_speaker_settings_roundtrip(self, persistence):
+        """Speaker settings survive save -> load round-trip with tuned defaults."""
+        settings = AppSettings()
+        # Verify tuned defaults are set
+        assert settings.speaker.clustering_threshold == 0.6
+        assert settings.speaker.min_duration_off == 0.5
+        assert settings.speaker.min_duration_on == 0.3
+
+        persistence.save_settings(settings)
+        loaded = persistence.load_settings()
+
+        assert loaded.speaker.clustering_threshold == 0.6
+        assert loaded.speaker.min_duration_off == 0.5
+        assert loaded.speaker.min_duration_on == 0.3
+        assert loaded.speaker.enabled is True
+        assert loaded.speaker.confidence_threshold == 0.6
+
+    def test_speaker_custom_values_roundtrip(self, persistence):
+        """Custom speaker settings survive save -> load."""
+        settings = AppSettings()
+        settings.speaker.clustering_threshold = 0.7
+        settings.speaker.min_duration_off = 1.0
+        settings.speaker.min_duration_on = 0.4
+        settings.speaker.enabled = False
+
+        persistence.save_settings(settings)
+        loaded = persistence.load_settings()
+
+        assert loaded.speaker.clustering_threshold == 0.7
+        assert loaded.speaker.min_duration_off == 1.0
+        assert loaded.speaker.min_duration_on == 0.4
+        assert loaded.speaker.enabled is False
+
+    def test_speaker_settings_migration_v3_to_current(self, persistence):
+        """Config migrated from v3 gets correct min_duration defaults."""
+        old_config = {
+            "config_version": 3,
+            "speaker": {
+                "enabled": True,
+                "confidence_threshold": 0.7,
+                "clustering_threshold": 0.6,
+            },
+        }
+        migrated = persistence.migrate_config(old_config, 3)
+        speaker = migrated["speaker"]
+        assert speaker["min_duration_on"] == 0.3
+        assert speaker["min_duration_off"] == 0.5
+
+    def test_speaker_migration_preserves_explicit_values(self, persistence):
+        """Explicit user-provided speaker settings are not overwritten by migration."""
+        old_config = {
+            "config_version": 3,
+            "speaker": {
+                "enabled": True,
+                "min_duration_on": 0.8,
+                "min_duration_off": 1.5,
+            },
+        }
+        migrated = persistence.migrate_config(old_config, 3)
+        speaker = migrated["speaker"]
+        assert speaker["min_duration_on"] == 0.8
+        assert speaker["min_duration_off"] == 1.5
 
 
 if __name__ == "__main__":

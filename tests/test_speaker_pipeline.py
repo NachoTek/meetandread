@@ -361,9 +361,9 @@ class TestSpeakerSettings:
         s = SpeakerSettings()
         assert s.enabled is True
         assert s.confidence_threshold == 0.6
-        assert s.clustering_threshold == 0.5
+        assert s.clustering_threshold == 0.6
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.8
+        assert s.min_duration_off == 0.5
 
     def test_roundtrip(self):
         from meetandread.config.models import AppSettings
@@ -394,7 +394,7 @@ class TestSpeakerSettings:
         assert app.speaker.enabled is True
         assert app.speaker.confidence_threshold == 0.6
         assert app.speaker.min_duration_on == 0.3
-        assert app.speaker.min_duration_off == 0.8
+        assert app.speaker.min_duration_off == 0.5
 
     def test_from_dict_partial(self):
         from meetandread.config.models import SpeakerSettings
@@ -402,9 +402,9 @@ class TestSpeakerSettings:
         s = SpeakerSettings.from_dict({"enabled": False})
         assert s.enabled is False
         assert s.confidence_threshold == 0.6  # default
-        assert s.clustering_threshold == 0.5  # default
+        assert s.clustering_threshold == 0.6  # default
         assert s.min_duration_on == 0.3  # default
-        assert s.min_duration_off == 0.8  # default
+        assert s.min_duration_off == 0.5  # default
 
     def test_from_dict_invalid_min_duration_uses_defaults(self):
         """Non-numeric, negative, or excessively large values fall back to defaults."""
@@ -413,17 +413,17 @@ class TestSpeakerSettings:
         # String values → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": "bad", "min_duration_off": "nope"})
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.8
+        assert s.min_duration_off == 0.5
 
         # Negative values → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": -1.0, "min_duration_off": -0.5})
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.8
+        assert s.min_duration_off == 0.5
 
         # Excessively large values → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": 999.0, "min_duration_off": 100.0})
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.8
+        assert s.min_duration_off == 0.5
 
     def test_from_dict_valid_custom_values(self):
         """Custom valid values are preserved."""
@@ -591,9 +591,9 @@ class TestDiarizerConstructionParams:
             ctrl._run_diarization(Path("test.wav"))
 
             mock_diarizer_cls.assert_called_once_with(
-                clustering_threshold=0.5,
+                clustering_threshold=0.6,
                 min_duration_on=0.3,
-                min_duration_off=0.8,
+                min_duration_off=0.5,
             )
 
     def test_diarizer_construction_failure_logged(self, caplog):
@@ -1104,3 +1104,529 @@ class TestControllerCleanupIntegration:
         cleanup_logs = [r for r in caplog.records if "cleanup" in r.message.lower()]
         assert len(cleanup_logs) >= 1
         assert any("2 -> 1" in r.message for r in cleanup_logs)
+
+
+# ---------------------------------------------------------------------------
+# T01: Turn-taking diarization tuning tests
+# ---------------------------------------------------------------------------
+
+class TestTurnTakingDiarizationTuning:
+    """Tests for tuned diarization defaults, degraded-result fallback, and
+    implausible speaker-count handling."""
+
+    # --- 0 speakers / empty segments fallback ---
+
+    def test_zero_speakers_fallback_single_speaker(self, caplog):
+        """When diarization returns 0 speakers, fall back to single-speaker labeling."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import DiarizationResult, SpeakerSegment
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._transcript_store.add_words([
+            Word(text="hello", start_time=0.0, end_time=0.5, confidence=90),
+            Word(text="world", start_time=0.5, end_time=1.0, confidence=85),
+        ])
+        ctrl._last_wav_path = Path("test.wav")
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Return segments but 0 speakers (degraded result)
+        mock_result = DiarizationResult(
+            segments=[SpeakerSegment(start=0.0, end=1.0, speaker="spk0")],
+            duration_seconds=1.0,
+            num_speakers=0,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+                mock_cls.return_value.diarize.return_value = mock_result
+                with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore"):
+                    ctrl._run_diarization(Path("test.wav"))
+
+        # Should have logged the 0-speaker fallback warning
+        assert any("0 speakers" in r.message and "falling back" in r.message for r in caplog.records)
+
+        # Words should be tagged with a single speaker label
+        words = ctrl._transcript_store.get_all_words()
+        assert all(w.speaker_id is not None for w in words)
+        assert all(w.speaker_id == "SPK_0" for w in words)
+
+    def test_empty_segments_no_crash(self, caplog):
+        """When diarization returns empty segments with non-zero speaker count,
+        the controller logs and returns gracefully."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Use a real DiarizationResult to avoid mock attribute issues.
+        # Empty segments with num_speakers=1 should hit the "no segments" early return.
+        from meetandread.speaker.models import DiarizationResult
+        mock_result = DiarizationResult(
+            segments=[],
+            duration_seconds=0.0,
+            num_speakers=1,
+        )
+
+        with caplog.at_level(logging.INFO):
+            with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+                mock_cls.return_value.diarize.return_value = mock_result
+                ctrl._run_diarization(Path("test.wav"))
+
+        # Should log no segments detected (early return path)
+        assert any("no speaker segments" in r.message.lower() for r in caplog.records)
+
+    # --- >8 speakers warning ---
+
+    def test_implausible_speaker_count_warning(self, caplog):
+        """When diarization returns >8 speakers, a warning is logged but processing continues."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature,
+        )
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._transcript_store.add_words([
+            Word(text="hello", start_time=0.0, end_time=0.5, confidence=90),
+        ])
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Create 10 speaker segments
+        segments = [
+            SpeakerSegment(start=i * 0.5, end=i * 0.5 + 0.4, speaker=f"spk{i}")
+            for i in range(10)
+        ]
+        embeddings = {
+            f"spk{i}": VoiceSignature(
+                embedding=np.ones(256, dtype=np.float32) / np.linalg.norm(np.ones(256, dtype=np.float32)),
+                speaker_label=f"spk{i}",
+            )
+            for i in range(10)
+        }
+        mock_result = DiarizationResult(
+            segments=segments,
+            signatures=embeddings,
+            duration_seconds=5.0,
+            num_speakers=10,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+                mock_cls.return_value.diarize.return_value = mock_result
+                with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore"):
+                    ctrl._run_diarization(Path("test.wav"))
+
+        # Should have warned about implausible count
+        assert any("implausible" in r.message.lower() and "10" in r.message for r in caplog.records)
+
+        # Processing should have continued (result stored, words labeled)
+        assert ctrl._last_diarization_result is not None
+        words = ctrl._transcript_store.get_all_words()
+        assert words[0].speaker_id is not None
+
+    # --- Single-speaker labeling fallback ---
+
+    def test_single_speaker_fallback_labels_all_words(self):
+        """Fallback creates one segment spanning the transcript and labels all words."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import DiarizationResult
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._last_wav_path = Path("test.wav")
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Words spanning 0-3s
+        ctrl._transcript_store.add_words([
+            Word(text="a", start_time=0.0, end_time=1.0, confidence=90),
+            Word(text="b", start_time=1.0, end_time=2.0, confidence=85),
+            Word(text="c", start_time=2.0, end_time=3.0, confidence=88),
+        ])
+
+        # 0-speaker result triggers fallback
+        result = DiarizationResult(
+            segments=[],
+            duration_seconds=3.0,
+            num_speakers=0,
+        )
+
+        with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+            mock_cls.return_value.diarize.return_value = result
+            with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore"):
+                ctrl._run_diarization(Path("test.wav"))
+
+        words = ctrl._transcript_store.get_all_words()
+        assert len(words) == 3
+        assert all(w.speaker_id == "SPK_0" for w in words)
+
+    # --- Invalid min-duration config fallback ---
+
+    def test_invalid_min_duration_config_uses_safe_defaults(self):
+        """Non-numeric or out-of-range min_duration values fall back to defaults."""
+        from meetandread.config.models import SpeakerSettings
+
+        # String values → fallback
+        s = SpeakerSettings.from_dict({"min_duration_on": "invalid", "min_duration_off": "bad"})
+        assert s.min_duration_on == 0.3
+        assert s.min_duration_off == 0.5
+
+        # Negative → fallback
+        s = SpeakerSettings.from_dict({"min_duration_on": -1.0})
+        assert s.min_duration_on == 0.3
+
+        # Out of range → fallback
+        s = SpeakerSettings.from_dict({"min_duration_off": 999.0})
+        assert s.min_duration_off == 0.5
+
+    # --- A/B/A turn-taking boundary preservation tests ---
+
+    def test_aba_boundary_preserves_two_speakers(self):
+        """A/B/A segments with >=0.5s gaps preserve 2+ speaker labels through
+        cleanup and signature-store mocking."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature,
+        )
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._last_wav_path = Path("test.wav")
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Add words across three turns: A speaks 0-2s, B speaks 2.5-4.5s, A speaks 5-7s
+        words = [
+            Word(text="hello", start_time=0.0, end_time=0.5, confidence=90),
+            Word(text="world", start_time=0.5, end_time=1.0, confidence=85),
+            Word(text="hi", start_time=2.5, end_time=3.0, confidence=88),
+            Word(text="there", start_time=3.0, end_time=3.5, confidence=92),
+            Word(text="back", start_time=5.0, end_time=5.5, confidence=87),
+            Word(text="again", start_time=5.5, end_time=6.0, confidence=91),
+        ]
+        ctrl._transcript_store.add_words(words)
+
+        # A/B/A segments with 0.5s+ gaps
+        emb_a = np.ones(256, dtype=np.float32)
+        emb_a /= np.linalg.norm(emb_a)
+        emb_b = np.zeros(256, dtype=np.float32)
+        emb_b[0] = 1.0
+
+        mock_result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+                SpeakerSegment(start=2.5, end=4.5, speaker="spk1"),
+                SpeakerSegment(start=5.0, end=7.0, speaker="spk0"),
+            ],
+            signatures={
+                "spk0": VoiceSignature(embedding=emb_a, speaker_label="spk0", num_segments=2),
+                "spk1": VoiceSignature(embedding=emb_b, speaker_label="spk1", num_segments=1),
+            },
+            duration_seconds=7.0,
+            num_speakers=2,
+        )
+
+        # Mock VoiceSignatureStore to return None from find_match (no known speakers)
+        mock_store = mock.MagicMock()
+        mock_store.__enter__ = mock.MagicMock(return_value=mock_store)
+        mock_store.__exit__ = mock.MagicMock(return_value=False)
+        mock_store.find_match.return_value = None
+
+        with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+            mock_cls.return_value.diarize.return_value = mock_result
+            with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_store):
+                ctrl._run_diarization(Path("test.wav"))
+
+        # Verify result stored and 2 speakers preserved
+        assert ctrl._last_diarization_result is not None
+        assert ctrl._last_diarization_result.num_speakers == 2
+
+        # Verify words tagged with correct speaker labels across turn boundaries
+        tagged = ctrl._transcript_store.get_all_words()
+        # Turn 1 (A): words 0-1 -> SPK_0
+        assert tagged[0].speaker_id == "SPK_0"
+        assert tagged[1].speaker_id == "SPK_0"
+        # Turn 2 (B): words 2-3 -> SPK_1
+        assert tagged[2].speaker_id == "SPK_1"
+        assert tagged[3].speaker_id == "SPK_1"
+        # Turn 3 (A again): words 4-5 -> SPK_0
+        assert tagged[4].speaker_id == "SPK_0"
+        assert tagged[5].speaker_id == "SPK_0"
+
+    def test_aba_fixture_metadata_validates(self, tmp_path):
+        """Ground truth from audio fixture helpers validates correctly for A/B/A
+        pattern with >=0.5s gaps."""
+        from tests.audio_fixture_helpers import (
+            generate_noisy_multi_speaker_wav,
+            validate_fixture_wav,
+        )
+
+        wav_path, gt = generate_noisy_multi_speaker_wav(
+            tmp_path / "aba.wav",
+            gap_duration=0.5,
+            speaker_turns=[
+                ("A", 2.0),
+                ("B", 2.0),
+                ("A", 1.5),
+            ],
+        )
+
+        # Validate WAV structure
+        info = validate_fixture_wav(wav_path, min_duration=5.0)
+        assert info["sample_rate"] == 16000
+        assert info["channels"] == 1
+
+        # Validate ground truth
+        assert sorted(gt.speakers) == ["A", "B"]
+        assert len(gt.segments) == 3
+        assert len(gt.boundaries) == 2  # A->B, B->A
+
+        # Verify segment boundaries match A/B/A pattern
+        assert gt.segments[0][2] == "A"  # first turn: A
+        assert gt.segments[1][2] == "B"  # second turn: B
+        assert gt.segments[2][2] == "A"  # third turn: A again
+
+        # Verify gaps between segments are >= 0.5s
+        for i in range(1, len(gt.segments)):
+            gap = gt.segments[i][0] - gt.segments[i - 1][1]
+            assert gap >= 0.5, f"Gap between segments {i-1} and {i} is {gap:.3f}s, expected >= 0.5s"
+
+    def test_aba_cleanup_preserves_speakers(self):
+        """Cleanup does not merge A/B/A segments with distinct speakers
+        even when gaps are at the tuned min_duration_off threshold."""
+        from meetandread.speaker.diarizer import cleanup_diarization_segments
+        from meetandread.speaker.models import SpeakerSegment
+
+        # A/B/A with 0.5s gaps — exactly at min_duration_off threshold
+        segs = [
+            SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+            SpeakerSegment(start=2.5, end=4.5, speaker="spk1"),
+            SpeakerSegment(start=5.0, end=7.0, speaker="spk0"),
+        ]
+        result = cleanup_diarization_segments(segs)
+        # All three segments should be preserved (distinct speakers, large gaps)
+        assert len(result) == 3
+        assert result[0].speaker == "spk0"
+        assert result[1].speaker == "spk1"
+        assert result[2].speaker == "spk0"
+
+    def test_aba_controller_preserves_turn_boundaries(self):
+        """Controller tags words with correct speaker across A/B/A turn boundaries
+        even when the same speaker appears in non-adjacent segments."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature, SpeakerMatch,
+        )
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._last_wav_path = Path("test.wav")
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Words across A/B/A turns with exact turn boundary gaps
+        words = [
+            # Turn 1: A
+            Word(text="first", start_time=0.0, end_time=1.0, confidence=90),
+            # Turn 2: B
+            Word(text="second", start_time=2.5, end_time=3.5, confidence=85),
+            # Turn 3: A again
+            Word(text="third", start_time=5.0, end_time=6.0, confidence=88),
+        ]
+        ctrl._transcript_store.add_words(words)
+
+        emb_a = np.ones(256, dtype=np.float32)
+        emb_a /= np.linalg.norm(emb_a)
+        emb_b = np.zeros(256, dtype=np.float32)
+        emb_b[0] = 1.0
+
+        # Pre-populate matches: spk0 matched to Alice
+        result_matches = {
+            "spk0": SpeakerMatch(name="Alice", score=0.95, confidence="high"),
+        }
+
+        mock_result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+                SpeakerSegment(start=2.5, end=4.5, speaker="spk1"),
+                SpeakerSegment(start=5.0, end=7.0, speaker="spk0"),
+            ],
+            signatures={
+                "spk0": VoiceSignature(embedding=emb_a, speaker_label="spk0", num_segments=2),
+                "spk1": VoiceSignature(embedding=emb_b, speaker_label="spk1", num_segments=1),
+            },
+            matches=result_matches,
+            duration_seconds=7.0,
+            num_speakers=2,
+        )
+
+        # Mock store: spk0 already matched so no lookup needed;
+        # spk1 has no match so find_match returns None
+        mock_store = mock.MagicMock()
+        mock_store.__enter__ = mock.MagicMock(return_value=mock_store)
+        mock_store.__exit__ = mock.MagicMock(return_value=False)
+        mock_store.find_match.return_value = None
+
+        with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+            mock_cls.return_value.diarize.return_value = mock_result
+            with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_store):
+                ctrl._run_diarization(Path("test.wav"))
+
+        tagged = ctrl._transcript_store.get_all_words()
+        # A is matched to Alice
+        assert tagged[0].speaker_id == "Alice"
+        # B is unmatched -> SPK_1
+        assert tagged[1].speaker_id == "SPK_1"
+        # A again should still be Alice (same speaker in non-adjacent turn)
+        assert tagged[2].speaker_id == "Alice"
+
+    # --- Single-speaker control test ---
+
+    def test_single_speaker_all_words_labeled(self):
+        """Single-speaker diarization labels every transcript word as exactly one speaker."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature,
+        )
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._last_wav_path = Path("test.wav")
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # Many words from a single speaker
+        words = [
+            Word(text="the", start_time=0.0, end_time=0.3, confidence=90),
+            Word(text="quick", start_time=0.3, end_time=0.6, confidence=85),
+            Word(text="brown", start_time=0.6, end_time=0.9, confidence=88),
+            Word(text="fox", start_time=0.9, end_time=1.2, confidence=92),
+            Word(text="jumps", start_time=1.2, end_time=1.5, confidence=87),
+            Word(text="over", start_time=1.5, end_time=1.8, confidence=91),
+        ]
+        ctrl._transcript_store.add_words(words)
+
+        emb = np.ones(256, dtype=np.float32)
+        emb /= np.linalg.norm(emb)
+
+        mock_result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+            ],
+            signatures={
+                "spk0": VoiceSignature(embedding=emb, speaker_label="spk0", num_segments=1),
+            },
+            duration_seconds=2.0,
+            num_speakers=1,
+        )
+
+        # Mock store with find_match returning None (no known speakers)
+        mock_store = mock.MagicMock()
+        mock_store.__enter__ = mock.MagicMock(return_value=mock_store)
+        mock_store.__exit__ = mock.MagicMock(return_value=False)
+        mock_store.find_match.return_value = None
+
+        with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
+            mock_cls.return_value.diarize.return_value = mock_result
+            with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_store):
+                ctrl._run_diarization(Path("test.wav"))
+
+        tagged = ctrl._transcript_store.get_all_words()
+        assert len(tagged) == 6
+        # Every word must be labeled
+        assert all(w.speaker_id is not None for w in tagged)
+        # Every word must be the same speaker
+        assert all(w.speaker_id == "SPK_0" for w in tagged)
+        # Exactly one distinct speaker
+        assert len({w.speaker_id for w in tagged}) == 1
+
+    # --- Skip handling for optional dependency absence ---
+
+    def test_diarization_graceful_skip_no_sherpa(self, caplog):
+        """When sherpa-onnx is unavailable, diarization skips gracefully
+        without crashing or labeling words."""
+        from meetandread.recording.controller import RecordingController
+        from meetandread.transcription.transcript_store import TranscriptStore, Word
+        from meetandread.config.models import SpeakerSettings
+        from unittest import mock
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = TranscriptStore()
+        ctrl._transcript_store.start_recording()
+        ctrl._transcript_store.add_words([
+            Word(text="test", start_time=0.0, end_time=0.5, confidence=90),
+        ])
+
+        mock_settings = mock.MagicMock()
+        mock_settings.speaker = SpeakerSettings(enabled=True)
+        ctrl._config_manager.get_settings = mock.MagicMock(return_value=mock_settings)
+
+        # The controller's _run_diarization catches ImportError from its
+        # local import block. Mock the diarizer module import to raise ImportError.
+        with mock.patch.dict("sys.modules"):
+            # Remove the diarizer module from cache so re-import triggers
+            # our mock
+            import sys
+            orig = sys.modules.get("meetandread.speaker.diarizer")
+            sys.modules["meetandread.speaker.diarizer"] = None
+
+            try:
+                with caplog.at_level(logging.WARNING):
+                    ctrl._run_diarization(Path("test.wav"))
+            finally:
+                # Restore
+                if orig is not None:
+                    sys.modules["meetandread.speaker.diarizer"] = orig
+                else:
+                    sys.modules.pop("meetandread.speaker.diarizer", None)
+
+        # Words should remain unlabeled
+        words = ctrl._transcript_store.get_all_words()
+        assert all(w.speaker_id is None for w in words)

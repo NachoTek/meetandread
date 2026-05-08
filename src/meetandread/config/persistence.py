@@ -334,7 +334,7 @@ class SettingsPersistence:
             if "min_duration_on" not in speaker:
                 speaker["min_duration_on"] = 0.3
             if "min_duration_off" not in speaker:
-                speaker["min_duration_off"] = 0.8
+                speaker["min_duration_off"] = 0.5
             config_dict["speaker"] = speaker
 
         if from_version == 4 and to_version == 5:
