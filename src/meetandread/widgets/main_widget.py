@@ -19,13 +19,15 @@ from typing import Optional
 import logging
 import math as _math
 import re
+
+import numpy as np
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsTextItem,
     QGraphicsWidget, QApplication, QGraphicsItemGroup, QWidget, QMenu
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal, QObject
-from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
+from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient, QPainterPath
 
 from meetandread.recording import RecordingController, ControllerState, ControllerError
 from meetandread.transcription.confidence import get_confidence_color, get_distortion_intensity
@@ -1086,7 +1088,13 @@ to avoid clipping issues and enable proper text rendering.
 
 class RecordButtonItem(QGraphicsEllipseItem):
     """Main record button component."""
-    
+
+    # Waveform constants
+    _WAVEFORM_TARGET_POINTS = 120      # Number of amplitude points to render
+    _WAVEFORM_FLAT_AMPLITUDE = 0.03    # Low-amplitude fallback for silent/empty
+    _WAVEFORM_INNER_RADIUS_FRAC = 0.20 # Inner boundary (fraction of button radius)
+    _WAVEFORM_OUTER_RADIUS_FRAC = 0.42 # Outer boundary (fraction of button radius)
+
     def __init__(self, parent_widget):
         super().__init__(0, 0, 80, 80)
         self.parent_widget = parent_widget
@@ -1094,15 +1102,20 @@ class RecordButtonItem(QGraphicsEllipseItem):
         self.is_processing = False
         self.pulse_phase = 0.0
         self.swirl_phase = 0.0
-        
+
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         # State transition animation (~200ms eased cross-fade)
         self._state_t = 1.0  # 0.0 (old state) → 1.0 (new state)
         self._transition_speed = 1.0 / 6  # ~200ms at 33ms/frame
         self._from_key = 'idle'
         self._to_key = 'idle'
+
+        # Waveform visualization state
+        self._waveform_data: list[float] = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
+        self._waveform_rotation_phase: float = 0.0
+        self._waveform_update_count: int = 0
     
     def _state_key(self):
         """Return current visual state key."""
@@ -1153,6 +1166,120 @@ class RecordButtonItem(QGraphicsEllipseItem):
     def set_swirl_phase(self, phase):
         """Set swirl animation phase."""
         self.swirl_phase = phase
+
+    # -- Waveform visualization API ------------------------------------------
+
+    def set_waveform_samples(self, samples) -> None:
+        """Accept audio samples and convert to bounded waveform amplitudes.
+
+        Downsamples *samples* to ``_WAVEFORM_TARGET_POINTS`` absolute
+        amplitudes, handles empty / silent / malformed data with a flat
+        low-amplitude fallback, and stores the result in a bounded
+        ``_waveform_data`` list.
+
+        Args:
+            samples: NumPy float32 array (or any array-like), or None.
+                Values are treated as normalized audio in [-1, 1].
+                Non-finite values are coerced to 0.
+        """
+        self._waveform_update_count += 1
+
+        # Handle None / empty gracefully
+        if samples is None:
+            self._waveform_data = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
+            return
+
+        try:
+            arr = np.asarray(samples, dtype=np.float32)
+        except (ValueError, TypeError):
+            self._waveform_data = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
+            return
+
+        # Flatten 2D+ arrays
+        if arr.ndim > 1:
+            arr = arr.flatten()
+
+        # Replace non-finite values with 0
+        arr = np.where(np.isfinite(arr), arr, 0.0)
+
+        # Empty or all-zero → flat fallback
+        if arr.size == 0 or np.all(arr == 0):
+            self._waveform_data = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
+            return
+
+        # Downsample to target point count by uniform decimation
+        if arr.size <= self._WAVEFORM_TARGET_POINTS:
+            # Pad or use as-is: take absolute values of what we have
+            abs_vals = np.abs(arr).tolist()
+            # Pad with flat amplitude to reach target
+            abs_vals.extend([self._WAVEFORM_FLAT_AMPLITUDE] * (self._WAVEFORM_TARGET_POINTS - len(abs_vals)))
+            self._waveform_data = abs_vals[:self._WAVEFORM_TARGET_POINTS]
+        else:
+            # Uniform decimation: pick evenly-spaced indices
+            indices = np.linspace(0, arr.size - 1, self._WAVEFORM_TARGET_POINTS, dtype=int)
+            self._waveform_data = np.abs(arr[indices]).tolist()
+
+    def advance_waveform_rotation(self, delta: float) -> None:
+        """Advance the waveform rotation phase by *delta* radians."""
+        self._waveform_rotation_phase += delta
+
+    def _paint_waveform(self, painter, rect) -> None:
+        """Render the waveform as a rotating circular line inside *rect*.
+
+        Uses polar-to-Cartesian conversion with amplitude modulating the
+        radius.  Colour is derived from ``current_palette().text`` at paint
+        time to stay theme-aware.  Empty ``_waveform_data`` is a safe no-op.
+        """
+        data = self._waveform_data
+        if not data:
+            return
+
+        n_points = len(data)
+        if n_points == 0:
+            return
+
+        # Theme-aware colour (resolved at paint time, never cached)
+        try:
+            palette = current_palette()
+            color = QColor(palette.text)
+            if not color.isValid():
+                color = QColor(255, 255, 255, 200)
+        except Exception:
+            color = QColor(255, 255, 255, 200)
+
+        pen = QPen(color, 2)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        center = rect.center()
+        half_w = rect.width() / 2.0
+        inner_r = half_w * self._WAVEFORM_INNER_RADIUS_FRAC
+        outer_r = half_w * self._WAVEFORM_OUTER_RADIUS_FRAC
+        radius_range = outer_r - inner_r
+
+        rotation = self._waveform_rotation_phase
+
+        # Build QPainterPath via polar-to-Cartesian conversion
+        path = QPainterPath()
+
+        for i in range(n_points):
+            # Angle: distribute evenly around the circle + rotation offset
+            angle = (2.0 * _math.pi * i / n_points) + rotation
+            # Radius: base (inner) + amplitude * range
+            r = inner_r + min(data[i], 1.0) * radius_range
+            x = center.x() + r * _math.cos(angle)
+            y = center.y() + r * _math.sin(angle)
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+
+        # Close the loop
+        if n_points > 2:
+            path.closeSubpath()
+
+        painter.drawPath(path)
     
     def paint(self, painter, option, widget=None):
         """Custom paint with eased cross-fade between states."""
@@ -1215,7 +1342,10 @@ class RecordButtonItem(QGraphicsEllipseItem):
         painter.setBrush(QBrush(QColor(255, 50, 50, alpha)))
         painter.setPen(QPen(QColor(255, 100, 100, 255), 2))
         painter.drawEllipse(rect)
-    
+
+        # Waveform visualization — rotating circular waveform over the red base
+        self._paint_waveform(painter, rect)
+
     def _paint_swirl(self, painter, rect):
         """Paint processing state - orbiting dots at varied radii and speeds."""
         # Background
