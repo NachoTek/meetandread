@@ -874,6 +874,60 @@ class RecordingController:
         # (don't recreate it for each recording session)
         pass
 
+    def get_live_audio_samples(
+        self, duration_seconds: float = 1.5
+    ) -> "np.ndarray":
+        """Return recent live audio as a normalized float32 NumPy array.
+
+        Copies the most recent *duration_seconds* of audio from the internal
+        live buffer, converts from int16 PCM to float32 in approximately
+        [-1.0, 1.0], and returns a **snapshot** that does not alias the
+        internal buffer.  Empty or invalid states return an empty float32
+        array — this method never raises.
+
+        Args:
+            duration_seconds: How many seconds of recent audio to return.
+                Clamped to a positive value; capped by the rolling max
+                buffer window.
+
+        Returns:
+            NumPy float32 array of normalized samples (one sample per
+            16 kHz int16 frame).  Empty ``ndarray(dtype=float32)`` when
+            no audio is available.
+        """
+        import numpy as np
+
+        # Guard: non-positive duration → empty
+        if duration_seconds <= 0:
+            return np.ndarray(0, dtype=np.float32)
+
+        # Clamp requested duration to the rolling max buffer window
+        max_duration = self._live_max_buffer_bytes / (16000 * 2)
+        duration_seconds = min(duration_seconds, max_duration)
+
+        # Calculate requested byte count (int16 = 2 bytes per sample)
+        requested_bytes = int(duration_seconds * 16000 * 2)
+
+        buf = self._live_audio_buffer
+        if not buf:
+            return np.ndarray(0, dtype=np.float32)
+
+        # Take only the most recent bytes, up to what's available
+        available = min(requested_bytes, len(buf))
+        raw = bytes(buf[-available:])
+
+        # Align to whole int16 samples (2 bytes each) — drop trailing odd byte
+        aligned_len = (len(raw) // 2) * 2
+        if aligned_len == 0:
+            return np.ndarray(0, dtype=np.float32)
+
+        # Convert and normalize to float32 in [-1, 1]
+        pcm_int16 = np.frombuffer(raw[:aligned_len], dtype=np.int16)
+        normalized = pcm_int16.astype(np.float32) / 32768.0
+
+        # Return a copy so the caller never aliases the internal buffer
+        return normalized.copy()
+
     def _run_diarization(self, wav_path: Path) -> None:
         """Run speaker diarization on the saved WAV and tag transcript words.
 
