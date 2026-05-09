@@ -1519,8 +1519,18 @@ class RecordButtonItem(QGraphicsEllipseItem):
         painter.setPen(QPen(QColor(255, 100, 100, 255), 2))
         painter.drawEllipse(rect)
 
-        # Waveform visualization — rotating circular waveform over the red base
-        self._paint_waveform(painter, rect)
+        # Waveform visualization — rotating circular waveform over the red base.
+        # Guard with config setting so toggles take effect on the next paint
+        # frame during active recording. On config errors, default to enabled
+        # so the feature remains visible rather than disappearing silently.
+        try:
+            _show_waveform = get_config("ui.waveform_enabled")
+            if _show_waveform is None:
+                _show_waveform = True
+        except Exception:
+            _show_waveform = True
+        if _show_waveform:
+            self._paint_waveform(painter, rect)
 
     def _paint_swirl(self, painter, rect):
         """Paint processing state - orbiting dots at varied radii and speeds."""

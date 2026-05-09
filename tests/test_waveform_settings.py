@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from unittest.mock import patch
+
 from meetandread.config import (
     AppSettings,
     ConfigManager,
@@ -281,3 +283,102 @@ class TestWaveformEnabledManager:
         """ui.waveform_enabled is included in _get_all_paths()."""
         all_paths = manager._get_all_paths()
         assert "ui.waveform_enabled" in all_paths
+
+
+# ============================================================================
+# T02: Settings handler tests
+# ============================================================================
+
+class TestWaveformToggleHandler:
+    """Tests for _on_waveform_toggled handler in FloatingSettingsPanel."""
+
+    @pytest.fixture
+    def qapp_local(self):
+        """Provide a QApplication for the test session."""
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        yield app
+
+    @pytest.fixture
+    def panel_and_mocks(self, qapp_local, manager):
+        """Create a FloatingSettingsPanel with mocked config dependencies."""
+        from unittest.mock import MagicMock, patch
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        fake_screen = MagicMock()
+        fake_screen.geometry.return_value = MagicMock(
+            x=lambda: 0, y=lambda: 0, width=lambda: 1920, height=lambda: 1080
+        )
+        with patch("meetandread.config.get_config", return_value=True), \
+             patch("meetandread.config.save_config"), \
+             patch("meetandread.widgets.floating_panels.QApplication.primaryScreen",
+                    return_value=fake_screen), \
+             patch("meetandread.widgets.floating_panels.QApplication.screens",
+                    return_value=[fake_screen]):
+            panel = FloatingSettingsPanel(
+                None,
+                controller=MagicMock(),
+                tray_manager=None,
+                main_widget=None,
+            )
+        return panel
+
+    def test_handler_persists_true(self, panel_and_mocks, manager):
+        """Checked state (state=2) persists ui.waveform_enabled=True."""
+        from PyQt6.QtCore import Qt
+        panel = panel_and_mocks
+        with patch("meetandread.config.set_config") as mock_set, \
+             patch("meetandread.config.save_config") as mock_save:
+            panel._on_waveform_toggled(Qt.CheckState.Checked.value)
+            mock_set.assert_called_once_with("ui.waveform_enabled", True)
+            mock_save.assert_called_once()
+
+    def test_handler_persists_false(self, panel_and_mocks, manager):
+        """Unchecked state (state=0) persists ui.waveform_enabled=False."""
+        panel = panel_and_mocks
+        with patch("meetandread.config.set_config") as mock_set, \
+             patch("meetandread.config.save_config") as mock_save:
+            panel._on_waveform_toggled(0)
+            mock_set.assert_called_once_with("ui.waveform_enabled", False)
+            mock_save.assert_called_once()
+
+    def test_handler_partial_state_persists_true(self, panel_and_mocks, manager):
+        """Partially checked state (state=1) persists ui.waveform_enabled=True."""
+        panel = panel_and_mocks
+        with patch("meetandread.config.set_config") as mock_set, \
+             patch("meetandread.config.save_config") as mock_save:
+            panel._on_waveform_toggled(1)
+            mock_set.assert_called_once_with("ui.waveform_enabled", True)
+            mock_save.assert_called_once()
+
+    def test_handler_does_not_crash_on_save_failure(self, panel_and_mocks, manager):
+        """Handler swallows save failures without crashing."""
+        panel = panel_and_mocks
+        with patch("meetandread.config.set_config", side_effect=RuntimeError("disk full")):
+            # Should not raise
+            panel._on_waveform_toggled(0)
+
+    def test_checkbox_exists(self, panel_and_mocks):
+        """Panel has the waveform checkbox widget."""
+        panel = panel_and_mocks
+        assert hasattr(panel, '_waveform_checkbox')
+        from PyQt6.QtWidgets import QCheckBox
+        assert isinstance(panel._waveform_checkbox, QCheckBox)
+
+    def test_checkbox_default_checked(self, panel_and_mocks):
+        """Waveform checkbox defaults to checked."""
+        panel = panel_and_mocks
+        assert panel._waveform_checkbox.isChecked() is True
+
+    def test_checkbox_object_name(self, panel_and_mocks):
+        """Waveform checkbox uses AethericCheckBox object name."""
+        panel = panel_and_mocks
+        assert panel._waveform_checkbox.objectName() == "AethericCheckBox"
+
+    def test_checkbox_label(self, panel_and_mocks):
+        """Checkbox has the expected label text."""
+        panel = panel_and_mocks
+        assert "waveform" in panel._waveform_checkbox.text().lower()
+        assert "recording" in panel._waveform_checkbox.text().lower()

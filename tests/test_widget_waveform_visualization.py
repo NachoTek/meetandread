@@ -976,3 +976,146 @@ class TestHealthStateColorInPaintWaveform:
             result.blue() != base.blue()
         )
         assert colors_differ, "WARNING color should differ from base theme color"
+
+
+# ---------------------------------------------------------------------------
+# T02: Waveform render guard — ui.waveform_enabled controls _paint_waveform
+# ---------------------------------------------------------------------------
+
+class TestWaveformRenderGuard:
+    """_paint_recording guards _paint_waveform on ui.waveform_enabled config."""
+
+    def test_enabled_calls_paint_waveform(self, button):
+        """When config is True, _paint_waveform is called during recording paint."""
+        button.is_recording = True
+        button.pulse_phase = 0.5
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
+        )
+        with patch("meetandread.widgets.main_widget.get_config",
+                    return_value=True):
+            with patch.object(button, "_paint_waveform",
+                              wraps=button._paint_waveform) as mock_wf:
+                pixmap = QPixmap(80, 80)
+                painter = QPainter(pixmap)
+                try:
+                    button._paint_recording(painter, QRectF(0, 0, 80, 80))
+                finally:
+                    painter.end()
+                mock_wf.assert_called_once()
+
+    def test_disabled_skips_paint_waveform(self, button):
+        """When config is False, _paint_waveform is NOT called during recording paint."""
+        button.is_recording = True
+        button.pulse_phase = 0.5
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
+        )
+        with patch("meetandread.widgets.main_widget.get_config",
+                    return_value=False):
+            with patch.object(button, "_paint_waveform") as mock_wf:
+                pixmap = QPixmap(80, 80)
+                painter = QPainter(pixmap)
+                try:
+                    button._paint_recording(painter, QRectF(0, 0, 80, 80))
+                finally:
+                    painter.end()
+                mock_wf.assert_not_called()
+
+    def test_config_error_defaults_to_enabled(self, button):
+        """When config lookup raises, waveform is still painted (enabled)."""
+        button.is_recording = True
+        button.pulse_phase = 0.5
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
+        )
+        with patch("meetandread.widgets.main_widget.get_config",
+                    side_effect=RuntimeError("config corrupted")):
+            with patch.object(button, "_paint_waveform",
+                              wraps=button._paint_waveform) as mock_wf:
+                pixmap = QPixmap(80, 80)
+                painter = QPainter(pixmap)
+                try:
+                    button._paint_recording(painter, QRectF(0, 0, 80, 80))
+                finally:
+                    painter.end()
+                mock_wf.assert_called_once()
+
+    def test_none_config_defaults_to_enabled(self, button):
+        """When config returns None, waveform is still painted (enabled)."""
+        button.is_recording = True
+        button.pulse_phase = 0.5
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
+        )
+        with patch("meetandread.widgets.main_widget.get_config",
+                    return_value=None):
+            with patch.object(button, "_paint_waveform",
+                              wraps=button._paint_waveform) as mock_wf:
+                pixmap = QPixmap(80, 80)
+                painter = QPainter(pixmap)
+                try:
+                    button._paint_recording(painter, QRectF(0, 0, 80, 80))
+                finally:
+                    painter.end()
+                mock_wf.assert_called_once()
+
+    def test_disabled_still_draws_pulse_base(self, button):
+        """Disabled waveform still draws the pulse/glow/base (no crash)."""
+        button.is_recording = True
+        button.pulse_phase = 0.5
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
+        )
+        with patch("meetandread.widgets.main_widget.get_config",
+                    return_value=False):
+            pixmap = QPixmap(80, 80)
+            painter = QPainter(pixmap)
+            try:
+                # Should complete without exception — pulse base still draws
+                button._paint_recording(painter, QRectF(0, 0, 80, 80))
+            finally:
+                painter.end()
+
+    def test_disabled_no_child_items(self, button):
+        """Disabled waveform does not add child items."""
+        button.is_recording = True
+        button.pulse_phase = 0.5
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
+        )
+        initial_children = len(button.childItems())
+        with patch("meetandread.widgets.main_widget.get_config",
+                    return_value=False):
+            pixmap = QPixmap(80, 80)
+            painter = QPainter(pixmap)
+            try:
+                button._paint_recording(painter, QRectF(0, 0, 80, 80))
+            finally:
+                painter.end()
+        assert len(button.childItems()) == initial_children
+
+    def test_guard_is_cheap_no_save_or_alloc(self, button):
+        """Guard path does not call save_config or allocate large objects.
+
+        The render guard executes every paint frame, so it must only do a
+        cheap config read. This test verifies the guard doesn't call save
+        or trigger UI rebuilding.
+        """
+        button.is_recording = True
+        button.pulse_phase = 0.5
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
+        )
+        with patch("meetandread.widgets.main_widget.get_config",
+                    return_value=True) as mock_get, \
+             patch("meetandread.widgets.main_widget.save_config") as mock_save:
+            pixmap = QPixmap(80, 80)
+            painter = QPainter(pixmap)
+            try:
+                button._paint_recording(painter, QRectF(0, 0, 80, 80))
+            finally:
+                painter.end()
+            # Only get_config called — no save
+            mock_get.assert_called_once_with("ui.waveform_enabled")
+            mock_save.assert_not_called()
