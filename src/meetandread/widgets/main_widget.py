@@ -279,6 +279,10 @@ to avoid clipping issues and enable proper text rendering.
         
         self.pulse_phase = 0.0
         
+        # Waveform polling cadence — polls controller every 3rd animation
+        # frame (~10 fps) during recording; 0 = no polling.
+        self._waveform_frame_counter: int = 0
+        
         # Context menu setup
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
@@ -532,6 +536,20 @@ to avoid clipping issues and enable proper text rendering.
         if self.is_recording and not self.is_processing:
             self.pulse_phase += 0.05  # ~2s period at 30fps
             self.record_button.pulse_phase = self.pulse_phase
+
+            # Waveform polling: poll controller every 3rd frame (~10 fps)
+            self._waveform_frame_counter += 1
+            if self._waveform_frame_counter % 3 == 0:
+                try:
+                    samples = self._controller.get_live_audio_samples(
+                        duration_seconds=1.5
+                    )
+                except Exception:
+                    # Degrade to flat waveform; never break the animation loop
+                    samples = None
+                self.record_button.set_waveform_samples(samples)
+                self.record_button.advance_waveform_rotation(0.06)
+
             self.record_button.update()
         elif self.is_processing:
             self.pulse_phase += 0.2
@@ -554,6 +572,10 @@ to avoid clipping issues and enable proper text rendering.
                     self.pulse_phase = 0.0
                     self.record_button.pulse_phase = 0.0
                     self.record_button.swirl_phase = 0.0
+                    # Reset waveform state after cross-fade completes
+                    self._waveform_frame_counter = 0
+                    self.record_button.set_waveform_samples(None)
+                    self.record_button._waveform_rotation_phase = 0.0
             else:
                 # Still cross-fading — keep driving phases so the fading-out
                 # state continues to paint smoothly (pulse decays naturally

@@ -18,7 +18,7 @@ import pytest
 
 from PyQt6.QtWidgets import QApplication, QGraphicsScene
 from PyQt6.QtGui import QPainter, QColor, QPixmap
-from PyQt6.QtCore import QRectF
+from PyQt6.QtCore import QRectF, Qt
 
 from meetandread.widgets.main_widget import RecordButtonItem
 
@@ -296,3 +296,323 @@ class TestFrameCounter:
         assert button._waveform_update_count == 1
         button.set_waveform_samples(samples)
         assert button._waveform_update_count == 2
+
+
+# ---------------------------------------------------------------------------
+# T03: Integration tests — waveform polling in animation loop
+# ---------------------------------------------------------------------------
+
+class _FakeScreenGeometry:
+    """Minimal stand-in for QScreen.geometry()."""
+
+    def __init__(self, width=1920, height=1080):
+        self._w = width
+        self._h = height
+
+    def width(self):
+        return self._w
+
+    def height(self):
+        return self._h
+
+    def contains(self, point):
+        return 0 <= point.x() < self._w and 0 <= point.y() < self._h
+
+
+def _make_widget(qapp):
+    """Create a MeetAndReadWidget with mocked Qt globals for testing."""
+    from unittest.mock import patch, MagicMock
+    from meetandread.widgets.main_widget import MeetAndReadWidget
+
+    fake_geo = _FakeScreenGeometry()
+    fake_screen = MagicMock()
+    fake_screen.geometry.return_value = fake_geo
+    with patch("meetandread.widgets.main_widget.QApplication.primaryScreen",
+               return_value=fake_screen), \
+         patch("meetandread.widgets.main_widget.QApplication.screens",
+               return_value=[fake_screen]), \
+         patch("meetandread.widgets.main_widget.get_config", return_value=None), \
+         patch("meetandread.widgets.main_widget.save_config"):
+        w = MeetAndReadWidget()
+    w._floating_settings_panel = MagicMock()
+    w._floating_settings_panel.isVisible.return_value = False
+    w._cc_overlay = MagicMock()
+    w._cc_overlay.isVisible.return_value = False
+    return w
+
+
+class TestWaveformPollingCadence:
+    """Waveform samples are polled from controller every 3rd animation tick."""
+
+    @pytest.fixture
+    def widget(self, qapp):
+        w = _make_widget(qapp)
+        yield w
+        w.close()
+
+    def test_no_polling_while_idle(self, widget):
+        """Idle widget should never call get_live_audio_samples."""
+        from unittest.mock import patch
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          side_effect=AssertionError("should not be called")) as mock:
+            for _ in range(30):
+                widget._update_animations()
+            mock.assert_not_called()
+
+    def test_no_polling_while_processing(self, widget):
+        """Processing widget should never call get_live_audio_samples."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        widget._on_controller_state_change(ControllerState.STOPPING)
+        assert widget.is_processing
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          side_effect=AssertionError("should not be called")) as mock:
+            for _ in range(30):
+                widget._update_animations()
+            mock.assert_not_called()
+
+    def test_polls_every_third_frame_while_recording(self, widget):
+        """During recording, get_live_audio_samples is called every 3rd frame."""
+        from unittest.mock import patch, MagicMock
+        from meetandread.recording import ControllerState
+        fake_samples = np.random.randn(16000).astype(np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        # Settle visual state
+        for _ in range(10):
+            widget._update_animations()
+
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples) as mock:
+            mock.reset_mock()
+            for _ in range(30):
+                widget._update_animations()
+            # 30 frames / 3 cadence = 10 calls
+            assert mock.call_count == 10
+
+    def test_polling_uses_correct_duration(self, widget):
+        """Controller is queried with duration_seconds=1.5."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        fake_samples = np.array([0.1, 0.2], dtype=np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        # Advance to first polling frame (frame 3 → counter=3)
+        widget._waveform_frame_counter = 0
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples) as mock:
+            # Advance 3 frames to trigger first poll
+            for _ in range(3):
+                widget._update_animations()
+            mock.assert_called_once_with(duration_seconds=1.5)
+
+
+class TestWaveformSamplePropagation:
+    """Controller samples propagate into record_button waveform data."""
+
+    @pytest.fixture
+    def widget(self, qapp):
+        w = _make_widget(qapp)
+        yield w
+        w.close()
+
+    def test_samples_reach_record_button(self, widget):
+        """After polling, record_button._waveform_data reflects the samples."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        fake_samples = np.sin(np.linspace(0, 2 * math.pi, 500)).astype(np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        # Settle
+        for _ in range(10):
+            widget._update_animations()
+
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples):
+            # Advance 3 frames to trigger one poll
+            for _ in range(3):
+                widget._update_animations()
+            # Waveform data should now reflect the samples (downsampled to 120)
+            assert widget.record_button._waveform_update_count > 0
+            assert len(widget.record_button._waveform_data) == 120
+
+    def test_empty_samples_degrade_gracefully(self, widget):
+        """Controller returning empty samples → button gets flat fallback."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        empty_samples = np.ndarray(0, dtype=np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        for _ in range(10):
+            widget._update_animations()
+
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=empty_samples):
+            for _ in range(3):
+                widget._update_animations()
+            # Should have flat fallback data, not crash
+            assert len(widget.record_button._waveform_data) == 120
+            assert all(math.isfinite(v) for v in widget.record_button._waveform_data)
+
+
+class TestWaveformRotationAdvancement:
+    """Rotation advances smoothly during recording."""
+
+    @pytest.fixture
+    def widget(self, qapp):
+        w = _make_widget(qapp)
+        yield w
+        w.close()
+
+    def test_rotation_advances_during_recording(self, widget):
+        """Waveform rotation phase increases during recording."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        fake_samples = np.array([0.1, 0.2], dtype=np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        for _ in range(10):
+            widget._update_animations()
+
+        initial_phase = widget.record_button._waveform_rotation_phase
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples):
+            for _ in range(6):  # 2 poll cycles
+                widget._update_animations()
+        # Each poll advances by 0.06 radians → 2 polls = 0.12
+        expected = initial_phase + 0.12
+        assert widget.record_button._waveform_rotation_phase == pytest.approx(
+            expected, abs=0.001
+        )
+
+    def test_rotation_resets_after_crossfade(self, widget):
+        """Rotation phase resets to 0 only after cross-fade settles on idle."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        fake_samples = np.array([0.1, 0.2], dtype=np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples):
+            for _ in range(15):
+                widget._update_animations()
+        assert widget.record_button._waveform_rotation_phase > 0.0
+
+        # Go idle
+        widget._on_controller_state_change(ControllerState.IDLE)
+        # Settle cross-fade
+        for _ in range(20):
+            widget._update_animations()
+        assert widget.record_button._state_t >= 1.0
+        assert widget.record_button._waveform_rotation_phase == 0.0
+
+
+class TestWaveformErrorDegradation:
+    """Controller errors degrade to flat waveform without crashing."""
+
+    @pytest.fixture
+    def widget(self, qapp):
+        w = _make_widget(qapp)
+        yield w
+        w.close()
+
+    def test_controller_exception_degrades_gracefully(self, widget):
+        """If controller raises, animation loop continues with flat data."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        for _ in range(10):
+            widget._update_animations()
+
+        call_count = 0
+        def _raising_getter(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("audio subsystem error")
+
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          side_effect=_raising_getter):
+            # Should not raise — animation loop must survive
+            for _ in range(30):
+                widget._update_animations()
+
+        # Controller was called (error path was exercised)
+        assert call_count > 0
+        # Animation loop survived: pulse_phase advanced
+        assert widget.pulse_phase > 0.0
+        # Waveform data is still valid (flat fallback from None passthrough)
+        assert len(widget.record_button._waveform_data) == 120
+
+
+class TestWaveformClickThrough:
+    """Waveform visualization does not add interactive items blocking clicks."""
+
+    @pytest.fixture
+    def widget(self, qapp):
+        w = _make_widget(qapp)
+        yield w
+        w.close()
+
+    def test_no_new_interactive_child_items_during_recording(self, widget):
+        """Recording with waveform does not add child items to the button."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        fake_samples = np.random.randn(16000).astype(np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+
+        initial_children = len(widget.record_button.childItems())
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples):
+            for _ in range(30):
+                widget._update_animations()
+        # No new child items added
+        assert len(widget.record_button.childItems()) == initial_children
+
+    def test_record_button_remains_clickable(self, widget):
+        """RecordButtonItem mouse event handling still works with waveform."""
+        from unittest.mock import patch, MagicMock
+        from meetandread.recording import ControllerState
+        fake_samples = np.array([0.1, 0.2], dtype=np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples):
+            for _ in range(15):
+                widget._update_animations()
+
+        # Simulate a click: toggle_recording should be callable via the button
+        widget.is_dragging = False
+        widget._click_consumed = False
+        event = MagicMock()
+        event.button.return_value = Qt.MouseButton.LeftButton
+        with patch.object(widget, "toggle_recording") as mock_toggle:
+            widget.record_button.mouseReleaseEvent(event)
+            mock_toggle.assert_called_once()
+
+
+class TestWaveformFrameCounterReset:
+    """Frame counter resets properly on state transitions."""
+
+    @pytest.fixture
+    def widget(self, qapp):
+        w = _make_widget(qapp)
+        yield w
+        w.close()
+
+    def test_frame_counter_resets_after_recording(self, widget):
+        """_waveform_frame_counter resets to 0 after recording stops and settles."""
+        from unittest.mock import patch
+        from meetandread.recording import ControllerState
+        fake_samples = np.array([0.1], dtype=np.float32)
+        widget._on_controller_state_change(ControllerState.RECORDING)
+        with patch.object(widget._controller, "get_live_audio_samples",
+                          return_value=fake_samples):
+            for _ in range(20):
+                widget._update_animations()
+        assert widget._waveform_frame_counter > 0
+
+        # Go idle and settle
+        widget._on_controller_state_change(ControllerState.IDLE)
+        for _ in range(20):
+            widget._update_animations()
+        assert widget._waveform_frame_counter == 0
+
+    def test_frame_counter_does_not_advance_while_idle(self, widget):
+        """Frame counter stays at 0 during idle."""
+        for _ in range(30):
+            widget._update_animations()
+        assert widget._waveform_frame_counter == 0
