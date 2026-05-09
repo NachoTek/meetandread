@@ -671,9 +671,10 @@ class TestHealthStateRepeatedDrops:
         button.is_recording = True
         button.on_frames_dropped(5)
         first_time = button._last_drop_time
-        # Small sleep to get a different timestamp
+        # Sleep longer to ensure monotonic() returns a different timestamp
+        # (Windows timer resolution may be ~15ms, so 50ms is safe)
         import time
-        time.sleep(0.01)
+        time.sleep(0.05)
         button.on_frames_dropped(6)
         assert button._last_drop_time > first_time
 
