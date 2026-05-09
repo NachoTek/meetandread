@@ -279,11 +279,11 @@ class TestWidgetFramesDroppedSlot:
         mock_handler.assert_not_called()
 
     def test_no_handler_on_record_button_is_safe(self, widget):
-        """No crash when record_button has no on_frames_dropped method."""
-        # RecordButtonItem doesn't have on_frames_dropped yet (T03 adds it)
-        if hasattr(widget.record_button, "on_frames_dropped"):
-            delattr(widget.record_button, "on_frames_dropped")
-        widget._on_frames_dropped(10)  # should not raise
+        """Record button has on_frames_dropped (T3) and handles calls safely."""
+        # T03 now provides on_frames_dropped — verify it exists and is callable
+        assert callable(widget.record_button.on_frames_dropped)
+        # Calling with None should not crash (handled by defensive coercion)
+        widget.record_button.on_frames_dropped(None)
 
     def test_handler_exception_does_not_crash(self, widget):
         """Exception in record_button.on_frames_dropped is caught."""

@@ -19,6 +19,7 @@ from typing import Optional
 import logging
 import math as _math
 import re
+import time as _time
 
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -1146,6 +1147,13 @@ class RecordButtonItem(QGraphicsEllipseItem):
     _WAVEFORM_INNER_RADIUS_FRAC = 0.20 # Inner boundary (fraction of button radius)
     _WAVEFORM_OUTER_RADIUS_FRAC = 0.42 # Outer boundary (fraction of button radius)
 
+    # Health-state constants
+    _HEALTH_DROP_THRESHOLD = 5         # Aggregate drops to enter WARNING
+    _HEALTH_RECOVERY_WINDOW = 1.0      # Seconds of no drops before WARNING→NORMAL
+    _WARNING_COLOR = QColor(255, 165, 0, 220)  # Amber/orange (#FFA500)
+    _HEALTH_NORMAL = "NORMAL"
+    _HEALTH_WARNING = "WARNING"
+
     def __init__(self, parent_widget):
         super().__init__(0, 0, 80, 80)
         self.parent_widget = parent_widget
@@ -1167,6 +1175,13 @@ class RecordButtonItem(QGraphicsEllipseItem):
         self._waveform_data: list[float] = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
         self._waveform_rotation_phase: float = 0.0
         self._waveform_update_count: int = 0
+
+        # Health-state visualization
+        self._health_state: str = self._HEALTH_NORMAL
+        self._health_t: float = 0.0  # 0.0 (NORMAL) → 1.0 (WARNING)
+        self._health_transition_speed: float = 1.0 / 6  # ~200ms at 33ms/frame
+        self._last_drop_time: float = 0.0  # monotonic timestamp of most recent drop
+        self._last_frames_dropped: int = 0  # latest aggregate count received
     
     def _state_key(self):
         """Return current visual state key."""
@@ -1177,10 +1192,36 @@ class RecordButtonItem(QGraphicsEllipseItem):
         return 'idle'
     
     def tick(self):
-        """Advance state transition animation by one frame (~33ms)."""
+        """Advance state transition animation by one frame (~33ms).
+
+        Also advances health-state transition and checks for timed
+        auto-recovery from WARNING → NORMAL.
+        """
         if self._state_t < 1.0:
             self._state_t = min(1.0, self._state_t + self._transition_speed)
             self.update()
+
+        # Health-state transition: advance eased interpolation
+        if self._health_state == self._HEALTH_WARNING:
+            # Advance toward WARNING
+            if self._health_t < 1.0:
+                self._health_t = min(1.0, self._health_t + self._health_transition_speed)
+                self.update()
+
+            # Auto-recovery: if 1+ seconds since last drop, recover to NORMAL
+            now = _time.monotonic()
+            if (now - self._last_drop_time) >= self._HEALTH_RECOVERY_WINDOW:
+                logging.info(
+                    "Health state: WARNING → NORMAL (recovered after %.1fs)",
+                    now - self._last_drop_time,
+                )
+                self._health_state = self._HEALTH_NORMAL
+                # _health_t will decay below
+        elif self._health_state == self._HEALTH_NORMAL and self._health_t > 0.0:
+            # Decay back to 0.0 (fully NORMAL color)
+            if self._health_t > 0.0:
+                self._health_t = max(0.0, self._health_t - self._health_transition_speed)
+                self.update()
     
     @staticmethod
     def _ease_out(t):
@@ -1193,6 +1234,19 @@ class RecordButtonItem(QGraphicsEllipseItem):
         self.is_recording = recording
         self._to_key = self._state_key()
         self._state_t = 0.0
+
+        # Immediately reset health state when recording stops
+        if not recording:
+            if self._health_state != self._HEALTH_NORMAL:
+                logging.info(
+                    "Health state: %s → NORMAL (recording stopped)",
+                    self._health_state,
+                )
+            self._health_state = self._HEALTH_NORMAL
+            self._health_t = 0.0
+            self._last_drop_time = 0.0
+            self._last_frames_dropped = 0
+
         self.update()
     
     def set_processing_state(self, processing):
@@ -1274,12 +1328,80 @@ class RecordButtonItem(QGraphicsEllipseItem):
         """Advance the waveform rotation phase by *delta* radians."""
         self._waveform_rotation_phase += delta
 
+    # -- Health-state API ----------------------------------------------------
+
+    def on_frames_dropped(self, count: int) -> None:
+        """Receive an aggregate frame-drop count from the UI bridge.
+
+        Enters WARNING state when *count* >= the drop threshold, refreshes
+        the recovery timer on each subsequent call, and logs state
+        transitions.  Invalid, negative, or non-integer inputs are safely
+        ignored.  Only acts while recording.
+
+        Args:
+            count: Sanitized aggregate frames_dropped count (>= 0).
+        """
+        # Defensive: reject malformed inputs
+        if not isinstance(count, (int, float)):
+            return
+        try:
+            safe_count = int(count)
+        except (ValueError, TypeError):
+            return
+        if safe_count < 0:
+            return
+
+        self._last_frames_dropped = safe_count
+
+        # Only track health while recording
+        if not self.is_recording:
+            return
+
+        # Refresh drop timestamp regardless of threshold
+        self._last_drop_time = _time.monotonic()
+
+        # Enter WARNING only at threshold
+        if safe_count >= self._HEALTH_DROP_THRESHOLD:
+            if self._health_state != self._HEALTH_WARNING:
+                logging.info(
+                    "Health state: %s → WARNING (frames_dropped=%d)",
+                    self._health_state, safe_count,
+                )
+                self._health_state = self._HEALTH_WARNING
+                # Start health_t from 0 so transition animates in
+                self._health_t = 0.0
+            self.update()
+
+    def _get_waveform_health_color(self, base_color: QColor) -> QColor:
+        """Interpolate between *base_color* and the warning amber color.
+
+        Uses eased health transition progress for smooth visual blend.
+        Returns the effective waveform color for the current frame.
+
+        Args:
+            base_color: The normal theme-aware waveform color.
+
+        Returns:
+            QColor interpolated between base and warning based on _health_t.
+        """
+        if self._health_t <= 0.0:
+            return QColor(base_color)
+
+        t = self._ease_out(self._health_t)
+        r = base_color.red()   + (self._WARNING_COLOR.red()   - base_color.red())   * t
+        g = base_color.green() + (self._WARNING_COLOR.green() - base_color.green()) * t
+        b = base_color.blue()  + (self._WARNING_COLOR.blue()  - base_color.blue())  * t
+        a = base_color.alpha() + (self._WARNING_COLOR.alpha() - base_color.alpha()) * t
+        return QColor(int(r), int(g), int(b), int(a))
+
     def _paint_waveform(self, painter, rect) -> None:
         """Render the waveform as a rotating circular line inside *rect*.
 
         Uses polar-to-Cartesian conversion with amplitude modulating the
         radius.  Colour is derived from ``current_palette().text`` at paint
-        time to stay theme-aware.  Empty ``_waveform_data`` is a safe no-op.
+        time to stay theme-aware, then interpolated toward amber/orange
+        when the health state is WARNING.  Empty ``_waveform_data`` is a
+        safe no-op.
         """
         data = self._waveform_data
         if not data:
@@ -1289,14 +1411,17 @@ class RecordButtonItem(QGraphicsEllipseItem):
         if n_points == 0:
             return
 
-        # Theme-aware colour (resolved at paint time, never cached)
+        # Theme-aware base colour (resolved at paint time, never cached)
         try:
             palette = current_palette()
-            color = QColor(palette.text)
-            if not color.isValid():
-                color = QColor(255, 255, 255, 200)
+            base_color = QColor(palette.text)
+            if not base_color.isValid():
+                base_color = QColor(255, 255, 255, 200)
         except Exception:
-            color = QColor(255, 255, 255, 200)
+            base_color = QColor(255, 255, 255, 200)
+
+        # Interpolate base color toward amber/orange based on health state
+        color = self._get_waveform_health_color(base_color)
 
         pen = QPen(color, 2)
         pen.setCosmetic(True)

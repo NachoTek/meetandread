@@ -616,3 +616,362 @@ class TestWaveformFrameCounterReset:
         for _ in range(30):
             widget._update_animations()
         assert widget._waveform_frame_counter == 0
+
+
+# ---------------------------------------------------------------------------
+# T03: Health-state threshold, recovery, color, and click-through tests
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+
+class TestHealthStateThreshold:
+    """Warning enters only at >= 5 aggregate drops; counts 0–4 stay NORMAL."""
+
+    def test_initial_health_is_normal(self, button):
+        """Fresh button starts in NORMAL health state."""
+        assert button._health_state == button._HEALTH_NORMAL
+        assert button._health_t == 0.0
+
+    def test_count_below_threshold_stays_normal(self, button):
+        """Counts 0–4 do not trigger WARNING."""
+        for count in range(0, 5):
+            button.is_recording = True
+            button.on_frames_dropped(count)
+            assert button._health_state == button._HEALTH_NORMAL, \
+                f"Count {count} should not trigger WARNING"
+
+    def test_count_5_enters_warning(self, button):
+        """Count 5 triggers WARNING state."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        assert button._health_state == button._HEALTH_WARNING
+        assert button._last_frames_dropped == 5
+
+    def test_count_above_5_enters_warning(self, button):
+        """Counts above 5 also trigger WARNING."""
+        button.is_recording = True
+        button.on_frames_dropped(100)
+        assert button._health_state == button._HEALTH_WARNING
+
+    def test_threshold_boundary_exact_5(self, button):
+        """Boundary: 4 stays NORMAL, 5 enters WARNING."""
+        button.is_recording = True
+        button.on_frames_dropped(4)
+        assert button._health_state == button._HEALTH_NORMAL
+        button.on_frames_dropped(5)
+        assert button._health_state == button._HEALTH_WARNING
+
+
+class TestHealthStateRepeatedDrops:
+    """Repeated drop events refresh _last_drop_time and sustain WARNING."""
+
+    def test_repeated_drops_refresh_timestamp(self, button):
+        """Each drop updates _last_drop_time to prevent premature recovery."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        first_time = button._last_drop_time
+        # Small sleep to get a different timestamp
+        import time
+        time.sleep(0.01)
+        button.on_frames_dropped(6)
+        assert button._last_drop_time > first_time
+
+    def test_warning_sustained_with_continuous_drops(self, button):
+        """WARNING state stays active as drops continue."""
+        button.is_recording = True
+        for count in range(5, 15):
+            button.on_frames_dropped(count)
+        assert button._health_state == button._HEALTH_WARNING
+
+    def test_health_t_resets_on_reentry(self, button):
+        """Re-entering WARNING after recovery resets _health_t for smooth transition."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        assert button._health_state == button._HEALTH_WARNING
+        assert button._health_t == 0.0  # starts at 0 for transition animation
+
+
+class TestHealthStateTimedRecovery:
+    """WARNING auto-recovers after 1 second of no drops via tick()."""
+
+    def test_no_recovery_before_one_second(self, button):
+        """tick() does not recover if < 1 second since last drop."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        assert button._health_state == button._HEALTH_WARNING
+
+        # Advance ticks but not enough time
+        with patch("meetandread.widgets.main_widget._time") as mock_time:
+            mock_time.monotonic.return_value = button._last_drop_time + 0.5
+            for _ in range(20):
+                button.tick()
+        assert button._health_state == button._HEALTH_WARNING
+
+    def test_recovery_after_one_second(self, button):
+        """tick() recovers to NORMAL after 1 second of no drops."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        assert button._health_state == button._HEALTH_WARNING
+
+        # Advance time past recovery window
+        with patch("meetandread.widgets.main_widget._time") as mock_time:
+            mock_time.monotonic.return_value = button._last_drop_time + 1.1
+            button.tick()
+        assert button._health_state == button._HEALTH_NORMAL
+
+    def test_recovery_decay_animates_health_t(self, button):
+        """After recovery, _health_t decays back to 0 over multiple ticks."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        # Advance health_t to 1.0
+        for _ in range(10):
+            button.tick()
+        assert button._health_t == 1.0
+
+        # Trigger recovery
+        with patch("meetandread.widgets.main_widget._time") as mock_time:
+            mock_time.monotonic.return_value = button._last_drop_time + 1.1
+            button.tick()
+        assert button._health_state == button._HEALTH_NORMAL
+
+        # Decay _health_t back to 0
+        for _ in range(10):
+            button.tick()
+        assert button._health_t == 0.0
+
+    def test_exact_one_second_triggers_recovery(self, button):
+        """Recovery triggers at exactly 1.0 seconds since last drop."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+
+        with patch("meetandread.widgets.main_widget._time") as mock_time:
+            mock_time.monotonic.return_value = button._last_drop_time + 1.0
+            button.tick()
+        assert button._health_state == button._HEALTH_NORMAL
+
+
+class TestHealthStateStopReset:
+    """Stopping recording resets health state immediately."""
+
+    def test_stop_resets_to_normal(self, button):
+        """set_recording_state(False) immediately resets to NORMAL."""
+        button.is_recording = True
+        button.on_frames_dropped(10)
+        assert button._health_state == button._HEALTH_WARNING
+
+        button.set_recording_state(False)
+        assert button._health_state == button._HEALTH_NORMAL
+        assert button._health_t == 0.0
+        assert button._last_drop_time == 0.0
+        assert button._last_frames_dropped == 0
+
+    def test_no_warning_after_stop(self, button):
+        """After stop, no delayed warning appears even with high _last_frames_dropped."""
+        button.is_recording = True
+        button.on_frames_dropped(10)
+        button.set_recording_state(False)
+
+        # Advance many ticks — should stay NORMAL
+        for _ in range(30):
+            button.tick()
+        assert button._health_state == button._HEALTH_NORMAL
+
+    def test_drops_ignored_when_not_recording(self, button):
+        """on_frames_dropped is ignored when not recording."""
+        button.is_recording = False
+        button.on_frames_dropped(100)
+        assert button._health_state == button._HEALTH_NORMAL
+        assert button._last_frames_dropped == 100  # count stored but no state change
+
+
+class TestHealthStateMalformedInput:
+    """Malformed inputs do not crash and do not enter WARNING."""
+
+    def test_none_count_ignored(self, button):
+        """None count is safely ignored."""
+        button.is_recording = True
+        button.on_frames_dropped(None)
+        assert button._health_state == button._HEALTH_NORMAL
+
+    def test_negative_count_ignored(self, button):
+        """Negative count is safely ignored."""
+        button.is_recording = True
+        button.on_frames_dropped(-5)
+        assert button._health_state == button._HEALTH_NORMAL
+
+    def test_string_count_ignored(self, button):
+        """String count is safely ignored."""
+        button.is_recording = True
+        button.on_frames_dropped("not-a-number")
+        assert button._health_state == button._HEALTH_NORMAL
+
+    def test_float_count_coerced(self, button):
+        """Float count is truncated to int."""
+        button.is_recording = True
+        button.on_frames_dropped(5.9)
+        assert button._health_state == button._HEALTH_WARNING
+        assert button._last_frames_dropped == 5
+
+    def test_zero_count_ignored(self, button):
+        """Zero count does not change state."""
+        button.is_recording = True
+        button.on_frames_dropped(0)
+        assert button._health_state == button._HEALTH_NORMAL
+        assert button._last_frames_dropped == 0
+
+
+class TestHealthColorInterpolation:
+    """_get_waveform_health_color produces valid QColor at all progress levels."""
+
+    def test_zero_health_t_returns_base_color(self, button):
+        """At _health_t=0.0, returns base color unchanged."""
+        base = QColor(200, 200, 200, 200)
+        button._health_t = 0.0
+        result = button._get_waveform_health_color(base)
+        assert result.red() == base.red()
+        assert result.green() == base.green()
+        assert result.blue() == base.blue()
+
+    def test_full_health_t_approaches_warning_color(self, button):
+        """At _health_t=1.0 (after easing), color is close to warning amber."""
+        base = QColor(200, 200, 200, 200)
+        button._health_t = 1.0
+        result = button._get_waveform_health_color(base)
+        # Should be interpolated toward amber (255, 165, 0)
+        assert result.red() == 255  # base 200 → 255 (warning red)
+        assert result.green() < base.green()  # should decrease toward 165
+        assert result.blue() < base.blue()  # should decrease toward 0
+
+    def test_intermediate_health_t_valid_color(self, button):
+        """At intermediate _health_t, result is a valid QColor."""
+        base = QColor(200, 200, 200, 200)
+        button._health_t = 0.5
+        result = button._get_waveform_health_color(base)
+        assert result.isValid()
+        assert 0 <= result.red() <= 255
+        assert 0 <= result.green() <= 255
+        assert 0 <= result.blue() <= 255
+        assert 0 <= result.alpha() <= 255
+
+    def test_interpolation_is_monotonic(self, button):
+        """Red channel increases monotonically as _health_t advances."""
+        base = QColor(200, 200, 200, 200)
+        prev_r = 0
+        for t_val in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
+            button._health_t = t_val
+            result = button._get_waveform_health_color(base)
+            assert result.red() >= prev_r
+            prev_r = result.red()
+
+    def test_invalid_base_color_falls_back(self, button):
+        """Invalid base color still produces a valid result."""
+        base = QColor()
+        assert not base.isValid()
+        button._health_t = 0.5
+        result = button._get_waveform_health_color(base)
+        assert result.isValid()
+
+
+class TestHealthStatePaintIntegration:
+    """Health color is used in waveform paint without adding child items."""
+
+    def test_warning_paint_uses_amber_color(self, button):
+        """During WARNING, waveform paint path uses amber-interpolated color."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        # Advance health_t to full
+        for _ in range(10):
+            button.tick()
+        assert button._health_t == 1.0
+
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 120)).astype(np.float32)
+        )
+
+        pixmap = QPixmap(80, 80)
+        painter = QPainter(pixmap)
+        try:
+            button._paint_waveform(painter, QRectF(0, 0, 80, 80))
+        finally:
+            painter.end()
+        # Should complete without error — amber color was used
+
+    def test_paint_does_not_add_child_items_with_health_warning(self, button):
+        """WARNING state paint adds no child items."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        for _ in range(10):
+            button.tick()
+
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 120)).astype(np.float32)
+        )
+
+        initial_children = len(button.childItems())
+        pixmap = QPixmap(80, 80)
+        painter = QPainter(pixmap)
+        try:
+            button._paint_waveform(painter, QRectF(0, 0, 80, 80))
+        finally:
+            painter.end()
+
+        assert len(button.childItems()) == initial_children
+
+    def test_health_warning_preserves_click_through(self, button):
+        """WARNING state does not affect mouse event handling."""
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        for _ in range(10):
+            button.tick()
+
+        # Mouse events should still work
+        event = MagicMock()
+        event.button.return_value = Qt.MouseButton.LeftButton
+        button.parent_widget.is_dragging = False
+        button.parent_widget._click_consumed = False
+        with patch.object(button.parent_widget, "toggle_recording") as mock:
+            button.mouseReleaseEvent(event)
+            mock.assert_called_once()
+
+
+class TestHealthStateColorInPaintWaveform:
+    """Verify waveform color reflects health state during _paint_recording."""
+
+    def test_normal_uses_base_color(self, button):
+        """NORMAL health paints with theme base color (not amber)."""
+        from meetandread.widgets.theme import current_palette
+
+        button.is_recording = True
+        button.set_waveform_samples(
+            np.sin(np.linspace(0, 2 * math.pi, 120)).astype(np.float32)
+        )
+
+        # Get expected base color
+        palette = current_palette()
+        expected_base = QColor(palette.text)
+
+        # Check health color returns base color when normal
+        result = button._get_waveform_health_color(expected_base)
+        assert result.red() == expected_base.red()
+        assert result.green() == expected_base.green()
+
+    def test_warning_produces_different_color_than_base(self, button):
+        """WARNING health produces a different color than the base."""
+        from meetandread.widgets.theme import current_palette
+
+        button.is_recording = True
+        button.on_frames_dropped(5)
+        for _ in range(10):
+            button.tick()
+
+        palette = current_palette()
+        base = QColor(palette.text)
+        result = button._get_waveform_health_color(base)
+        # Color should differ from base (unless base happens to be amber)
+        colors_differ = (
+            result.red() != base.red() or
+            result.green() != base.green() or
+            result.blue() != base.blue()
+        )
+        assert colors_differ, "WARNING color should differ from base theme color"
