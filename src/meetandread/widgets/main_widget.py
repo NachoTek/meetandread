@@ -52,6 +52,7 @@ class _ControllerBridge(QObject):
     recording_complete = pyqtSignal(object, object)  # wav_path, transcript_path
     post_process_complete = pyqtSignal(str, object)   # job_id, transcript_path
     phrase_result = pyqtSignal(object)       # SegmentResult
+    frames_dropped = pyqtSignal(int)         # aggregate drop count
 
 
 
@@ -244,6 +245,7 @@ to avoid clipping issues and enable proper text rendering.
         self._bridge.recording_complete.connect(self._on_recording_complete)
         self._bridge.post_process_complete.connect(self._on_post_process_complete)
         self._bridge.phrase_result.connect(self._on_phrase_result)
+        self._bridge.frames_dropped.connect(self._on_frames_dropped)
 
         # Controller callbacks emit bridge signals (thread-safe)
         self._controller.on_state_change = self._bridge.state_changed.emit
@@ -251,6 +253,7 @@ to avoid clipping issues and enable proper text rendering.
         self._controller.on_phrase_result = lambda result: self._bridge.phrase_result.emit(result)
         self._controller.on_recording_complete = lambda wav, t: self._bridge.recording_complete.emit(wav, t)
         self._controller.on_post_process_complete = lambda jid, tp: self._bridge.post_process_complete.emit(jid, tp)
+        self._controller.on_frames_dropped = lambda count: self._bridge.frames_dropped.emit(count)
         self._error_indicator = None  # For showing errors
         self._warning_indicator = None  # For showing resource warnings
         self._warning_hide_timer: Optional[QTimer] = None  # Auto-hide timer for warnings
@@ -935,6 +938,32 @@ to avoid clipping issues and enable proper text rendering.
         if self._floating_settings_panel:
             wer = self._controller.get_last_wer()
             self._floating_settings_panel.update_wer_display(wer)
+
+    def _on_frames_dropped(self, count: int) -> None:
+        """Handle frame-drop events forwarded through the Qt bridge.
+
+        Runs on the UI thread via signal/slot delivery. Forwards the
+        sanitized aggregate count to the record button if it supports
+        frame-drop notifications (T03). Exception-safe so the animation
+        loop is never compromised.
+
+        Args:
+            count: Sanitized aggregate frames_dropped count (>= 0).
+        """
+        try:
+            # Defensive: validate count before forwarding
+            if not isinstance(count, (int, float)):
+                return
+            safe_count = int(max(0, count))
+            if safe_count == 0:
+                return  # no-op
+
+            # Forward to record button if it supports frame-drop notifications
+            handler = getattr(self.record_button, "on_frames_dropped", None)
+            if callable(handler):
+                handler(safe_count)
+        except Exception:
+            logging.exception("Error forwarding frame-drop count to record button")
 
     def _on_speaker_name_pinned(self, raw_label: str, name: str):
         """Handle user pinning a speaker name in the transcript panel.

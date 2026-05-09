@@ -109,6 +109,7 @@ class RecordingController:
         self.on_recording_complete: Optional[Callable[[Path, Optional[Path]], None]] = None
         self.on_phrase_result: Optional[Callable[[SegmentResult], None]] = None  # For accumulating processor results
         self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, transcript_path
+        self.on_frames_dropped: Optional[Callable[[int], None]] = None  # Aggregate drop count (UI thread via bridge)
         
         # Audio feed tracking
         self._audio_chunks_fed = 0
@@ -135,7 +136,36 @@ class RecordingController:
         self._live_min_audio_bytes = 8 * 16000 * 2  # 8s at 16kHz int16 = 256000
         self._live_attempt_interval = 2.0  # seconds between match attempts
         self._live_extractor_lock = threading.Lock()  # serialize extractor use
-        
+    
+    def _on_session_frames_dropped(self, count: int) -> None:
+        """Internal handler for session-level frame-drop events.
+
+        Called from the audio callback thread via SessionConfig.on_frames_dropped.
+        Sanitizes the count and forwards to the user-provided
+        ``on_frames_dropped`` callback. Exceptions in the user callback are
+        logged and swallowed so recording continues uninterrupted.
+        """
+        try:
+            # Defensive: coerce non-int / negative to safe int
+            safe_count = int(max(0, count))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Non-numeric frame-drop count received: %r — treating as 0",
+                count,
+            )
+            safe_count = 0
+
+        if safe_count == 0:
+            return  # no-op for zero
+
+        logger.info(
+            "Controller frame-drop forwarded: aggregate=%d", safe_count
+        )
+        if self.on_frames_dropped:
+            try:
+                self.on_frames_dropped(safe_count)
+            except Exception:
+                logger.exception("on_frames_dropped callback error (recording continues)")
     
     def _set_state(self, state: ControllerState) -> None:
         """Update state and notify listeners."""
@@ -304,6 +334,7 @@ class RecordingController:
                 enable_microphone_denoising=denoise_enabled,
                 denoising_provider_name=denoise_provider if denoise_enabled else None,
                 denoising_latency_budget_ms=denoise_budget_ms,
+                on_frames_dropped=self._on_session_frames_dropped,
             )
             logger.info(
                 "Denoising config: enabled=%s provider=%s budget=%.0fms",
