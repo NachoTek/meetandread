@@ -3,6 +3,7 @@
 Provides threaded audio capture using sounddevice with queue-based frame delivery.
 """
 
+import logging
 import sounddevice
 import numpy as np
 import queue
@@ -11,6 +12,8 @@ from typing import Optional, Callable, Dict, Any
 import platform
 
 from .devices import get_wasapi_hostapi_index, list_mic_inputs, list_loopback_outputs
+
+_log = logging.getLogger(__name__)
 
 
 class AudioSourceError(Exception):
@@ -34,6 +37,7 @@ class SoundDeviceSource:
         blocksize: int = 1024,
         dtype: str = 'float32',
         queue_size: int = 10,
+        on_frame_dropped: Optional[Callable[[str, int], None]] = None,
     ):
         self.device_id = device_id
         self.channels = channels
@@ -44,6 +48,15 @@ class SoundDeviceSource:
         self._stream: Optional[sounddevice.InputStream] = None
         self._running = False
         self._lock = threading.Lock()
+        # Frame-drop accounting
+        self._frames_dropped: int = 0
+        self._on_frame_dropped: Optional[Callable[[str, int], None]] = on_frame_dropped
+        # Sanitized source label for logging/callbacks (no audio data)
+        self._source_label: str = self.__class__.__name__
+
+    def get_frames_dropped(self) -> int:
+        """Return the number of frames dropped due to queue overflow."""
+        return self._frames_dropped
     
     def _callback(
         self,
@@ -57,8 +70,23 @@ class SoundDeviceSource:
             # Try to put without blocking - drop if queue is full
             self._queue.put_nowait(indata.copy())
         except queue.Full:
-            # Queue is full - drop this frame
-            pass
+            # Queue is full - drop this frame, increment counter, log, callback
+            self._frames_dropped += 1
+            count = self._frames_dropped
+            _log.info(
+                "Audio frame dropped: source=%s, count=%d",
+                self._source_label,
+                count,
+            )
+            if self._on_frame_dropped is not None:
+                try:
+                    self._on_frame_dropped(self._source_label, count)
+                except Exception:
+                    # Never let callback failures propagate into the audio backend
+                    _log.exception(
+                        "on_frame_dropped callback error (source=%s)",
+                        self._source_label,
+                    )
     
     def start(self) -> None:
         """Start the audio capture stream."""
@@ -129,6 +157,7 @@ class MicSource(SoundDeviceSource):
         samplerate: Optional[int] = None,
         blocksize: int = 1024,
         queue_size: int = 10,
+        on_frame_dropped: Optional[Callable[[str, int], None]] = None,
     ):
         # If no device specified, find a WASAPI input device
         if device_id is None:
@@ -160,7 +189,9 @@ class MicSource(SoundDeviceSource):
             blocksize=blocksize,
             dtype='float32',
             queue_size=queue_size,
+            on_frame_dropped=on_frame_dropped,
         )
+        self._source_label = "mic"
 
 
 class SystemSource:
@@ -180,6 +211,7 @@ class SystemSource:
         samplerate: Optional[int] = None,
         blocksize: int = 1024,
         queue_size: int = 10,
+        on_frame_dropped: Optional[Callable[[str, int], None]] = None,
     ):
         import logging
         self._log = logging.getLogger(__name__)
@@ -192,6 +224,7 @@ class SystemSource:
         self._blocksize: int = blocksize
         self._queue_size: int = queue_size
         self._backend: Optional[Any] = None  # PyAudioWPatchSource when available
+        self._on_frame_dropped: Optional[Callable[[str, int], None]] = on_frame_dropped
 
         # device_id is the legacy alias from SoundDeviceSource — if supplied,
         # it maps to device_index in the pyaudiowpatch backend.
@@ -231,6 +264,7 @@ class SystemSource:
                 samplerate=self._samplerate,
                 blocksize=self._blocksize,
                 queue_size=self._queue_size,
+                on_frame_dropped=on_frame_dropped,
             )
             self.available = True
 
@@ -293,3 +327,9 @@ class SystemSource:
     def close(self) -> None:
         if self._backend is not None:
             self._backend.close()
+
+    def get_frames_dropped(self) -> int:
+        """Return the number of frames dropped by the backend source."""
+        if self._backend is not None:
+            return self._backend.get_frames_dropped()
+        return 0
