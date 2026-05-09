@@ -238,6 +238,10 @@ class UISettings:
         default=None,
         metadata={"description": "CC overlay position and size as (x, y, width, height)"}
     )
+    waveform_enabled: bool = field(
+        default=True,
+        metadata={"description": "Whether to show real-time waveform visualization on the recording button"}
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -263,6 +267,7 @@ class UISettings:
             widget_dock_edge=data.get("widget_dock_edge"),
             audio_sources=data.get("audio_sources"),
             cc_panel_geometry=tuple(data["cc_panel_geometry"]) if data.get("cc_panel_geometry") else None,
+            waveform_enabled=data.get("waveform_enabled", cls.waveform_enabled),
         )
 
 
@@ -358,7 +363,7 @@ class AppSettings:
         ui: UI behavior and appearance settings.
     """
     config_version: int = field(
-        default=6,
+        default=7,
         metadata={"description": "Configuration schema version for migrations"}
     )
     model: ModelSettings = field(default_factory=ModelSettings)

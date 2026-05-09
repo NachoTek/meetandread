@@ -541,9 +541,9 @@ to avoid clipping issues and enable proper text rendering.
             self.pulse_phase += 0.05  # ~2s period at 30fps
             self.record_button.pulse_phase = self.pulse_phase
 
-            # Waveform polling: poll controller every 3rd frame (~10 fps)
+            # Waveform polling: poll controller every 6th frame (~5 fps, optimized for CPU <5% per S03 performance testing)
             self._waveform_frame_counter += 1
-            if self._waveform_frame_counter % 3 == 0:
+            if self._waveform_frame_counter % 6 == 0:
                 try:
                     samples = self._controller.get_live_audio_samples(
                         duration_seconds=1.5
@@ -552,7 +552,7 @@ to avoid clipping issues and enable proper text rendering.
                     # Degrade to flat waveform; never break the animation loop
                     samples = None
                 self.record_button.set_waveform_samples(samples)
-                self.record_button.advance_waveform_rotation(0.06)
+                self.record_button.advance_waveform_rotation(0.12)  # Double the step to maintain rotation speed at 5 fps
 
             self.record_button.update()
         elif self.is_processing:
@@ -1142,7 +1142,7 @@ class RecordButtonItem(QGraphicsEllipseItem):
     """Main record button component."""
 
     # Waveform constants
-    _WAVEFORM_TARGET_POINTS = 120      # Number of amplitude points to render
+    _WAVEFORM_TARGET_POINTS = 60       # Number of amplitude points to render (optimized: 120→80→60 for CPU <5% per S03 performance testing)
     _WAVEFORM_FLAT_AMPLITUDE = 0.03    # Low-amplitude fallback for silent/empty
     _WAVEFORM_INNER_RADIUS_FRAC = 0.20 # Inner boundary (fraction of button radius)
     _WAVEFORM_OUTER_RADIUS_FRAC = 0.42 # Outer boundary (fraction of button radius)

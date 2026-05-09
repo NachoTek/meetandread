@@ -7,13 +7,13 @@ TEST CONFIGURATION
   Audio source:      benchmark.wav (fake, looped)
   Transcription:     disabled
   Duration:          8.0s
-  CPU sample count:  80
+  CPU sample count:  77
   CPU sample interval: 0.1s
 
 CPU UTILIZATION
 ----------------------------------------
-  Average CPU:       8.8%
-  Peak CPU:          12.5%
+  Average CPU:       9.3%
+  Peak CPU:          13.1%
   Target:            < 5.0%
   Target met:        NO [X]
 
@@ -26,12 +26,12 @@ MEMORY (Python heap via tracemalloc)
 CONTROLLER DIAGNOSTICS
 ----------------------------------------
   state: IDLE
-  last_wav_path: C:\Users\david.keymel\Documents\meetandread\recordings\recording-2026-05-09-170849.wav
+  last_wav_path: C:\Users\david.keymel\Documents\meetandread\recordings\recording-2026-05-09-172105.wav
   last_transcript_path: None
   session:
-    frames_recorded: 129257216
+    frames_recorded: 86294784
     frames_dropped: 0
-    duration_seconds: 8.031551122665405
+    duration_seconds: 8.02744746208191
     source_stats: {}
     denoising: {'provider': '', 'enabled': False, 'active': False, 'processed_frame_count': 0, 'fallback_count': 0, 'avg_latency_ms': 0.0, 'max_latency_ms': 0.0, 'budget_exceeded_count': 0, 'last_error_class': ''}
   live_speaker_matching:
@@ -52,9 +52,9 @@ GAP ANALYSIS — performance target(s) exceeded
 ======================================================================
 
   CPU GAP:
-    Actual:   8.8%
+    Actual:   9.3%
     Target:   < 5.0%
-    Gap:      +3.8%
+    Gap:      +4.3%
 
   MEASUREMENT NOTE:
     CPU is normalized by logical core count (psutil.Process / cpu_count).

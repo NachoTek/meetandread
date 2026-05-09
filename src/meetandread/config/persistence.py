@@ -32,7 +32,7 @@ class ConfigVersion:
 
 
 # Current config version - bump this when schema changes
-CURRENT_CONFIG_VERSION = 6
+CURRENT_CONFIG_VERSION = 7
 
 # Version history for migrations
 VERSION_HISTORY: Dict[int, ConfigVersion] = {
@@ -41,6 +41,7 @@ VERSION_HISTORY: Dict[int, ConfigVersion] = {
     3: ConfigVersion(3, "Added microphone denoising settings to TranscriptionSettings"),
     4: ConfigVersion(4, "Added min_duration_on/min_duration_off to SpeakerSettings for noisy-room diarization tuning"),
     5: ConfigVersion(5, "Changed microphone denoising default to disabled due to spectral gate artifacts"),
+    6: ConfigVersion(6, "Added CC overlay font size and auto-open settings to TranscriptionSettings"),
 }
 
 
@@ -351,6 +352,13 @@ class SettingsPersistence:
             if "cc_font_size" not in transcription:
                 transcription["cc_font_size"] = 48
             config_dict["transcription"] = transcription
+
+        if from_version == 6 and to_version == 7:
+            # Add waveform_enabled to UI settings
+            ui = config_dict.get("ui", {})
+            if "waveform_enabled" not in ui:
+                ui["waveform_enabled"] = True
+            config_dict["ui"] = ui
         
         return config_dict
     

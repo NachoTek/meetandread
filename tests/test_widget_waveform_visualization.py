@@ -69,13 +69,13 @@ class TestSampleDownsampling:
     """set_waveform_samples downsamples to ~120 absolute amplitudes."""
 
     def test_exact_target_count(self, button):
-        """Providing exactly 120 samples should produce 120 amplitudes."""
-        samples = np.sin(np.linspace(0, 2 * math.pi, 120)).astype(np.float32)
+        """Providing exactly 60 samples should produce 60 amplitudes."""
+        samples = np.sin(np.linspace(0, 2 * math.pi, 60)).astype(np.float32)
         button.set_waveform_samples(samples)
-        assert len(button._waveform_data) == 120
+        assert len(button._waveform_data) == 60
 
     def test_oversized_array_downsampled(self, button):
-        """16000 samples (1 second) should be downsampled to ~120."""
+        """16000 samples (1 second) should be downsampled to ~60."""
         samples = np.random.randn(16000).astype(np.float32) * 0.5
         button.set_waveform_samples(samples)
         assert len(button._waveform_data) == button._WAVEFORM_TARGET_POINTS
@@ -373,7 +373,7 @@ class TestWaveformPollingCadence:
             mock.assert_not_called()
 
     def test_polls_every_third_frame_while_recording(self, widget):
-        """During recording, get_live_audio_samples is called every 3rd frame."""
+        """During recording, get_live_audio_samples is called every 6th frame (optimized for CPU <5%)."""
         from unittest.mock import patch, MagicMock
         from meetandread.recording import ControllerState
         fake_samples = np.random.randn(16000).astype(np.float32)
@@ -387,8 +387,8 @@ class TestWaveformPollingCadence:
             mock.reset_mock()
             for _ in range(30):
                 widget._update_animations()
-            # 30 frames / 3 cadence = 10 calls
-            assert mock.call_count == 10
+            # 30 frames / 6 cadence = 5 calls
+            assert mock.call_count == 5
 
     def test_polling_uses_correct_duration(self, widget):
         """Controller is queried with duration_seconds=1.5."""
@@ -396,12 +396,12 @@ class TestWaveformPollingCadence:
         from meetandread.recording import ControllerState
         fake_samples = np.array([0.1, 0.2], dtype=np.float32)
         widget._on_controller_state_change(ControllerState.RECORDING)
-        # Advance to first polling frame (frame 3 → counter=3)
+        # Advance to first polling frame (frame 6 → counter=6, optimized for CPU <5%)
         widget._waveform_frame_counter = 0
         with patch.object(widget._controller, "get_live_audio_samples",
                           return_value=fake_samples) as mock:
-            # Advance 3 frames to trigger first poll
-            for _ in range(3):
+            # Advance 6 frames to trigger first poll
+            for _ in range(6):
                 widget._update_animations()
             mock.assert_called_once_with(duration_seconds=1.5)
 
@@ -430,9 +430,9 @@ class TestWaveformSamplePropagation:
             # Advance 3 frames to trigger one poll
             for _ in range(3):
                 widget._update_animations()
-            # Waveform data should now reflect the samples (downsampled to 120)
+            # Waveform data should now reflect the samples (downsampled to 60)
             assert widget.record_button._waveform_update_count > 0
-            assert len(widget.record_button._waveform_data) == 120
+            assert len(widget.record_button._waveform_data) == 60
 
     def test_empty_samples_degrade_gracefully(self, widget):
         """Controller returning empty samples → button gets flat fallback."""
@@ -448,7 +448,7 @@ class TestWaveformSamplePropagation:
             for _ in range(3):
                 widget._update_animations()
             # Should have flat fallback data, not crash
-            assert len(widget.record_button._waveform_data) == 120
+            assert len(widget.record_button._waveform_data) == 60
             assert all(math.isfinite(v) for v in widget.record_button._waveform_data)
 
 
@@ -536,7 +536,7 @@ class TestWaveformErrorDegradation:
         # Animation loop survived: pulse_phase advanced
         assert widget.pulse_phase > 0.0
         # Waveform data is still valid (flat fallback from None passthrough)
-        assert len(widget.record_button._waveform_data) == 120
+        assert len(widget.record_button._waveform_data) == 60
 
 
 class TestWaveformClickThrough:
