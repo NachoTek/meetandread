@@ -120,6 +120,9 @@ class SessionConfig:
             Calculated as: int(round(seconds * sample_rate))
         on_audio_frame: Optional callback for mixed audio frames (float32).
             Called from the consumer thread with each mixed audio chunk.
+        on_frames_dropped: Optional callback invoked when frames are dropped
+            due to queue overflow. Receives the aggregate frames_dropped count.
+            Called from the audio callback thread — must be non-blocking.
         enable_microphone_denoising: Whether to denoise mic-like sources.
         denoising_provider_name: Provider name (e.g. 'spectral_gate').
         denoising_latency_budget_ms: Per-chunk latency budget in ms.
@@ -133,6 +136,7 @@ class SessionConfig:
     channels: int = 1
     max_frames: Optional[int] = None
     on_audio_frame: Optional[Callable[[np.ndarray], None]] = None
+    on_frames_dropped: Optional[Callable[[int], None]] = None
     enable_microphone_denoising: bool = False
     denoising_provider_name: Optional[str] = None
     denoising_latency_budget_ms: float = 200.0
@@ -331,6 +335,35 @@ class AudioSession:
         # Denoising state
         self._denoising_provider: Optional[DenoisingProvider] = None
         self._denoising_disabled: bool = False  # True after init/process failure
+        # Lock protecting _stats.frames_dropped increments from audio callbacks
+        self._stats_lock = threading.Lock()
+
+    def _on_source_frame_dropped(self, source_type: str, source_count: int) -> None:
+        """Thread-safe handler called from audio callback threads on queue overflow.
+
+        Increments SessionStats.frames_dropped and fires the optional
+        SessionConfig.on_frames_dropped callback with the aggregate count.
+        Never raises — exceptions are logged and swallowed so the audio
+        callback thread is never compromised.
+        """
+        try:
+            with self._stats_lock:
+                self._stats.frames_dropped += 1
+                aggregate = self._stats.frames_dropped
+            _log.info(
+                "Session frame drop: source=%s, source_count=%d, total=%d",
+                source_type,
+                source_count,
+                aggregate,
+            )
+            if self._config and self._config.on_frames_dropped:
+                try:
+                    self._config.on_frames_dropped(aggregate)
+                except Exception:
+                    _log.exception("on_frames_dropped callback error")
+        except Exception:
+            # Absolute safety net — never raise into audio callback
+            _log.exception("Unexpected error in _on_source_frame_dropped")
     
     def start(self, config: SessionConfig) -> None:
         """Start a recording session.
@@ -459,12 +492,14 @@ class AudioSession:
                     device_id=source_config.device_id,
                     blocksize=1024,
                     queue_size=10,
+                    on_frame_dropped=self._on_source_frame_dropped,
                 )
             elif source_config.type == 'system':
                 source = SystemSource(
                     device_id=source_config.device_id,
                     blocksize=1024,
                     queue_size=10,
+                    on_frame_dropped=self._on_source_frame_dropped,
                 )
                 if not source.available:
                     _log.warning(

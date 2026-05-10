@@ -59,6 +59,7 @@ class PyAudioWPatchSource:
         samplerate: int = 48000,
         blocksize: int = 1024,
         queue_size: int = 10,
+        on_frame_dropped: Optional[Any] = None,
     ) -> None:
         if not _HAS_PYAUDIOWPATCH:
             raise ImportError(
@@ -76,6 +77,11 @@ class PyAudioWPatchSource:
         self._stream: Optional[pyaudiowpatch.Stream] = None  # type: ignore[name-defined]
         self._running: bool = False
         self._lock = threading.Lock()
+
+        # Frame-drop accounting
+        self._frames_dropped: int = 0
+        self._on_frame_dropped: Optional[Any] = on_frame_dropped
+        self._source_label: str = "system"
 
         # Create the PyAudio instance once — terminate() in close()
         self._pyaudio = pyaudiowpatch.PyAudio()
@@ -114,7 +120,22 @@ class PyAudioWPatchSource:
             self._queue.put_nowait(frames)
         except queue.Full:
             # Drop frame — better than blocking the audio thread
-            pass
+            self._frames_dropped += 1
+            count = self._frames_dropped
+            logger.info(
+                "Audio frame dropped: source=%s, count=%d",
+                self._source_label,
+                count,
+            )
+            if self._on_frame_dropped is not None:
+                try:
+                    self._on_frame_dropped(self._source_label, count)
+                except Exception:
+                    # Never let callback failures propagate into PyAudio
+                    logger.exception(
+                        "on_frame_dropped callback error (source=%s)",
+                        self._source_label,
+                    )
         except Exception:
             # Swallow in callback thread — never raise into PyAudio
             logger.exception("Unexpected error in PyAudioWPatch callback")
@@ -219,6 +240,10 @@ class PyAudioWPatchSource:
         """Check if the capture stream is active."""
         with self._lock:
             return self._running
+
+    def get_frames_dropped(self) -> int:
+        """Return the number of frames dropped due to queue overflow."""
+        return self._frames_dropped
 
     def get_metadata(self) -> Dict[str, Any]:
         """Return diagnostic metadata about this source."""

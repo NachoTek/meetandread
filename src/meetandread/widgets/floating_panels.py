@@ -3479,6 +3479,27 @@ class FloatingSettingsPanel(QWidget):
         self._cc_auto_open_checkbox.stateChanged.connect(self._on_cc_auto_open_toggled)
         settings_layout.addWidget(self._cc_auto_open_checkbox)
 
+        # Waveform visualization checkbox
+        self._waveform_checkbox = QCheckBox("Show waveform visualization during recording")
+        self._waveform_checkbox.setObjectName("AethericCheckBox")
+        self._waveform_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._waveform_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
+        self._waveform_checkbox.setToolTip(
+            "When disabled, the recording button shows a minimal pulse animation "
+            "instead of the real-time waveform."
+        )
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _waveform_on = get_config("ui.waveform_enabled")
+            self._waveform_checkbox.setChecked(
+                _waveform_on if isinstance(_waveform_on, bool) else True
+            )
+        except Exception:
+            self._waveform_checkbox.setChecked(True)
+        self._waveform_checkbox.stateChanged.connect(self._on_waveform_toggled)
+        settings_layout.addWidget(self._waveform_checkbox)
+
         settings_layout.addStretch()
         self._content_stack.addWidget(settings_page)
 
@@ -4533,6 +4554,21 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.warning("Failed to save CC auto-open setting: %s", exc)
         logger.info("CC auto-open set to %s", enabled)
+
+    def _on_waveform_toggled(self, state: int) -> None:
+        """Handle waveform visualization checkbox toggle.
+
+        Persists the setting to config immediately so the next recording
+        paint frame picks it up without restart.
+        """
+        enabled = bool(state)
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("ui.waveform_enabled", enabled)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save waveform setting: %s", exc)
+        logger.info("Waveform visualization %s", "enabled" if enabled else "disabled")
 
     def _refresh_dropdown_wer(self) -> None:
         """Update all dropdown item texts with latest WER from config."""

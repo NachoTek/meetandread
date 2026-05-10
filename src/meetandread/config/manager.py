@@ -265,6 +265,7 @@ class ConfigManager:
             "ui.widget_position",
             "ui.widget_dock_edge",
             "ui.audio_sources",
+            "ui.waveform_enabled",
             # Transcription denoising settings
             "transcription.microphone_denoising_enabled",
             "transcription.microphone_denoising_provider",

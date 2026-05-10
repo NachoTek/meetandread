@@ -109,6 +109,7 @@ class RecordingController:
         self.on_recording_complete: Optional[Callable[[Path, Optional[Path]], None]] = None
         self.on_phrase_result: Optional[Callable[[SegmentResult], None]] = None  # For accumulating processor results
         self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, transcript_path
+        self.on_frames_dropped: Optional[Callable[[int], None]] = None  # Aggregate drop count (UI thread via bridge)
         
         # Audio feed tracking
         self._audio_chunks_fed = 0
@@ -135,7 +136,36 @@ class RecordingController:
         self._live_min_audio_bytes = 8 * 16000 * 2  # 8s at 16kHz int16 = 256000
         self._live_attempt_interval = 2.0  # seconds between match attempts
         self._live_extractor_lock = threading.Lock()  # serialize extractor use
-        
+    
+    def _on_session_frames_dropped(self, count: int) -> None:
+        """Internal handler for session-level frame-drop events.
+
+        Called from the audio callback thread via SessionConfig.on_frames_dropped.
+        Sanitizes the count and forwards to the user-provided
+        ``on_frames_dropped`` callback. Exceptions in the user callback are
+        logged and swallowed so recording continues uninterrupted.
+        """
+        try:
+            # Defensive: coerce non-int / negative to safe int
+            safe_count = int(max(0, count))
+        except (TypeError, ValueError):
+            logger.warning(
+                "Non-numeric frame-drop count received: %r — treating as 0",
+                count,
+            )
+            safe_count = 0
+
+        if safe_count == 0:
+            return  # no-op for zero
+
+        logger.info(
+            "Controller frame-drop forwarded: aggregate=%d", safe_count
+        )
+        if self.on_frames_dropped:
+            try:
+                self.on_frames_dropped(safe_count)
+            except Exception:
+                logger.exception("on_frames_dropped callback error (recording continues)")
     
     def _set_state(self, state: ControllerState) -> None:
         """Update state and notify listeners."""
@@ -304,6 +334,7 @@ class RecordingController:
                 enable_microphone_denoising=denoise_enabled,
                 denoising_provider_name=denoise_provider if denoise_enabled else None,
                 denoising_latency_budget_ms=denoise_budget_ms,
+                on_frames_dropped=self._on_session_frames_dropped,
             )
             logger.info(
                 "Denoising config: enabled=%s provider=%s budget=%.0fms",
@@ -873,6 +904,60 @@ class RecordingController:
         # Keep extractor available across recordings for efficiency
         # (don't recreate it for each recording session)
         pass
+
+    def get_live_audio_samples(
+        self, duration_seconds: float = 1.5
+    ) -> "np.ndarray":
+        """Return recent live audio as a normalized float32 NumPy array.
+
+        Copies the most recent *duration_seconds* of audio from the internal
+        live buffer, converts from int16 PCM to float32 in approximately
+        [-1.0, 1.0], and returns a **snapshot** that does not alias the
+        internal buffer.  Empty or invalid states return an empty float32
+        array — this method never raises.
+
+        Args:
+            duration_seconds: How many seconds of recent audio to return.
+                Clamped to a positive value; capped by the rolling max
+                buffer window.
+
+        Returns:
+            NumPy float32 array of normalized samples (one sample per
+            16 kHz int16 frame).  Empty ``ndarray(dtype=float32)`` when
+            no audio is available.
+        """
+        import numpy as np
+
+        # Guard: non-positive duration → empty
+        if duration_seconds <= 0:
+            return np.ndarray(0, dtype=np.float32)
+
+        # Clamp requested duration to the rolling max buffer window
+        max_duration = self._live_max_buffer_bytes / (16000 * 2)
+        duration_seconds = min(duration_seconds, max_duration)
+
+        # Calculate requested byte count (int16 = 2 bytes per sample)
+        requested_bytes = int(duration_seconds * 16000 * 2)
+
+        buf = self._live_audio_buffer
+        if not buf:
+            return np.ndarray(0, dtype=np.float32)
+
+        # Take only the most recent bytes, up to what's available
+        available = min(requested_bytes, len(buf))
+        raw = bytes(buf[-available:])
+
+        # Align to whole int16 samples (2 bytes each) — drop trailing odd byte
+        aligned_len = (len(raw) // 2) * 2
+        if aligned_len == 0:
+            return np.ndarray(0, dtype=np.float32)
+
+        # Convert and normalize to float32 in [-1, 1]
+        pcm_int16 = np.frombuffer(raw[:aligned_len], dtype=np.int16)
+        normalized = pcm_int16.astype(np.float32) / 32768.0
+
+        # Return a copy so the caller never aliases the internal buffer
+        return normalized.copy()
 
     def _run_diarization(self, wav_path: Path) -> None:
         """Run speaker diarization on the saved WAV and tag transcript words.
