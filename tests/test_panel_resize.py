@@ -107,10 +107,12 @@ class TestSettingsPanelConstraints:
         assert settings_panel.minimumHeight() == 425
 
     def test_maximum_width(self, settings_panel):
-        assert settings_panel.maximumWidth() == 825
+        # Max size cap removed — panel can be freely resized
+        assert settings_panel.maximumWidth() == 16777215  # Qt default (no cap)
 
     def test_maximum_height(self, settings_panel):
-        assert settings_panel.maximumHeight() == 825
+        # Max size cap removed — panel can be freely resized
+        assert settings_panel.maximumHeight() == 16777215  # Qt default (no cap)
 
     def test_not_fixed_size(self, settings_panel):
         sz = settings_panel.minimumSize()
