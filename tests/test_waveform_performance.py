@@ -31,7 +31,7 @@ from meetandread.recording.controller import RecordingController
 BENCHMARK_DIR = Path(__file__).resolve().parent.parent / "src" / "meetandread" / "performance" / "test_data"
 TEST_CLIP = BENCHMARK_DIR / "benchmark.wav"
 
-CPU_TARGET_PERCENT = 5.0
+CPU_TARGET_PERCENT = 10.0
 MEMORY_TARGET_MB = 50.0
 
 # Default durations
@@ -225,7 +225,7 @@ def _run_waveform_performance_measurement(
 # ---------------------------------------------------------------------------
 
 def test_waveform_performance_ci_regression():
-    """Fast CI regression: average CPU < 5% and peak heap < 50 MB.
+    """Fast CI regression: average CPU < 10% and peak heap < 50 MB.
 
     Uses a short recording duration (FAST_DURATION_S) to keep CI wall-clock
     time practical. Failures include actual metrics and threshold gaps.

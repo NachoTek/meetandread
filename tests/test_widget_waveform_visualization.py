@@ -372,8 +372,8 @@ class TestWaveformPollingCadence:
                 widget._update_animations()
             mock.assert_not_called()
 
-    def test_polls_every_third_frame_while_recording(self, widget):
-        """During recording, get_live_audio_samples is called every 6th frame (optimized for CPU <5%)."""
+    def test_polls_every_frame_while_recording(self, widget):
+        """During recording, get_live_audio_samples is called every frame (30fps)."""
         from unittest.mock import patch, MagicMock
         from meetandread.recording import ControllerState
         fake_samples = np.random.randn(16000).astype(np.float32)
@@ -387,23 +387,21 @@ class TestWaveformPollingCadence:
             mock.reset_mock()
             for _ in range(30):
                 widget._update_animations()
-            # 30 frames / 6 cadence = 5 calls
-            assert mock.call_count == 5
+            # 30 frames at 30fps = 30 calls
+            assert mock.call_count == 30
 
     def test_polling_uses_correct_duration(self, widget):
-        """Controller is queried with duration_seconds=1.5."""
+        """Controller is queried with duration_seconds=0.1."""
         from unittest.mock import patch
         from meetandread.recording import ControllerState
         fake_samples = np.array([0.1, 0.2], dtype=np.float32)
         widget._on_controller_state_change(ControllerState.RECORDING)
-        # Advance to first polling frame (frame 6 → counter=6, optimized for CPU <5%)
         widget._waveform_frame_counter = 0
         with patch.object(widget._controller, "get_live_audio_samples",
                           return_value=fake_samples) as mock:
-            # Advance 6 frames to trigger first poll
-            for _ in range(6):
-                widget._update_animations()
-            mock.assert_called_once_with(duration_seconds=1.5)
+            # Single frame triggers poll (every frame at 30fps)
+            widget._update_animations()
+            mock.assert_called_with(duration_seconds=0.1)
 
 
 class TestWaveformSamplePropagation:
@@ -461,8 +459,8 @@ class TestWaveformRotationAdvancement:
         yield w
         w.close()
 
-    def test_rotation_advances_during_recording(self, widget):
-        """Waveform rotation phase increases during recording."""
+    def test_rotation_is_static_during_recording(self, widget):
+        """Waveform rotation is disabled — phase stays at 0."""
         from unittest.mock import patch
         from meetandread.recording import ControllerState
         fake_samples = np.array([0.1, 0.2], dtype=np.float32)
@@ -470,19 +468,15 @@ class TestWaveformRotationAdvancement:
         for _ in range(10):
             widget._update_animations()
 
-        initial_phase = widget.record_button._waveform_rotation_phase
         with patch.object(widget._controller, "get_live_audio_samples",
                           return_value=fake_samples):
-            for _ in range(6):  # 2 poll cycles
+            for _ in range(6):
                 widget._update_animations()
-        # Each poll advances by 0.06 radians → 2 polls = 0.12
-        expected = initial_phase + 0.12
-        assert widget.record_button._waveform_rotation_phase == pytest.approx(
-            expected, abs=0.001
-        )
+        # Rotation is disabled — phase should remain 0
+        assert widget.record_button._waveform_rotation_phase == pytest.approx(0.0, abs=0.001)
 
     def test_rotation_resets_after_crossfade(self, widget):
-        """Rotation phase resets to 0 only after cross-fade settles on idle."""
+        """Rotation phase stays at 0 after cross-fade (static waveform)."""
         from unittest.mock import patch
         from meetandread.recording import ControllerState
         fake_samples = np.array([0.1, 0.2], dtype=np.float32)
@@ -491,7 +485,7 @@ class TestWaveformRotationAdvancement:
                           return_value=fake_samples):
             for _ in range(15):
                 widget._update_animations()
-        assert widget.record_button._waveform_rotation_phase > 0.0
+        # Rotation is disabled — always 0
 
         # Go idle
         widget._on_controller_state_change(ControllerState.IDLE)

@@ -543,16 +543,16 @@ to avoid clipping issues and enable proper text rendering.
 
             # Waveform polling: poll controller every 6th frame (~5 fps, optimized for CPU <5% per S03 performance testing)
             self._waveform_frame_counter += 1
-            if self._waveform_frame_counter % 6 == 0:
+            if True:  # every frame at 30fps
                 try:
                     samples = self._controller.get_live_audio_samples(
-                        duration_seconds=1.5
+                        duration_seconds=0.1
                     )
                 except Exception:
                     # Degrade to flat waveform; never break the animation loop
                     samples = None
                 self.record_button.set_waveform_samples(samples)
-                self.record_button.advance_waveform_rotation(0.12)  # Double the step to maintain rotation speed at 5 fps
+                # No rotation — static waveform ring
 
             self.record_button.update()
         elif self.is_processing:
@@ -1143,9 +1143,10 @@ class RecordButtonItem(QGraphicsEllipseItem):
 
     # Waveform constants
     _WAVEFORM_TARGET_POINTS = 60       # Number of amplitude points to render (optimized: 120→80→60 for CPU <5% per S03 performance testing)
-    _WAVEFORM_FLAT_AMPLITUDE = 0.03    # Low-amplitude fallback for silent/empty
-    _WAVEFORM_INNER_RADIUS_FRAC = 0.20 # Inner boundary (fraction of button radius)
-    _WAVEFORM_OUTER_RADIUS_FRAC = 0.42 # Outer boundary (fraction of button radius)
+    _WAVEFORM_FLAT_AMPLITUDE = 0.005   # Near-zero so baseline ring sits on button edge
+    _WAVEFORM_INNER_RADIUS_FRAC = 0.40 # Inner boundary — max amplitude reach toward center
+    _WAVEFORM_OUTER_RADIUS_FRAC = 0.95 # Outer boundary — baseline sits on button perimeter
+    _WAVEFORM_AMPLITUDE_GAIN = 6.0     # Boost raw audio amplitudes so speech is clearly visible
 
     # Health-state constants
     _HEALTH_DROP_THRESHOLD = 5         # Aggregate drops to enter WARNING
@@ -1274,55 +1275,60 @@ class RecordButtonItem(QGraphicsEllipseItem):
 
     # -- Waveform visualization API ------------------------------------------
 
-    def set_waveform_samples(self, samples) -> None:
-        """Accept audio samples and convert to bounded waveform amplitudes.
+    _WAVEFORM_SILENCE_THRESHOLD = 0.02  # Below this peak amplitude, treat as silent and decay
 
-        Downsamples *samples* to ``_WAVEFORM_TARGET_POINTS`` absolute
-        amplitudes, handles empty / silent / malformed data with a flat
-        low-amplitude fallback, and stores the result in a bounded
-        ``_waveform_data`` list.
+    def set_waveform_samples(self, samples) -> None:
+        """Accept audio samples using peak-hold-with-decay.
+
+        Each frame, all points decay toward baseline.  New audio data only
+        *raises* a point — it never lowers it directly.  This produces the
+        classic audio visualizer behavior where peaks fall smoothly instead
+        of snapping or getting stuck.
 
         Args:
             samples: NumPy float32 array (or any array-like), or None.
-                Values are treated as normalized audio in [-1, 1].
-                Non-finite values are coerced to 0.
         """
         self._waveform_update_count += 1
 
-        # Handle None / empty gracefully
+        # Per-frame decay toward baseline (0.90 = ~10-frame settle, ~0.33s at 30fps)
+        _DECAY = 0.90
+
+        # Step 1: decay existing data toward baseline
+        flat = self._WAVEFORM_FLAT_AMPLITUDE
+        self._waveform_data = [
+            flat + (v - flat) * _DECAY for v in self._waveform_data
+        ]
+
+        # Step 2: if we have new audio, raise points that exceed decayed values
         if samples is None:
-            self._waveform_data = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
             return
 
         try:
             arr = np.asarray(samples, dtype=np.float32)
         except (ValueError, TypeError):
-            self._waveform_data = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
             return
 
-        # Flatten 2D+ arrays
         if arr.ndim > 1:
             arr = arr.flatten()
-
-        # Replace non-finite values with 0
         arr = np.where(np.isfinite(arr), arr, 0.0)
 
-        # Empty or all-zero → flat fallback
-        if arr.size == 0 or np.all(arr == 0):
-            self._waveform_data = [self._WAVEFORM_FLAT_AMPLITUDE] * self._WAVEFORM_TARGET_POINTS
+        if arr.size == 0:
             return
 
-        # Downsample to target point count by uniform decimation
+        # Downsample to target point count
         if arr.size <= self._WAVEFORM_TARGET_POINTS:
-            # Pad or use as-is: take absolute values of what we have
-            abs_vals = np.abs(arr).tolist()
-            # Pad with flat amplitude to reach target
-            abs_vals.extend([self._WAVEFORM_FLAT_AMPLITUDE] * (self._WAVEFORM_TARGET_POINTS - len(abs_vals)))
-            self._waveform_data = abs_vals[:self._WAVEFORM_TARGET_POINTS]
+            new_vals = np.abs(arr).tolist()
+            new_vals.extend([flat] * (self._WAVEFORM_TARGET_POINTS - len(new_vals)))
+            new_vals = new_vals[:self._WAVEFORM_TARGET_POINTS]
         else:
-            # Uniform decimation: pick evenly-spaced indices
             indices = np.linspace(0, arr.size - 1, self._WAVEFORM_TARGET_POINTS, dtype=int)
-            self._waveform_data = np.abs(arr[indices]).tolist()
+            new_vals = np.abs(arr[indices]).tolist()
+
+        # Step 3: only raise — never lower via new data
+        self._waveform_data = [
+            max(new_vals[i], self._waveform_data[i])
+            for i in range(self._WAVEFORM_TARGET_POINTS)
+        ]
 
     def advance_waveform_rotation(self, delta: float) -> None:
         """Advance the waveform rotation phase by *delta* radians."""
@@ -1423,7 +1429,7 @@ class RecordButtonItem(QGraphicsEllipseItem):
         # Interpolate base color toward amber/orange based on health state
         color = self._get_waveform_health_color(base_color)
 
-        pen = QPen(color, 2)
+        pen = QPen(color, 2.5)
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1436,26 +1442,41 @@ class RecordButtonItem(QGraphicsEllipseItem):
 
         rotation = self._waveform_rotation_phase
 
-        # Build QPainterPath via polar-to-Cartesian conversion
-        path = QPainterPath()
-
+        # Compute all points first
+        points = []
         for i in range(n_points):
-            # Angle: distribute evenly around the circle + rotation offset
             angle = (2.0 * _math.pi * i / n_points) + rotation
-            # Radius: base (inner) + amplitude * range
-            r = inner_r + min(data[i], 1.0) * radius_range
+            r = outer_r - min(data[i] * self._WAVEFORM_AMPLITUDE_GAIN, 1.0) * radius_range
             x = center.x() + r * _math.cos(angle)
             y = center.y() + r * _math.sin(angle)
-            if i == 0:
-                path.moveTo(x, y)
-            else:
-                path.lineTo(x, y)
+            points.append((x, y, r))
 
-        # Close the loop
-        if n_points > 2:
-            path.closeSubpath()
+        # Gradient colors: red (button edge) → white (center/icon)
+        red_color = QColor(255, 50, 50, 230)   # matches recording button red
+        white_color = QColor(255, 255, 255, 230)
 
-        painter.drawPath(path)
+        # Draw individual line segments, each colored by radial position
+        for i in range(n_points):
+            x1, y1, r1 = points[i]
+            x2, y2, r2 = points[(i + 1) % n_points]
+
+            # Average radius of this segment, normalized 0=inner(white) to 1=outer(red)
+            avg_r = (r1 + r2) / 2.0
+            t = (avg_r - inner_r) / radius_range if radius_range > 0 else 1.0
+            t = max(0.0, min(1.0, t))
+
+            # Interpolate white→red based on radial position
+            seg_color = QColor(
+                int(white_color.red()   + (red_color.red()   - white_color.red())   * t),
+                int(white_color.green() + (red_color.green() - white_color.green()) * t),
+                int(white_color.blue()  + (red_color.blue()  - white_color.blue())  * t),
+                int(white_color.alpha() + (red_color.alpha() - white_color.alpha()) * t),
+            )
+
+            seg_pen = QPen(seg_color, 2.5)
+            seg_pen.setCosmetic(True)
+            painter.setPen(seg_pen)
+            painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
     
     def paint(self, painter, option, widget=None):
         """Custom paint with eased cross-fade between states."""
