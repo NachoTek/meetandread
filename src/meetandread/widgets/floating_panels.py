@@ -3169,7 +3169,7 @@ class FloatingSettingsPanel(QWidget):
 
         # Size — wider to accommodate sidebar + content stack
         self.setMinimumSize(545, 425)
-        self.setMaximumSize(825, 825)
+        self.resize(900, 600)
 
         # ------------------------------------------------------------------
         # Root layout: vertical (title bar on top, then sidebar + content)
