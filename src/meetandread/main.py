@@ -77,7 +77,7 @@ def setup_logging():
     """Setup logging to both console and file with timestamped filename."""
     # Determine logs directory: under user Documents for both frozen and dev
     logs_dir = Path.home() / "Documents" / "meetandread" / "logs"
-    logs_dir.mkdir(exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
     
     # Create timestamped log filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
