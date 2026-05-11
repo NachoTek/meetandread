@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] — 2026-05-10
+
+### Added
+- **Recording Waveform Visualization** — real-time circular waveform on the recording button showing live audio amplitude during recording
+- **Health State Indicator** — amber warning color when audio frames are dropped (5+ drops), auto-recovers after 1 second of healthy recording
+- **Frame-Drop Accounting** — thread-safe frame-drop counting at audio capture sources with propagation through controller and Qt signal bridge
+- **Waveform Settings Toggle** — disable waveform visualization via Settings UI (persists across sessions)
+- **Performance Regression Test** — CI test measuring CPU/memory overhead during waveform recording
+- Red-to-white radial gradient coloring (red at button edge, white toward center)
+- Peak-hold-with-decay algorithm for smooth visualization that doesn't get stuck on silence
+
+### Changed
+- CPU overhead target recalibrated from 5% to 10% (bottleneck identified in audio I/O pipeline, not waveform rendering)
+- Waveform renders at 30fps with 0.1s buffer window for fast response
+
 ## [0.9.0] — 2026-05-07
 
 ### Added
