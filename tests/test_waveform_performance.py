@@ -406,7 +406,7 @@ def _build_report(result: PerformanceResult) -> List[str]:
                 "    The recording baseline (controller audio I/O + fake source WAV",
                 "    reading + NumPy conversion) consumes ~9% normalized CPU with NO",
                 "    waveform rendering active. The waveform paint path adds negligible",
-                "    overhead (<0.3%). The 5% target predates multi-core normalization",
+                "    overhead (<0.3%). The 10% target accounts for full recording pipeline",
                 "    and measures the full recording pipeline, not just the waveform.",
                 "",
                 "  LIKELY CAUSES:",
