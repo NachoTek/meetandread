@@ -234,6 +234,10 @@ class RecordingController:
         Returns:
             ControllerError if start failed, None on success
         """
+        # Cancel any in-flight post-processing from a previous recording
+        # so the queue's idle-wait gate doesn't block the new recording.
+        self.cancel_post_processing()
+        
         # Validate state
         if self._state in (ControllerState.RECORDING, ControllerState.STARTING):
             return self._set_error("Already recording", is_recoverable=True)
@@ -399,8 +403,162 @@ class RecordingController:
         
         return None
     
+    def cancel_post_processing(self) -> None:
+        """Cancel any in-flight post-processing job (idempotent, safe).
+        
+        Called when a new recording is about to start so the queue's
+        idle-wait gate and any running job are stopped.  Exceptions are
+        logged and swallowed so they cannot leave the controller in a
+        bad state.
+        """
+        try:
+            if self._post_processor is None:
+                return
+            if self._post_process_job_id is not None:
+                logger.info(
+                    "Cancelling post-processing job %s (new recording starting)",
+                    self._post_process_job_id,
+                )
+                self._post_processor.cancel_job(
+                    self._post_process_job_id,
+                    reason="new recording starting",
+                )
+                self._post_process_job_id = None
+            # Also cancel whatever the queue worker might be running right now
+            self._post_processor.cancel_current_job(
+                reason="new recording starting",
+            )
+        except Exception as exc:
+            logger.warning(
+                "cancel_post_processing error (non-fatal): %s", exc,
+            )
+    
+    def _run_diarization_for_postprocess(self, wav_path: Path) -> "DiarizationResult":
+        """Run diarization in the context of post-processing.
+        
+        This is the callback passed to PostProcessingQueue so diarization
+        runs in the queue's worker thread instead of blocking the stop
+        worker.  Delegates to the existing _run_diarization method but
+        returns the result object instead of discarding it.
+        
+        Args:
+            wav_path: Path to the saved WAV file.
+        
+        Returns:
+            DiarizationResult from the diarizer.
+        """
+        # We need the result object back from _run_diarization, but
+        # the current method stores it internally.  Call the diarizer
+        # directly to get the return value.
+        try:
+            import numpy as np
+            from meetandread.speaker.diarizer import Diarizer
+            from meetandread.speaker.signatures import VoiceSignatureStore
+            from meetandread.audio.storage.paths import get_recordings_dir
+        except ImportError:
+            logger.warning(
+                "sherpa-onnx not installed — speaker diarization skipped. "
+                "Install sherpa-onnx to enable speaker identification."
+            )
+            return None
+
+        try:
+            settings = self._config_manager.get_settings()
+            speaker_cfg = settings.speaker
+
+            if not speaker_cfg.enabled:
+                logger.info("Speaker diarization disabled in settings — skipped")
+                return None
+
+            logger.info("Running speaker diarization on %s (post-process)", wav_path.name)
+
+            # (1) Run diarization
+            diarizer = Diarizer(
+                clustering_threshold=speaker_cfg.clustering_threshold,
+                min_duration_on=speaker_cfg.min_duration_on,
+                min_duration_off=speaker_cfg.min_duration_off,
+            )
+            result = diarizer.diarize(wav_path)
+
+            if not result.succeeded:
+                logger.error(
+                    "Diarization failed for %s: %s", wav_path.name, result.error
+                )
+                return None
+
+            # --- Degraded-result fallback: 0 speakers ---
+            if result.num_speakers == 0:
+                logger.warning(
+                    "Diarization returned 0 speakers for %s — falling back to "
+                    "single-speaker labeling",
+                    wav_path.name,
+                )
+                self._fallback_single_speaker_labeling(result)
+                return result
+
+            if not result.segments:
+                logger.info("No speaker segments detected in %s", wav_path.name)
+                return None
+
+            logger.info(
+                "Diarized %s: %d segments, %d speakers",
+                wav_path.name, len(result.segments), result.num_speakers,
+            )
+
+            # --- Clean up noisy over-segmentation ---
+            from meetandread.speaker.diarizer import cleanup_diarization_segments
+            pre_cleanup_count = len(result.segments)
+            result.segments = cleanup_diarization_segments(result.segments)
+            if len(result.segments) != pre_cleanup_count:
+                logger.info(
+                    "Diarization cleanup: %d -> %d segments",
+                    pre_cleanup_count, len(result.segments),
+                )
+
+            # (2) Save diarization embeddings to signature store and match
+            db_path = get_recordings_dir() / "speaker_signatures.db"
+            with VoiceSignatureStore(db_path=db_path) as store:
+                for label, sig in result.signatures.items():
+                    emb = np.asarray(sig.embedding, dtype=np.float32) if not isinstance(sig.embedding, np.ndarray) else sig.embedding
+                    match = store.find_match(
+                        emb,
+                        threshold=speaker_cfg.confidence_threshold,
+                    )
+                    if match:
+                        result.matches[label] = match
+                    else:
+                        display_label = result.speaker_label_for(label)
+                        store.save_signature(
+                            display_label,
+                            emb,
+                            averaged_from_segments=sig.num_segments,
+                        )
+
+            # (3) Tag transcript words with speaker labels (realtime store)
+            if self._transcript_store:
+                self._apply_speaker_labels(result)
+
+            # Store result for pin-to-name UX
+            self._last_diarization_result = result
+
+            return result
+
+        except Exception as exc:
+            logger.error(
+                "Speaker diarization error for %s: %s",
+                wav_path.name, exc, exc_info=True,
+            )
+            return None
+    
     def _stop_worker(self) -> None:
-        """Worker thread that handles stop and finalization."""
+        """Worker thread that handles stop and finalization.
+        
+        Immediately saves the WAV and real-time transcript, schedules
+        background post-processing (stronger model + diarization), and
+        returns the controller to IDLE so the user can start a new
+        recording right away.  Post-processing runs in the queue's
+        worker thread and is cancellable via cancel_post_processing().
+        """
         try:
             # Stop transcription first to flush results
             if self._transcription_processor:
@@ -415,11 +573,7 @@ class RecordingController:
             self._last_wav_path = wav_path
             print(f"[{_ts()}] DEBUG: Audio saved to: {wav_path}")
             
-            # --- Speaker diarization (post-processing step) ---
-            if self._transcript_store and self._last_wav_path:
-                self._run_diarization(self._last_wav_path)
-            
-            # Save transcript if available
+            # Save transcript if available (before post-processing)
             transcript_path = None
             if self._transcript_store and self._last_wav_path:
                 print(f"[{_ts()}] DEBUG: Saving transcript ({self._transcript_store.get_word_count()} words)...")
@@ -427,7 +581,9 @@ class RecordingController:
                 self._last_transcript_path = transcript_path
                 print(f"[{_ts()}] DEBUG: Transcript saved to: {transcript_path}")
             
-            # Schedule post-processing with stronger model
+            # Schedule post-processing with stronger model + diarization
+            # The queue handles idle-wait, cancellation, and diarization
+            # in its own worker thread — the controller goes to IDLE immediately.
             if self._post_processor and self._last_wav_path and self._transcript_store:
                 from meetandread.audio.storage.paths import get_transcripts_dir
                 print("DEBUG: Scheduling post-processing job...")
@@ -437,8 +593,12 @@ class RecordingController:
                     output_dir=get_transcripts_dir()
                 )
                 self._post_process_job_id = job.job_id
-                print(f"[{_ts()}] DEBUG: Post-processing job scheduled: {job.job_id}")
+                logger.info(
+                    "Post-processing job %s scheduled, controller moving to IDLE",
+                    job.job_id,
+                )
             
+            # Move to IDLE immediately — post-processing continues in background
             self._set_state(ControllerState.IDLE)
             print("DEBUG: Recording stopped, state set to IDLE")
             
@@ -510,7 +670,10 @@ class RecordingController:
                 self._post_processor = PostProcessingQueue(
                     settings=settings,
                     on_progress=self._on_post_process_progress,
-                    on_complete=self._on_post_process_complete_callback
+                    on_complete=self._on_post_process_complete_callback,
+                    is_recording_callback=lambda: self.is_recording(),
+                    diarize_callback=self._run_diarization_for_postprocess,
+                    apply_speaker_labels_callback=lambda store, result: self._apply_speaker_labels(result, store),
                 )
                 self._post_processor.start()
             
@@ -610,6 +773,16 @@ class RecordingController:
         print(f"[{_ts()}] DEBUG: Real-time words: {result.get('realtime_word_count')}")
         print(f"[{_ts()}] DEBUG: Post-processed words: {result.get('word_count')}")
         
+        # --- Store diarization result from background processing ---
+        diarization_result = result.get("diarization_result")
+        if diarization_result is not None:
+            self._last_diarization_result = diarization_result
+            logger.info(
+                "Post-processing job %s delivered diarization result (%d speakers)",
+                job_id,
+                getattr(diarization_result, "num_speakers", 0),
+            )
+
         # --- Auto-WER calculation ---
         self._compute_and_store_wer(result)
 
@@ -1099,7 +1272,7 @@ class RecordingController:
                 wav_path.name, exc, exc_info=True,
             )
 
-    def _apply_speaker_labels(self, result: "DiarizationResult") -> None:
+    def _apply_speaker_labels(self, result: "DiarizationResult", transcript_store: Optional[TranscriptStore] = None) -> None:
         """Tag transcript store words with speaker IDs from diarization.
 
         Strategy:
@@ -1120,11 +1293,14 @@ class RecordingController:
 
         Args:
             result: A successful DiarizationResult with segments and matches.
+            transcript_store: Optional TranscriptStore to apply labels to.
+                When None (default), uses self._transcript_store.
         """
-        assert self._transcript_store is not None
+        store = transcript_store or self._transcript_store
+        assert store is not None
         from meetandread.speaker.models import DiarizationResult
 
-        words = self._transcript_store.get_all_words()
+        words = store.get_all_words()
         if not words:
             return
 

@@ -69,6 +69,7 @@ class PostProcessStatus(Enum):
     RUNNING = auto()      # Currently processing
     COMPLETED = auto()    # Successfully completed
     FAILED = auto()       # Failed with error
+    CANCELLED = auto()    # Cancelled by caller
 
 
 @dataclass
@@ -85,6 +86,9 @@ class PostProcessJob:
         progress: Progress percentage (0-100)
         result: Result data after completion
         error: Error message if failed
+        cancel_requested: True when cancellation has been requested
+        cancel_reason: Optional reason string for the cancellation
+        diarization_error: Warning/error from diarization step (non-fatal)
     """
     job_id: str
     audio_file: Path
@@ -95,6 +99,9 @@ class PostProcessJob:
     progress: int = 0
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    cancel_requested: bool = False
+    cancel_reason: Optional[str] = None
+    diarization_error: Optional[str] = None
 
 
 class PostProcessingQueue:
@@ -127,7 +134,12 @@ class PostProcessingQueue:
         self,
         settings: AppSettings,
         on_progress: Optional[Callable[[str, int], None]] = None,
-        on_complete: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        on_complete: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        is_recording_callback: Optional[Callable[[], bool]] = None,
+        diarize_callback: Optional[Callable[[Path], Any]] = None,
+        apply_speaker_labels_callback: Optional[
+            Callable[[TranscriptStore, Any], None]
+        ] = None,
     ):
         """Initialize the post-processing queue.
         
@@ -135,10 +147,24 @@ class PostProcessingQueue:
             settings: Application settings containing model configuration
             on_progress: Callback(job_id, progress_pct) for progress updates
             on_complete: Callback(job_id, result) when job completes
+            is_recording_callback: Callable returning True while recording is
+                active.  When provided, the queue waits (without busy-spinning)
+                for the callback to return False before starting each job.
+            diarize_callback: Callable(wav_path) -> DiarizationResult.
+                When provided, diarization runs before stronger-model
+                transcription.  Errors are caught and recorded in
+                ``job.diarization_error`` but do not block transcription.
+            apply_speaker_labels_callback: Callable(transcript_store,
+                diarization_result) that applies speaker labels to a
+                transcript store. Called with the diarization result after
+                stronger-model transcription completes.
         """
         self._settings = settings
         self._on_progress = on_progress
         self._on_complete = on_complete
+        self._is_recording_callback = is_recording_callback
+        self._diarize_callback = diarize_callback
+        self._apply_speaker_labels_callback = apply_speaker_labels_callback
         
         # Job queue
         self._job_queue: queue.Queue[PostProcessJob] = queue.Queue()
@@ -153,6 +179,10 @@ class PostProcessingQueue:
         # Engine cache - one engine per model size
         self._engines: Dict[str, WhisperTranscriptionEngine] = {}
         self._engines_lock = threading.Lock()
+        
+        # Currently running job (for cancel_current_job)
+        self._current_job: Optional[PostProcessJob] = None
+        self._current_job_lock = threading.Lock()
     
     def start(self) -> None:
         """Start the background worker thread."""
@@ -167,7 +197,7 @@ class PostProcessingQueue:
             name="PostProcessingWorker"
         )
         self._worker_thread.start()
-        print("DEBUG: PostProcessingQueue worker started")
+        logger.info("PostProcessingQueue worker started")
     
     def stop(self) -> None:
         """Stop the background worker thread."""
@@ -181,7 +211,7 @@ class PostProcessingQueue:
             self._worker_thread.join(timeout=5.0)
             self._worker_thread = None
         
-        print("DEBUG: PostProcessingQueue worker stopped")
+        logger.info("PostProcessingQueue worker stopped")
     
     def schedule_post_process(
         self,
@@ -222,7 +252,9 @@ class PostProcessingQueue:
             self._jobs[job.job_id] = job
         
         self._job_queue.put(job)
-        print(f"DEBUG: Scheduled post-processing job {job.job_id} with model {model_size}")
+        logger.info(
+            "Scheduled post-processing job %s with model %s", job.job_id, model_size
+        )
         
         # Ensure worker is running
         if not self._is_running:
@@ -251,19 +283,129 @@ class PostProcessingQueue:
         with self._jobs_lock:
             return list(self._jobs.values())
     
+    def cancel_job(self, job_id: str, reason: str = "") -> bool:
+        """Request cancellation of a specific job.
+        
+        If the job is PENDING, it is immediately marked CANCELLED.
+        If the job is RUNNING, the cancellation flag is set and the
+        worker will abort at the next checkpoint.
+        
+        Args:
+            job_id: The job ID to cancel
+            reason: Optional reason for cancellation
+        
+        Returns:
+            True if the job was found and cancellation was requested,
+            False if the job was not found or already terminal.
+        """
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+        
+        if job is None:
+            logger.warning("cancel_job: unknown job_id %s", job_id)
+            return False
+        
+        if job.status in (PostProcessStatus.COMPLETED, PostProcessStatus.FAILED, PostProcessStatus.CANCELLED):
+            logger.info("cancel_job: job %s already terminal (%s)", job_id, job.status.name)
+            return False
+        
+        job.cancel_requested = True
+        job.cancel_reason = reason or "cancelled by caller"
+        
+        if job.status == PostProcessStatus.PENDING:
+            job.status = PostProcessStatus.CANCELLED
+            logger.info(
+                "Job %s cancelled while PENDING: %s", job_id, job.cancel_reason
+            )
+        else:
+            logger.info(
+                "Job %s cancellation requested while RUNNING: %s",
+                job_id, job.cancel_reason,
+            )
+        
+        return True
+    
+    def cancel_current_job(self, reason: str = "") -> bool:
+        """Request cancellation of the currently running job.
+        
+        Args:
+            reason: Optional reason for cancellation
+        
+        Returns:
+            True if a running job was found and cancellation was requested.
+        """
+        with self._current_job_lock:
+            job = self._current_job
+        
+        if job is None:
+            return False
+        
+        return self.cancel_job(job.job_id, reason)
+    
     def _worker_loop(self) -> None:
         """Background worker thread that processes jobs."""
-        print("DEBUG: Post-processing worker loop started")
+        logger.info("Post-processing worker loop started")
         
         while self._is_running and not self._stop_event.is_set():
             try:
                 # Get job with timeout to allow checking stop_event
                 job = self._job_queue.get(timeout=0.5)
-                self._process_job(job)
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"ERROR in post-processing worker: {e}")
+                logger.error("Error in post-processing worker loop: %s", e)
+                continue
+            
+            # Check if job was already cancelled while queued
+            if job.cancel_requested:
+                job.status = PostProcessStatus.CANCELLED
+                logger.info(
+                    "Job %s skipped (cancelled while queued)", job.job_id
+                )
+                continue
+            
+            # Idle-wait gate: if an is_recording_callback is provided and
+            # recording is still active, wait for it to become idle before
+            # processing.  This prevents post-processing from consuming CPU
+            # while a new recording is starting.
+            if self._is_recording_callback is not None:
+                waited = False
+                while (
+                    self._is_running
+                    and not self._stop_event.is_set()
+                    and not job.cancel_requested
+                    and self._is_recording_callback()
+                ):
+                    if not waited:
+                        logger.info(
+                            "Job %s idle-wait: recording active, deferring start",
+                            job.job_id,
+                        )
+                        waited = True
+                    self._stop_event.wait(timeout=0.5)
+                
+                if job.cancel_requested:
+                    job.status = PostProcessStatus.CANCELLED
+                    logger.info(
+                        "Job %s cancelled during idle-wait", job.job_id
+                    )
+                    continue
+                
+                if waited:
+                    logger.info(
+                        "Job %s idle-wait ended, proceeding", job.job_id
+                    )
+            
+            # Track current job for cancel_current_job()
+            with self._current_job_lock:
+                self._current_job = job
+            
+            try:
+                self._process_job(job)
+            finally:
+                with self._current_job_lock:
+                    if self._current_job is job:
+                        self._current_job = None
     
     def _process_job(self, job: PostProcessJob) -> None:
         """Process a single post-processing job.
@@ -271,30 +413,82 @@ class PostProcessingQueue:
         Args:
             job: The job to process
         """
-        print(f"DEBUG: Processing job {job.job_id} with model {job.model_size}")
+        logger.info("Processing job %s with model %s", job.job_id, job.model_size)
         
         try:
+            # ---- Checkpoint: not cancelled ----
+            if job.cancel_requested:
+                job.status = PostProcessStatus.CANCELLED
+                logger.info("Job %s cancelled before start", job.job_id)
+                return
+            
             # Update status
             job.status = PostProcessStatus.RUNNING
             self._update_progress(job, 10)
             
             # Load or get engine
             engine = self._get_or_create_engine(job.model_size)
-            self._update_progress(job, 20)
+            self._update_progress(job, 15)
+            
+            # ---- Checkpoint: not cancelled ----
+            if job.cancel_requested:
+                job.status = PostProcessStatus.CANCELLED
+                logger.info("Job %s cancelled after engine load", job.job_id)
+                return
+            
+            # ---- Diarization step (optional, before transcription) ----
+            diarization_result = None
+            if self._diarize_callback is not None:
+                try:
+                    logger.info(
+                        "Job %s: running diarization on %s",
+                        job.job_id, job.audio_file.name,
+                    )
+                    diarization_result = self._diarize_callback(job.audio_file)
+                    self._update_progress(job, 25)
+                except ImportError:
+                    job.diarization_error = "diarization dependencies not available"
+                    logger.warning(
+                        "Job %s: diarization skipped — %s",
+                        job.job_id, job.diarization_error,
+                    )
+                    self._update_progress(job, 25)
+                except Exception as exc:
+                    job.diarization_error = str(exc)
+                    logger.warning(
+                        "Job %s: diarization failed (non-fatal): %s",
+                        job.job_id, exc,
+                    )
+                    self._update_progress(job, 25)
+            
+            # ---- Checkpoint: not cancelled ----
+            if job.cancel_requested:
+                job.status = PostProcessStatus.CANCELLED
+                logger.info("Job %s cancelled after diarization", job.job_id)
+                return
             
             # Read audio file
             audio_data = self._load_audio_file(job.audio_file)
-            self._update_progress(job, 30)
+            self._update_progress(job, 35)
             
             # Transcribe with stronger model
-            print(f"DEBUG: Transcribing {len(audio_data)} samples with {job.model_size} model...")
+            logger.info(
+                "Transcribing %d samples with %s model for job %s...",
+                len(audio_data), job.model_size, job.job_id,
+            )
             segments = engine.transcribe_chunk(audio_data)
             self._update_progress(job, 80)
+            
+            # ---- Checkpoint: not cancelled ----
+            if job.cancel_requested:
+                job.status = PostProcessStatus.CANCELLED
+                logger.info("Job %s cancelled after transcription", job.job_id)
+                return
             
             # Create post-processed transcript
             audio_duration = len(audio_data) / 16000.0  # 16kHz sample rate
             enhanced_store = self._create_post_processed_transcript(segments, audio_duration)
-            self._update_progress(job, 90)
+            self._update_progress(job, 85)
 
             # Transfer speaker labels from realtime transcript to post-processed words.
             # The realtime transcript has speaker labels from diarization; the
@@ -302,6 +496,27 @@ class PostProcessingQueue:
             # stronger model but no speaker info.  Merge by time overlap.
             if job.realtime_transcript:
                 self._transfer_speaker_labels(job.realtime_transcript, enhanced_store)
+            
+            # Apply diarization speaker labels if diarization ran successfully.
+            if diarization_result is not None and self._apply_speaker_labels_callback is not None:
+                try:
+                    self._apply_speaker_labels_callback(enhanced_store, diarization_result)
+                except Exception as exc:
+                    logger.warning(
+                        "Job %s: apply speaker labels failed (non-fatal): %s",
+                        job.job_id, exc,
+                    )
+
+            # ---- Checkpoint: not cancelled before save ----
+            if job.cancel_requested:
+                job.status = PostProcessStatus.CANCELLED
+                logger.info(
+                    "Job %s cancelled before save — transcript NOT overwritten",
+                    job.job_id,
+                )
+                return
+
+            self._update_progress(job, 90)
 
             # Save post-processed transcript (overwrites original .md).
             # Carry forward speaker_matches from the realtime transcript's
@@ -309,10 +524,6 @@ class PostProcessingQueue:
             speaker_matches = None
             if job.realtime_transcript:
                 try:
-                    from meetandread.audio.storage.paths import get_recordings_dir
-                    from meetandread.recording.controller import RecordingController
-                    # Read the original file to extract speaker_matches
-                    # (stored by _save_transcript before post-processing)
                     base_name = job.audio_file.stem
                     original_path = job.output_dir / f"{base_name}.md"
                     speaker_matches = self._read_speaker_matches(original_path)
@@ -330,7 +541,8 @@ class PostProcessingQueue:
                 "transcript_path": str(transcript_path),
                 "word_count": enhanced_store.get_word_count(),
                 "realtime_word_count": job.realtime_transcript.get_word_count(),
-                "model_used": job.model_size
+                "model_used": job.model_size,
+                "diarization_result": diarization_result,
             }
             
             logger.info(
@@ -344,7 +556,7 @@ class PostProcessingQueue:
         except Exception as e:
             job.status = PostProcessStatus.FAILED
             job.error = str(e)
-            print(f"ERROR: Job {job.job_id} failed: {e}")
+            logger.error("Job %s failed: %s", job.job_id, e)
     
     def _get_or_create_engine(self, model_size: str) -> WhisperTranscriptionEngine:
         """Get cached engine or create new one.
@@ -357,7 +569,7 @@ class PostProcessingQueue:
         """
         with self._engines_lock:
             if model_size not in self._engines:
-                print(f"DEBUG: Creating new engine for model {model_size}")
+                logger.info("Creating new engine for model %s", model_size)
                 engine = WhisperTranscriptionEngine(
                     model_size=model_size,
                     device="cpu",
@@ -613,11 +825,15 @@ class PostProcessingQueue:
             self._on_progress(job.job_id, progress)
     
     def clear_completed_jobs(self) -> None:
-        """Clear completed and failed jobs from memory."""
+        """Clear completed, failed, and cancelled jobs from memory."""
         with self._jobs_lock:
             to_remove = [
                 job_id for job_id, job in self._jobs.items()
-                if job.status in (PostProcessStatus.COMPLETED, PostProcessStatus.FAILED)
+                if job.status in (
+                    PostProcessStatus.COMPLETED,
+                    PostProcessStatus.FAILED,
+                    PostProcessStatus.CANCELLED,
+                )
             ]
             for job_id in to_remove:
                 del self._jobs[job_id]

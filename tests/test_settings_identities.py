@@ -1813,3 +1813,107 @@ class TestIdentitiesRefreshReselection:
         panel = settings_panel_on_identities
         panel._populate_identity_list(["X", "Y", "Z"], {})
         assert panel._identity_profile_names == ["X", "Y", "Z"]
+
+
+# ---------------------------------------------------------------------------
+# Double-delete graceful handling tests (T01 / S02)
+# ---------------------------------------------------------------------------
+
+class TestIdentityDoubleDelete:
+    """Verify that deleting an identity that was already removed shows a
+    graceful 'Already Deleted' message instead of a generic error.
+    """
+
+    def test_double_delete_shows_already_deleted(
+        self, settings_panel_on_identities, qapp
+    ):
+        from meetandread.speaker.identity_management import DeleteError
+
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+        _select_identity(panel, "Alice", qapp)
+
+        mock_store = MagicMock()
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir",
+            return_value=(mock_store, Path("/tmp/t")),
+        ), patch(
+            "meetandread.speaker.identity_management.delete_identity",
+            side_effect=DeleteError("Identity not found in store"),
+        ), patch(
+            "meetandread.widgets.floating_panels.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ), patch.object(
+            panel, "_refresh_and_reselect"
+        ) as mock_reselect, patch.object(
+            QMessageBox, "information"
+        ) as mock_info:
+            panel._on_identity_delete()
+
+        # Should show "Already Deleted" information dialog
+        mock_info.assert_called_once()
+        call_args = mock_info.call_args
+        assert "Already Deleted" in call_args[0][1]
+
+    def test_double_delete_triggers_reselect(
+        self, settings_panel_on_identities, qapp
+    ):
+        from meetandread.speaker.identity_management import DeleteError
+
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+        _select_identity(panel, "Alice", qapp)
+
+        mock_store = MagicMock()
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir",
+            return_value=(mock_store, Path("/tmp/t")),
+        ), patch(
+            "meetandread.speaker.identity_management.delete_identity",
+            side_effect=DeleteError("Identity not found in store"),
+        ), patch(
+            "meetandread.widgets.floating_panels.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ), patch.object(
+            panel, "_refresh_and_reselect"
+        ) as mock_reselect, patch.object(
+            QMessageBox, "information"
+        ):
+            panel._on_identity_delete()
+
+        # Should call _refresh_and_reselect with no target (item is gone)
+        mock_reselect.assert_called_once_with(target_name=None)
+
+    def test_delete_other_error_shows_warning(
+        self, settings_panel_on_identities, qapp
+    ):
+        from meetandread.speaker.identity_management import DeleteError
+
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+        _select_identity(panel, "Alice", qapp)
+
+        mock_store = MagicMock()
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir",
+            return_value=(mock_store, Path("/tmp/t")),
+        ), patch(
+            "meetandread.speaker.identity_management.delete_identity",
+            side_effect=DeleteError("Failed to delete identity: disk error"),
+        ), patch(
+            "meetandread.widgets.floating_panels.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ), patch.object(
+            panel, "_refresh_and_reselect"
+        ) as mock_reselect, patch.object(
+            QMessageBox, "warning"
+        ) as mock_warn:
+            panel._on_identity_delete()
+
+        # Should show generic warning for non-"not found" errors
+        mock_warn.assert_called_once()
+        call_args = mock_warn.call_args
+        assert "Delete Failed" in call_args[0][1]

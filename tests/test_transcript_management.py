@@ -8,6 +8,8 @@ Covers T01 must-haves:
 """
 
 import json
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -51,13 +53,25 @@ def _make_store_with_words(*texts: str) -> TranscriptStore:
     return store
 
 
-def _make_job(tmp_path: Path) -> PostProcessJob:
-    """Create a minimal PostProcessJob pointing at *tmp_path*."""
-    audio_file = tmp_path / "recording_001.wav"
+def _make_job(tmp_path: Path, job_id: str | None = None, audio_name: str | None = None) -> PostProcessJob:
+    """Create a minimal PostProcessJob pointing at *tmp_path*.
+    
+    Uses a unique job_id by default (UUID4 prefix) to avoid dict key
+    collisions when multiple jobs are created in the same test.
+    
+    Args:
+        job_id: Override job_id (default: auto-generated).
+        audio_name: Override audio file name (default: "recording_{job_id}.wav").
+    """
+    import uuid
+    if job_id is None:
+        job_id = str(uuid.uuid4())[:8]
+    audio_name = audio_name or f"recording_{job_id}"
+    audio_file = tmp_path / f"{audio_name}.wav"
     audio_file.write_bytes(b"\x00")  # placeholder
     realtime = _make_store_with_words("hello world")
     return PostProcessJob(
-        job_id="test-job",
+        job_id=job_id,
         audio_file=audio_file,
         realtime_transcript=realtime,
         output_dir=tmp_path,
@@ -78,7 +92,7 @@ class TestPostProcessInPlaceOverwrite:
         settings.transcription.postprocess_model_size = "base"
 
         ppq = PostProcessingQueue(settings=settings)
-        job = _make_job(tmp_path)
+        job = _make_job(tmp_path, audio_name="recording_001")
         store = _make_store_with_words("post", "processed", "result")
 
         result_path = ppq._save_post_processed_transcript(job, store)
@@ -97,7 +111,7 @@ class TestPostProcessInPlaceOverwrite:
         settings.transcription.postprocess_model_size = "base"
 
         ppq = PostProcessingQueue(settings=settings)
-        job = _make_job(tmp_path)
+        job = _make_job(tmp_path, audio_name="recording_001")
 
         # Create an existing transcript .md
         existing_md = tmp_path / "recording_001.md"
@@ -121,7 +135,7 @@ class TestPostProcessInPlaceOverwrite:
         settings.transcription.postprocess_model_size = "base"
 
         ppq = PostProcessingQueue(settings=settings)
-        job = _make_job(tmp_path)
+        job = _make_job(tmp_path, audio_name="recording_001")
 
         # No pre-existing .md
         transcript_md = tmp_path / "recording_001.md"
@@ -155,7 +169,7 @@ class TestPostProcessResultKey:
         settings.transcription.postprocess_model_size = "base"
 
         ppq = PostProcessingQueue(settings=settings)
-        job = _make_job(tmp_path)
+        job = _make_job(tmp_path, audio_name="recording_001")
 
         # Stub audio loading
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
@@ -871,3 +885,502 @@ class TestSpeakerRename:
         html_rendered = panel._render_history_transcript(md_path)
         assert html_rendered is not None
         assert "Carol" in html_rendered
+
+
+# ---------------------------------------------------------------------------
+# Tests — Idle-aware queue (T01)
+# ---------------------------------------------------------------------------
+
+class TestPostProcessingQueueIdleWait:
+    """Verify the queue defers processing while is_recording_callback is True."""
+
+    def test_idle_wait_delays_processing_until_not_recording(self, tmp_path: Path) -> None:
+        """Job stays deferred while is_recording_callback returns True."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        recording = {"active": True}
+        is_recording = lambda: recording["active"]
+
+        ppq = PostProcessingQueue(
+            settings=settings,
+            is_recording_callback=is_recording,
+        )
+        job = _make_job(tmp_path)
+        # Patch _process_job so we can observe when it fires
+        process_called = threading.Event()
+        original_process = ppq._process_job
+
+        def patched_process(j):
+            process_called.set()
+            original_process(j)
+
+        ppq._process_job = patched_process
+        ppq._job_queue.put(job)
+
+        # Start the worker
+        ppq.start()
+        try:
+            # Give the worker time to pick up the job
+            time.sleep(0.3)
+            # Should NOT have started processing — recording still active
+            assert not process_called.is_set(), "Job should not process while recording"
+
+            # Now stop recording
+            recording["active"] = False
+
+            # Wait for processing to start
+            process_called.wait(timeout=3.0)
+            assert process_called.is_set(), "Job should process after recording stops"
+        finally:
+            ppq.stop()
+
+    def test_idle_wait_cancels_during_wait(self, tmp_path: Path) -> None:
+        """A job cancelled while idle-waiting becomes CANCELLED."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        recording = {"active": True}
+        is_recording = lambda: recording["active"]
+
+        ppq = PostProcessingQueue(
+            settings=settings,
+            is_recording_callback=is_recording,
+        )
+        job = _make_job(tmp_path)
+
+        # Register the job so cancel_job can find it
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+
+        ppq._job_queue.put(job)
+
+        ppq.start()
+        try:
+            time.sleep(0.3)
+            # Cancel while waiting for idle
+            ok = ppq.cancel_job(job.job_id, reason="test cancel")
+            assert ok
+            time.sleep(0.3)
+
+            status = ppq.get_job_status(job.job_id)
+            assert status.status == PostProcessStatus.CANCELLED
+        finally:
+            ppq.stop()
+
+    def test_no_idle_wait_when_callback_is_none(self, tmp_path: Path) -> None:
+        """Without is_recording_callback, jobs process immediately."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+
+        process_called = threading.Event()
+        original_process = ppq._process_job
+
+        def patched_process(j):
+            process_called.set()
+
+        ppq._process_job = patched_process
+
+        job = _make_job(tmp_path)
+        ppq._job_queue.put(job)
+
+        ppq.start()
+        try:
+            process_called.wait(timeout=2.0)
+            assert process_called.is_set(), "Job should start without idle wait"
+        finally:
+            ppq.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests — Cancellation (T01)
+# ---------------------------------------------------------------------------
+
+class TestPostProcessingQueueCancellation:
+    """Verify job cancellation at various lifecycle stages."""
+
+    def test_cancel_pending_job(self, tmp_path: Path) -> None:
+        """Cancelling a PENDING job immediately marks it CANCELLED."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        job = _make_job(tmp_path)
+
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+
+        # Job is still PENDING
+        assert job.status == PostProcessStatus.PENDING
+
+        result = ppq.cancel_job(job.job_id, reason="user requested")
+        assert result is True
+        assert job.status == PostProcessStatus.CANCELLED
+        assert job.cancel_requested is True
+        assert job.cancel_reason == "user requested"
+
+    def test_cancel_unknown_job_returns_false(self) -> None:
+        """Cancelling a non-existent job returns False."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        result = ppq.cancel_job("nonexistent-id")
+        assert result is False
+
+    def test_cancel_completed_job_returns_false(self, tmp_path: Path) -> None:
+        """Cancelling a COMPLETED job returns False."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        job = _make_job(tmp_path)
+        job.status = PostProcessStatus.COMPLETED
+        job.result = {"transcript_path": "dummy"}
+
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+
+        result = ppq.cancel_job(job.job_id)
+        assert result is False
+        assert job.status == PostProcessStatus.COMPLETED
+
+    def test_cancel_current_job(self, tmp_path: Path) -> None:
+        """cancel_current_job cancels the currently processing job."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        job = _make_job(tmp_path)
+        job.status = PostProcessStatus.RUNNING
+
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+        with ppq._current_job_lock:
+            ppq._current_job = job
+
+        result = ppq.cancel_current_job(reason="new recording started")
+        assert result is True
+        assert job.cancel_requested is True
+        assert job.cancel_reason == "new recording started"
+
+    def test_cancel_current_job_when_none_running(self) -> None:
+        """cancel_current_job returns False when no job is running."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        result = ppq.cancel_current_job()
+        assert result is False
+
+    def test_cancelled_job_skipped_in_worker(self, tmp_path: Path) -> None:
+        """A job cancelled while queued is skipped by the worker loop."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        job = _make_job(tmp_path)
+
+        # Register and cancel before worker picks it up
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+        ppq.cancel_job(job.job_id, reason="pre-cancel")
+
+        # Now put it in the queue (simulates race condition)
+        ppq._job_queue.put(job)
+
+        process_called = threading.Event()
+
+        def patched_process(j):
+            process_called.set()
+
+        ppq._process_job = patched_process
+
+        ppq.start()
+        try:
+            time.sleep(0.5)
+            # _process_job should never have been called
+            assert not process_called.is_set()
+            assert job.status == PostProcessStatus.CANCELLED
+        finally:
+            ppq.stop()
+
+    @patch.object(PostProcessingQueue, "_get_or_create_engine")
+    @patch.object(PostProcessingQueue, "_load_audio_file")
+    def test_cancelled_running_job_does_not_overwrite(
+        self, mock_load_audio, mock_engine, tmp_path: Path
+    ) -> None:
+        """A job cancelled during processing does NOT overwrite the transcript."""
+        import numpy as np
+
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+
+        # Create an existing transcript that must NOT be overwritten
+        existing_md = tmp_path / "recording_001.md"
+        original_content = "# Original Transcript\n\nDo not overwrite this."
+        existing_md.write_text(original_content, encoding="utf-8")
+
+        job = _make_job(tmp_path, audio_name="recording_001")
+
+        mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
+        mock_eng = MagicMock()
+        mock_eng.transcribe_chunk.return_value = []
+        mock_engine.return_value = mock_eng
+
+        # Set cancel flag before processing — simulates cancel during run
+        job.cancel_requested = True
+
+        ppq._process_job(job)
+
+        # Job must be CANCELLED, not COMPLETED
+        assert job.status == PostProcessStatus.CANCELLED
+
+        # Original file must be untouched
+        assert existing_md.read_text(encoding="utf-8") == original_content
+
+
+# ---------------------------------------------------------------------------
+# Tests — Diarization failure continuation (T01)
+# ---------------------------------------------------------------------------
+
+class TestPostProcessingQueueDiarization:
+    """Verify diarization errors are non-fatal and transcription continues."""
+
+    @patch.object(PostProcessingQueue, "_get_or_create_engine")
+    @patch.object(PostProcessingQueue, "_load_audio_file")
+    def test_diarization_import_error_continues(
+        self, mock_load_audio, mock_engine, tmp_path: Path
+    ) -> None:
+        """ImportError from diarize callback is caught; transcription proceeds."""
+        import numpy as np
+
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        def diarize_raise_import(wav_path):
+            raise ImportError("sherpa-onnx not installed")
+
+        ppq = PostProcessingQueue(
+            settings=settings,
+            diarize_callback=diarize_raise_import,
+        )
+
+        job = _make_job(tmp_path)
+
+        mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
+        mock_eng = MagicMock()
+        mock_eng.transcribe_chunk.return_value = []
+        mock_engine.return_value = mock_eng
+
+        ppq._process_job(job)
+
+        # Transcription should still complete
+        assert job.status == PostProcessStatus.COMPLETED
+        # But diarization_error should be recorded
+        assert job.diarization_error is not None
+        assert "not available" in job.diarization_error
+
+    @patch.object(PostProcessingQueue, "_get_or_create_engine")
+    @patch.object(PostProcessingQueue, "_load_audio_file")
+    def test_diarization_runtime_error_continues(
+        self, mock_load_audio, mock_engine, tmp_path: Path
+    ) -> None:
+        """RuntimeError from diarize callback is caught; transcription proceeds."""
+        import numpy as np
+
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        def diarize_raise_runtime(wav_path):
+            raise RuntimeError("model file missing")
+
+        ppq = PostProcessingQueue(
+            settings=settings,
+            diarize_callback=diarize_raise_runtime,
+        )
+
+        job = _make_job(tmp_path)
+
+        mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
+        mock_eng = MagicMock()
+        mock_eng.transcribe_chunk.return_value = []
+        mock_engine.return_value = mock_eng
+
+        ppq._process_job(job)
+
+        assert job.status == PostProcessStatus.COMPLETED
+        assert job.diarization_error == "model file missing"
+
+    @patch.object(PostProcessingQueue, "_get_or_create_engine")
+    @patch.object(PostProcessingQueue, "_load_audio_file")
+    def test_diarization_success_sets_no_error(
+        self, mock_load_audio, mock_engine, tmp_path: Path
+    ) -> None:
+        """Successful diarization leaves diarization_error as None."""
+        import numpy as np
+
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        from meetandread.speaker.models import DiarizationResult, SpeakerSegment
+
+        fake_result = DiarizationResult(
+            segments=[SpeakerSegment(start=0.0, end=1.0, speaker="spk0")],
+            duration_seconds=1.0,
+            num_speakers=1,
+        )
+
+        ppq = PostProcessingQueue(
+            settings=settings,
+            diarize_callback=lambda wav: fake_result,
+        )
+
+        job = _make_job(tmp_path)
+
+        mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
+        mock_eng = MagicMock()
+        mock_eng.transcribe_chunk.return_value = []
+        mock_engine.return_value = mock_eng
+
+        ppq._process_job(job)
+
+        assert job.status == PostProcessStatus.COMPLETED
+        assert job.diarization_error is None
+
+    @patch.object(PostProcessingQueue, "_get_or_create_engine")
+    @patch.object(PostProcessingQueue, "_load_audio_file")
+    def test_no_diarization_callback_succeeds(
+        self, mock_load_audio, mock_engine, tmp_path: Path
+    ) -> None:
+        """Without a diarize_callback, transcription proceeds normally."""
+        import numpy as np
+
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+
+        job = _make_job(tmp_path)
+
+        mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
+        mock_eng = MagicMock()
+        mock_eng.transcribe_chunk.return_value = []
+        mock_engine.return_value = mock_eng
+
+        ppq._process_job(job)
+
+        assert job.status == PostProcessStatus.COMPLETED
+        assert job.diarization_error is None
+
+
+# ---------------------------------------------------------------------------
+# Tests — Negative / edge cases (T01)
+# ---------------------------------------------------------------------------
+
+class TestPostProcessingQueueNegative:
+    """Verify graceful handling of malformed inputs and edge conditions."""
+
+    @patch.object(PostProcessingQueue, "_get_or_create_engine")
+    @patch.object(PostProcessingQueue, "_load_audio_file")
+    def test_missing_wav_fails_gracefully(
+        self, mock_load_audio, mock_engine, tmp_path: Path
+    ) -> None:
+        """When _load_audio_file raises, job status becomes FAILED."""
+        mock_load_audio.side_effect = FileNotFoundError("wav not found")
+        mock_eng = MagicMock()
+        mock_engine.return_value = mock_eng
+
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        job = _make_job(tmp_path)
+
+        # Remove the placeholder audio file
+        job.audio_file.unlink()
+
+        ppq._process_job(job)
+
+        assert job.status == PostProcessStatus.FAILED
+        assert "wav not found" in job.error
+
+    def test_clear_completed_jobs_removes_terminal(self, tmp_path: Path) -> None:
+        """clear_completed_jobs removes COMPLETED, FAILED, and CANCELLED."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+
+        completed = _make_job(tmp_path)
+        completed.status = PostProcessStatus.COMPLETED
+
+        failed = _make_job(tmp_path)
+        failed.status = PostProcessStatus.FAILED
+        failed.error = "test"
+
+        cancelled = _make_job(tmp_path)
+        cancelled.status = PostProcessStatus.CANCELLED
+
+        pending = _make_job(tmp_path)
+        pending.status = PostProcessStatus.PENDING
+
+        with ppq._jobs_lock:
+            ppq._jobs = {
+                completed.job_id: completed,
+                failed.job_id: failed,
+                cancelled.job_id: cancelled,
+                pending.job_id: pending,
+            }
+
+        ppq.clear_completed_jobs()
+
+        remaining_ids = list(ppq._jobs.keys())
+        assert pending.job_id in remaining_ids
+        assert completed.job_id not in remaining_ids
+        assert failed.job_id not in remaining_ids
+        assert cancelled.job_id not in remaining_ids
+
+    def test_get_all_jobs_returns_all(self, tmp_path: Path) -> None:
+        """get_all_jobs returns all registered jobs."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        j1 = _make_job(tmp_path)
+        j2 = _make_job(tmp_path)
+
+        with ppq._jobs_lock:
+            ppq._jobs[j1.job_id] = j1
+            ppq._jobs[j2.job_id] = j2
+
+        all_jobs = ppq.get_all_jobs()
+        assert len(all_jobs) == 2
+        ids = {j.job_id for j in all_jobs}
+        assert j1.job_id in ids
+        assert j2.job_id in ids
+
+    def test_status_inspectable_lifecycle(self, tmp_path: Path) -> None:
+        """Job status transitions are inspectable via get_job_status."""
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ppq = PostProcessingQueue(settings=settings)
+        job = _make_job(tmp_path)
+
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+
+        # PENDING
+        s = ppq.get_job_status(job.job_id)
+        assert s.status == PostProcessStatus.PENDING
+
+        # Transition to CANCELLED
+        ppq.cancel_job(job.job_id, reason="test")
+        s = ppq.get_job_status(job.job_id)
+        assert s.status == PostProcessStatus.CANCELLED
+        assert s.cancel_reason == "test"

@@ -1832,16 +1832,10 @@ class FloatingTranscriptPanel(QWidget):
     def _on_scrub_progress(self, pct: int) -> None:
         """Update scrub button text with progress percentage.
 
-        Called from the ScrubRunner background thread — uses QMetaObject
-        to marshal the update to the GUI thread.
+        Called from the ScrubRunner background thread — uses
+        QTimer.singleShot to marshal the update to the GUI thread.
         """
-        # Schedule on GUI thread
-        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
-        QMetaObject.invokeMethod(
-            self._scrub_btn, "setText",
-            Qt.ConnectionType.QueuedConnection,
-            Q_ARG(str, f"Scrubbing... {pct}%"),
-        )
+        QTimer.singleShot(0, lambda: self._scrub_btn.setText(f"Scrubbing... {pct}%"))
 
     def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """Handle scrub completion — show comparison or error.
@@ -5031,10 +5025,24 @@ class FloatingSettingsPanel(QWidget):
         try:
             store, transcripts_dir = self._get_identity_store_and_transcripts_dir()
             try:
-                from meetandread.speaker.identity_management import delete_identity
+                from meetandread.speaker.identity_management import delete_identity, DeleteError
                 delete_identity(store, transcripts_dir, name)
             finally:
                 store.close()
+        except DeleteError as exc:
+            # Graceful handling for double-delete or already-removed identity
+            msg = str(exc)
+            if "not found" in msg.lower():
+                QMessageBox.information(
+                    self, "Already Deleted",
+                    f"Identity \"{name}\" has already been removed."
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Delete Failed", f"Could not delete identity: {exc}"
+                )
+            self._refresh_and_reselect(target_name=None)
+            return
         except Exception as exc:
             QMessageBox.warning(
                 self, "Delete Failed", f"Could not delete identity: {exc}"
@@ -5049,6 +5057,19 @@ class FloatingSettingsPanel(QWidget):
     # ------------------------------------------------------------------
     # History page methods (adapted from FloatingTranscriptPanel)
     # ------------------------------------------------------------------
+
+    def refresh_history_if_visible(self) -> None:
+        """Refresh the history list when the History page is currently shown.
+
+        Public entry point for external callers (e.g. MeetAndReadWidget)
+        to trigger a history refresh after recording or post-processing
+        completes.  Avoids unnecessary work when the History page is not
+        visible — the next navigation to it will call ``_refresh_history``
+        via ``_on_nav_clicked``.
+        """
+        if (self._content_stack.currentIndex() == self._NAV_HISTORY
+                and self.isVisible()):
+            self._refresh_history()
 
     def _refresh_history(self) -> None:
         """Re-scan recordings and repopulate the history list."""
@@ -5344,6 +5365,16 @@ class FloatingSettingsPanel(QWidget):
         else:
             self._history_viewer.setPlainText("(Error refreshing after link)")
 
+        # Refresh the identities list so the newly linked identity appears
+        # immediately when the user switches to the Identities tab.
+        self._refresh_identities()
+
+        # Refresh the history list so speaker counts update immediately,
+        # and re-select the current item so the user stays on the same recording.
+        if md_path is not None:
+            self._refresh_history()
+            self._reselect_history_item(md_path)
+
     def _rename_speaker_in_file(
         self, md_path: Path, old_name: str, new_name: str
     ) -> None:
@@ -5592,13 +5623,12 @@ class FloatingSettingsPanel(QWidget):
         )
 
     def _on_scrub_progress(self, pct: int) -> None:
-        """Update scrub button text with progress percentage."""
-        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
-        QMetaObject.invokeMethod(
-            self._scrub_btn, "setText",
-            Qt.ConnectionType.QueuedConnection,
-            Q_ARG(str, f"Scrubbing... {pct}%"),
-        )
+        """Update scrub button text with progress percentage.
+
+        Called from the ScrubRunner background thread — uses
+        QTimer.singleShot to marshal the update to the GUI thread.
+        """
+        QTimer.singleShot(0, lambda: self._scrub_btn.setText(f"Scrubbing... {pct}%"))
 
     def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """Handle scrub completion."""

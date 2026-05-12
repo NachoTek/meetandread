@@ -974,3 +974,150 @@ class TestStalePlaceholderAbsence:
         # It must have child widgets (splitter, list, viewer)
         assert settings_panel._history_list is not None
         assert settings_panel._history_viewer is not None
+
+
+# ---------------------------------------------------------------------------
+# Identity-refresh-after-link tests (T01 / S02)
+# ---------------------------------------------------------------------------
+
+class TestHistoryLinkRefreshesIdentities:
+    """Verify that linking an identity from the History tab refreshes the
+    Identities list so the newly linked name appears immediately.
+    """
+
+    def test_link_triggers_refresh_identities(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        md_path, _item = _select_recording(
+            settings_panel_on_history, tmp_path, qapp,
+            body="**SPK_0**\nHello.\n", speakers=["SPK_0"],
+        )
+
+        url = QUrl("speaker:SPK_0")
+        with patch(
+            "meetandread.widgets.floating_panels._open_identity_link_dialog",
+            return_value=True,
+        ), patch.object(
+            settings_panel_on_history, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        mock_refresh.assert_called_once()
+
+    def test_cancel_does_not_trigger_refresh(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        md_path, _item = _select_recording(
+            settings_panel_on_history, tmp_path, qapp,
+            body="**SPK_0**\nHello.\n", speakers=["SPK_0"],
+        )
+
+        url = QUrl("speaker:SPK_0")
+        with patch(
+            "meetandread.widgets.floating_panels._open_identity_link_dialog",
+            return_value=False,
+        ), patch.object(
+            settings_panel_on_history, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        mock_refresh.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# T02: History list refresh after recording / post-processing
+# ---------------------------------------------------------------------------
+
+class TestRefreshHistoryIfVisible:
+    """Verify refresh_history_if_visible only refreshes when History is active."""
+
+    def test_refreshes_when_on_history_and_visible(
+        self, settings_panel_on_history, qapp
+    ):
+        with patch.object(
+            settings_panel_on_history, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel_on_history.refresh_history_if_visible()
+
+        mock_refresh.assert_called_once()
+
+    def test_skips_when_on_different_page(self, settings_panel, qapp):
+        """Panel is on Settings page (index 0), not History."""
+        with patch.object(
+            settings_panel, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel.refresh_history_if_visible()
+
+        mock_refresh.assert_not_called()
+
+    def test_skips_when_not_visible(self, settings_panel_on_history, qapp):
+        settings_panel_on_history.hide()
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel_on_history, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel_on_history.refresh_history_if_visible()
+
+        mock_refresh.assert_not_called()
+
+
+class TestHistoryAnchorRefreshesList:
+    """Verify history list + reselect after speaker link from anchor click."""
+
+    def test_link_triggers_refresh_history(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        md_path, _item = _select_recording(
+            settings_panel_on_history, tmp_path, qapp,
+            body="**SPK_0**\nHello.\n", speakers=["SPK_0"],
+        )
+
+        url = QUrl("speaker:SPK_0")
+        with patch(
+            "meetandread.widgets.floating_panels._open_identity_link_dialog",
+            return_value=True,
+        ), patch.object(
+            settings_panel_on_history, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        mock_refresh.assert_called_once()
+
+    def test_link_triggers_reselect(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        md_path, _item = _select_recording(
+            settings_panel_on_history, tmp_path, qapp,
+            body="**SPK_0**\nHello.\n", speakers=["SPK_0"],
+        )
+
+        url = QUrl("speaker:SPK_0")
+        with patch(
+            "meetandread.widgets.floating_panels._open_identity_link_dialog",
+            return_value=True,
+        ), patch.object(
+            settings_panel_on_history, "_reselect_history_item"
+        ) as mock_reselect:
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        mock_reselect.assert_called_once_with(md_path)
+
+    def test_cancel_does_not_trigger_list_refresh(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        md_path, _item = _select_recording(
+            settings_panel_on_history, tmp_path, qapp,
+            body="**SPK_0**\nHello.\n", speakers=["SPK_0"],
+        )
+
+        url = QUrl("speaker:SPK_0")
+        with patch(
+            "meetandread.widgets.floating_panels._open_identity_link_dialog",
+            return_value=False,
+        ), patch.object(
+            settings_panel_on_history, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel_on_history._on_history_anchor_clicked(url)
+
+        mock_refresh.assert_not_called()

@@ -95,6 +95,7 @@ tests/test_performance.py
 tests/test_recommender_models.py
 tests/test_recording_controller_noisy_audio_e2e.py
 tests/test_recording_controller_speaker_metadata.py
+tests/test_recording_frame_drop_signals.py
 tests/test_recording_management.py
 tests/test_recording_waveform.py
 tests/test_resource_warnings.py
@@ -118,6 +119,8 @@ tests/test_transcription_engine.py
 tests/test_transcription_pipeline.py
 tests/test_unknown_speaker_link.py
 tests/test_voice_activity_detector.py
+tests/test_waveform_performance.py
+tests/test_waveform_settings.py
 tests/test_widget_docking.py
 tests/test_widget_requirements.py
 tests/test_widget_visual_state.py

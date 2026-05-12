@@ -927,6 +927,10 @@ to avoid clipping issues and enable proper text rendering.
         if transcript_path:
             logging.info("Transcript saved to: %s", transcript_path)
 
+        # Refresh history list so new recording appears immediately
+        if self._floating_settings_panel:
+            self._floating_settings_panel.refresh_history_if_visible()
+
     def _on_post_process_complete(self, job_id, transcript_path):
         """Handle post-processing completion.
 
@@ -939,6 +943,8 @@ to avoid clipping issues and enable proper text rendering.
         if self._floating_settings_panel:
             wer = self._controller.get_last_wer()
             self._floating_settings_panel.update_wer_display(wer)
+            # Refresh history list — post-processing may change word/speaker counts
+            self._floating_settings_panel.refresh_history_if_visible()
 
     def _on_frames_dropped(self, count: int) -> None:
         """Handle frame-drop events forwarded through the Qt bridge.
