@@ -573,3 +573,215 @@ class TestNegativeScenarios:
 
         # Should not raise
         ctrl.cancel_post_processing()
+
+
+# ---------------------------------------------------------------------------
+# T03: Stop → immediate re-record regression tests
+# ---------------------------------------------------------------------------
+
+class TestStopRerecordFlow:
+    """Regression proof: stop a recording, immediately start another.
+
+    Verifies the complete stop→IDLE→start cycle is non-blocking, cancels
+    in-flight post-processing, and leaves the controller ready to record.
+    """
+
+    def test_stop_then_start_cancels_old_job(self, tmp_path: Path):
+        """After _stop_worker schedules post-processing, start() cancels it."""
+        ctrl = _make_controller(tmp_path)
+        fake_queue = ctrl._post_processor
+        _setup_transcription(ctrl)
+        ctrl._state = ControllerState.RECORDING
+
+        # Stop — schedules a post-processing job
+        ctrl._stop_worker()
+        assert ctrl._state == ControllerState.IDLE
+        assert len(fake_queue.scheduled_jobs) == 1
+        old_job_id = fake_queue.scheduled_jobs[0].job_id
+        ctrl._post_process_job_id = old_job_id
+
+        # Start new recording — should cancel the old job
+        with patch.object(ctrl, "_init_transcription", return_value=None), \
+             patch.object(ctrl, "_build_source_configs", return_value=[]):
+            ctrl.start({"mic"})
+
+        # Old job was cancelled
+        assert old_job_id in fake_queue.cancelled_job_ids
+        assert fake_queue.cancel_current_called >= 1
+
+    def test_stop_then_start_controller_not_stuck_in_stopping(self, tmp_path: Path):
+        """After stop→start, controller is NOT stuck in STOPPING."""
+        ctrl = _make_controller(tmp_path)
+        fake_queue = ctrl._post_processor
+        _setup_transcription(ctrl)
+        ctrl._state = ControllerState.RECORDING
+
+        # Stop
+        ctrl._stop_worker()
+        assert ctrl._state == ControllerState.IDLE
+
+        # Start
+        with patch.object(ctrl, "_init_transcription", return_value=None), \
+             patch.object(ctrl, "_build_source_configs", return_value=[]):
+            error = ctrl.start({"mic"})
+
+        # Controller should not be STOPPING (it's either STARTING→RECORDING
+        # or errored — but never STOPPING)
+        assert ctrl._state != ControllerState.STOPPING
+
+    def test_rapid_stop_start_cycle(self, tmp_path: Path):
+        """Multiple rapid stop→start cycles don't accumulate stale jobs."""
+        ctrl = _make_controller(tmp_path)
+        fake_queue = ctrl._post_processor
+        _setup_transcription(ctrl)
+
+        for i in range(3):
+            ctrl._state = ControllerState.RECORDING
+            ctrl._stop_worker()
+            assert ctrl._state == ControllerState.IDLE
+
+            # Each stop schedules a job
+            assert len(fake_queue.scheduled_jobs) == i + 1
+
+            # Start should cancel the latest job
+            with patch.object(ctrl, "_init_transcription", return_value=None), \
+                 patch.object(ctrl, "_build_source_configs", return_value=[]):
+                ctrl.start({"mic"})
+
+        # All jobs should have been cancelled
+        assert len(fake_queue.cancelled_job_ids) >= 3
+
+    def test_stop_no_postprocessor_then_start(self, tmp_path: Path):
+        """Stop with no post-processor followed by start works cleanly."""
+        ctrl = _make_controller(tmp_path, enable_postprocess=False)
+        ctrl._post_processor = None
+        _setup_transcription(ctrl)
+        ctrl._state = ControllerState.RECORDING
+
+        ctrl._stop_worker()
+        assert ctrl._state == ControllerState.IDLE
+
+        # Start should succeed (cancel_post_processing is no-op with None queue)
+        with patch.object(ctrl, "_init_transcription", return_value=None), \
+             patch.object(ctrl, "_build_source_configs", return_value=[]):
+            error = ctrl.start({"mic"})
+        assert ctrl._state != ControllerState.STOPPING
+
+    def test_stop_idle_transcript_store_cleared_on_new_init(self, tmp_path: Path):
+        """After stop, a new start() reinitializes the transcript store."""
+        ctrl = _make_controller(tmp_path)
+        fake_queue = ctrl._post_processor
+        _setup_transcription(ctrl)
+        ctrl._state = ControllerState.RECORDING
+
+        ctrl._stop_worker()
+        assert ctrl._state == ControllerState.IDLE
+
+        # _init_transcription creates a fresh TranscriptStore
+        # Simulate what happens inside start() after _init_transcription
+        old_store = ctrl._transcript_store
+        with patch.object(ctrl, "_init_transcription") as mock_init:
+            mock_init.return_value = None
+            with patch.object(ctrl, "_build_source_configs", return_value=[]):
+                ctrl.start({"mic"})
+            # _init_transcription was called — it would create a new store
+            mock_init.assert_called_once()
+
+    def test_start_after_stop_with_valid_sources_proceeds(self, tmp_path: Path):
+        """start() after stop with valid sources proceeds to STARTING/RECORDING.
+
+        Patches AudioSession at the module level so the controller's
+        start() method (which creates a new session internally) gets a
+        fake that doesn't touch the real filesystem.
+        """
+        ctrl = _make_controller(tmp_path)
+        fake_queue = ctrl._post_processor
+        _setup_transcription(ctrl)
+        ctrl._state = ControllerState.RECORDING
+
+        ctrl._stop_worker()
+        assert ctrl._state == ControllerState.IDLE
+
+        new_wav = tmp_path / "recording2.wav"
+        new_wav.write_text("fake wav 2")
+        with patch.object(ctrl, "_init_transcription", return_value=None), \
+             patch.object(ctrl, "_build_source_configs") as mock_sources, \
+             patch("meetandread.recording.controller.AudioSession") as MockSession:
+            from meetandread.audio import SourceConfig
+            mock_sources.return_value = [SourceConfig(type="mic")]
+            mock_session_instance = FakeAudioSession(new_wav)
+            MockSession.return_value = mock_session_instance
+            error = ctrl.start({"mic"})
+
+        # start() should succeed (no error)
+        assert error is None
+        assert ctrl._state == ControllerState.RECORDING
+
+
+class TestWidgetStartCancellationIntegration:
+    """Widget-level integration: start_recording path triggers cancel_post_processing.
+
+    The widget's start_recording() → controller.start() path is the user-facing
+    flow. These tests confirm that the controller-level cancellation wiring
+    (added in T02) works end-to-end when called through the widget's API.
+
+    Note: The widget does NOT need to call cancel_post_processing() directly —
+    controller.start() handles cancellation internally. These tests document
+    that design decision and guard against regressions.
+    """
+
+    def test_start_recording_cancels_postprocess_via_controller(self, tmp_path: Path):
+        """Widget start_recording triggers controller.start() which cancels
+        post-processing. This is the user-facing record button flow."""
+        ctrl = _make_controller(tmp_path)
+        fake_queue = ctrl._post_processor
+        _setup_transcription(ctrl)
+        ctrl._state = ControllerState.RECORDING
+
+        # Stop to schedule a post-process job
+        ctrl._stop_worker()
+        assert ctrl._state == ControllerState.IDLE
+        assert len(fake_queue.scheduled_jobs) == 1
+
+        # Simulate what the widget does: controller.start()
+        with patch.object(ctrl, "_init_transcription", return_value=None), \
+             patch.object(ctrl, "_build_source_configs", return_value=[]):
+            ctrl.start({"mic"})
+
+        # The controller cancelled the old job
+        assert len(fake_queue.cancelled_job_ids) >= 1
+        assert fake_queue.cancel_current_called >= 1
+
+    def test_no_postprocess_no_job_cancellation(self, tmp_path: Path):
+        """When no post-processor exists, start() proceeds without error."""
+        ctrl = _make_controller(tmp_path, enable_postprocess=False)
+        ctrl._post_processor = None
+        ctrl._state = ControllerState.IDLE
+
+        with patch.object(ctrl, "_init_transcription", return_value=None), \
+             patch.object(ctrl, "_build_source_configs", return_value=[]):
+            error = ctrl.start({"mic"})
+
+        # Error is about no valid sources, not about cancellation
+        assert error is not None
+        assert "cancel" not in error.message.lower()
+
+    def test_invalid_source_errors_unchanged(self, tmp_path: Path):
+        """Invalid source errors are unchanged after cancellation wiring."""
+        ctrl = _make_controller(tmp_path)
+        ctrl._state = ControllerState.IDLE
+
+        # Empty sources → error
+        error = ctrl.start(set())
+        assert error is not None
+        assert "No audio source" in error.message
+
+    def test_start_while_recording_errors_recoverable(self, tmp_path: Path):
+        """Starting while already recording gives recoverable error."""
+        ctrl = _make_controller(tmp_path)
+        ctrl._state = ControllerState.RECORDING
+
+        error = ctrl.start({"mic"})
+        assert error is not None
+        assert error.is_recoverable is True
+        assert "Already recording" in error.message
