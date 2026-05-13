@@ -7,13 +7,13 @@ TEST CONFIGURATION
   Audio source:      benchmark.wav (fake, looped)
   Transcription:     disabled
   Duration:          8.0s
-  CPU sample count:  85
+  CPU sample count:  78
   CPU sample interval: 0.1s
 
 CPU UTILIZATION
 ----------------------------------------
-  Average CPU:       8.5%
-  Peak CPU:          12.6%
+  Average CPU:       9.0%
+  Peak CPU:          14.3%
   Target:            < 10.0%
   Target met:        YES [OK]
 
@@ -26,12 +26,12 @@ MEMORY (Python heap via tracemalloc)
 CONTROLLER DIAGNOSTICS
 ----------------------------------------
   state: IDLE
-  last_wav_path: C:\Users\david.keymel\Documents\meetandread\recordings\recording-2026-05-11-012749.wav
+  last_wav_path: C:\Users\david.keymel\Documents\meetandread\recordings\recording-2026-05-12-002321.wav
   last_transcript_path: None
   session:
-    frames_recorded: 108585728
+    frames_recorded: 83141120
     frames_dropped: 0
-    duration_seconds: 8.012757778167725
+    duration_seconds: 8.020209550857544
     source_stats: {}
     denoising: {'provider': '', 'enabled': False, 'active': False, 'processed_frame_count': 0, 'fallback_count': 0, 'avg_latency_ms': 0.0, 'max_latency_ms': 0.0, 'budget_exceeded_count': 0, 'last_error_class': ''}
   live_speaker_matching:
