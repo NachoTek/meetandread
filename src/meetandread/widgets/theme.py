@@ -1287,3 +1287,318 @@ def aetheric_history_action_button_css(p: ThemePalette) -> str:
             color: {AETHERIC_PURPLE};
         }}
     """
+
+
+def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
+    """Aetheric Glass playback toolbar controls for the History header.
+
+    Returns a dict of scoped QSS strings keyed by widget role:
+    'play_button', 'skip_button', 'progress_slider', 'speed_combo',
+    'volume_slider', 'volume_icon', 'status_label', 'status_label_error',
+    'bookmark_button', 'bookmark_combo', 'bookmark_delete_button'.
+
+    All selectors are scoped to object names (e.g.
+    ``QPushButton#AethericHistoryPlaybackButton``) so they cannot
+    leak to unrelated widgets.
+
+    Object name selectors used:
+    - ``QPushButton#AethericHistoryPlaybackButton``
+    - ``QPushButton#AethericHistoryPlaybackSkipBackButton``
+    - ``QPushButton#AethericHistoryPlaybackSkipFwdButton``
+    - ``QSlider#AethericHistoryPlaybackProgressSlider``
+    - ``QComboBox#AethericHistoryPlaybackSpeedCombo``
+    - ``QSlider#AethericHistoryPlaybackVolumeSlider``
+    - ``QLabel#AethericHistoryPlaybackVolumeIcon``
+    - ``QLabel#AethericHistoryPlaybackStatusLabel``
+    - ``QPushButton#AethericHistoryBookmarkButton``
+    - ``QComboBox#AethericHistoryBookmarkCombo``
+    - ``QPushButton#AethericHistoryBookmarkDeleteButton``
+
+    Args:
+        p: Active theme palette.
+
+    Returns:
+        Dict of named QSS strings, one per playback widget role.
+    """
+    return {
+        "play_button": f"""
+            QPushButton#AethericHistoryPlaybackButton {{
+                background-color: {AETHERIC_GLASS_ROW_BG};
+                color: {p.text_secondary};
+                border: 1px solid transparent;
+                border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+                border-right: 1px solid {AETHERIC_BORDER_DARK};
+                border-radius: 6px;
+                padding: 2px 4px;
+                font-size: 13px;
+            }}
+            QPushButton#AethericHistoryPlaybackButton:hover {{
+                background-color: {AETHERIC_NAV_HOVER_BG};
+                border: 1px solid {AETHERIC_RED};
+                color: {AETHERIC_RED};
+            }}
+            QPushButton#AethericHistoryPlaybackButton:pressed {{
+                background-color: {AETHERIC_NAV_ACTIVE_BG};
+            }}
+            QPushButton#AethericHistoryPlaybackButton:disabled {{
+                color: {AETHERIC_BORDER_DARK};
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+        "skip_button": f"""
+            QPushButton#AethericHistoryPlaybackSkipBackButton,
+            QPushButton#AethericHistoryPlaybackSkipFwdButton {{
+                background-color: {AETHERIC_GLASS_ROW_BG};
+                color: {p.text_secondary};
+                border: 1px solid transparent;
+                border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+                border-right: 1px solid {AETHERIC_BORDER_DARK};
+                border-radius: 6px;
+                padding: 2px 4px;
+                font-size: 13px;
+            }}
+            QPushButton#AethericHistoryPlaybackSkipBackButton:hover,
+            QPushButton#AethericHistoryPlaybackSkipFwdButton:hover {{
+                background-color: {AETHERIC_NAV_HOVER_BG};
+                border: 1px solid {AETHERIC_RED};
+                color: {AETHERIC_RED};
+            }}
+            QPushButton#AethericHistoryPlaybackSkipBackButton:pressed,
+            QPushButton#AethericHistoryPlaybackSkipFwdButton:pressed {{
+                background-color: {AETHERIC_NAV_ACTIVE_BG};
+            }}
+            QPushButton#AethericHistoryPlaybackSkipBackButton:disabled,
+            QPushButton#AethericHistoryPlaybackSkipFwdButton:disabled {{
+                color: {AETHERIC_BORDER_DARK};
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+        "progress_slider": f"""
+            QSlider#AethericHistoryPlaybackProgressSlider {{
+                background: transparent;
+                height: 6px;
+            }}
+            QSlider#AethericHistoryPlaybackProgressSlider::groove:horizontal {{
+                background: {AETHERIC_BORDER_DARK};
+                height: 4px;
+                border-radius: 2px;
+            }}
+            QSlider#AethericHistoryPlaybackProgressSlider::handle:horizontal {{
+                background: {p.text_secondary};
+                width: 10px;
+                height: 10px;
+                margin: -3px 0;
+                border-radius: 5px;
+            }}
+            QSlider#AethericHistoryPlaybackProgressSlider::handle:horizontal:hover {{
+                background: {AETHERIC_RED};
+            }}
+            QSlider#AethericHistoryPlaybackProgressSlider:disabled {{
+                background: transparent;
+            }}
+            QSlider#AethericHistoryPlaybackProgressSlider::groove:horizontal:disabled {{
+                background: transparent;
+            }}
+            QSlider#AethericHistoryPlaybackProgressSlider::handle:horizontal:disabled {{
+                background: {AETHERIC_BORDER_DARK};
+            }}
+        """,
+        "speed_combo": f"""
+            QComboBox#AethericHistoryPlaybackSpeedCombo {{
+                background-color: {AETHERIC_SETTINGS_BG};
+                color: {p.text_tertiary};
+                border: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-radius: 6px;
+                padding: 2px 6px;
+                font-size: 11px;
+                min-height: 20px;
+            }}
+            QComboBox#AethericHistoryPlaybackSpeedCombo:hover {{
+                border-color: {AETHERIC_RED};
+                color: {p.text_secondary};
+            }}
+            QComboBox#AethericHistoryPlaybackSpeedCombo::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 16px;
+                border: none;
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+            QComboBox#AethericHistoryPlaybackSpeedCombo::down-arrow {{
+                image: url({ARROW_DOWN_SVG});
+                width: 10px;
+                height: 10px;
+            }}
+            QComboBox#AethericHistoryPlaybackSpeedCombo QAbstractItemView {{
+                background-color: {AETHERIC_SETTINGS_BG};
+                color: {p.text_secondary};
+                border: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-radius: 8px;
+                padding: 2px;
+                outline: none;
+                selection-background-color: {AETHERIC_NAV_ACTIVE_BG};
+                selection-color: {AETHERIC_RED};
+            }}
+            QComboBox#AethericHistoryPlaybackSpeedCombo:disabled {{
+                color: {AETHERIC_BORDER_DARK};
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+        "volume_slider": f"""
+            QSlider#AethericHistoryPlaybackVolumeSlider {{
+                background: transparent;
+                height: 6px;
+            }}
+            QSlider#AethericHistoryPlaybackVolumeSlider::groove:horizontal {{
+                background: {AETHERIC_BORDER_DARK};
+                height: 4px;
+                border-radius: 2px;
+            }}
+            QSlider#AethericHistoryPlaybackVolumeSlider::handle:horizontal {{
+                background: {p.text_secondary};
+                width: 10px;
+                height: 10px;
+                margin: -3px 0;
+                border-radius: 5px;
+            }}
+            QSlider#AethericHistoryPlaybackVolumeSlider::handle:horizontal:hover {{
+                background: {AETHERIC_RED};
+            }}
+            QSlider#AethericHistoryPlaybackVolumeSlider:disabled {{
+                background: transparent;
+            }}
+            QSlider#AethericHistoryPlaybackVolumeSlider::groove:horizontal:disabled {{
+                background: transparent;
+            }}
+            QSlider#AethericHistoryPlaybackVolumeSlider::handle:horizontal:disabled {{
+                background: {AETHERIC_BORDER_DARK};
+            }}
+        """,
+        "volume_icon": f"""
+            QLabel#AethericHistoryPlaybackVolumeIcon {{
+                color: {p.text_secondary};
+                font-size: 12px;
+            }}
+        """,
+        "status_label": f"""
+            QLabel#AethericHistoryPlaybackStatusLabel {{
+                color: {p.text_tertiary};
+                font-size: 10px;
+                padding: 0 4px;
+            }}
+        """,
+        "status_label_error": f"""
+            QLabel#AethericHistoryPlaybackStatusLabel {{
+                color: {p.text_disabled};
+                font-size: 10px;
+                padding: 0 4px;
+            }}
+        """,
+        "bookmark_button": f"""
+            QPushButton#AethericHistoryBookmarkButton {{
+                background-color: {AETHERIC_GLASS_ROW_BG};
+                color: {p.text_secondary};
+                border: 1px solid transparent;
+                border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+                border-right: 1px solid {AETHERIC_BORDER_DARK};
+                border-radius: 6px;
+                padding: 2px 4px;
+                font-size: 13px;
+            }}
+            QPushButton#AethericHistoryBookmarkButton:hover {{
+                background-color: {AETHERIC_NAV_HOVER_BG};
+                border: 1px solid {AETHERIC_RED};
+                color: {AETHERIC_RED};
+            }}
+            QPushButton#AethericHistoryBookmarkButton:pressed {{
+                background-color: {AETHERIC_NAV_ACTIVE_BG};
+            }}
+            QPushButton#AethericHistoryBookmarkButton:disabled {{
+                color: {AETHERIC_BORDER_DARK};
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+        "bookmark_combo": f"""
+            QComboBox#AethericHistoryBookmarkCombo {{
+                background-color: {AETHERIC_SETTINGS_BG};
+                color: {p.text_tertiary};
+                border: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-radius: 6px;
+                padding: 2px 6px;
+                font-size: 11px;
+                min-height: 20px;
+            }}
+            QComboBox#AethericHistoryBookmarkCombo:hover {{
+                border-color: {AETHERIC_RED};
+                color: {p.text_secondary};
+            }}
+            QComboBox#AethericHistoryBookmarkCombo::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 16px;
+                border: none;
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+            QComboBox#AethericHistoryBookmarkCombo::down-arrow {{
+                image: url({ARROW_DOWN_SVG});
+                width: 10px;
+                height: 10px;
+            }}
+            QComboBox#AethericHistoryBookmarkCombo QAbstractItemView {{
+                background-color: {AETHERIC_SETTINGS_BG};
+                color: {p.text_secondary};
+                border: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-radius: 8px;
+                padding: 2px;
+                outline: none;
+                selection-background-color: {AETHERIC_NAV_ACTIVE_BG};
+                selection-color: {AETHERIC_RED};
+            }}
+            QComboBox#AethericHistoryBookmarkCombo:disabled {{
+                color: {AETHERIC_BORDER_DARK};
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+        "bookmark_delete_button": f"""
+            QPushButton#AethericHistoryBookmarkDeleteButton {{
+                background-color: {AETHERIC_GLASS_ROW_BG};
+                color: {p.text_tertiary};
+                border: 1px solid transparent;
+                border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+                border-right: 1px solid {AETHERIC_BORDER_DARK};
+                border-radius: 6px;
+                padding: 2px;
+                font-size: 11px;
+            }}
+            QPushButton#AethericHistoryBookmarkDeleteButton:hover {{
+                background-color: {AETHERIC_NAV_HOVER_BG};
+                border: 1px solid {AETHERIC_RED};
+                color: {AETHERIC_RED};
+            }}
+            QPushButton#AethericHistoryBookmarkDeleteButton:pressed {{
+                background-color: {AETHERIC_NAV_ACTIVE_BG};
+            }}
+            QPushButton#AethericHistoryBookmarkDeleteButton:disabled {{
+                color: {AETHERIC_BORDER_DARK};
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+    }

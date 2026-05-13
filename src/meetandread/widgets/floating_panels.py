@@ -10,13 +10,14 @@ from PyQt6.QtWidgets import (
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
     QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
-    QCheckBox, QLineEdit,
+    QCheckBox, QLineEdit, QSlider,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from pathlib import Path
+import html as _html_module
 import json
 import re
 import time
@@ -76,8 +77,10 @@ from meetandread.widgets.theme import (
     aetheric_history_list_css, aetheric_history_viewer_css,
     aetheric_history_splitter_css, aetheric_history_header_css,
     aetheric_history_action_button_css,
+    aetheric_playback_toolbar_css,
     aetheric_cc_overlay_css,
     AETHERIC_RED,
+    AETHERIC_BORDER_DARK,
     AETHERIC_SETTINGS_BG,
     AETHERIC_RADIUS,
     ARROW_UP_SVG,
@@ -88,6 +91,9 @@ from meetandread.widgets.theme import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Lazy import — avoids QtMultimedia DLL issues at module level
+# HistoryPlaybackController is imported inside FloatingSettingsPanel methods.
 
 
 # ---------------------------------------------------------------------------
@@ -3647,12 +3653,164 @@ class FloatingSettingsPanel(QWidget):
         viewer_layout.setContentsMargins(0, 0, 0, 0)
         viewer_layout.setSpacing(0)
 
-        # Detail header bar with Scrub/Delete buttons (hidden until selection)
+        # Detail header bar with playback controls + Scrub/Delete buttons (hidden until selection)
         self._history_detail_header = QFrame()
         self._history_detail_header.setObjectName("AethericHistoryHeader")
         detail_header_layout = QHBoxLayout(self._history_detail_header)
         detail_header_layout.setContentsMargins(6, 2, 6, 2)
         detail_header_layout.setSpacing(4)
+
+        # -- Playback controls (left side, before stretch) --
+        self._playback_play_btn = QPushButton("▶")
+        self._playback_play_btn.setObjectName("AethericHistoryPlaybackButton")
+        self._playback_play_btn.setProperty("playback_action", "play_pause")
+        self._playback_play_btn.setAccessibleName("Play or pause audio")
+        self._playback_play_btn.setAccessibleDescription("Toggle audio playback for the selected transcript recording")
+        self._playback_play_btn.setFixedHeight(26)
+        self._playback_play_btn.setFixedWidth(32)
+        self._playback_play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._playback_play_btn.setToolTip("Play / Pause audio")
+        self._playback_play_btn.setEnabled(False)
+        self._playback_play_btn.clicked.connect(self._on_playback_play_clicked)
+        detail_header_layout.addWidget(self._playback_play_btn)
+
+        self._playback_speed_combo = QComboBox()
+        self._playback_speed_combo.setObjectName("AethericHistoryPlaybackSpeedCombo")
+        self._playback_speed_combo.setAccessibleName("Playback speed")
+        self._playback_speed_combo.setAccessibleDescription("Select audio playback speed from 0.25x to 2x")
+        self._playback_speed_combo.setFixedHeight(26)
+        self._playback_speed_combo.setFixedWidth(68)
+        self._playback_speed_combo.setToolTip("Playback speed")
+        self._playback_speed_combo.setEnabled(False)
+        for rate_label in ["0.25x", "0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"]:
+            self._playback_speed_combo.addItem(rate_label)
+        # Default to "1x" (index 3)
+        self._playback_speed_combo.setCurrentIndex(3)
+        self._playback_speed_combo.currentIndexChanged.connect(self._on_playback_speed_changed)
+        detail_header_layout.addWidget(self._playback_speed_combo)
+
+        self._playback_volume_label = QLabel("🔊")
+        self._playback_volume_label.setObjectName("AethericHistoryPlaybackVolumeIcon")
+        self._playback_volume_label.setAccessibleName("Volume icon")
+        self._playback_volume_label.setFixedWidth(18)
+        self._playback_volume_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        detail_header_layout.addWidget(self._playback_volume_label)
+
+        self._playback_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self._playback_volume_slider.setObjectName("AethericHistoryPlaybackVolumeSlider")
+        self._playback_volume_slider.setAccessibleName("Volume control")
+        self._playback_volume_slider.setAccessibleDescription("Adjust audio volume from 0 to 100 percent")
+        self._playback_volume_slider.setFixedHeight(22)
+        self._playback_volume_slider.setFixedWidth(70)
+        self._playback_volume_slider.setRange(0, 100)
+        self._playback_volume_slider.setValue(80)
+        self._playback_volume_slider.setToolTip("Volume")
+        self._playback_volume_slider.setEnabled(False)
+        self._playback_volume_slider.valueChanged.connect(self._on_playback_volume_changed)
+        detail_header_layout.addWidget(self._playback_volume_slider)
+
+        self._playback_status_label = QLabel("")
+        self._playback_status_label.setObjectName("AethericHistoryPlaybackStatusLabel")
+        self._playback_status_label.setAccessibleName("Audio playback status")
+        self._playback_status_label.setAccessibleDescription("Current status of audio playback or error message")
+        self._playback_status_label.setFixedHeight(20)
+        self._playback_status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        detail_header_layout.addWidget(self._playback_status_label)
+
+        # Progress slider for transport position
+        self._playback_progress_slider = QSlider(Qt.Orientation.Horizontal)
+        self._playback_progress_slider.setObjectName("AethericHistoryPlaybackProgressSlider")
+        self._playback_progress_slider.setAccessibleName("Playback position")
+        self._playback_progress_slider.setAccessibleDescription("Seek within the audio recording by dragging or clicking the progress bar")
+        self._playback_progress_slider.setFixedHeight(22)
+        self._playback_progress_slider.setMinimumWidth(100)
+        self._playback_progress_slider.setMaximumWidth(200)
+        self._playback_progress_slider.setRange(0, 1000)
+        self._playback_progress_slider.setValue(0)
+        self._playback_progress_slider.setToolTip("Playback position")
+        self._playback_progress_slider.setEnabled(False)
+        self._playback_progress_slider.sliderPressed.connect(self._on_progress_slider_pressed)
+        self._playback_progress_slider.sliderReleased.connect(self._on_progress_slider_released)
+        self._playback_progress_slider.valueChanged.connect(self._on_progress_slider_value_changed)
+        detail_header_layout.addWidget(self._playback_progress_slider)
+
+        # Skip backward button (⏪ -5s)
+        self._playback_skip_back_btn = QPushButton("⏪")
+        self._playback_skip_back_btn.setObjectName("AethericHistoryPlaybackSkipBackButton")
+        self._playback_skip_back_btn.setProperty("playback_action", "skip_back")
+        self._playback_skip_back_btn.setAccessibleName("Skip backward 5 seconds")
+        self._playback_skip_back_btn.setAccessibleDescription("Skip backward by 5 seconds in the audio recording")
+        self._playback_skip_back_btn.setFixedHeight(26)
+        self._playback_skip_back_btn.setFixedWidth(32)
+        self._playback_skip_back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._playback_skip_back_btn.setToolTip("Skip back 5 seconds")
+        self._playback_skip_back_btn.setEnabled(False)
+        self._playback_skip_back_btn.clicked.connect(self._on_playback_skip_back_clicked)
+        detail_header_layout.addWidget(self._playback_skip_back_btn)
+
+        # Skip forward button (⏩ +5s)
+        self._playback_skip_fwd_btn = QPushButton("⏩")
+        self._playback_skip_fwd_btn.setObjectName("AethericHistoryPlaybackSkipFwdButton")
+        self._playback_skip_fwd_btn.setProperty("playback_action", "skip_fwd")
+        self._playback_skip_fwd_btn.setAccessibleName("Skip forward 5 seconds")
+        self._playback_skip_fwd_btn.setAccessibleDescription("Skip forward by 5 seconds in the audio recording")
+        self._playback_skip_fwd_btn.setFixedHeight(26)
+        self._playback_skip_fwd_btn.setFixedWidth(32)
+        self._playback_skip_fwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._playback_skip_fwd_btn.setToolTip("Skip forward 5 seconds")
+        self._playback_skip_fwd_btn.setEnabled(False)
+        self._playback_skip_fwd_btn.clicked.connect(self._on_playback_skip_fwd_clicked)
+        detail_header_layout.addWidget(self._playback_skip_fwd_btn)
+
+        # Bookmark button (🔖)
+        self._bookmark_add_btn = QPushButton("🔖")
+        self._bookmark_add_btn.setObjectName("AethericHistoryBookmarkButton")
+        self._bookmark_add_btn.setProperty("playback_action", "bookmark_add")
+        self._bookmark_add_btn.setAccessibleName("Add bookmark at current position")
+        self._bookmark_add_btn.setAccessibleDescription("Save a playback bookmark at the current audio position")
+        self._bookmark_add_btn.setFixedHeight(26)
+        self._bookmark_add_btn.setFixedWidth(32)
+        self._bookmark_add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._bookmark_add_btn.setToolTip("Add bookmark (M)")
+        self._bookmark_add_btn.setEnabled(False)
+        self._bookmark_add_btn.clicked.connect(self._on_bookmark_add_clicked)
+        detail_header_layout.addWidget(self._bookmark_add_btn)
+
+        # Bookmark list combo/dropdown
+        self._bookmark_combo = QComboBox()
+        self._bookmark_combo.setObjectName("AethericHistoryBookmarkCombo")
+        self._bookmark_combo.setAccessibleName("Bookmarks")
+        self._bookmark_combo.setAccessibleDescription("Navigate to a saved bookmark or manage bookmarks")
+        self._bookmark_combo.setFixedHeight(26)
+        self._bookmark_combo.setFixedWidth(120)
+        self._bookmark_combo.setToolTip("Bookmarks")
+        self._bookmark_combo.setEnabled(False)
+        self._bookmark_combo.addItem("No bookmarks")
+        self._bookmark_combo.currentIndexChanged.connect(self._on_bookmark_combo_changed)
+        detail_header_layout.addWidget(self._bookmark_combo)
+
+        # Bookmark delete button — removes selected bookmark by created_at
+        self._bookmark_delete_btn = QPushButton("✕")
+        self._bookmark_delete_btn.setObjectName("AethericHistoryBookmarkDeleteButton")
+        self._bookmark_delete_btn.setProperty("playback_action", "bookmark_delete")
+        self._bookmark_delete_btn.setAccessibleName("Delete selected bookmark")
+        self._bookmark_delete_btn.setAccessibleDescription("Delete the currently selected bookmark from this transcript")
+        self._bookmark_delete_btn.setFixedHeight(26)
+        self._bookmark_delete_btn.setFixedWidth(26)
+        self._bookmark_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._bookmark_delete_btn.setToolTip("Delete selected bookmark")
+        self._bookmark_delete_btn.setEnabled(False)
+        self._bookmark_delete_btn.clicked.connect(self._on_bookmark_delete_clicked)
+        detail_header_layout.addWidget(self._bookmark_delete_btn)
+
+        # Drag state flag for progress slider
+        self._is_dragging_progress_slider = False
+
+        # Bookmark manager state — per-transcript BookmarkManager, created on
+        # selection.  _bookmark_items stores (created_at, position_ms) tuples
+        # parallel to the combo items for navigation lookup.
+        self._bookmark_manager: Optional[object] = None  # BookmarkManager
+        self._bookmark_items: List[tuple] = []  # [(created_at, position_ms), ...]
 
         detail_header_layout.addStretch()
 
@@ -3698,6 +3856,21 @@ class FloatingSettingsPanel(QWidget):
 
         # -- History state attributes --
         self._current_history_md_path: Optional[Path] = None
+
+        # -- Playback helper (lazy-init on first History use) --
+        self._playback_helper: Optional[object] = None  # HistoryPlaybackController
+
+        # -- Current-word highlight state --
+        # Cached list of (start_ms, end_ms) tuples for timed words in the
+        # current transcript.  Populated by _extract_timed_words() and reset
+        # when the history selection changes.
+        self._cached_timed_words: List[tuple] = []  # [(start_ms, end_ms), ...]
+        # Index of the currently highlighted word, or -1 if none.
+        self._current_highlight_word_idx: int = -1
+        # Timestamp (monotonic ms) of the last highlight re-render.
+        self._last_highlight_update_ms: int = 0
+        # Highlight throttle interval in milliseconds.
+        self._HIGHLIGHT_UPDATE_INTERVAL_MS: int = 200
 
         # ------------------------------------------------------------------
         # Page 3: Identities — voice identity list, detail viewer
@@ -3981,6 +4154,20 @@ class FloatingSettingsPanel(QWidget):
         self._delete_btn.setStyleSheet(history_btn_css)
         self._history_viewer.setStyleSheet(aetheric_history_viewer_css(p))
 
+        # Playback controls styling (scoped Aetheric toolbar styles)
+        playback_css = aetheric_playback_toolbar_css(p)
+        self._playback_play_btn.setStyleSheet(playback_css["play_button"])
+        self._playback_speed_combo.setStyleSheet(playback_css["speed_combo"])
+        self._playback_volume_slider.setStyleSheet(playback_css["volume_slider"])
+        self._playback_status_label.setStyleSheet(playback_css["status_label"])
+        self._playback_volume_label.setStyleSheet(playback_css["volume_icon"])
+        self._playback_skip_back_btn.setStyleSheet(playback_css["skip_button"])
+        self._playback_skip_fwd_btn.setStyleSheet(playback_css["skip_button"])
+        self._playback_progress_slider.setStyleSheet(playback_css["progress_slider"])
+        self._bookmark_add_btn.setStyleSheet(playback_css["bookmark_button"])
+        self._bookmark_combo.setStyleSheet(playback_css["bookmark_combo"])
+        self._bookmark_delete_btn.setStyleSheet(playback_css["bookmark_delete_button"])
+
         # Identities page — reuse history CSS patterns with Identity object names
         identities_page = self._content_stack.widget(self._NAV_IDENTITIES)
         if identities_page is not None:
@@ -4038,6 +4225,7 @@ class FloatingSettingsPanel(QWidget):
         """Hide the panel with a 150ms fade-out and stop monitoring."""
         self._stop_resource_monitor()
         self._metrics_timer.stop()
+        self._stop_playback()
         self._start_fade_out()
 
     # ------------------------------------------------------------------
@@ -4125,6 +4313,9 @@ class FloatingSettingsPanel(QWidget):
         # Refresh History when navigating to it
         if page_index == self._NAV_HISTORY:
             self._refresh_history()
+        else:
+            # Stop playback when leaving History page
+            self._stop_playback()
 
         # Refresh Identities when navigating to it
         if page_index == self._NAV_IDENTITIES:
@@ -5110,22 +5301,47 @@ class FloatingSettingsPanel(QWidget):
             self._history_list.addItem(item)
 
     def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
-        """Load and display the transcript for the clicked history item."""
+        """Load and display the transcript for the clicked history item.
+
+        Also loads companion audio via the playback helper, updating
+        toolbar control enabled/disabled state and status text.
+        """
         if self._is_comparison_mode:
             self._hide_scrub_accept_reject()
 
         md_path_str = item.data(Qt.ItemDataRole.UserRole)
         if not md_path_str:
+            self._reset_highlight_state()
+            self._bookmark_manager = None
+            self._bookmark_items = []
+            self._refresh_bookmark_combo()
+            self._update_playback_for_no_audio()
             return
         md_path = Path(md_path_str)
         if not md_path.exists():
             self._current_history_md_path = None
+            self._reset_highlight_state()
+            self._bookmark_manager = None
+            self._bookmark_items = []
+            self._refresh_bookmark_combo()
             self._history_viewer.setPlainText(f"(File not found: {md_path})")
             self._history_detail_header.show()
+            self._update_playback_for_no_audio()
             return
 
         self._current_history_md_path = md_path
         self._history_detail_header.show()
+
+        # Reset highlight state and extract timed words for the new transcript
+        self._reset_highlight_state()
+        self._extract_timed_words(md_path)
+
+        # Load audio for this transcript
+        self._load_playback_audio(md_path)
+
+        # Load bookmarks for this transcript
+        self._load_bookmarks_for_transcript(md_path)
+
         html = self._render_history_transcript(md_path)
         if html is not None:
             self._history_viewer.setHtml(html)
@@ -5140,6 +5356,521 @@ class FloatingSettingsPanel(QWidget):
             if marker_idx != -1:
                 content = content[:marker_idx]
             self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
+
+    # ------------------------------------------------------------------
+    # Playback helper management
+    # ------------------------------------------------------------------
+
+    def _ensure_playback_helper(self):
+        """Lazily create the HistoryPlaybackController if not yet created.
+
+        Returns None (and logs a warning) if QtMultimedia is unavailable
+        (e.g. DLL load failure in some test environments).
+
+        On first creation, wires player.positionChanged and
+        player.durationChanged to the progress slider with throttling
+        and drag-guard logic.
+        """
+        if self._playback_helper is None:
+            try:
+                from meetandread.playback.history import HistoryPlaybackController
+                self._playback_helper = HistoryPlaybackController()
+                # Wire player signals to progress slider (once per helper)
+                self._wire_player_signals()
+            except ImportError as exc:
+                logger.warning("QtMultimedia unavailable — playback disabled: %s", exc)
+                self._playback_helper = None
+        return self._playback_helper
+
+    def _wire_player_signals(self) -> None:
+        """Connect player.positionChanged / durationChanged to the slider.
+
+        Called once after helper creation. Guards against None helper or
+        missing player.
+        """
+        helper = self._playback_helper
+        if helper is None:
+            return
+        player = helper.player
+        player.positionChanged.connect(self._on_player_position_changed)
+        player.durationChanged.connect(self._on_player_duration_changed)
+        logger.info("player_signals_wired: positionChanged, durationChanged")
+
+    # Minimum interval (ms) between slider updates from player position
+    _POSITION_UPDATE_INTERVAL_MS = 50
+
+    def _on_player_position_changed(self, position_ms: int) -> None:
+        """Update progress slider and current-word highlight from player position.
+
+        Skips the slider update when the user is dragging the slider to avoid
+        feedback loops. Throttles slider updates to at most once per 50 ms.
+
+        Highlight updates use a separate 200ms throttle and are gated by
+        active-word-change detection — ``setHtml()`` is only called when the
+        active word index actually changes.  Both sliders and highlights are
+        independently throttled so a skipped slider update does not block
+        highlighting and vice versa.
+        """
+        if self._is_dragging_progress_slider:
+            return
+
+        helper = self._playback_helper
+        if helper is None:
+            return
+
+        duration = helper.duration_ms
+        if duration <= 0:
+            # No duration known yet — can't compute slider position
+            return
+
+        now_ms = int(time.monotonic() * 1000)
+
+        # --- Slider update (50ms throttle) ---
+        last_slider = getattr(self, "_last_slider_update_ms", 0)
+        if (now_ms - last_slider) >= self._POSITION_UPDATE_INTERVAL_MS:
+            self._last_slider_update_ms = now_ms
+            slider_value = min(1000, int(position_ms / duration * 1000))
+            self._playback_progress_slider.blockSignals(True)
+            self._playback_progress_slider.setValue(slider_value)
+            self._playback_progress_slider.blockSignals(False)
+
+        # --- Current-word highlight (200ms throttle + active-word gating) ---
+        if self._cached_timed_words and self._current_history_md_path is not None:
+            last_highlight = self._last_highlight_update_ms
+            if (now_ms - last_highlight) >= self._HIGHLIGHT_UPDATE_INTERVAL_MS:
+                self._last_highlight_update_ms = now_ms
+                active_idx = self._find_active_word_index(position_ms)
+                if active_idx != self._current_highlight_word_idx:
+                    logger.debug(
+                        "highlight_word_changed: index=%d position_ms=%d",
+                        active_idx, position_ms,
+                    )
+                    self._render_highlighted_transcript(
+                        self._current_history_md_path, active_idx
+                    )
+
+    def _on_player_duration_changed(self, duration_ms: int) -> None:
+        """Handle duration changes from the player (media load completion).
+
+        Resets the slider when a new media source is loaded (duration
+        transitions from 0 to a positive value). Keeps the slider at
+        value 0 so the user sees a clean start position.
+        """
+        if duration_ms > 0:
+            logger.info(
+                "duration_changed: duration_ms=%d, resetting slider",
+                duration_ms,
+            )
+            # Reset slider to start on new media load
+            if not self._is_dragging_progress_slider:
+                self._playback_progress_slider.blockSignals(True)
+                self._playback_progress_slider.setValue(0)
+                self._playback_progress_slider.blockSignals(False)
+
+    def _load_playback_audio(self, md_path: Path) -> None:
+        """Load audio for the given transcript and update toolbar state."""
+        helper = self._ensure_playback_helper()
+        if helper is not None:
+            helper.load_transcript_audio(md_path)
+        self._sync_playback_controls()
+
+    def _update_playback_for_no_audio(self) -> None:
+        """Disable playback controls when no transcript is selected."""
+        helper = self._ensure_playback_helper()
+        if helper is not None:
+            helper.load_transcript_audio(None)
+        self._sync_playback_controls()
+
+    def _sync_playback_controls(self) -> None:
+        """Sync toolbar enabled/disabled state and status from the helper."""
+        helper = self._playback_helper
+        if helper is None:
+            self._playback_play_btn.setEnabled(False)
+            self._playback_speed_combo.setEnabled(False)
+            self._playback_volume_slider.setEnabled(False)
+            self._playback_progress_slider.setEnabled(False)
+            self._playback_skip_back_btn.setEnabled(False)
+            self._playback_skip_fwd_btn.setEnabled(False)
+            self._bookmark_add_btn.setEnabled(False)
+            self._bookmark_combo.setEnabled(False)
+            self._playback_status_label.setText("")
+            return
+
+        available = helper.is_audio_available
+        self._playback_play_btn.setEnabled(available)
+        self._playback_speed_combo.setEnabled(available)
+        self._playback_volume_slider.setEnabled(available)
+        self._playback_progress_slider.setEnabled(available)
+        self._playback_skip_back_btn.setEnabled(available)
+        self._playback_skip_fwd_btn.setEnabled(available)
+
+        # Bookmark add requires both audio and a selected transcript
+        has_transcript = self._current_history_md_path is not None
+        self._bookmark_add_btn.setEnabled(available and has_transcript)
+        # Bookmark combo is enabled when there are bookmarks to navigate
+        has_bookmarks = len(self._bookmark_items) > 0
+        self._bookmark_combo.setEnabled(has_transcript and has_bookmarks)
+
+        # Update play/pause button text based on helper state
+        if available:
+            self._playback_play_btn.setText("▶")
+        else:
+            self._playback_play_btn.setText("▶")
+
+        if helper.last_error:
+            self._playback_status_label.setText(helper.last_error)
+            # Apply error-tinted status style
+            p = current_palette()
+            playback_css = aetheric_playback_toolbar_css(p)
+            self._playback_status_label.setStyleSheet(playback_css["status_label_error"])
+        else:
+            status = helper.status_text
+            self._playback_status_label.setText(status)
+            # Restore normal status style
+            p = current_palette()
+            playback_css = aetheric_playback_toolbar_css(p)
+            self._playback_status_label.setStyleSheet(playback_css["status_label"])
+
+    def _on_playback_play_clicked(self) -> None:
+        """Toggle play/pause on the playback helper."""
+        helper = self._playback_helper
+        if helper is None or not helper.is_audio_available:
+            return
+        # Check current state from the helper's player
+        player = helper.player
+        # Use the player's own PlaybackState enum values to avoid importing
+        # QtMultimedia (which may have DLL issues in some environments)
+        state = player.playbackState()
+        # PlayingState == 1 in QtMultimedia
+        if state == 1:  # PlayingState
+            helper.pause()
+            self._playback_play_btn.setText("▶")
+        else:
+            helper.play()
+            self._playback_play_btn.setText("⏸")
+
+    def _on_playback_speed_changed(self, index: int) -> None:
+        """Route speed combo change to the playback helper."""
+        helper = self._playback_helper
+        if helper is None or not helper.is_audio_available:
+            return
+        rate_text = self._playback_speed_combo.itemText(index)
+        try:
+            rate = float(rate_text.replace("x", ""))
+        except (ValueError, AttributeError):
+            logger.warning("Invalid playback rate text: %r", rate_text)
+            return
+        helper.set_rate(rate)
+
+    def _on_playback_volume_changed(self, value: int) -> None:
+        """Route volume slider change to the playback helper."""
+        helper = self._playback_helper
+        if helper is None or not helper.is_audio_available:
+            return
+        normalized = value / 100.0
+        helper.set_volume(normalized)
+
+    def _on_playback_skip_back_clicked(self) -> None:
+        """Skip backward 5 seconds via toolbar button."""
+        helper = self._playback_helper
+        if helper is None or not helper.is_audio_available:
+            return
+        helper.skip_backward()
+
+    def _on_playback_skip_fwd_clicked(self) -> None:
+        """Skip forward 5 seconds via toolbar button."""
+        helper = self._playback_helper
+        if helper is None or not helper.is_audio_available:
+            return
+        helper.skip_forward()
+
+    # -- Bookmark handlers ---------------------------------------------------
+
+    def _on_bookmark_add_clicked(self) -> None:
+        """Add a bookmark at the current playback position.
+
+        Checks: helper present, audio available, transcript selected.
+        Prompts for name via QInputDialog with default "Bookmark at MM:SS".
+        On cancel, no-op. On empty name, uses default. On manager error,
+        shows concise status message.
+        """
+        helper = self._playback_helper
+        if helper is None or not helper.is_audio_available:
+            return
+        md_path = self._current_history_md_path
+        if md_path is None:
+            return
+
+        position_ms = helper.position_ms
+        from meetandread.playback.bookmark import _format_position
+        default_name = f"Bookmark at {_format_position(position_ms)}"
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Add Bookmark",
+            "Bookmark name:",
+            text=default_name,
+        )
+        if not ok:
+            # User cancelled — do nothing
+            return
+
+        # Empty name → use default
+        if not name or not name.strip():
+            name = default_name
+
+        try:
+            from meetandread.playback.bookmark import BookmarkManager
+            if self._bookmark_manager is None:
+                self._bookmark_manager = BookmarkManager(md_path)
+            bm = self._bookmark_manager.add(position_ms, name=name)
+            logger.info(
+                "bookmark_added_ui: stem=%s position_ms=%d",
+                md_path.stem, position_ms,
+            )
+        except Exception as exc:
+            logger.warning("bookmark_add_failed: stem=%s error=%s", md_path.stem, exc)
+            self._playback_status_label.setText(f"Bookmark error: {exc}")
+            return
+
+        # Refresh the bookmark combo
+        self._refresh_bookmark_combo()
+
+    def _on_bookmark_combo_changed(self, index: int) -> None:
+        """Navigate to the selected bookmark's position.
+
+        Looks up the (created_at, position_ms) from _bookmark_items.
+        Seeks to position_ms and plays if audio is available.
+        On stale id or unavailable audio, no-ops safely.
+        """
+        if index < 0 or index >= len(self._bookmark_items):
+            return
+
+        created_at, position_ms = self._bookmark_items[index]
+        helper = self._playback_helper
+        if helper is None:
+            return
+
+        if helper.is_audio_available:
+            helper.seek_to(position_ms)
+            helper.play()
+            logger.info(
+                "bookmark_navigation_triggered: position_ms=%d",
+                position_ms,
+            )
+        else:
+            # Audio unavailable — show status, don't seek
+            self._playback_status_label.setText(
+                "Cannot navigate: audio unavailable"
+            )
+            logger.info(
+                "bookmark_navigation_skipped: reason=audio_unavailable position_ms=%d",
+                position_ms,
+            )
+
+    def _refresh_bookmark_combo(self) -> None:
+        """Reload bookmarks from the manager and repopulate the combo.
+
+        Safe no-op when no transcript is selected or manager is unavailable.
+        """
+        md_path = self._current_history_md_path
+        if md_path is None:
+            self._bookmark_combo.clear()
+            self._bookmark_combo.addItem("No bookmarks")
+            self._bookmark_combo.setEnabled(False)
+            self._bookmark_items = []
+            return
+
+        try:
+            from meetandread.playback.bookmark import BookmarkManager
+            if self._bookmark_manager is None:
+                self._bookmark_manager = BookmarkManager(md_path)
+            bookmarks = self._bookmark_manager.list_bookmarks()
+        except Exception as exc:
+            logger.warning(
+                "bookmark_load_failed: stem=%s error=%s",
+                md_path.stem, exc,
+            )
+            self._bookmark_combo.clear()
+            self._bookmark_combo.addItem("(Bookmark error)")
+            self._bookmark_combo.setEnabled(False)
+            self._bookmark_items = []
+            return
+
+        # Block signals while rebuilding to avoid triggering navigation
+        self._bookmark_combo.blockSignals(True)
+        self._bookmark_combo.clear()
+        self._bookmark_items = []
+
+        if not bookmarks:
+            self._bookmark_combo.addItem("No bookmarks")
+        else:
+            for bm in bookmarks:
+                from meetandread.playback.bookmark import _format_position
+                label = f"{bm.name} ({_format_position(bm.position_ms)})"
+                self._bookmark_combo.addItem(label)
+                self._bookmark_items.append((bm.created_at, bm.position_ms))
+
+        self._bookmark_combo.blockSignals(False)
+
+        # Update enabled state
+        has_bookmarks = len(self._bookmark_items) > 0
+        helper = self._playback_helper
+        has_audio = helper is not None and helper.is_audio_available
+        self._bookmark_combo.setEnabled(has_audio and has_bookmarks)
+        self._bookmark_delete_btn.setEnabled(has_bookmarks)
+
+    def _on_bookmark_delete_clicked(self) -> None:
+        """Delete the currently selected bookmark.
+
+        Looks up ``created_at`` from ``_bookmark_items`` at the current combo
+        index, calls ``BookmarkManager.delete()``, and refreshes UI state.
+        Safe no-op when no bookmark is selected, no transcript is active, or
+        the bookmark has already been deleted.
+        """
+        idx = self._bookmark_combo.currentIndex()
+        if idx < 0 or idx >= len(self._bookmark_items):
+            return
+
+        created_at, _position_ms = self._bookmark_items[idx]
+        md_path = self._current_history_md_path
+        if md_path is None:
+            return
+
+        try:
+            from meetandread.playback.bookmark import BookmarkManager
+            if self._bookmark_manager is None:
+                self._bookmark_manager = BookmarkManager(md_path)
+            deleted = self._bookmark_manager.delete(created_at)
+            if deleted:
+                logger.info(
+                    "bookmark_deleted_ui: stem=%s",
+                    md_path.stem,
+                )
+            # If not found (already deleted), silently refresh
+        except Exception as exc:
+            logger.warning("bookmark_delete_failed: stem=%s error=%s", md_path.stem, exc)
+            self._playback_status_label.setText(f"Bookmark delete error: {exc}")
+            return
+
+        self._refresh_bookmark_combo()
+
+    def _load_bookmarks_for_transcript(self, md_path: Path) -> None:
+        """Initialize bookmark manager and combo for a newly selected transcript.
+
+        Called from _on_history_item_clicked after setting _current_history_md_path.
+        """
+        self._bookmark_manager = None  # Reset — will lazy-init on first use
+        self._refresh_bookmark_combo()
+
+    def _on_progress_slider_pressed(self) -> None:
+        """Mark slider as being dragged to suppress position updates."""
+        self._is_dragging_progress_slider = True
+
+    def _on_progress_slider_released(self) -> None:
+        """Seek to the slider position and resume position tracking."""
+        helper = self._playback_helper
+        if helper is None or not helper.is_audio_available:
+            self._is_dragging_progress_slider = False
+            return
+        slider_value = self._playback_progress_slider.value()
+        duration = helper.duration_ms
+        if duration > 0:
+            percent = slider_value / 1000.0
+            target_ms = int(percent * duration)
+            logger.info(
+                "slider_seek_triggered position_ms=%d percent=%.3f",
+                target_ms, percent,
+            )
+            helper.seek_to(target_ms)
+        self._is_dragging_progress_slider = False
+
+    def _on_progress_slider_value_changed(self, value: int) -> None:
+        """Handle slider value changes (only seek on drag release, not live)."""
+        # Live value changes during drag are tracked but not applied;
+        # actual seek happens in _on_progress_slider_released.
+        pass
+
+    def _stop_playback(self) -> None:
+        """Stop playback and reset helper. Called on panel hide/close."""
+        if self._playback_helper is not None:
+            self._playback_helper.stop()
+        self._reset_highlight_state()
+
+    # -- Keyboard shortcuts for History playback -----------------------------
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        """Handle keyboard shortcuts for History playback.
+
+        Shortcuts only fire when the History nav page is active and audio is
+        available:
+
+        - Space: toggle play/pause
+        - Arrow Left: skip backward 5 seconds
+        - Arrow Right: skip forward 5 seconds
+        - ``+`` / ``=``: increase playback speed
+        - ``-`` / ``_``: decrease playback speed
+        """
+        key = event.key()
+        modifier = event.modifiers()
+
+        # Only handle shortcuts when on the History page
+        if self._content_stack.currentIndex() == self._NAV_HISTORY:
+            helper = self._playback_helper
+            if helper is not None and helper.is_audio_available:
+                action = None
+
+                # Space — play/pause (no modifier)
+                if key == Qt.Key.Key_Space and modifier == Qt.KeyboardModifier.NoModifier:
+                    action = "play_pause"
+                    self._on_playback_play_clicked()
+
+                # Arrow Left — skip backward (no modifier)
+                elif key == Qt.Key.Key_Left and modifier == Qt.KeyboardModifier.NoModifier:
+                    action = "skip_backward"
+                    self._on_playback_skip_back_clicked()
+
+                # Arrow Right — skip forward (no modifier)
+                elif key == Qt.Key.Key_Right and modifier == Qt.KeyboardModifier.NoModifier:
+                    action = "skip_forward"
+                    self._on_playback_skip_fwd_clicked()
+
+                # Plus / Equal — increase speed (no modifier)
+                elif key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) and modifier == Qt.KeyboardModifier.NoModifier:
+                    action = "speed_up"
+                    self._step_playback_speed(1)
+
+                # Minus — decrease speed (no modifier)
+                elif key == Qt.Key.Key_Minus and modifier == Qt.KeyboardModifier.NoModifier:
+                    action = "speed_down"
+                    self._step_playback_speed(-1)
+
+                # M — add bookmark (no modifier)
+                elif key == Qt.Key.Key_M and modifier == Qt.KeyboardModifier.NoModifier:
+                    action = "bookmark_add"
+                    self._on_bookmark_add_clicked()
+
+                if action is not None:
+                    logger.info(
+                        "keyboard_shortcut_triggered key=%s action=%s",
+                        event.text() or str(key), action,
+                    )
+                    event.accept()
+                    return
+
+        # Not a shortcut we handle — pass to base class
+        super().keyPressEvent(event)
+
+    def _step_playback_speed(self, delta: int) -> None:
+        """Step the playback speed combo up (``+1``) or down (``-1``).
+
+        Clamps at combo bounds so the index never goes out of range.
+        """
+        combo = self._playback_speed_combo
+        new_index = combo.currentIndex() + delta
+        new_index = max(0, min(new_index, combo.count() - 1))
+        if new_index != combo.currentIndex():
+            combo.setCurrentIndex(new_index)
 
     @staticmethod
     def _extract_transcript_body(md_path: Optional[Path]) -> str:
@@ -5163,6 +5894,318 @@ class FloatingSettingsPanel(QWidget):
         if marker_idx != -1:
             content = content[:marker_idx]
         return content.strip()
+
+    @staticmethod
+    def _validate_timed_word(word: dict, index: int) -> Optional[int]:
+        """Validate a metadata word entry and return its start_ms, or None.
+
+        A valid timed word must have ``start_time`` as a non-negative number.
+        Returns the start time in milliseconds (int) for seek anchors.
+
+        Args:
+            word: A word dict from the metadata ``words`` array.
+            index: Zero-based index of the word in the array.
+
+        Returns:
+            Start time in milliseconds, or None if the word lacks valid timing.
+        """
+        try:
+            start = word.get("start_time")
+            if start is None:
+                return None
+            start_ms = int(float(start) * 1000)
+            if start_ms < 0:
+                return None
+            return start_ms
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _escape_html_text(text: str) -> str:
+        """Escape text for safe inclusion in HTML content.
+
+        Uses :func:`html.escape` with ``quote=True`` to handle
+        ampersands, angle brackets, and quotes.
+
+        Args:
+            text: Raw text to escape.
+
+        Returns:
+            HTML-safe string.
+        """
+        return _html_module.escape(str(text), quote=True)
+
+    def _extract_timed_words(self, md_path: Path) -> List[tuple]:
+        """Extract and cache (start_ms, end_ms) pairs from transcript metadata.
+
+        Reads the metadata ``words`` array and builds a list of
+        ``(start_ms, end_ms)`` tuples for words that have valid timing.
+        Words with missing or negative timing are represented as ``(None, None)``
+        to keep indices aligned with the metadata array.
+
+        The result is cached in ``_cached_timed_words`` and reused across
+        highlight lookups until the transcript selection changes.
+
+        Args:
+            md_path: Path to the transcript .md file.
+
+        Returns:
+            List of ``(start_ms, end_ms)`` tuples aligned with the words array.
+        """
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except OSError:
+            self._cached_timed_words = []
+            return self._cached_timed_words
+
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx == -1:
+            self._cached_timed_words = []
+            return self._cached_timed_words
+
+        metadata_text = content[marker_idx + len(footer_marker):]
+        if metadata_text.strip().endswith(" -->"):
+            metadata_text = metadata_text.strip()[:-len(" -->")]
+
+        try:
+            data = json.loads(metadata_text)
+        except json.JSONDecodeError:
+            self._cached_timed_words = []
+            return self._cached_timed_words
+
+        words = data.get("words", [])
+        result: List[tuple] = []
+        for w in words:
+            start = self._validate_timed_word(w, len(result))
+            if start is not None:
+                # Parse end_time
+                try:
+                    end_val = w.get("end_time")
+                    if end_val is not None:
+                        end_ms = int(float(end_val) * 1000)
+                        if end_ms < start:
+                            end_ms = start + 1  # fallback: 1ms minimum span
+                    else:
+                        end_ms = start + 1  # fallback for missing end_time
+                except (TypeError, ValueError):
+                    end_ms = start + 1
+                result.append((start, end_ms))
+            else:
+                result.append((None, None))
+
+        self._cached_timed_words = result
+        return result
+
+    def _find_active_word_index(self, position_ms: int) -> int:
+        """Map a playback position to the active word index.
+
+        Uses ``[start_ms, end_ms)`` semantics: a word is active when
+        ``start_ms <= position_ms < end_ms``.
+
+        For position gaps (silence between words), returns -1.
+        For positions before the first word, returns -1.
+        For positions at or beyond the last word's end, returns -1.
+
+        Args:
+            position_ms: Current playback position in milliseconds.
+
+        Returns:
+            Zero-based index of the active word, or -1 if no word is active.
+        """
+        if position_ms < 0:
+            return -1
+
+        cached = self._cached_timed_words
+        if not cached:
+            return -1
+
+        # Binary search for efficiency on large transcripts
+        # Find the last word whose start_ms <= position_ms
+        lo, hi = 0, len(cached) - 1
+        candidate = -1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            start, end = cached[mid]
+            if start is None:
+                # Untimed word — skip; search both sides
+                # We can't binary search through None entries efficiently,
+                # fall back to linear for correctness.
+                # In practice, mixed transcripts are rare.
+                return self._find_active_word_index_linear(position_ms)
+            if start <= position_ms:
+                candidate = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+
+        if candidate >= 0:
+            start, end = cached[candidate]
+            if start is not None and end is not None and start <= position_ms < end:
+                return candidate
+
+        return -1
+
+    def _find_active_word_index_linear(self, position_ms: int) -> int:
+        """Linear fallback for _find_active_word_index when None entries exist.
+
+        Used when binary search encounters untimed (None) entries that
+        prevent correct halving.
+        """
+        for i, (start, end) in enumerate(self._cached_timed_words):
+            if start is not None and end is not None:
+                if start <= position_ms < end:
+                    return i
+        return -1
+
+    def _reset_highlight_state(self) -> None:
+        """Reset all highlight state (on transcript change, stop, etc.).
+
+        Clears the cached timed words, resets the current highlight index,
+        and resets the highlight throttle timestamp.
+        """
+        self._cached_timed_words = []
+        self._current_highlight_word_idx = -1
+        self._last_highlight_update_ms = 0
+
+    def _render_highlighted_transcript(self, md_path: Path, highlight_idx: int) -> None:
+        """Re-render the transcript with the word at *highlight_idx* highlighted.
+
+        Preserves vertical scroll position around the re-render.  Skips
+        the re-render entirely if the HTML content would be identical
+        (e.g., same highlight index as current).
+
+        Args:
+            md_path: Path to the transcript .md file.
+            highlight_idx: Zero-based word index to highlight, or -1 for none.
+        """
+        if highlight_idx == self._current_highlight_word_idx:
+            # No change — skip expensive setHtml() call
+            return
+
+        # Save scroll position
+        scrollbar = self._history_viewer.verticalScrollBar()
+        scroll_pos = scrollbar.value()
+
+        self._current_highlight_word_idx = highlight_idx
+        html = self._render_history_transcript_highlighted(md_path, highlight_idx)
+        if html is not None:
+            self._history_viewer.setHtml(html)
+
+        # Restore scroll position
+        scrollbar.setValue(scroll_pos)
+
+    def _render_history_transcript_highlighted(
+        self, md_path: Path, highlight_idx: int
+    ) -> Optional[str]:
+        """Render transcript HTML with a highlighted word.
+
+        Produces the same output as ``_render_history_transcript`` but wraps
+        the word at *highlight_idx* in a ``<span>`` with a highlight style.
+
+        Args:
+            md_path: Path to the transcript .md file.
+            highlight_idx: Zero-based word index to highlight, or -1 for none.
+
+        Returns:
+            HTML string, or None if the transcript cannot be rendered.
+        """
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.error("Failed to read transcript for highlighting: %s: %s", md_path, exc)
+            return None
+
+        footer_marker = "\n---\n\n<!-- METADATA:"
+        marker_idx = content.find(footer_marker)
+        if marker_idx == -1:
+            return None
+
+        metadata_text = content[marker_idx + len(footer_marker):]
+        if metadata_text.strip().endswith(" -->"):
+            metadata_text = metadata_text.strip()[:-len(" -->")]
+
+        try:
+            data = json.loads(metadata_text)
+        except json.JSONDecodeError:
+            return None
+
+        words = data.get("words", [])
+        has_timed_words = any(self._validate_timed_word(w, i) is not None
+                             for i, w in enumerate(words))
+
+        if not has_timed_words:
+            # No timing data — nothing to highlight; return plain render
+            return self._render_history_transcript(md_path)
+
+        # Collect unique speakers
+        speakers = []
+        seen = set()
+        has_unknown = False
+        for word in words:
+            sid = word.get("speaker_id")
+            if sid is not None and sid not in seen:
+                seen.add(sid)
+                speakers.append(sid)
+            elif sid is None:
+                has_unknown = True
+
+        # Build highlighted HTML
+        _SENTINEL = object()
+        current_speaker = _SENTINEL
+        html_lines = []
+        highlight_style = (
+            "background-color: rgba(79, 195, 247, 0.25); "
+            "border-radius: 2px; padding: 0 1px;"
+        )
+
+        for idx, w in enumerate(words):
+            sid = w.get("speaker_id")
+            if sid != current_speaker:
+                current_speaker = sid
+                if sid is not None and sid in seen:
+                    color = speaker_color(sid)
+                    html_lines.append(
+                        f'<p><a href="speaker:{sid}" '
+                        f'style="color:{color}; font-weight:bold; text-decoration:none;">'
+                        f'[{sid}]</a></p>'
+                    )
+                elif sid is None and has_unknown:
+                    html_lines.append(
+                        f'<p><a href="speaker:__unknown__" '
+                        f'style="color:#888888; font-weight:bold; text-decoration:none;">'
+                        f'[Unknown Speaker]</a></p>'
+                    )
+                else:
+                    label = sid if sid is not None else "Unknown Speaker"
+                    html_lines.append(f"<p><b>{self._escape_html_text(label)}</b></p>")
+
+            word_text = self._escape_html_text(w.get("text", ""))
+            start_ms = self._validate_timed_word(w, idx)
+
+            if start_ms is not None and word_text:
+                if idx == highlight_idx:
+                    html_lines.append(
+                        f'<a href="word:{idx}:{start_ms}" '
+                        f'style="color:inherit; text-decoration:none; {highlight_style}">'
+                        f'{word_text}</a>'
+                    )
+                else:
+                    html_lines.append(
+                        f'<a href="word:{idx}:{start_ms}" '
+                        f'style="color:inherit; text-decoration:none;">'
+                        f'{word_text}</a>'
+                    )
+            else:
+                if idx == highlight_idx and word_text:
+                    html_lines.append(
+                        f'<span style="{highlight_style}">{word_text}</span>'
+                    )
+                else:
+                    html_lines.append(word_text)
+            html_lines.append(" ")
+
+        return "".join(html_lines)
 
     def _render_history_transcript(self, md_path: Path) -> Optional[str]:
         """Render a transcript .md file as HTML with clickable speaker anchors.
@@ -5212,9 +6255,56 @@ class FloatingSettingsPanel(QWidget):
             elif sid is None:
                 has_unknown = True
 
+        # Check if words have timing metadata for clickable word anchors
+        words = data.get("words", [])
+        has_timed_words = any(self._validate_timed_word(w, i) is not None
+                             for i, w in enumerate(words))
+
         # Build HTML with clickable speaker anchors
         # The markdown body has lines like "**SPK_0**" — make them anchors
         html_lines = []
+
+        if has_timed_words:
+            # Render words from metadata as clickable timed anchors,
+            # grouped by speaker with speaker heading anchors preserved.
+            _SENTINEL = object()
+            current_speaker = _SENTINEL
+            for idx, w in enumerate(words):
+                sid = w.get("speaker_id")
+                if sid != current_speaker:
+                    current_speaker = sid
+                    if sid is not None and sid in seen:
+                        color = speaker_color(sid)
+                        html_lines.append(
+                            f'<p><a href="speaker:{sid}" '
+                            f'style="color:{color}; font-weight:bold; text-decoration:none;">'
+                            f'[{sid}]</a></p>'
+                        )
+                    elif sid is None and has_unknown:
+                        html_lines.append(
+                            f'<p><a href="speaker:__unknown__" '
+                            f'style="color:#888888; font-weight:bold; text-decoration:none;">'
+                            f'[Unknown Speaker]</a></p>'
+                        )
+                    else:
+                        label = sid if sid is not None else "Unknown Speaker"
+                        html_lines.append(f"<p><b>{self._escape_html_text(label)}</b></p>")
+
+                word_text = self._escape_html_text(w.get("text", ""))
+                start_ms = self._validate_timed_word(w, idx)
+                if start_ms is not None and word_text:
+                    html_lines.append(
+                        f'<a href="word:{idx}:{start_ms}" '
+                        f'style="color:inherit; text-decoration:none;">'
+                        f'{word_text}</a>'
+                    )
+                else:
+                    html_lines.append(word_text)
+                html_lines.append(" ")
+
+            return "".join(html_lines)
+
+        # Fallback: render markdown body (legacy / no-timing transcripts)
         for line in md_body.splitlines():
             match = re.match(r"^\*\*(.+?)\*\*\s*$", line)
             if match:
@@ -5338,12 +6428,27 @@ class FloatingSettingsPanel(QWidget):
         self._history_viewer.clear()
         self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
         self._history_detail_header.hide()
+        self._stop_playback()
+        self._sync_playback_controls()
 
         self._refresh_history()
 
     def _on_history_anchor_clicked(self, url: QUrl) -> None:
-        """Handle clicks on speaker label anchors in the history viewer."""
+        """Handle clicks on speaker and word anchors in the history viewer.
+
+        ``speaker:`` anchors trigger the existing identity-link dialog.
+        ``word:{index}:{start_ms}`` anchors seek playback to the word's
+        start time and resume playing.
+        """
         link = url.toString()
+
+        # Handle word anchors: word:{index}:{start_ms}
+        word_prefix = "word:"
+        if link.startswith(word_prefix):
+            self._on_word_anchor_clicked(link)
+            return
+
+        # Handle speaker anchors: speaker:{label}
         prefix = "speaker:"
         if not link.startswith(prefix):
             return
@@ -5362,6 +6467,9 @@ class FloatingSettingsPanel(QWidget):
         html = self._render_history_transcript(md_path)
         if html is not None:
             self._history_viewer.setHtml(html)
+            # Re-extract timed words after file change and re-apply highlight
+            self._extract_timed_words(md_path)
+            self._current_highlight_word_idx = -1
         else:
             self._history_viewer.setPlainText("(Error refreshing after link)")
 
@@ -5374,6 +6482,57 @@ class FloatingSettingsPanel(QWidget):
         if md_path is not None:
             self._refresh_history()
             self._reselect_history_item(md_path)
+
+    def _on_word_anchor_clicked(self, link: str) -> None:
+        """Handle a ``word:{index}:{start_ms}`` anchor click.
+
+        Validates the payload, checks helper/audio availability, then
+        calls ``seek_to(start_ms)`` and ``play()``.  Logs structured
+        diagnostics for success, skipped seeks, and malformed payloads.
+        """
+        payload = link[len("word:"):]
+        parts = payload.split(":")
+
+        if len(parts) != 2:
+            logger.warning("word_anchor_malformed: link=%s", link)
+            return
+
+        try:
+            word_index = int(parts[0])
+            start_ms = int(parts[1])
+        except (ValueError, TypeError):
+            logger.warning("word_anchor_malformed: link=%s", link)
+            return
+
+        if word_index < 0 or start_ms < 0:
+            logger.warning(
+                "word_anchor_malformed: index=%d start_ms=%d",
+                word_index, start_ms,
+            )
+            return
+
+        # Check helper availability
+        helper = self._playback_helper
+        if helper is None:
+            logger.info(
+                "word_seek_skipped: index=%d start_ms=%d reason=no_helper",
+                word_index, start_ms,
+            )
+            return
+
+        if not helper.is_audio_available:
+            logger.info(
+                "word_seek_skipped: index=%d start_ms=%d reason=audio_unavailable",
+                word_index, start_ms,
+            )
+            return
+
+        helper.seek_to(start_ms)
+        helper.play()
+        logger.info(
+            "word_seek_success: index=%d start_ms=%d",
+            word_index, start_ms,
+        )
 
     def _rename_speaker_in_file(
         self, md_path: Path, old_name: str, new_name: str

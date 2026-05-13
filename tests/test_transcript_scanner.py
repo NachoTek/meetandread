@@ -10,6 +10,7 @@ Covers T02 must-haves:
 import json
 from pathlib import Path
 from typing import List, Optional
+from unittest.mock import patch
 
 import pytest
 
@@ -94,21 +95,23 @@ class TestParseMetadata:
         assert meta.wav_exists is False
 
     def test_wav_exists_true(self, tmp_path: Path) -> None:
-        """wav_exists is True when a companion .wav file exists."""
+        """wav_exists is True when a companion .wav file exists in recordings dir."""
         md = _write_transcript_md(tmp_path / "recording-001.md", words=_sample_words())
         wav = tmp_path / "recording-001.wav"
         wav.write_bytes(b"\x00")
 
-        meta = parse_metadata(md)
+        with patch("meetandread.transcription.transcript_scanner.get_recordings_dir", return_value=tmp_path):
+            meta = parse_metadata(md)
 
         assert meta is not None
         assert meta.wav_exists is True
 
     def test_wav_exists_false(self, tmp_path: Path) -> None:
-        """wav_exists is False when no companion .wav file."""
+        """wav_exists is False when no companion .wav file in recordings dir."""
         md = _write_transcript_md(tmp_path / "recording-001.md", words=_sample_words())
 
-        meta = parse_metadata(md)
+        with patch("meetandread.transcription.transcript_scanner.get_recordings_dir", return_value=tmp_path):
+            meta = parse_metadata(md)
 
         assert meta is not None
         assert meta.wav_exists is False
@@ -333,7 +336,8 @@ class TestScanRecordings:
             words=[{"text": "silent", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": None}],
         )
 
-        results = scan_recordings(tmp_path)
+        with patch("meetandread.transcription.transcript_scanner.get_recordings_dir", return_value=tmp_path):
+            results = scan_recordings(tmp_path)
 
         assert len(results) == 2
         # Sorted newest first
@@ -397,3 +401,141 @@ class TestMultiWordEntries:
 
         assert meta is not None
         assert meta.word_count == 2  # Only "Hello" and "world"
+
+
+# ---------------------------------------------------------------------------
+# Tests — Bookmark exposure in parse_metadata / RecordingMeta
+# ---------------------------------------------------------------------------
+
+class TestScannerBookmarks:
+    """Tests for bookmark exposure in parse_metadata and RecordingMeta."""
+
+    def test_parse_metadata_returns_bookmarks(self, tmp_path: Path) -> None:
+        """parse_metadata exposes parsed bookmarks in RecordingMeta."""
+        bm_data = [
+            {"name": "Intro", "position_ms": 5000, "created_at": "2026-05-01T10:01:00+00:00"},
+            {"name": "End", "position_ms": 120000, "created_at": "2026-05-01T10:02:00+00:00"},
+        ]
+        md = _write_transcript_md(
+            tmp_path / "with-bm.md",
+            words=_sample_words(),
+            extra_metadata={"bookmarks": bm_data},
+        )
+
+        meta = parse_metadata(md)
+
+        assert meta is not None
+        assert len(meta.bookmarks) == 2
+        assert meta.bookmarks[0].name == "Intro"
+        assert meta.bookmarks[0].position_ms == 5000
+        assert meta.bookmarks[1].name == "End"
+
+    def test_parse_metadata_no_bookmarks_defaults_empty(self, tmp_path: Path) -> None:
+        """parse_metadata returns empty bookmarks list when key is missing."""
+        md = _write_transcript_md(tmp_path / "no-bm.md", words=_sample_words())
+        # No bookmarks key in metadata
+
+        meta = parse_metadata(md)
+
+        assert meta is not None
+        assert meta.bookmarks == []
+
+    def test_parse_metadata_filters_malformed_bookmarks(self, tmp_path: Path) -> None:
+        """parse_metadata skips malformed bookmark entries."""
+        bm_data = [
+            {"name": "Good", "position_ms": 1000, "created_at": "2026-05-01T10:00:00+00:00"},
+            {"name": "No position"},  # missing fields
+            "not a dict",
+        ]
+        md = _write_transcript_md(
+            tmp_path / "mixed-bm.md",
+            words=_sample_words(),
+            extra_metadata={"bookmarks": bm_data},
+        )
+
+        meta = parse_metadata(md)
+
+        assert meta is not None
+        assert len(meta.bookmarks) == 1
+        assert meta.bookmarks[0].name == "Good"
+
+    def test_parse_metadata_clamps_negative_positions(self, tmp_path: Path) -> None:
+        """parse_metadata clamps negative position_ms to zero."""
+        bm_data = [
+            {"name": "Neg", "position_ms": -100, "created_at": "2026-05-01T10:00:00+00:00"},
+        ]
+        md = _write_transcript_md(
+            tmp_path / "neg-bm.md",
+            words=_sample_words(),
+            extra_metadata={"bookmarks": bm_data},
+        )
+
+        meta = parse_metadata(md)
+
+        assert meta is not None
+        assert len(meta.bookmarks) == 1
+        assert meta.bookmarks[0].position_ms == 0
+
+    def test_scan_recordings_includes_bookmarks(self, tmp_path: Path) -> None:
+        """scan_recordings includes bookmarks in each RecordingMeta."""
+        bm_data = [{"name": "A", "position_ms": 1000, "created_at": "2026-05-01T10:00:00+00:00"}]
+        _write_transcript_md(
+            tmp_path / "rec.md",
+            words=_sample_words(),
+            extra_metadata={"bookmarks": bm_data},
+        )
+
+        results = scan_recordings(tmp_path)
+
+        assert len(results) == 1
+        assert len(results[0].bookmarks) == 1
+        assert results[0].bookmarks[0].name == "A"
+
+    def test_bookmarks_wrong_type_defaults_empty(self, tmp_path: Path) -> None:
+        """When bookmarks is not a list, defaults to empty list."""
+        md = _write_transcript_md(
+            tmp_path / "bad-type.md",
+            words=_sample_words(),
+            extra_metadata={"bookmarks": "not a list"},
+        )
+
+        meta = parse_metadata(md)
+
+        assert meta is not None
+        assert meta.bookmarks == []
+
+    def test_bookmarks_field_is_bookmark_objects(self, tmp_path: Path) -> None:
+        """bookmarks field returns Bookmark dataclass instances."""
+        from meetandread.playback.bookmark import Bookmark
+
+        bm_data = [{"name": "X", "position_ms": 500, "created_at": "2026-05-01T10:00:00+00:00"}]
+        md = _write_transcript_md(
+            tmp_path / "typed.md",
+            words=_sample_words(),
+            extra_metadata={"bookmarks": bm_data},
+        )
+
+        meta = parse_metadata(md)
+
+        assert meta is not None
+        assert isinstance(meta.bookmarks[0], Bookmark)
+
+    def test_preserves_words_segments_speaker_matches(self, tmp_path: Path) -> None:
+        """parse_metadata with bookmarks preserves other metadata fields."""
+        extra = {
+            "bookmarks": [{"name": "BM", "position_ms": 1000, "created_at": "2026-05-01T10:00:00+00:00"}],
+            "segments": [{"start": 0.0, "end": 0.5, "speaker_id": "A"}],
+            "speaker_matches": {"SPK_0": {"identity_name": "Alice"}},
+        }
+        md = _write_transcript_md(
+            tmp_path / "full.md",
+            words=_sample_words(),
+            extra_metadata=extra,
+        )
+
+        meta = parse_metadata(md)
+
+        assert meta is not None
+        assert meta.word_count == 4
+        assert meta.speaker_count == 2
+        assert len(meta.bookmarks) == 1

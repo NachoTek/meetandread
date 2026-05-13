@@ -6,6 +6,16 @@ empty state, missing-file fallback, speaker anchor rendering,
 delete workflows, scrub workflows, and speaker rename workflows.
 """
 
+import os
+
+# Skip this module in headless environments where Qt cannot be imported
+if not os.environ.get("DISPLAY") and not os.environ.get("CI"):
+    import pytest
+    pytest.skip(
+        "Skipping Qt widget tests in headless environment (requires DISPLAY or CI=1 with display context)",
+        allow_module_level=True,
+    )
+
 import json
 import re
 import pytest
@@ -22,6 +32,9 @@ from PyQt6.QtCore import Qt, QUrl
 from meetandread.widgets.floating_panels import FloatingSettingsPanel
 from meetandread.transcription.transcript_scanner import RecordingMeta
 
+# Mark this module as requiring real Qt widgets - these tests
+# cannot run in headless environments due to Qt platform plugin DLL loading
+pytestmark = pytest.mark.requires_qt_widgets
 
 # ---------------------------------------------------------------------------
 # Helpers

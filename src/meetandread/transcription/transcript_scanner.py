@@ -13,11 +13,12 @@ METADATA FORMAT (written by TranscriptStore.save_to_file):
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from meetandread.audio.storage.paths import get_recordings_dir
+from meetandread.playback.bookmark import Bookmark, _parse_bookmark_entry
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class RecordingMeta:
         speakers: List of unique speaker IDs
         duration_seconds: Derived from max end_time across all words (0.0 if none)
         wav_exists: Whether a corresponding .wav file exists
+        bookmarks: List of Bookmark objects parsed from metadata (default empty)
     """
 
     path: Path
@@ -43,6 +45,7 @@ class RecordingMeta:
     speakers: List[str]
     duration_seconds: float
     wav_exists: bool
+    bookmarks: List[Bookmark] = field(default_factory=list)
 
 
 def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
@@ -131,9 +134,20 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
     else:
         word_count: int = data.get("word_count", 0)
 
-    # Check companion .wav file
-    wav_path = md_path.with_suffix(".wav")
+    # Check companion .wav file in the recordings directory (same stem).
+    # Transcripts live in transcripts/ but their WAVs live in recordings/.
+    recordings_dir = get_recordings_dir()
+    wav_path = recordings_dir / f"{md_path.stem}.wav"
     wav_exists = wav_path.exists()
+
+    # Parse bookmarks from metadata, skipping malformed entries
+    raw_bookmarks = data.get("bookmarks", [])
+    bookmarks: List[Bookmark] = []
+    if isinstance(raw_bookmarks, list):
+        for entry in raw_bookmarks:
+            bm = _parse_bookmark_entry(entry)
+            if bm is not None:
+                bookmarks.append(bm)
 
     return RecordingMeta(
         path=md_path,
@@ -143,6 +157,7 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
         speakers=speakers,
         duration_seconds=max_end_time,
         wav_exists=wav_exists,
+        bookmarks=bookmarks,
     )
 
 

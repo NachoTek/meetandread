@@ -42,6 +42,7 @@ from meetandread.widgets.theme import (
     tab_widget_css,
     text_area_css,
     title_css,
+    aetheric_playback_toolbar_css,
 )
 
 
@@ -433,3 +434,207 @@ class TestSplitterCss:
         css = splitter_css(DARK_PALETTE)
         assert "QSplitter::handle" in css
         assert DARK_PALETTE.border in css
+
+
+# ---------------------------------------------------------------------------
+# Aetheric playback toolbar CSS — scoped selectors and design tokens
+# ---------------------------------------------------------------------------
+
+class TestAethericPlaybackToolbarCss:
+    """Verify aetheric_playback_toolbar_css returns scoped styles."""
+
+    EXPECTED_KEYS = {
+        "play_button", "skip_button", "progress_slider",
+        "speed_combo", "volume_slider",
+        "volume_icon", "status_label", "status_label_error",
+        "bookmark_button", "bookmark_combo", "bookmark_delete_button",
+    }
+
+    def test_returns_dict(self):
+        result = aetheric_playback_toolbar_css(DARK_PALETTE)
+        assert isinstance(result, dict)
+
+    def test_has_expected_keys(self):
+        result = aetheric_playback_toolbar_css(DARK_PALETTE)
+        assert set(result.keys()) == self.EXPECTED_KEYS
+
+    def test_play_button_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
+        assert "QPushButton#AethericHistoryPlaybackButton" in css
+        # Must NOT use bare QPushButton selector (global leak risk)
+        lines = [l.strip() for l in css.strip().splitlines() if l.strip() and not l.strip().startswith("//")]
+        for line in lines:
+            if "QPushButton" in line and "{" in line:
+                assert "#" in line, f"Bare QPushButton selector found: {line}"
+
+    def test_speed_combo_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["speed_combo"]
+        assert "QComboBox#AethericHistoryPlaybackSpeedCombo" in css
+
+    def test_volume_slider_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["volume_slider"]
+        assert "QSlider#AethericHistoryPlaybackVolumeSlider" in css
+
+    def test_volume_icon_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["volume_icon"]
+        assert "QLabel#AethericHistoryPlaybackVolumeIcon" in css
+
+    def test_status_label_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["status_label"]
+        assert "QLabel#AethericHistoryPlaybackStatusLabel" in css
+
+    def test_status_label_error_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["status_label_error"]
+        assert "QLabel#AethericHistoryPlaybackStatusLabel" in css
+
+    def test_play_button_has_hover_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
+        assert ":hover" in css
+
+    def test_play_button_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
+        assert ":disabled" in css
+
+    def test_speed_combo_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["speed_combo"]
+        assert ":disabled" in css
+
+    def test_volume_slider_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["volume_slider"]
+        assert ":disabled" in css
+
+    def test_all_values_are_nonempty(self):
+        result = aetheric_playback_toolbar_css(DARK_PALETTE)
+        for key, css in result.items():
+            assert len(css.strip()) > 50, f"Key {key!r} produced suspiciously short CSS"
+
+    def test_dark_and_light_produce_different_play_button(self):
+        dark_css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
+        light_css = aetheric_playback_toolbar_css(LIGHT_PALETTE)["play_button"]
+        # Light uses different text_secondary, so CSS should differ
+        assert dark_css != light_css
+
+    def test_skip_button_uses_scoped_selectors(self):
+        """Skip back/fwd buttons use scoped #AethericHistoryPlaybackSkip* selectors."""
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
+        assert "QPushButton#AethericHistoryPlaybackSkipBackButton" in css
+        assert "QPushButton#AethericHistoryPlaybackSkipFwdButton" in css
+
+    def test_skip_button_has_hover_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
+        assert ":hover" in css
+
+    def test_skip_button_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
+        assert ":disabled" in css
+
+    def test_skip_button_has_directional_borders(self):
+        """Skip buttons use Aetheric directional border cues."""
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
+        assert "border-top" in css
+        assert "border-bottom" in css
+
+    def test_progress_slider_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["progress_slider"]
+        assert "QSlider#AethericHistoryPlaybackProgressSlider" in css
+
+    def test_progress_slider_has_groove(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["progress_slider"]
+        assert "::groove:horizontal" in css
+
+    def test_progress_slider_has_handle(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["progress_slider"]
+        assert "::handle:horizontal" in css
+
+    def test_progress_slider_handle_hover_accent(self):
+        """Handle changes to AETHERIC_RED on hover for clear affordance."""
+        from meetandread.widgets.theme import AETHERIC_RED
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["progress_slider"]
+        # The handle:hover state should use the red accent
+        assert AETHERIC_RED in css
+
+    def test_progress_slider_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["progress_slider"]
+        assert ":disabled" in css
+
+    def test_no_bare_global_selectors(self):
+        """No key should contain bare QTextBrowser, QComboBox, or global selectors."""
+        for key, css in aetheric_playback_toolbar_css(DARK_PALETTE).items():
+            # Bare selectors that would leak globally
+            for bare in ["QTextBrowser", "QWidget ", "QSlider "]:
+                assert bare not in css, f"Key {key!r} contains bare selector: {bare}"
+
+
+# ---------------------------------------------------------------------------
+# T03: Bookmark CSS tests for aetheric_playback_toolbar_css
+# ---------------------------------------------------------------------------
+
+class TestBookmarkToolbarCss:
+    """Verify bookmark button, combo, and delete button CSS."""
+
+    def test_bookmark_button_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_button"]
+        assert "QPushButton#AethericHistoryBookmarkButton" in css
+
+    def test_bookmark_button_has_hover_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_button"]
+        assert ":hover" in css
+
+    def test_bookmark_button_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_button"]
+        assert ":disabled" in css
+
+    def test_bookmark_button_has_directional_borders(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_button"]
+        assert "border-top" in css
+        assert "border-bottom" in css
+
+    def test_bookmark_combo_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_combo"]
+        assert "QComboBox#AethericHistoryBookmarkCombo" in css
+
+    def test_bookmark_combo_has_hover_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_combo"]
+        assert ":hover" in css
+
+    def test_bookmark_combo_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_combo"]
+        assert ":disabled" in css
+
+    def test_bookmark_combo_has_dropdown_arrow(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_combo"]
+        assert "::down-arrow" in css
+
+    def test_bookmark_delete_button_uses_scoped_selector(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
+        assert "QPushButton#AethericHistoryBookmarkDeleteButton" in css
+
+    def test_bookmark_delete_button_has_hover_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
+        assert ":hover" in css
+
+    def test_bookmark_delete_button_has_disabled_state(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
+        assert ":disabled" in css
+
+    def test_bookmark_delete_button_has_directional_borders(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
+        assert "border-top" in css
+        assert "border-bottom" in css
+
+    def test_bookmark_delete_button_no_bare_selectors(self):
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
+        lines = [l.strip() for l in css.strip().splitlines() if l.strip()]
+        for line in lines:
+            if "QPushButton" in line and "{" in line:
+                assert "#" in line, f"Bare QPushButton selector: {line}"
+
+    def test_bookmark_dark_and_light_differ(self):
+        dark = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_button"]
+        light = aetheric_playback_toolbar_css(LIGHT_PALETTE)["bookmark_button"]
+        assert dark != light
+
+    def test_bookmark_delete_dark_and_light_differ(self):
+        dark = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
+        light = aetheric_playback_toolbar_css(LIGHT_PALETTE)["bookmark_delete_button"]
+        assert dark != light
