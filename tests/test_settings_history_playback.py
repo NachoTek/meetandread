@@ -1478,6 +1478,53 @@ class TestWordAnchorRendering:
         # But the text should still be present
         assert "neg" in html
 
+    # -- Readability contract tests (T01) ------------------------------------
+
+    def test_timed_anchor_has_explicit_readable_color(self, settings_panel_on_history, qapp, tmp_path):
+        """Timed word anchors use explicit color:#eeeeee instead of color:inherit."""
+        words = [
+            {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+            {"text": "world", "start_time": 0.5, "end_time": 1.0, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "readable_color", words)
+        html = settings_panel_on_history._render_history_transcript(md_path)
+        assert html is not None
+
+        # Every timed anchor must have an explicit readable color
+        assert 'style="color:#eeeeee; text-decoration:none;"' in html, (
+            "Timed word anchors should use explicit color:#eeeeee, not color:inherit"
+        )
+
+        # Clickability preserved
+        assert 'href="word:0:0"' in html
+        assert 'href="word:1:500"' in html
+
+    def test_no_color_inherit_in_timed_transcript(self, settings_panel_on_history, qapp, tmp_path):
+        """Timed transcript HTML must not contain color:inherit on word anchors."""
+        words = [
+            {"text": "alpha", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+            {"text": "beta", "start_time": 1.0, "end_time": 1.5, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "no_inherit", words)
+        html = settings_panel_on_history._render_history_transcript(md_path)
+        assert html is not None
+        assert "color:inherit" not in html, (
+            "Timed transcript HTML must not use color:inherit for word anchors"
+        )
+
+    def test_negative_one_highlight_no_color_inherit(self, settings_panel_on_history, qapp, tmp_path):
+        """Highlight index -1 should not emit color:inherit for timed word anchors."""
+        words = [
+            {"text": "first", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+            {"text": "second", "start_time": 1.0, "end_time": 1.5, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "hl_no_inherit", words)
+        html = settings_panel_on_history._render_history_transcript_highlighted(md_path, -1)
+        assert html is not None
+        assert "color:inherit" not in html, (
+            "Highlighted transcript with index -1 must not use color:inherit"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Word seek routing tests
@@ -1858,6 +1905,59 @@ class TestHighlightRendering:
         assert "background-color" in html
         # First word should NOT have highlight
         assert html.index("word:0:0") < html.index("background-color")
+
+    # -- Readability contract tests (T01) ------------------------------------
+
+    def test_highlighted_word_has_explicit_white_color(self, settings_panel_on_history, qapp, tmp_path):
+        """Highlighted timed word anchor uses color:#ffffff with background."""
+        panel = settings_panel_on_history
+        words = [
+            {"text": "hello", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+            {"text": "world", "start_time": 0.5, "end_time": 1.0, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "hl_color", words)
+        html = panel._render_history_transcript_highlighted(md_path, 1)
+        assert html is not None
+
+        # Highlighted anchor should have white color with background
+        assert "color:#ffffff" in html, (
+            "Highlighted word anchor should use explicit color:#ffffff"
+        )
+        assert "background-color" in html
+
+        # Background should be the expected rgba
+        assert "rgba(79, 195, 247, 0.25)" in html
+
+    def test_non_highlighted_word_has_readable_color(self, settings_panel_on_history, qapp, tmp_path):
+        """Non-highlighted timed word anchors use color:#eeeeee."""
+        panel = settings_panel_on_history
+        words = [
+            {"text": "first", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+            {"text": "second", "start_time": 0.5, "end_time": 1.0, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "hl_non_active", words)
+        html = panel._render_history_transcript_highlighted(md_path, 1)
+        assert html is not None
+
+        # Non-highlighted anchor should use #eeeeee
+        assert 'style="color:#eeeeee; text-decoration:none;"' in html, (
+            "Non-highlighted word anchor should use color:#eeeeee"
+        )
+
+    def test_highlighted_transcript_no_color_inherit(self, settings_panel_on_history, qapp, tmp_path):
+        """Highlighted transcript must not contain color:inherit anywhere."""
+        panel = settings_panel_on_history
+        words = [
+            {"text": "a", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+            {"text": "b", "start_time": 0.5, "end_time": 1.0, "speaker_id": "SPK_0"},
+            {"text": "c", "start_time": 1.0, "end_time": 1.5, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "hl_no_inherit", words)
+        html = panel._render_history_transcript_highlighted(md_path, 1)
+        assert html is not None
+        assert "color:inherit" not in html, (
+            "Highlighted transcript must not use color:inherit"
+        )
 
     def test_highlight_none_clears_style(self, settings_panel_on_history, qapp, tmp_path):
         """Highlight index -1 renders without any background styles."""

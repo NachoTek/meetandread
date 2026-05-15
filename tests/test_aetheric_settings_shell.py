@@ -90,7 +90,7 @@ class TestAethericDesignTokens:
         assert AETHERIC_NAV_ACTIVE_GLOW == "rgba(255, 85, 69, 0.4)"
 
     def test_nav_inactive_text(self):
-        assert AETHERIC_NAV_INACTIVE_TEXT == "rgba(255, 255, 255, 0.4)"
+        assert AETHERIC_NAV_INACTIVE_TEXT == "rgba(255, 255, 255, 0.9)"
 
     def test_nav_hover_bg(self):
         assert AETHERIC_NAV_HOVER_BG == "rgba(255, 255, 255, 0.05)"
