@@ -6187,13 +6187,13 @@ class FloatingSettingsPanel(QWidget):
                 if idx == highlight_idx:
                     html_lines.append(
                         f'<a href="word:{idx}:{start_ms}" '
-                        f'style="color:inherit; text-decoration:none; {highlight_style}">'
+                        f'style="color:#ffffff; text-decoration:none; {highlight_style}">'
                         f'{word_text}</a>'
                     )
                 else:
                     html_lines.append(
                         f'<a href="word:{idx}:{start_ms}" '
-                        f'style="color:inherit; text-decoration:none;">'
+                        f'style="color:#eeeeee; text-decoration:none;">'
                         f'{word_text}</a>'
                     )
             else:
@@ -6295,7 +6295,7 @@ class FloatingSettingsPanel(QWidget):
                 if start_ms is not None and word_text:
                     html_lines.append(
                         f'<a href="word:{idx}:{start_ms}" '
-                        f'style="color:inherit; text-decoration:none;">'
+                        f'style="color:#eeeeee; text-decoration:none;">'
                         f'{word_text}</a>'
                     )
                 else:

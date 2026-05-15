@@ -787,7 +787,7 @@ AETHERIC_BORDER_DARK = "rgba(0, 0, 0, 80)"
 # Navigation pill colours
 AETHERIC_NAV_ACTIVE_BG = "rgba(255, 85, 69, 0.2)"  # red-500/20
 AETHERIC_NAV_ACTIVE_GLOW = "rgba(255, 85, 69, 0.4)"  # red glow
-AETHERIC_NAV_INACTIVE_TEXT = "rgba(255, 255, 255, 0.4)"  # white/40
+AETHERIC_NAV_INACTIVE_TEXT = "rgba(255, 255, 255, 0.9)"  # white/90
 AETHERIC_NAV_HOVER_BG = "rgba(255, 255, 255, 0.05)"  # white/5
 
 # Accent colours for the Aetheric theme
