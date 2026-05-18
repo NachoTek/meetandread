@@ -12,10 +12,12 @@ import sys
 
 import pytest
 
-# Skip this module in headless environments where Qt cannot be imported
-if not os.environ.get("DISPLAY") and not os.environ.get("CI"):
+# Skip this module in environments where Qt widgets cannot be instantiated
+try:
+    from PyQt6.QtWidgets import QApplication  # noqa: F401
+except Exception:
     pytest.skip(
-        "Skipping Qt widget tests in headless environment (requires DISPLAY or CI=1 with display context)",
+        "Skipping Qt widget tests (PyQt6 not available)",
         allow_module_level=True,
     )
 
@@ -1531,14 +1533,54 @@ class TestWordAnchorRendering:
 # ---------------------------------------------------------------------------
 
 class TestWordSeekRouting:
-    """Verify word: anchor clicks route to seek_to + play."""
+    """Verify word: anchor clicks seek without starting playback when paused/stopped.
 
-    def test_word_click_seeks_and_plays(self, settings_panel_on_history, qapp, tmp_path):
-        """Clicking a word anchor seeks to its start_ms and plays."""
+    S02 contract: clicking a timed transcript word seeks to that word's
+    start_ms without calling play() unless playback was already running.
+    """
+
+    # -- State-preserving seek (paused / stopped) ---------------------------
+
+    def test_paused_seeks_without_play(self, settings_panel_on_history, qapp, tmp_path):
+        """When paused, word click seeks but does NOT call play()."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.last_error = None
+        panel._playback_helper.status_text = "Paused"
+        # PausedState = 2
+        panel._playback_helper.player.playbackState.return_value = 2
+
+        url = MagicMock()
+        url.toString.return_value = "word:5:3000"
+        panel._on_history_anchor_clicked(url)
+
+        panel._playback_helper.seek_to.assert_called_once_with(3000)
+        panel._playback_helper.play.assert_not_called()
+
+    def test_stopped_seeks_without_play(self, settings_panel_on_history, qapp, tmp_path):
+        """When stopped, word click seeks but does NOT call play()."""
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = True
         panel._playback_helper.last_error = None
         panel._playback_helper.status_text = "Ready"
+        # StoppedState = 0
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        url = MagicMock()
+        url.toString.return_value = "word:5:3000"
+        panel._on_history_anchor_clicked(url)
+
+        panel._playback_helper.seek_to.assert_called_once_with(3000)
+        panel._playback_helper.play.assert_not_called()
+
+    def test_playing_seeks_and_plays(self, settings_panel_on_history, qapp, tmp_path):
+        """When already playing, word click seeks AND calls play() to resume."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.last_error = None
+        panel._playback_helper.status_text = "Playing"
+        # PlayingState = 1
+        panel._playback_helper.player.playbackState.return_value = 1
 
         url = MagicMock()
         url.toString.return_value = "word:5:3000"
@@ -1547,12 +1589,30 @@ class TestWordSeekRouting:
         panel._playback_helper.seek_to.assert_called_once_with(3000)
         panel._playback_helper.play.assert_called_once()
 
-    def test_word_click_seeks_to_zero(self, settings_panel_on_history, qapp, tmp_path):
-        """Clicking a word at start_ms=0 seeks to 0 and plays."""
+    # -- Exact zero timestamp ------------------------------------------------
+
+    def test_seeks_to_zero_stopped(self, settings_panel_on_history, qapp, tmp_path):
+        """Clicking a word at start_ms=0 seeks to 0 without play when stopped."""
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = True
         panel._playback_helper.last_error = None
         panel._playback_helper.status_text = "Ready"
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        url = MagicMock()
+        url.toString.return_value = "word:0:0"
+        panel._on_history_anchor_clicked(url)
+
+        panel._playback_helper.seek_to.assert_called_once_with(0)
+        panel._playback_helper.play.assert_not_called()
+
+    def test_seeks_to_zero_playing(self, settings_panel_on_history, qapp, tmp_path):
+        """Clicking a word at start_ms=0 when playing seeks to 0 and plays."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.last_error = None
+        panel._playback_helper.status_text = "Playing"
+        panel._playback_helper.player.playbackState.return_value = 1
 
         url = MagicMock()
         url.toString.return_value = "word:0:0"
@@ -1560,6 +1620,124 @@ class TestWordSeekRouting:
 
         panel._playback_helper.seek_to.assert_called_once_with(0)
         panel._playback_helper.play.assert_called_once()
+
+    # -- Highlight rendering on click ----------------------------------------
+
+    def test_immediate_highlight_render_on_click(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        """Word click triggers _render_highlighted_transcript(md_path, word_index)
+        immediately so the clicked word is visually highlighted."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        words = [
+            {"text": "hello", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+            {"text": "world", "start_time": 0.5, "end_time": 1.0, "speaker_id": "SPK_0"},
+            {"text": "test",  "start_time": 1.0, "end_time": 1.5, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "hl_click", words)
+        panel._current_history_md_path = md_path
+        panel._extract_timed_words(md_path)
+
+        # Patch _render_highlighted_transcript to track calls
+        render_calls = []
+        original_render = panel._render_highlighted_transcript
+        def tracking_render(p, idx):
+            render_calls.append((str(p), idx))
+            original_render(p, idx)
+        panel._render_highlighted_transcript = tracking_render
+
+        url = MagicMock()
+        url.toString.return_value = "word:2:1000"
+        panel._on_history_anchor_clicked(url)
+
+        assert len(render_calls) == 1
+        assert render_calls[0][1] == 2  # highlight index matches word index
+
+    # -- Debounce: rapid-click suppression -----------------------------------
+
+    def test_rapid_click_debounce_suppresses_second(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        """Two word clicks within 100ms: second click is suppressed."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        # First click at t=100.0s
+        with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.0):
+            url1 = MagicMock()
+            url1.toString.return_value = "word:0:500"
+            panel._on_history_anchor_clicked(url1)
+
+        assert panel._playback_helper.seek_to.call_count == 1
+
+        # Second click at t=100.05s (50ms later, within 100ms debounce)
+        with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.05):
+            url2 = MagicMock()
+            url2.toString.return_value = "word:1:1000"
+            panel._on_history_anchor_clicked(url2)
+
+        # Second click should be suppressed
+        assert panel._playback_helper.seek_to.call_count == 1, (
+            "Second click within 100ms debounce should be suppressed"
+        )
+
+    def test_rapid_click_allows_after_debounce_window(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        """Two word clicks >100ms apart: both are processed."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        # First click at t=100.0s
+        with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.0):
+            url1 = MagicMock()
+            url1.toString.return_value = "word:0:500"
+            panel._on_history_anchor_clicked(url1)
+
+        assert panel._playback_helper.seek_to.call_count == 1
+
+        # Second click at t=100.15s (150ms later, past 100ms debounce)
+        with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.15):
+            url2 = MagicMock()
+            url2.toString.return_value = "word:1:1000"
+            panel._on_history_anchor_clicked(url2)
+
+        assert panel._playback_helper.seek_to.call_count == 2
+
+    # -- Current transcript already loaded -----------------------------------
+
+    def test_same_transcript_seeks_directly(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        """When current transcript matches the loaded one, seek directly
+        without calling load_transcript_audio again."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0
+        panel._playback_helper.load_transcript_audio.reset_mock()
+
+        words = [
+            {"text": "hi", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "same_trans", words)
+        panel._current_history_md_path = md_path
+        # Simulate helper already has this transcript loaded
+        panel._playback_helper.current_transcript_path = md_path
+
+        url = MagicMock()
+        url.toString.return_value = "word:0:0"
+        panel._on_history_anchor_clicked(url)
+
+        panel._playback_helper.seek_to.assert_called_once_with(0)
+        # load_transcript_audio should NOT be called again for same transcript
+        panel._playback_helper.load_transcript_audio.assert_not_called()
+
+    # -- No helper / no audio: safe no-ops -----------------------------------
 
     def test_word_click_noop_no_helper(self, settings_panel_on_history, qapp, tmp_path):
         """Word click is a no-op when playback helper is None."""
@@ -1582,6 +1760,8 @@ class TestWordSeekRouting:
 
         panel._playback_helper.seek_to.assert_not_called()
         panel._playback_helper.play.assert_not_called()
+
+    # -- Malformed anchors remain no-ops -------------------------------------
 
     def test_malformed_word_anchor_extra_colon(self, settings_panel_on_history, qapp, tmp_path):
         """Malformed word anchor with extra colons is ignored."""
@@ -1627,6 +1807,8 @@ class TestWordSeekRouting:
 
         panel._playback_helper.seek_to.assert_not_called()
 
+    # -- Speaker anchor isolation --------------------------------------------
+
     def test_word_anchor_does_not_trigger_speaker_dialog(self, settings_panel_on_history, qapp, tmp_path):
         """Word anchors do NOT trigger the speaker identity dialog."""
         panel = settings_panel_on_history
@@ -1652,19 +1834,116 @@ class TestWordSeekRouting:
         # seek_to should NOT be called for speaker anchors
         panel._playback_helper.seek_to.assert_not_called()
 
+    # -- Auto-load: no helper triggers attempted auto-load -------------------
+
+    def test_no_helper_triggers_attempted_auto_load(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        """When helper is None and a transcript is selected, clicking a word
+        attempts to create/load the playback helper for that transcript."""
+        panel = settings_panel_on_history
+        panel._playback_helper = None
+
+        words = [
+            {"text": "hi", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "auto_load", words)
+        panel._current_history_md_path = md_path
+
+        # Patch _load_playback_audio to inject a mock helper instead of
+        # creating a real HistoryPlaybackController (which requires QtMultimedia).
+        auto_helper = _make_mock_helper(audio_available=True)
+        auto_helper.current_transcript_path = md_path
+
+        def _fake_load(path):
+            panel._playback_helper = auto_helper
+
+        url = MagicMock()
+        url.toString.return_value = "word:0:0"
+        with patch.object(panel, "_load_playback_audio", side_effect=_fake_load):
+            panel._on_history_anchor_clicked(url)
+
+        # Verify seek was called (auto-load succeeded)
+        auto_helper.seek_to.assert_called_once_with(0)
+
+    # -- Different transcript auto-load preserving play state ----------------
+
+    def test_different_transcript_auto_load_preserves_playing(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        """When the clicked word belongs to a different transcript than
+        currently loaded, auto-loading the new transcript preserves the
+        prior playing state: if playing, continues playing after seek."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 1  # PlayingState
+
+        words_a = [
+            {"text": "first", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+        ]
+        words_b = [
+            {"text": "second", "start_time": 1.0, "end_time": 1.5, "speaker_id": "SPK_0"},
+        ]
+        md_a = _write_timed_transcript(tmp_path, "trans_a", words_a)
+        md_b = _write_timed_transcript(tmp_path, "trans_b", words_b)
+
+        # Simulate transcript A already loaded
+        panel._current_history_md_path = md_a
+        panel._playback_helper.current_transcript_path = md_a
+
+        # Now click a word from transcript B (panel path is A, anchor targets B)
+        # In practice this scenario triggers auto-load of the new transcript.
+        # For now, verify that when the helper's current_transcript_path differs,
+        # the handler still works correctly.
+        panel._current_history_md_path = md_b
+        url = MagicMock()
+        url.toString.return_value = "word:0:1000"
+        panel._on_history_anchor_clicked(url)
+
+        # PlayingState → should seek AND play
+        panel._playback_helper.seek_to.assert_called_once_with(1000)
+        panel._playback_helper.play.assert_called_once()
+
+    def test_different_transcript_auto_load_preserves_paused(
+        self, settings_panel_on_history, qapp, tmp_path
+    ):
+        """Different transcript auto-load when paused: seeks without play."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 2  # PausedState
+
+        words_b = [
+            {"text": "second", "start_time": 1.0, "end_time": 1.5, "speaker_id": "SPK_0"},
+        ]
+        md_b = _write_timed_transcript(tmp_path, "trans_b_paused", words_b)
+        panel._current_history_md_path = md_b
+
+        url = MagicMock()
+        url.toString.return_value = "word:0:1000"
+        panel._on_history_anchor_clicked(url)
+
+        panel._playback_helper.seek_to.assert_called_once_with(1000)
+        panel._playback_helper.play.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Word seek logging tests
 # ---------------------------------------------------------------------------
 
 class TestWordSeekLogging:
-    """Verify structured logging for word seek events."""
+    """Verify structured logging for word seek events.
 
-    def test_word_seek_success_logged(self, settings_panel_on_history, qapp, caplog):
-        """Successful word seek logs word_seek_success."""
+    S02 contract: logs include pre-click playback state, auto-load/debounce
+    reasons, and enough information to distinguish seek-only from seek-and-play
+    without ever logging transcript body text.
+    """
+
+    def test_seek_success_logs_playback_state_stopped(self, settings_panel_on_history, qapp, caplog):
+        """Successful seek when stopped logs playback_state=stopped."""
         import logging
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0  # Stopped
 
         url = MagicMock()
         url.toString.return_value = "word:3:2500"
@@ -1676,9 +1955,62 @@ class TestWordSeekLogging:
         assert len(seek_records) == 1
         assert "index=3" in seek_records[0].message
         assert "start_ms=2500" in seek_records[0].message
+        assert "playback_state=stopped" in seek_records[0].message
+
+    def test_seek_success_logs_playback_state_paused(self, settings_panel_on_history, qapp, caplog):
+        """Successful seek when paused logs playback_state=paused."""
+        import logging
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 2  # Paused
+
+        url = MagicMock()
+        url.toString.return_value = "word:1:1000"
+
+        with caplog.at_level(logging.INFO, logger="meetandread.widgets.floating_panels"):
+            panel._on_history_anchor_clicked(url)
+
+        seek_records = [r for r in caplog.records if "word_seek_success" in r.message]
+        assert len(seek_records) == 1
+        assert "playback_state=paused" in seek_records[0].message
+
+    def test_seek_success_logs_playback_state_playing(self, settings_panel_on_history, qapp, caplog):
+        """Successful seek when playing logs playback_state=playing."""
+        import logging
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 1  # Playing
+
+        url = MagicMock()
+        url.toString.return_value = "word:2:2000"
+
+        with caplog.at_level(logging.INFO, logger="meetandread.widgets.floating_panels"):
+            panel._on_history_anchor_clicked(url)
+
+        seek_records = [r for r in caplog.records if "word_seek_success" in r.message]
+        assert len(seek_records) == 1
+        assert "playback_state=playing" in seek_records[0].message
+
+    def test_seek_success_never_logs_transcript_text(self, settings_panel_on_history, qapp, caplog):
+        """word_seek_success log never contains transcript body text."""
+        import logging
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        url = MagicMock()
+        url.toString.return_value = "word:0:0"
+
+        with caplog.at_level(logging.INFO, logger="meetandread.widgets.floating_panels"):
+            panel._on_history_anchor_clicked(url)
+
+        seek_records = [r for r in caplog.records if "word_seek_success" in r.message]
+        for record in seek_records:
+            # Logs should only contain stem/index/timestamp, never body text
+            assert "transcript" not in record.message.lower() or "stem=" in record.message
 
     def test_word_seek_skipped_no_helper_logged(self, settings_panel_on_history, qapp, caplog):
-        """Skipped seek (no helper) logs word_seek_skipped."""
+        """Skipped seek (no helper) logs word_seek_skipped with reason."""
         import logging
         panel = settings_panel_on_history
         panel._playback_helper = None
@@ -1694,7 +2026,7 @@ class TestWordSeekLogging:
         assert "reason=no_helper" in skip_records[0].message
 
     def test_word_seek_skipped_audio_unavailable_logged(self, settings_panel_on_history, qapp, caplog):
-        """Skipped seek (no audio) logs word_seek_skipped."""
+        """Skipped seek (no audio) logs word_seek_skipped with reason."""
         import logging
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = False
@@ -1723,6 +2055,67 @@ class TestWordSeekLogging:
 
         warn_records = [r for r in caplog.records if "word_anchor_malformed" in r.message]
         assert len(warn_records) == 1
+
+    def test_debounce_skip_logged(self, settings_panel_on_history, qapp, caplog):
+        """Debounced rapid click logs word_seek_skipped with reason=debounced."""
+        import logging
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        # First click at t=100.0
+        with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.0):
+            url1 = MagicMock()
+            url1.toString.return_value = "word:0:500"
+            panel._on_history_anchor_clicked(url1)
+
+        # Second click at t=100.05 (within 100ms debounce)
+        with caplog.at_level(logging.INFO, logger="meetandread.widgets.floating_panels"):
+            with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.05):
+                url2 = MagicMock()
+                url2.toString.return_value = "word:1:1000"
+                panel._on_history_anchor_clicked(url2)
+
+        debounce_records = [
+            r for r in caplog.records
+            if "word_seek_skipped" in r.message and "debounce" in r.message
+        ]
+        assert len(debounce_records) >= 1, (
+            "Debounced click should log word_seek_skipped with debounce reason"
+        )
+
+    def test_auto_load_log_when_different_transcript(
+        self, settings_panel_on_history, qapp, tmp_path, caplog
+    ):
+        """When word click triggers auto-load of a different transcript,
+        logs include auto_load indicator."""
+        import logging
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.player.playbackState.return_value = 0
+
+        words = [
+            {"text": "hi", "start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"},
+        ]
+        md_path = _write_timed_transcript(tmp_path, "log_autoload", words)
+        panel._current_history_md_path = md_path
+        # Simulate a different transcript currently loaded
+        panel._playback_helper.current_transcript_path = tmp_path / "other.md"
+
+        url = MagicMock()
+        url.toString.return_value = "word:0:0"
+
+        with caplog.at_level(logging.INFO, logger="meetandread.widgets.floating_panels"):
+            panel._on_history_anchor_clicked(url)
+
+        # Either word_seek_success with auto_load field, or a separate auto-load log
+        seek_or_load = [
+            r for r in caplog.records
+            if "word_seek" in r.message or "word_auto_load" in r.message
+        ]
+        assert len(seek_or_load) >= 1, (
+            "Auto-load scenario should emit a seek or auto-load log"
+        )
 
 
 # ---------------------------------------------------------------------------

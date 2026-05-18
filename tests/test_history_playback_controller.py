@@ -138,15 +138,21 @@ class _MockQUrl:
         return f"QUrl('{self._url}')"
 
 
-_mock_qt_core = ModuleType("PyQt6.QtCore")
-_mock_qt_core.QUrl = _MockQUrl
-
+# Inject mocks before importing the controller.
+# Only mock QtMultimedia (which has DLL issues in headless envs).
+# QtCore is left alone when available so that co-collected test modules
+# can still use Qt namespace, QUrl, etc.
 _mock_qt_multimedia.QMediaPlayer = _MockQMediaPlayer
 _mock_qt_multimedia.QAudioOutput = _MockQAudioOutput
-
-# Inject mocks before importing the controller
-sys.modules.setdefault("PyQt6.QtCore", _mock_qt_core)
 sys.modules.setdefault("PyQt6.QtMultimedia", _mock_qt_multimedia)
+
+# If real QtCore is unavailable, provide a minimal mock for QUrl.
+try:
+    from PyQt6.QtCore import QUrl as _RealQUrl  # noqa: F401
+except ImportError:
+    _mock_qt_core = ModuleType("PyQt6.QtCore")
+    _mock_qt_core.QUrl = _MockQUrl
+    sys.modules.setdefault("PyQt6.QtCore", _mock_qt_core)
 
 # Now import the module under test — it will use our mocked Qt types
 from meetandread.playback.history import (
@@ -315,8 +321,8 @@ class TestLoadTranscriptAudio:
 
         source = ctrl.player.source()
         assert source is not None
-        # Our mock QUrl stores the path
-        assert str(wav_path) in repr(source)
+        # Our mock QUrl stores the path (normalize slashes for Windows)
+        assert wav_path.as_posix() in repr(source).replace("\\", "/")
 
 
 # ---------------------------------------------------------------------------

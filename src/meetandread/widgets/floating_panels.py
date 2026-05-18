@@ -3867,6 +3867,10 @@ class FloatingSettingsPanel(QWidget):
         self._cached_timed_words: List[tuple] = []  # [(start_ms, end_ms), ...]
         # Index of the currently highlighted word, or -1 if none.
         self._current_highlight_word_idx: int = -1
+        # Debounce timestamp (monotonic seconds) for word anchor clicks.
+        self._last_word_click_time: float = 0.0
+        # Minimum interval (seconds) between word-click seeks.
+        _WORD_CLICK_DEBOUNCE_S: float = 0.1
         # Timestamp (monotonic ms) of the last highlight re-render.
         self._last_highlight_update_ms: int = 0
         # Highlight throttle interval in milliseconds.
@@ -5441,13 +5445,23 @@ class FloatingSettingsPanel(QWidget):
                 self._last_highlight_update_ms = now_ms
                 active_idx = self._find_active_word_index(position_ms)
                 if active_idx != self._current_highlight_word_idx:
-                    logger.debug(
-                        "highlight_word_changed: index=%d position_ms=%d",
-                        active_idx, position_ms,
-                    )
-                    self._render_highlighted_transcript(
-                        self._current_history_md_path, active_idx
-                    )
+                    if active_idx == -1 and self._current_highlight_word_idx != -1:
+                        # Gap-hold: no active word but one was highlighted
+                        # before.  Preserve the highlight instead of clearing
+                        # it so the user sees the last spoken word during
+                        # pauses between words.
+                        logger.debug(
+                            "highlight_gap_hold: held_index=%d position_ms=%d",
+                            self._current_highlight_word_idx, position_ms,
+                        )
+                    else:
+                        logger.debug(
+                            "highlight_word_changed: index=%d position_ms=%d",
+                            active_idx, position_ms,
+                        )
+                        self._render_highlighted_transcript(
+                            self._current_history_md_path, active_idx
+                        )
 
     def _on_player_duration_changed(self, duration_ms: int) -> None:
         """Handle duration changes from the player (media load completion).
@@ -5995,6 +6009,32 @@ class FloatingSettingsPanel(QWidget):
                 result.append((None, None))
 
         self._cached_timed_words = result
+
+        # --- PII-safe diagnostics for timed-word cache quality ---
+        if result:
+            timed_count = sum(1 for s, e in result if s is not None and e is not None)
+            untimed_count = len(result) - timed_count
+            first_gap_start = None
+            last_gap_end = None
+            gap_count = 0
+            prev_end = None
+            for i, (s, e) in enumerate(result):
+                if s is not None and e is not None:
+                    if prev_end is not None and s > prev_end:
+                        gap_count += 1
+                        if first_gap_start is None:
+                            first_gap_start = prev_end
+                        last_gap_end = s
+                    prev_end = max(prev_end or 0, e)
+            logger.debug(
+                "timed_word_cache: total=%d timed=%d untimed=%d "
+                "gaps=%d first_gap_start_ms=%s last_gap_end_ms=%s",
+                len(result), timed_count, untimed_count,
+                gap_count,
+                first_gap_start if first_gap_start is not None else "n/a",
+                last_gap_end if last_gap_end is not None else "n/a",
+            )
+
         return result
 
     def _find_active_word_index(self, position_ms: int) -> int:
@@ -6483,12 +6523,22 @@ class FloatingSettingsPanel(QWidget):
             self._refresh_history()
             self._reselect_history_item(md_path)
 
+    # Minimum interval (seconds) between word-click seeks
+    _WORD_CLICK_DEBOUNCE_S = 0.1
+
     def _on_word_anchor_clicked(self, link: str) -> None:
         """Handle a ``word:{index}:{start_ms}`` anchor click.
 
         Validates the payload, checks helper/audio availability, then
-        calls ``seek_to(start_ms)`` and ``play()``.  Logs structured
-        diagnostics for success, skipped seeks, and malformed payloads.
+        calls ``seek_to(start_ms)``.  Only calls ``play()`` when the
+        player was already playing before the click (state-preserving seek).
+
+        Implements a 100 ms debounce to suppress rapid double-clicks.
+        Auto-loads audio when no helper exists or when the transcript
+        differs from the currently loaded one.
+
+        Logs structured diagnostics for success, skipped seeks, and
+        malformed payloads — never logs transcript body text.
         """
         payload = link[len("word:"):]
         parts = payload.split(":")
@@ -6511,15 +6561,52 @@ class FloatingSettingsPanel(QWidget):
             )
             return
 
-        # Check helper availability
-        helper = self._playback_helper
-        if helper is None:
+        # -- Debounce: suppress rapid clicks within 100 ms ---------------
+        now = time.monotonic()
+        if (now - self._last_word_click_time) < self._WORD_CLICK_DEBOUNCE_S:
             logger.info(
-                "word_seek_skipped: index=%d start_ms=%d reason=no_helper",
+                "word_seek_skipped: index=%d start_ms=%d reason=debounced",
                 word_index, start_ms,
             )
             return
+        self._last_word_click_time = now
 
+        # -- Determine pre-click playback state ---------------------------
+        helper = self._playback_helper
+        md_path = self._current_history_md_path
+
+        # Capture was_playing before any load/seek that might change state
+        was_playing = False
+        auto_loaded = False
+        track_switched = False
+
+        if helper is not None:
+            try:
+                was_playing = helper.player.playbackState() == 1  # PlayingState
+            except Exception:
+                was_playing = False
+
+        # -- Ensure helper exists (auto-load) ----------------------------
+        if helper is None:
+            if md_path is not None:
+                self._load_playback_audio(md_path)
+                helper = self._playback_helper
+                auto_loaded = helper is not None
+            if helper is None:
+                logger.info(
+                    "word_seek_skipped: index=%d start_ms=%d reason=no_helper",
+                    word_index, start_ms,
+                )
+                return
+
+        # -- Check / load correct transcript ------------------------------
+        if md_path is not None and helper.current_transcript_path != md_path:
+            track_switched = True
+            self._load_playback_audio(md_path)
+            helper = self._playback_helper
+            auto_loaded = True
+
+        # -- Audio availability check ------------------------------------
         if not helper.is_audio_available:
             logger.info(
                 "word_seek_skipped: index=%d start_ms=%d reason=audio_unavailable",
@@ -6527,11 +6614,35 @@ class FloatingSettingsPanel(QWidget):
             )
             return
 
+        # -- Determine playback state name for logging -------------------
+        try:
+            state_val = helper.player.playbackState()
+            if state_val == 1:
+                state_name = "playing"
+            elif state_val == 2:
+                state_name = "paused"
+            else:
+                state_name = "stopped"
+        except Exception:
+            state_name = "unknown"
+
+        # -- Seek --------------------------------------------------------
         helper.seek_to(start_ms)
-        helper.play()
+
+        # -- Play only if was_playing before the click -------------------
+        if was_playing:
+            helper.play()
+
+        # -- Immediate highlight render ----------------------------------
+        if md_path is not None:
+            self._render_highlighted_transcript(md_path, word_index)
+
+        # -- Structured log ----------------------------------------------
         logger.info(
-            "word_seek_success: index=%d start_ms=%d",
-            word_index, start_ms,
+            "word_seek_success: index=%d start_ms=%d playback_state=%s"
+            " auto_loaded=%s track_switched=%s was_playing=%s",
+            word_index, start_ms, state_name,
+            auto_loaded, track_switched, was_playing,
         )
 
     def _rename_speaker_in_file(
