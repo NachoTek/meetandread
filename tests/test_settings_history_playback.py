@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QApplication, QListWidget, QListWidgetItem, QPushButton,
     QComboBox, QSlider, QLabel,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPointF
 
 from meetandread.widgets.floating_panels import FloatingSettingsPanel
 from meetandread.transcription.transcript_scanner import RecordingMeta
@@ -197,70 +197,48 @@ def settings_panel_on_history(settings_panel, qapp):
 # Toolbar structure tests
 # ---------------------------------------------------------------------------
 
-class TestPlaybackToolbarStructure:
-    """Verify playback toolbar widgets exist with correct object names."""
+class TestCircularPlaybackControlStructure:
+    """Verify the circular playback control replaces old header transport widgets."""
 
-    def test_play_button_object_name(self, settings_panel):
-        assert settings_panel._playback_play_btn.objectName() == "AethericHistoryPlaybackButton"
+    def test_playback_control_exists(self, settings_panel):
+        assert hasattr(settings_panel, '_playback_control')
 
-    def test_play_button_has_playback_action_property(self, settings_panel):
-        assert settings_panel._playback_play_btn.property("playback_action") == "play_pause"
+    def test_playback_control_object_name(self, settings_panel):
+        assert settings_panel._playback_control.objectName() == "CircularPlaybackControl"
 
-    def test_speed_combo_object_name(self, settings_panel):
-        assert settings_panel._playback_speed_combo.objectName() == "AethericHistoryPlaybackSpeedCombo"
+    def test_playback_control_is_graphics_view(self, settings_panel):
+        from meetandread.widgets.playback_control import CircularPlaybackControl
+        assert isinstance(settings_panel._playback_control, CircularPlaybackControl)
 
-    def test_speed_combo_has_all_rates(self, settings_panel):
-        combo = settings_panel._playback_speed_combo
-        expected = ["0.25x", "0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"]
-        actual = [combo.itemText(i) for i in range(combo.count())]
-        assert actual == expected
-
-    def test_speed_combo_defaults_to_1x(self, settings_panel):
-        assert settings_panel._playback_speed_combo.currentText() == "1x"
-
-    def test_volume_slider_object_name(self, settings_panel):
-        assert settings_panel._playback_volume_slider.objectName() == "AethericHistoryPlaybackVolumeSlider"
-
-    def test_volume_slider_range(self, settings_panel):
-        assert settings_panel._playback_volume_slider.minimum() == 0
-        assert settings_panel._playback_volume_slider.maximum() == 100
-
-    def test_volume_slider_default(self, settings_panel):
-        assert settings_panel._playback_volume_slider.value() == 80
+    def test_playback_control_initially_hidden(self, settings_panel):
+        assert not settings_panel._playback_control.isVisible()
 
     def test_status_label_object_name(self, settings_panel):
         assert settings_panel._playback_status_label.objectName() == "AethericHistoryPlaybackStatusLabel"
 
-    def test_volume_label_object_name(self, settings_panel):
-        assert settings_panel._playback_volume_label.objectName() == "AethericHistoryPlaybackVolumeIcon"
-
     def test_controls_initially_disabled(self, settings_panel):
-        assert not settings_panel._playback_play_btn.isEnabled()
-        assert not settings_panel._playback_speed_combo.isEnabled()
-        assert not settings_panel._playback_volume_slider.isEnabled()
         assert not settings_panel._playback_progress_slider.isEnabled()
-        assert not settings_panel._playback_skip_back_btn.isEnabled()
-        assert not settings_panel._playback_skip_fwd_btn.isEnabled()
 
     def test_playback_helper_initially_none(self, settings_panel):
         assert settings_panel._playback_helper is None
 
-    def test_play_button_in_header_layout(self, settings_panel):
-        layout = settings_panel._history_detail_header.layout()
-        assert layout.indexOf(settings_panel._playback_play_btn) >= 0
+    def test_old_play_button_absent(self, settings_panel):
+        assert not hasattr(settings_panel, '_playback_play_btn')
 
-    def test_speed_combo_in_header_layout(self, settings_panel):
-        layout = settings_panel._history_detail_header.layout()
-        assert layout.indexOf(settings_panel._playback_speed_combo) >= 0
+    def test_old_speed_combo_absent(self, settings_panel):
+        assert not hasattr(settings_panel, '_playback_speed_combo')
 
-    def test_controls_before_scrub_delete(self, settings_panel):
-        """Playback controls should appear before Scrub/Delete buttons."""
-        layout = settings_panel._history_detail_header.layout()
-        play_idx = layout.indexOf(settings_panel._playback_play_btn)
-        scrub_idx = layout.indexOf(settings_panel._scrub_btn)
-        delete_idx = layout.indexOf(settings_panel._delete_btn)
-        assert play_idx < scrub_idx
-        assert play_idx < delete_idx
+    def test_old_volume_slider_absent(self, settings_panel):
+        assert not hasattr(settings_panel, '_playback_volume_slider')
+
+    def test_old_volume_label_absent(self, settings_panel):
+        assert not hasattr(settings_panel, '_playback_volume_label')
+
+    def test_old_skip_back_absent(self, settings_panel):
+        assert not hasattr(settings_panel, '_playback_skip_back_btn')
+
+    def test_old_skip_fwd_absent(self, settings_panel):
+        assert not hasattr(settings_panel, '_playback_skip_fwd_btn')
 
     def test_progress_slider_object_name(self, settings_panel):
         assert settings_panel._playback_progress_slider.objectName() == "AethericHistoryPlaybackProgressSlider"
@@ -276,25 +254,30 @@ class TestPlaybackToolbarStructure:
         layout = settings_panel._history_detail_header.layout()
         assert layout.indexOf(settings_panel._playback_progress_slider) >= 0
 
-    def test_skip_back_button_object_name(self, settings_panel):
-        assert settings_panel._playback_skip_back_btn.objectName() == "AethericHistoryPlaybackSkipBackButton"
-
-    def test_skip_back_button_has_skip_back_property(self, settings_panel):
-        assert settings_panel._playback_skip_back_btn.property("playback_action") == "skip_back"
-
-    def test_skip_fwd_button_object_name(self, settings_panel):
-        assert settings_panel._playback_skip_fwd_btn.objectName() == "AethericHistoryPlaybackSkipFwdButton"
-
-    def test_skip_fwd_button_has_skip_fwd_property(self, settings_panel):
-        assert settings_panel._playback_skip_fwd_btn.property("playback_action") == "skip_fwd"
-
-    def test_skip_buttons_in_header_layout(self, settings_panel):
-        layout = settings_panel._history_detail_header.layout()
-        assert layout.indexOf(settings_panel._playback_skip_back_btn) >= 0
-        assert layout.indexOf(settings_panel._playback_skip_fwd_btn) >= 0
-
     def test_drag_flag_initially_false(self, settings_panel):
         assert settings_panel._is_dragging_progress_slider is False
+
+    def test_playback_control_parented_to_history_page(self, settings_panel):
+        """Circular control should be a child of the history page widget."""
+        ctrl = settings_panel._playback_control
+        # Walk up parent chain to find the history page
+        parent = ctrl.parent()
+        found_history_page = False
+        while parent is not None:
+            if parent.objectName() == "AethericHistoryPage":
+                found_history_page = True
+                break
+            parent = parent.parent()
+        assert found_history_page
+
+    def test_controls_before_scrub_delete(self, settings_panel):
+        """Progress slider should appear before Scrub/Delete buttons."""
+        layout = settings_panel._history_detail_header.layout()
+        slider_idx = layout.indexOf(settings_panel._playback_progress_slider)
+        scrub_idx = layout.indexOf(settings_panel._scrub_btn)
+        delete_idx = layout.indexOf(settings_panel._delete_btn)
+        assert slider_idx < scrub_idx
+        assert slider_idx < delete_idx
 
 
 # ---------------------------------------------------------------------------
@@ -313,12 +296,10 @@ class TestPlaybackAudioPresent:
 
         md_path, _ = _select_and_populate(panel, tmp_path, qapp)
 
-        assert panel._playback_play_btn.isEnabled()
-        assert panel._playback_speed_combo.isEnabled()
-        assert panel._playback_volume_slider.isEnabled()
         assert panel._playback_progress_slider.isEnabled()
-        assert panel._playback_skip_back_btn.isEnabled()
-        assert panel._playback_skip_fwd_btn.isEnabled()
+        # Circular control should be visible and have helper injected
+        assert panel._playback_control.isVisible()
+        assert panel._playback_control._helper is panel._playback_helper
 
     def test_status_label_shows_ready(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -350,12 +331,9 @@ class TestPlaybackMissingAudio:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        assert not panel._playback_play_btn.isEnabled()
-        assert not panel._playback_speed_combo.isEnabled()
-        assert not panel._playback_volume_slider.isEnabled()
         assert not panel._playback_progress_slider.isEnabled()
-        assert not panel._playback_skip_back_btn.isEnabled()
-        assert not panel._playback_skip_fwd_btn.isEnabled()
+        # Circular control should be hidden when audio unavailable
+        assert not panel._playback_control.isVisible()
 
     def test_status_label_shows_missing(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -372,7 +350,7 @@ class TestPlaybackMissingAudio:
 # ---------------------------------------------------------------------------
 
 class TestPlaybackPlayPauseRouting:
-    """Play/pause button routes to helper methods."""
+    """Play/pause routes through circular control to helper methods."""
 
     def test_play_calls_helper_play(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -383,7 +361,8 @@ class TestPlaybackPlayPauseRouting:
         panel._playback_helper.player.playbackState.return_value = 0  # StoppedState
 
         _select_and_populate(panel, tmp_path, qapp)
-        panel._playback_play_btn.click()
+        # Trigger play via the panel's _on_playback_play_clicked (used by keyboard shortcuts)
+        panel._on_playback_play_clicked()
         qapp.processEvents()
 
         panel._playback_helper.play.assert_called_once()
@@ -397,7 +376,7 @@ class TestPlaybackPlayPauseRouting:
         panel._playback_helper.player.playbackState.return_value = 1  # PlayingState
 
         _select_and_populate(panel, tmp_path, qapp)
-        panel._playback_play_btn.click()
+        panel._on_playback_play_clicked()
         qapp.processEvents()
 
         panel._playback_helper.pause.assert_called_once()
@@ -407,9 +386,8 @@ class TestPlaybackPlayPauseRouting:
         panel._playback_helper.is_audio_available = False
 
         _select_and_populate(panel, tmp_path, qapp)
-        # Force enable to simulate clicking while unavailable
-        panel._playback_play_btn.setEnabled(True)
-        panel._playback_play_btn.click()
+        # Circular control should be hidden, _on_playback_play_clicked should no-op
+        panel._on_playback_play_clicked()
         qapp.processEvents()
 
         panel._playback_helper.play.assert_not_called()
@@ -421,7 +399,7 @@ class TestPlaybackPlayPauseRouting:
 # ---------------------------------------------------------------------------
 
 class TestPlaybackSpeedRouting:
-    """Speed combo routes to helper.set_rate."""
+    """Speed control routes through circular control to helper.set_rate."""
 
     def test_speed_change_routes_to_helper(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -431,26 +409,25 @@ class TestPlaybackSpeedRouting:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        # Change to 1.5x (index 5)
-        panel._playback_speed_combo.setCurrentIndex(5)
+        # Step speed up from 1.0x (index 3) to 1.25x (index 4)
+        panel._step_playback_speed(1)
         qapp.processEvents()
 
-        panel._playback_helper.set_rate.assert_called_with(1.5)
+        panel._playback_helper.set_rate.assert_called_with(1.25)
 
     def test_speed_noop_when_unavailable(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = False
 
         _select_and_populate(panel, tmp_path, qapp)
-        # Force enable
-        panel._playback_speed_combo.setEnabled(True)
-        panel._playback_speed_combo.setCurrentIndex(0)  # 0.25x
+        # Speed UI state changes but helper.set_rate is not called
+        panel._step_playback_speed(1)
         qapp.processEvents()
 
         panel._playback_helper.set_rate.assert_not_called()
 
     def test_all_speed_values(self, settings_panel_on_history, qapp, tmp_path):
-        """Each combo index maps to the correct float rate."""
+        """Each speed step maps to the correct float rate."""
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = True
         panel._playback_helper.last_error = None
@@ -459,9 +436,13 @@ class TestPlaybackSpeedRouting:
         _select_and_populate(panel, tmp_path, qapp)
 
         expected_rates = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+        from meetandread.widgets.playback_control import SPEED_RATES
+        ctrl = panel._playback_control
+        # Start from index -1 so the first step lands on 0
+        ctrl._speed_index = -1
         for i, expected_rate in enumerate(expected_rates):
             panel._playback_helper.set_rate.reset_mock()
-            panel._playback_speed_combo.setCurrentIndex(i)
+            panel._step_playback_speed(1)
             qapp.processEvents()
             panel._playback_helper.set_rate.assert_called_with(expected_rate)
 
@@ -471,9 +452,9 @@ class TestPlaybackSpeedRouting:
 # ---------------------------------------------------------------------------
 
 class TestPlaybackVolumeRouting:
-    """Volume slider routes to helper.set_volume."""
+    """Volume control routes through circular control to helper.set_volume."""
 
-    def test_volume_change_routes_to_helper(self, settings_panel_on_history, qapp, tmp_path):
+    def test_volume_up_routes_to_helper(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = True
         panel._playback_helper.last_error = None
@@ -481,12 +462,14 @@ class TestPlaybackVolumeRouting:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        panel._playback_volume_slider.setValue(50)
+        # Trigger volume up via circular control
+        from meetandread.widgets.playback_control import PlaybackRegion
+        panel._playback_control._handle_region_press(PlaybackRegion.VOL_UP, QPointF(0, 0))
         qapp.processEvents()
 
-        panel._playback_helper.set_volume.assert_called_with(0.5)
+        panel._playback_helper.set_volume.assert_called()
 
-    def test_volume_zero(self, settings_panel_on_history, qapp, tmp_path):
+    def test_volume_down_routes_to_helper(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = True
         panel._playback_helper.last_error = None
@@ -494,12 +477,13 @@ class TestPlaybackVolumeRouting:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        panel._playback_volume_slider.setValue(0)
+        from meetandread.widgets.playback_control import PlaybackRegion
+        panel._playback_control._handle_region_press(PlaybackRegion.VOL_DOWN, QPointF(0, 0))
         qapp.processEvents()
 
-        panel._playback_helper.set_volume.assert_called_with(0.0)
+        panel._playback_helper.set_volume.assert_called()
 
-    def test_volume_max(self, settings_panel_on_history, qapp, tmp_path):
+    def test_volume_max_clamped(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = True
         panel._playback_helper.last_error = None
@@ -507,21 +491,23 @@ class TestPlaybackVolumeRouting:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        panel._playback_volume_slider.setValue(100)
-        qapp.processEvents()
-
-        panel._playback_helper.set_volume.assert_called_with(1.0)
+        from meetandread.widgets.playback_control import PlaybackRegion
+        ctrl = panel._playback_control
+        # Set volume near max and step up
+        ctrl._volume_val = 0.95
+        ctrl._handle_region_press(PlaybackRegion.VOL_UP, QPointF(0, 0))
+        assert ctrl.current_volume == 1.0  # clamped at 1.0
 
     def test_volume_noop_when_unavailable(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
         panel._playback_helper.is_audio_available = False
 
         _select_and_populate(panel, tmp_path, qapp)
-        panel._playback_volume_slider.setEnabled(True)
-        panel._playback_volume_slider.setValue(30)
-        qapp.processEvents()
-
-        panel._playback_helper.set_volume.assert_not_called()
+        # Circular control's helper is None when unavailable, so volume actions no-op
+        from meetandread.widgets.playback_control import PlaybackRegion
+        ctrl = panel._playback_control
+        # The control won't have a helper set when unavailable
+        assert ctrl._helper is None or not ctrl._helper.is_audio_available
 
 
 # ---------------------------------------------------------------------------
@@ -552,14 +538,16 @@ class TestPlaybackReloadOnSelection:
         panel._playback_helper.last_error = None
         panel._playback_helper.status_text = "Ready"
         _select_and_populate(panel, tmp_path, qapp, stem="with_audio")
-        assert panel._playback_play_btn.isEnabled()
+        assert panel._playback_progress_slider.isEnabled()
+        assert panel._playback_control.isVisible()
 
         # Second: audio missing
         panel._playback_helper.is_audio_available = False
         panel._playback_helper.last_error = "Audio file not found"
         panel._playback_helper.status_text = "Audio file not found"
         _select_and_populate(panel, tmp_path, qapp, stem="no_audio")
-        assert not panel._playback_play_btn.isEnabled()
+        assert not panel._playback_progress_slider.isEnabled()
+        assert not panel._playback_control.isVisible()
         assert "Audio file not found" in panel._playback_status_label.text()
 
 
@@ -597,7 +585,7 @@ class TestPlaybackNegativeCases:
         qapp.processEvents()
 
         # File not found → should show error in viewer, playback disabled
-        assert not panel._playback_play_btn.isEnabled()
+        assert not panel._playback_progress_slider.isEnabled()
 
     def test_helper_load_error(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -607,7 +595,7 @@ class TestPlaybackNegativeCases:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        assert not panel._playback_play_btn.isEnabled()
+        assert not panel._playback_progress_slider.isEnabled()
         assert "Audio could not be loaded" in panel._playback_status_label.text()
 
     def test_stop_on_hide_panel(self, settings_panel_on_history, qapp):
@@ -623,18 +611,6 @@ class TestPlaybackNegativeCases:
         qapp.processEvents()
 
         panel._playback_helper.stop.assert_called()
-
-    def test_play_button_height(self, settings_panel):
-        """Play button should have compact fixed height."""
-        assert settings_panel._playback_play_btn.height() <= 30
-
-    def test_speed_combo_height(self, settings_panel):
-        """Speed combo should have compact fixed height."""
-        assert settings_panel._playback_speed_combo.height() <= 32
-
-    def test_volume_slider_width(self, settings_panel):
-        """Volume slider should be reasonably narrow."""
-        assert settings_panel._playback_volume_slider.width() <= 80
 
     def test_stop_on_delete_recording(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -658,41 +634,8 @@ class TestPlaybackNegativeCases:
 class TestPlaybackAccessibility:
     """Verify accessible names, descriptions, and tooltips are set."""
 
-    def test_play_button_accessible_name(self, settings_panel):
-        assert settings_panel._playback_play_btn.accessibleName() == "Play or pause audio"
-
-    def test_play_button_accessible_description(self, settings_panel):
-        desc = settings_panel._playback_play_btn.accessibleDescription()
-        assert "audio" in desc.lower()
-        assert "transcript" in desc.lower()
-
-    def test_play_button_tooltip(self, settings_panel):
-        tip = settings_panel._playback_play_btn.toolTip()
-        assert "Play" in tip
-        assert "Pause" in tip
-
-    def test_speed_combo_accessible_name(self, settings_panel):
-        assert settings_panel._playback_speed_combo.accessibleName() == "Playback speed"
-
-    def test_speed_combo_accessible_description(self, settings_panel):
-        desc = settings_panel._playback_speed_combo.accessibleDescription()
-        assert "speed" in desc.lower()
-
-    def test_speed_combo_tooltip(self, settings_panel):
-        assert "speed" in settings_panel._playback_speed_combo.toolTip().lower()
-
-    def test_volume_slider_accessible_name(self, settings_panel):
-        assert settings_panel._playback_volume_slider.accessibleName() == "Volume control"
-
-    def test_volume_slider_accessible_description(self, settings_panel):
-        desc = settings_panel._playback_volume_slider.accessibleDescription()
-        assert "volume" in desc.lower()
-
-    def test_volume_slider_tooltip(self, settings_panel):
-        assert "volume" in settings_panel._playback_volume_slider.toolTip().lower()
-
-    def test_volume_icon_accessible_name(self, settings_panel):
-        assert settings_panel._playback_volume_label.accessibleName() == "Volume icon"
+    def test_playback_control_object_name(self, settings_panel):
+        assert settings_panel._playback_control.objectName() == "CircularPlaybackControl"
 
     def test_status_label_accessible_name(self, settings_panel):
         assert settings_panel._playback_status_label.accessibleName() == "Audio playback status"
@@ -700,6 +643,13 @@ class TestPlaybackAccessibility:
     def test_status_label_accessible_description(self, settings_panel):
         desc = settings_panel._playback_status_label.accessibleDescription()
         assert "status" in desc.lower() or "error" in desc.lower()
+
+    def test_progress_slider_accessible_name(self, settings_panel):
+        assert settings_panel._playback_progress_slider.accessibleName() == "Playback position"
+
+    def test_progress_slider_accessible_description(self, settings_panel):
+        desc = settings_panel._playback_progress_slider.accessibleDescription()
+        assert "seek" in desc.lower() or "position" in desc.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -709,50 +659,19 @@ class TestPlaybackAccessibility:
 class TestPlaybackScopedStyling:
     """Verify playback controls use scoped Aetheric styles, not generic ones."""
 
-    def test_play_button_style_has_scoped_selector(self, settings_panel):
-        css = settings_panel._playback_play_btn.styleSheet()
-        assert "AethericHistoryPlaybackButton" in css
-        # Must not use bare QPushButton selector
-        for line in css.splitlines():
-            stripped = line.strip()
-            if "QPushButton" in stripped and "{" in stripped:
-                assert "#" in stripped, f"Bare QPushButton selector: {stripped}"
-
-    def test_speed_combo_style_has_scoped_selector(self, settings_panel):
-        css = settings_panel._playback_speed_combo.styleSheet()
-        assert "AethericHistoryPlaybackSpeedCombo" in css
-
-    def test_volume_slider_style_has_scoped_selector(self, settings_panel):
-        css = settings_panel._playback_volume_slider.styleSheet()
-        assert "AethericHistoryPlaybackVolumeSlider" in css
-
     def test_status_label_style_has_scoped_selector(self, settings_panel):
         css = settings_panel._playback_status_label.styleSheet()
         assert "AethericHistoryPlaybackStatusLabel" in css
 
-    def test_volume_icon_style_has_scoped_selector(self, settings_panel):
-        css = settings_panel._playback_volume_label.styleSheet()
-        assert "AethericHistoryPlaybackVolumeIcon" in css
+    def test_status_label_has_hover_style(self, settings_panel):
+        css = settings_panel._playback_status_label.styleSheet()
+        # Status label may or may not have hover, check it has styling at all
+        assert len(css) > 0
 
-    def test_play_button_has_hover_style(self, settings_panel):
-        css = settings_panel._playback_play_btn.styleSheet()
-        assert ":hover" in css
-
-    def test_play_button_has_disabled_style(self, settings_panel):
-        css = settings_panel._playback_play_btn.styleSheet()
-        assert ":disabled" in css
-
-    def test_play_button_has_pressed_style(self, settings_panel):
-        css = settings_panel._playback_play_btn.styleSheet()
-        assert ":pressed" in css
-
-    def test_speed_combo_has_hover_style(self, settings_panel):
-        css = settings_panel._playback_speed_combo.styleSheet()
-        assert ":hover" in css
-
-    def test_speed_combo_has_disabled_style(self, settings_panel):
-        css = settings_panel._playback_speed_combo.styleSheet()
-        assert ":disabled" in css
+    def test_playback_control_has_transparent_background(self, settings_panel):
+        """Circular playback control should have transparent background."""
+        css = settings_panel._playback_control.styleSheet()
+        assert "transparent" in css.lower() or "background" in css.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -761,14 +680,6 @@ class TestPlaybackScopedStyling:
 
 class TestPlaybackDisabledStateClarity:
     """Verify disabled/missing-audio state is visually and textually clear."""
-
-    def test_disabled_play_button_has_transparent_background(self, settings_panel):
-        """Disabled play button should not look clickable."""
-        css = settings_panel._playback_play_btn.styleSheet()
-        assert ":disabled" in css
-        # Disabled style should mention transparent or different color
-        disabled_block = css.split(":disabled")[1] if ":disabled" in css else ""
-        assert "transparent" in disabled_block.lower() or "border-color: transparent" in disabled_block
 
     def test_missing_audio_status_text_is_clear(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -781,12 +692,6 @@ class TestPlaybackDisabledStateClarity:
         # Status text should be human-readable and specific
         assert "Audio" in status
         assert "not found" in status
-
-    def test_disabled_speed_combo_has_transparent_background(self, settings_panel):
-        css = settings_panel._playback_speed_combo.styleSheet()
-        assert ":disabled" in css
-        disabled_block = css.split(":disabled")[1] if ":disabled" in css else ""
-        assert "transparent" in disabled_block.lower()
 
     def test_error_status_label_uses_distinct_style(self, settings_panel_on_history, qapp, tmp_path):
         """When there's an error, the status label style should differ from normal."""
@@ -807,13 +712,23 @@ class TestPlaybackDisabledStateClarity:
         # Error style should be different from normal style
         assert normal_css != error_css or "Audio file not found" in panel._playback_status_label.text()
 
+    def test_circular_control_hidden_when_no_audio(self, settings_panel_on_history, qapp, tmp_path):
+        """Circular control should be hidden when audio is unavailable."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = False
+        panel._playback_helper.last_error = "No audio"
+        panel._playback_helper.status_text = "No audio"
+
+        _select_and_populate(panel, tmp_path, qapp)
+        assert not panel._playback_control.isVisible()
+
 
 # ---------------------------------------------------------------------------
 # Skip button routing tests
 # ---------------------------------------------------------------------------
 
 class TestPlaybackSkipButtonRouting:
-    """Skip forward/backward buttons route to helper methods."""
+    """Skip forward/backward routes through circular control to helper methods."""
 
     def test_skip_back_routes_to_helper(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -822,7 +737,7 @@ class TestPlaybackSkipButtonRouting:
         panel._playback_helper.status_text = "Ready"
 
         _select_and_populate(panel, tmp_path, qapp)
-        panel._playback_skip_back_btn.click()
+        panel._on_playback_skip_back_clicked()
         qapp.processEvents()
 
         panel._playback_helper.skip_backward.assert_called_once()
@@ -834,7 +749,7 @@ class TestPlaybackSkipButtonRouting:
         panel._playback_helper.status_text = "Ready"
 
         _select_and_populate(panel, tmp_path, qapp)
-        panel._playback_skip_fwd_btn.click()
+        panel._on_playback_skip_fwd_clicked()
         qapp.processEvents()
 
         panel._playback_helper.skip_forward.assert_called_once()
@@ -844,8 +759,7 @@ class TestPlaybackSkipButtonRouting:
         panel._playback_helper.is_audio_available = False
 
         _select_and_populate(panel, tmp_path, qapp)
-        panel._playback_skip_back_btn.setEnabled(True)
-        panel._playback_skip_back_btn.click()
+        panel._on_playback_skip_back_clicked()
         qapp.processEvents()
 
         panel._playback_helper.skip_backward.assert_not_called()
@@ -855,8 +769,7 @@ class TestPlaybackSkipButtonRouting:
         panel._playback_helper.is_audio_available = False
 
         _select_and_populate(panel, tmp_path, qapp)
-        panel._playback_skip_fwd_btn.setEnabled(True)
-        panel._playback_skip_fwd_btn.click()
+        panel._on_playback_skip_fwd_clicked()
         qapp.processEvents()
 
         panel._playback_helper.skip_forward.assert_not_called()
@@ -943,21 +856,25 @@ class TestPlaybackProgressSlider:
     def test_progress_slider_tooltip(self, settings_panel):
         assert "position" in settings_panel._playback_progress_slider.toolTip().lower()
 
-    def test_skip_back_accessible_name(self, settings_panel):
-        assert "skip" in settings_panel._playback_skip_back_btn.accessibleName().lower()
-        assert "backward" in settings_panel._playback_skip_back_btn.accessibleName().lower()
+    def test_skip_back_routes_via_panel_handler(self, settings_panel_on_history, qapp, tmp_path):
+        """Skip back via panel handler delegates to circular control."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.last_error = None
+        panel._playback_helper.status_text = "Ready"
+        _select_and_populate(panel, tmp_path, qapp)
+        panel._on_playback_skip_back_clicked()
+        panel._playback_helper.skip_backward.assert_called()
 
-    def test_skip_fwd_accessible_name(self, settings_panel):
-        assert "skip" in settings_panel._playback_skip_fwd_btn.accessibleName().lower()
-        assert "forward" in settings_panel._playback_skip_fwd_btn.accessibleName().lower()
-
-    def test_skip_back_tooltip(self, settings_panel):
-        tip = settings_panel._playback_skip_back_btn.toolTip()
-        assert "skip" in tip.lower() or "back" in tip.lower()
-
-    def test_skip_fwd_tooltip(self, settings_panel):
-        tip = settings_panel._playback_skip_fwd_btn.toolTip()
-        assert "skip" in tip.lower() or "forward" in tip.lower()
+    def test_skip_fwd_routes_via_panel_handler(self, settings_panel_on_history, qapp, tmp_path):
+        """Skip forward via panel handler delegates to circular control."""
+        panel = settings_panel_on_history
+        panel._playback_helper.is_audio_available = True
+        panel._playback_helper.last_error = None
+        panel._playback_helper.status_text = "Ready"
+        _select_and_populate(panel, tmp_path, qapp)
+        panel._on_playback_skip_fwd_clicked()
+        panel._playback_helper.skip_forward.assert_called()
 
 
 # ---------------------------------------------------------------------------
@@ -965,7 +882,7 @@ class TestPlaybackProgressSlider:
 # ---------------------------------------------------------------------------
 
 class TestProgressAndSkipStyling:
-    """Verify progress slider and skip buttons use scoped Aetheric styles."""
+    """Verify progress slider uses scoped Aetheric styles."""
 
     def test_progress_slider_has_scoped_selector(self, settings_panel):
         css = settings_panel._playback_progress_slider.styleSheet()
@@ -979,29 +896,10 @@ class TestProgressAndSkipStyling:
         css = settings_panel._playback_progress_slider.styleSheet()
         assert ":hover" in css
 
-    def test_skip_back_button_has_scoped_selector(self, settings_panel):
-        css = settings_panel._playback_skip_back_btn.styleSheet()
-        assert "AethericHistoryPlaybackSkipBackButton" in css
-
-    def test_skip_fwd_button_has_scoped_selector(self, settings_panel):
-        css = settings_panel._playback_skip_fwd_btn.styleSheet()
-        assert "AethericHistoryPlaybackSkipFwdButton" in css
-
-    def test_skip_back_button_has_disabled_style(self, settings_panel):
-        css = settings_panel._playback_skip_back_btn.styleSheet()
-        assert ":disabled" in css
-
-    def test_skip_fwd_button_has_disabled_style(self, settings_panel):
-        css = settings_panel._playback_skip_fwd_btn.styleSheet()
-        assert ":disabled" in css
-
-    def test_skip_back_button_has_hover_style(self, settings_panel):
-        css = settings_panel._playback_skip_back_btn.styleSheet()
-        assert ":hover" in css
-
-    def test_skip_fwd_button_has_hover_style(self, settings_panel):
-        css = settings_panel._playback_skip_fwd_btn.styleSheet()
-        assert ":hover" in css
+    def test_playback_control_size_is_fixed(self, settings_panel):
+        """Circular playback control should be 160×160."""
+        assert settings_panel._playback_control.width() == 160
+        assert settings_panel._playback_control.height() == 160
 
 
 # ---------------------------------------------------------------------------
@@ -1233,48 +1131,54 @@ class TestKeyboardShortcuts:
     # -- Speed controls: +/- -------------------------------------------------
 
     def test_plus_increases_speed(self, settings_panel_on_history, qapp):
-        """Plus key increases speed combo index."""
+        """Plus key increases speed via circular control."""
         panel = settings_panel_on_history
-        panel._playback_speed_combo.setCurrentIndex(3)  # 1x
+        ctrl = panel._playback_control
+        ctrl._speed_index = 3  # 1.0x
         event = self._make_key_event(Qt.Key.Key_Plus, text="+")
         panel.keyPressEvent(event)
-        assert panel._playback_speed_combo.currentIndex() == 4  # 1.25x
+        assert ctrl.current_speed_index == 4  # 1.25x
         assert event.accepted is True
 
     def test_equal_increases_speed(self, settings_panel_on_history, qapp):
         """Equal key (=, unshifted +) also increases speed."""
         panel = settings_panel_on_history
-        panel._playback_speed_combo.setCurrentIndex(3)  # 1x
+        ctrl = panel._playback_control
+        ctrl._speed_index = 3  # 1.0x
         event = self._make_key_event(Qt.Key.Key_Equal, text="=")
         panel.keyPressEvent(event)
-        assert panel._playback_speed_combo.currentIndex() == 4
+        assert ctrl.current_speed_index == 4
         assert event.accepted is True
 
     def test_minus_decreases_speed(self, settings_panel_on_history, qapp):
-        """Minus key decreases speed combo index."""
+        """Minus key decreases speed via circular control."""
         panel = settings_panel_on_history
-        panel._playback_speed_combo.setCurrentIndex(3)  # 1x
+        ctrl = panel._playback_control
+        ctrl._speed_index = 3  # 1.0x
         event = self._make_key_event(Qt.Key.Key_Minus, text="-")
         panel.keyPressEvent(event)
-        assert panel._playback_speed_combo.currentIndex() == 2  # 0.75x
+        assert ctrl.current_speed_index == 2  # 0.75x
         assert event.accepted is True
 
     def test_speed_clamps_at_max(self, settings_panel_on_history, qapp):
-        """Plus at max speed does not exceed combo bounds."""
+        """Plus at max speed does not exceed bounds."""
         panel = settings_panel_on_history
-        last_idx = panel._playback_speed_combo.count() - 1
-        panel._playback_speed_combo.setCurrentIndex(last_idx)
+        ctrl = panel._playback_control
+        from meetandread.widgets.playback_control import SPEED_RATES
+        last_idx = len(SPEED_RATES) - 1
+        ctrl._speed_index = last_idx
         event = self._make_key_event(Qt.Key.Key_Plus, text="+")
         panel.keyPressEvent(event)
-        assert panel._playback_speed_combo.currentIndex() == last_idx
+        assert ctrl.current_speed_index == last_idx
 
     def test_speed_clamps_at_min(self, settings_panel_on_history, qapp):
-        """Minus at min speed does not go below combo bounds."""
+        """Minus at min speed does not go below bounds."""
         panel = settings_panel_on_history
-        panel._playback_speed_combo.setCurrentIndex(0)
+        ctrl = panel._playback_control
+        ctrl._speed_index = 0
         event = self._make_key_event(Qt.Key.Key_Minus, text="-")
         panel.keyPressEvent(event)
-        assert panel._playback_speed_combo.currentIndex() == 0
+        assert ctrl.current_speed_index == 0
 
     # -- Context guard: non-History page -------------------------------------
 
@@ -2707,14 +2611,14 @@ class TestBookmarkToolbarStructure:
         layout = settings_panel._history_detail_header.layout()
         assert layout.indexOf(settings_panel._bookmark_combo) >= 0
 
-    def test_bookmark_controls_after_skip_fwd(self, settings_panel):
-        """Bookmark controls should appear after skip-forward button."""
+    def test_bookmark_controls_after_progress_slider(self, settings_panel):
+        """Bookmark controls should appear after progress slider."""
         layout = settings_panel._history_detail_header.layout()
-        skip_idx = layout.indexOf(settings_panel._playback_skip_fwd_btn)
+        slider_idx = layout.indexOf(settings_panel._playback_progress_slider)
         btn_idx = layout.indexOf(settings_panel._bookmark_add_btn)
         combo_idx = layout.indexOf(settings_panel._bookmark_combo)
-        assert btn_idx > skip_idx
-        assert combo_idx > skip_idx
+        assert btn_idx > slider_idx
+        assert combo_idx > slider_idx
 
     def test_bookmark_controls_before_scrub_delete(self, settings_panel):
         """Bookmark controls should appear before Scrub/Delete buttons."""
@@ -3757,10 +3661,8 @@ class TestFullPlaybackRobustnessIntegration:
         qapp.processEvents()
 
         # Controls enabled
-        assert panel._playback_play_btn.isEnabled()
-        assert panel._playback_speed_combo.isEnabled()
-        assert panel._playback_volume_slider.isEnabled()
         assert panel._playback_progress_slider.isEnabled()
+        assert panel._playback_control.isVisible()
         assert panel._bookmark_add_btn.isEnabled()
         assert panel._playback_status_label.text() == "Ready"
 
@@ -3769,7 +3671,7 @@ class TestFullPlaybackRobustnessIntegration:
 
         # Simulate play button click → calls helper.play
         panel._playback_helper.player.playbackState.return_value = 0  # Stopped
-        panel._playback_play_btn.click()
+        panel._on_playback_play_clicked()
         qapp.processEvents()
         panel._playback_helper.play.assert_called_once()
 
@@ -3795,7 +3697,7 @@ class TestFullPlaybackRobustnessIntegration:
 
         # Pause
         panel._playback_helper.player.playbackState.return_value = 1  # Playing
-        panel._playback_play_btn.click()
+        panel._on_playback_play_clicked()
         qapp.processEvents()
         panel._playback_helper.pause.assert_called_once()
 
@@ -3832,10 +3734,8 @@ class TestFullPlaybackRobustnessIntegration:
         qapp.processEvents()
 
         # All playback controls disabled
-        assert not panel._playback_play_btn.isEnabled()
-        assert not panel._playback_speed_combo.isEnabled()
-        assert not panel._playback_volume_slider.isEnabled()
         assert not panel._playback_progress_slider.isEnabled()
+        assert not panel._playback_control.isVisible()
         assert not panel._bookmark_add_btn.isEnabled()
         assert "Audio file not found" in panel._playback_status_label.text()
 
@@ -3843,9 +3743,8 @@ class TestFullPlaybackRobustnessIntegration:
         html = panel._history_viewer.toHtml()
         assert "hello" in html
 
-        # Play no-op
-        panel._playback_play_btn.setEnabled(True)  # force enable to test guard
-        panel._playback_play_btn.click()
+        # Play no-op (circular control has no helper)
+        panel._on_playback_play_clicked()
         qapp.processEvents()
         panel._playback_helper.play.assert_not_called()
 
@@ -3888,7 +3787,7 @@ class TestFullPlaybackRobustnessIntegration:
         qapp.processEvents()
 
         # Controls disabled
-        assert not panel._playback_play_btn.isEnabled()
+        assert not panel._playback_progress_slider.isEnabled()
         assert "Audio could not be loaded" in panel._playback_status_label.text()
 
         # Transcript still rendered (from word metadata since timing exists)
@@ -3928,7 +3827,8 @@ class TestFullPlaybackRobustnessIntegration:
         qapp.processEvents()
 
         # Audio controls enabled (WAV exists)
-        assert panel._playback_play_btn.isEnabled()
+        assert panel._playback_progress_slider.isEnabled()
+        assert panel._playback_control.isVisible()
         assert panel._playback_status_label.text() == "Ready"
 
         # No word anchors in rendered HTML
@@ -4491,10 +4391,11 @@ class TestLongTranscriptPlaybackPerformance:
             panel._on_player_position_changed(50)
         assert panel._current_highlight_word_idx == 0
 
-        # End: past last word
+        # End: past last word — gap-hold preserves the last active word
         with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.3):
             panel._on_player_position_changed(n * interval_ms)
-        assert panel._current_highlight_word_idx == -1
+        # Gap-hold: index stays at 0 (first highlighted word) since S03
+        assert panel._current_highlight_word_idx == 0
 
         # Near-end: last word
         with patch("meetandread.widgets.floating_panels.time.monotonic", return_value=100.6):

@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
     QCheckBox, QLineEdit, QSlider,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QPointF
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -3660,55 +3660,7 @@ class FloatingSettingsPanel(QWidget):
         detail_header_layout.setContentsMargins(6, 2, 6, 2)
         detail_header_layout.setSpacing(4)
 
-        # -- Playback controls (left side, before stretch) --
-        self._playback_play_btn = QPushButton("▶")
-        self._playback_play_btn.setObjectName("AethericHistoryPlaybackButton")
-        self._playback_play_btn.setProperty("playback_action", "play_pause")
-        self._playback_play_btn.setAccessibleName("Play or pause audio")
-        self._playback_play_btn.setAccessibleDescription("Toggle audio playback for the selected transcript recording")
-        self._playback_play_btn.setFixedHeight(26)
-        self._playback_play_btn.setFixedWidth(32)
-        self._playback_play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._playback_play_btn.setToolTip("Play / Pause audio")
-        self._playback_play_btn.setEnabled(False)
-        self._playback_play_btn.clicked.connect(self._on_playback_play_clicked)
-        detail_header_layout.addWidget(self._playback_play_btn)
-
-        self._playback_speed_combo = QComboBox()
-        self._playback_speed_combo.setObjectName("AethericHistoryPlaybackSpeedCombo")
-        self._playback_speed_combo.setAccessibleName("Playback speed")
-        self._playback_speed_combo.setAccessibleDescription("Select audio playback speed from 0.25x to 2x")
-        self._playback_speed_combo.setFixedHeight(26)
-        self._playback_speed_combo.setFixedWidth(68)
-        self._playback_speed_combo.setToolTip("Playback speed")
-        self._playback_speed_combo.setEnabled(False)
-        for rate_label in ["0.25x", "0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"]:
-            self._playback_speed_combo.addItem(rate_label)
-        # Default to "1x" (index 3)
-        self._playback_speed_combo.setCurrentIndex(3)
-        self._playback_speed_combo.currentIndexChanged.connect(self._on_playback_speed_changed)
-        detail_header_layout.addWidget(self._playback_speed_combo)
-
-        self._playback_volume_label = QLabel("🔊")
-        self._playback_volume_label.setObjectName("AethericHistoryPlaybackVolumeIcon")
-        self._playback_volume_label.setAccessibleName("Volume icon")
-        self._playback_volume_label.setFixedWidth(18)
-        self._playback_volume_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-        detail_header_layout.addWidget(self._playback_volume_label)
-
-        self._playback_volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self._playback_volume_slider.setObjectName("AethericHistoryPlaybackVolumeSlider")
-        self._playback_volume_slider.setAccessibleName("Volume control")
-        self._playback_volume_slider.setAccessibleDescription("Adjust audio volume from 0 to 100 percent")
-        self._playback_volume_slider.setFixedHeight(22)
-        self._playback_volume_slider.setFixedWidth(70)
-        self._playback_volume_slider.setRange(0, 100)
-        self._playback_volume_slider.setValue(80)
-        self._playback_volume_slider.setToolTip("Volume")
-        self._playback_volume_slider.setEnabled(False)
-        self._playback_volume_slider.valueChanged.connect(self._on_playback_volume_changed)
-        detail_header_layout.addWidget(self._playback_volume_slider)
-
+        # -- Status label (kept for playback diagnostics) --
         self._playback_status_label = QLabel("")
         self._playback_status_label.setObjectName("AethericHistoryPlaybackStatusLabel")
         self._playback_status_label.setAccessibleName("Audio playback status")
@@ -3734,33 +3686,11 @@ class FloatingSettingsPanel(QWidget):
         self._playback_progress_slider.valueChanged.connect(self._on_progress_slider_value_changed)
         detail_header_layout.addWidget(self._playback_progress_slider)
 
-        # Skip backward button (⏪ -5s)
-        self._playback_skip_back_btn = QPushButton("⏪")
-        self._playback_skip_back_btn.setObjectName("AethericHistoryPlaybackSkipBackButton")
-        self._playback_skip_back_btn.setProperty("playback_action", "skip_back")
-        self._playback_skip_back_btn.setAccessibleName("Skip backward 5 seconds")
-        self._playback_skip_back_btn.setAccessibleDescription("Skip backward by 5 seconds in the audio recording")
-        self._playback_skip_back_btn.setFixedHeight(26)
-        self._playback_skip_back_btn.setFixedWidth(32)
-        self._playback_skip_back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._playback_skip_back_btn.setToolTip("Skip back 5 seconds")
-        self._playback_skip_back_btn.setEnabled(False)
-        self._playback_skip_back_btn.clicked.connect(self._on_playback_skip_back_clicked)
-        detail_header_layout.addWidget(self._playback_skip_back_btn)
-
-        # Skip forward button (⏩ +5s)
-        self._playback_skip_fwd_btn = QPushButton("⏩")
-        self._playback_skip_fwd_btn.setObjectName("AethericHistoryPlaybackSkipFwdButton")
-        self._playback_skip_fwd_btn.setProperty("playback_action", "skip_fwd")
-        self._playback_skip_fwd_btn.setAccessibleName("Skip forward 5 seconds")
-        self._playback_skip_fwd_btn.setAccessibleDescription("Skip forward by 5 seconds in the audio recording")
-        self._playback_skip_fwd_btn.setFixedHeight(26)
-        self._playback_skip_fwd_btn.setFixedWidth(32)
-        self._playback_skip_fwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._playback_skip_fwd_btn.setToolTip("Skip forward 5 seconds")
-        self._playback_skip_fwd_btn.setEnabled(False)
-        self._playback_skip_fwd_btn.clicked.connect(self._on_playback_skip_fwd_clicked)
-        detail_header_layout.addWidget(self._playback_skip_fwd_btn)
+        # -- Circular playback control (positioned as overlay in bottom-left) --
+        from meetandread.widgets.playback_control import CircularPlaybackControl
+        self._playback_control = CircularPlaybackControl(parent=history_page)
+        self._playback_control.setObjectName("CircularPlaybackControl")
+        self._playback_control.hide()  # shown when audio is available
 
         # Bookmark button (🔖)
         self._bookmark_add_btn = QPushButton("🔖")
@@ -4027,12 +3957,21 @@ class FloatingSettingsPanel(QWidget):
             pass
 
     def resizeEvent(self, event) -> None:
-        """Reposition resize grip on resize."""
+        """Reposition resize grip and circular playback control on resize."""
         if hasattr(self, '_resize_grip'):
             self._resize_grip.move(
                 self.width() - self._resize_grip.width(),
                 self.height() - self._resize_grip.height(),
             )
+        if hasattr(self, '_playback_control'):
+            # Position circular control in bottom-left of the content area,
+            # above the resize grip with matching insets.
+            inset = 24
+            grip_h = 16 if hasattr(self, '_resize_grip') else 0
+            ctrl_size = self._playback_control.width()
+            x = inset
+            y = self.height() - ctrl_size - grip_h - (inset - grip_h)
+            self._playback_control.move(x, y)
         super().resizeEvent(event)
 
     def paintEvent(self, event) -> None:
@@ -4160,13 +4099,7 @@ class FloatingSettingsPanel(QWidget):
 
         # Playback controls styling (scoped Aetheric toolbar styles)
         playback_css = aetheric_playback_toolbar_css(p)
-        self._playback_play_btn.setStyleSheet(playback_css["play_button"])
-        self._playback_speed_combo.setStyleSheet(playback_css["speed_combo"])
-        self._playback_volume_slider.setStyleSheet(playback_css["volume_slider"])
         self._playback_status_label.setStyleSheet(playback_css["status_label"])
-        self._playback_volume_label.setStyleSheet(playback_css["volume_icon"])
-        self._playback_skip_back_btn.setStyleSheet(playback_css["skip_button"])
-        self._playback_skip_fwd_btn.setStyleSheet(playback_css["skip_button"])
         self._playback_progress_slider.setStyleSheet(playback_css["progress_slider"])
         self._bookmark_add_btn.setStyleSheet(playback_css["bookmark_button"])
         self._bookmark_combo.setStyleSheet(playback_css["bookmark_combo"])
@@ -5381,6 +5314,9 @@ class FloatingSettingsPanel(QWidget):
                 self._playback_helper = HistoryPlaybackController()
                 # Wire player signals to progress slider (once per helper)
                 self._wire_player_signals()
+                # Inject helper into circular playback control
+                if hasattr(self, '_playback_control'):
+                    self._playback_control.set_helper(self._playback_helper)
             except ImportError as exc:
                 logger.warning("QtMultimedia unavailable — playback disabled: %s", exc)
                 self._playback_helper = None
@@ -5499,24 +5435,17 @@ class FloatingSettingsPanel(QWidget):
         """Sync toolbar enabled/disabled state and status from the helper."""
         helper = self._playback_helper
         if helper is None:
-            self._playback_play_btn.setEnabled(False)
-            self._playback_speed_combo.setEnabled(False)
-            self._playback_volume_slider.setEnabled(False)
             self._playback_progress_slider.setEnabled(False)
-            self._playback_skip_back_btn.setEnabled(False)
-            self._playback_skip_fwd_btn.setEnabled(False)
             self._bookmark_add_btn.setEnabled(False)
             self._bookmark_combo.setEnabled(False)
             self._playback_status_label.setText("")
+            if hasattr(self, '_playback_control'):
+                self._playback_control.set_helper(None)
+                self._playback_control.hide()
             return
 
         available = helper.is_audio_available
-        self._playback_play_btn.setEnabled(available)
-        self._playback_speed_combo.setEnabled(available)
-        self._playback_volume_slider.setEnabled(available)
         self._playback_progress_slider.setEnabled(available)
-        self._playback_skip_back_btn.setEnabled(available)
-        self._playback_skip_fwd_btn.setEnabled(available)
 
         # Bookmark add requires both audio and a selected transcript
         has_transcript = self._current_history_md_path is not None
@@ -5525,11 +5454,14 @@ class FloatingSettingsPanel(QWidget):
         has_bookmarks = len(self._bookmark_items) > 0
         self._bookmark_combo.setEnabled(has_transcript and has_bookmarks)
 
-        # Update play/pause button text based on helper state
-        if available:
-            self._playback_play_btn.setText("▶")
-        else:
-            self._playback_play_btn.setText("▶")
+        # Sync circular control visibility and helper
+        if hasattr(self, '_playback_control'):
+            if available:
+                self._playback_control.set_helper(helper)
+                self._playback_control.show()
+            else:
+                self._playback_control.set_helper(None)
+                self._playback_control.hide()
 
         if helper.last_error:
             self._playback_status_label.setText(helper.last_error)
@@ -5546,57 +5478,43 @@ class FloatingSettingsPanel(QWidget):
             self._playback_status_label.setStyleSheet(playback_css["status_label"])
 
     def _on_playback_play_clicked(self) -> None:
-        """Toggle play/pause on the playback helper."""
+        """Toggle play/pause — delegates to circular control's center click."""
         helper = self._playback_helper
         if helper is None or not helper.is_audio_available:
             return
-        # Check current state from the helper's player
-        player = helper.player
-        # Use the player's own PlaybackState enum values to avoid importing
-        # QtMultimedia (which may have DLL issues in some environments)
-        state = player.playbackState()
-        # PlayingState == 1 in QtMultimedia
-        if state == 1:  # PlayingState
-            helper.pause()
-            self._playback_play_btn.setText("▶")
-        else:
-            helper.play()
-            self._playback_play_btn.setText("⏸")
-
-    def _on_playback_speed_changed(self, index: int) -> None:
-        """Route speed combo change to the playback helper."""
-        helper = self._playback_helper
-        if helper is None or not helper.is_audio_available:
-            return
-        rate_text = self._playback_speed_combo.itemText(index)
-        try:
-            rate = float(rate_text.replace("x", ""))
-        except (ValueError, AttributeError):
-            logger.warning("Invalid playback rate text: %r", rate_text)
-            return
-        helper.set_rate(rate)
-
-    def _on_playback_volume_changed(self, value: int) -> None:
-        """Route volume slider change to the playback helper."""
-        helper = self._playback_helper
-        if helper is None or not helper.is_audio_available:
-            return
-        normalized = value / 100.0
-        helper.set_volume(normalized)
+        from meetandread.widgets.playback_control import PlaybackRegion
+        if hasattr(self, '_playback_control') and self._playback_control._helper is None:
+            self._playback_control.set_helper(helper)
+        if hasattr(self, '_playback_control') and self._playback_control._helper is not None:
+            self._playback_control._handle_region_press(
+                PlaybackRegion.CENTER,
+                QPointF(0, 0),
+            )
+            self._playback_control._clear_all_pressed()
 
     def _on_playback_skip_back_clicked(self) -> None:
-        """Skip backward 5 seconds via toolbar button."""
+        """Skip backward — delegates to circular control."""
         helper = self._playback_helper
         if helper is None or not helper.is_audio_available:
             return
-        helper.skip_backward()
+        from meetandread.widgets.playback_control import PlaybackRegion
+        if hasattr(self, '_playback_control') and self._playback_control._helper is None:
+            self._playback_control.set_helper(helper)
+        if hasattr(self, '_playback_control') and self._playback_control._helper is not None:
+            self._playback_control._handle_region_press(PlaybackRegion.SKIP_BACK, QPointF(0, 0))
+            self._playback_control._clear_all_pressed()
 
     def _on_playback_skip_fwd_clicked(self) -> None:
-        """Skip forward 5 seconds via toolbar button."""
+        """Skip forward — delegates to circular control."""
         helper = self._playback_helper
         if helper is None or not helper.is_audio_available:
             return
-        helper.skip_forward()
+        from meetandread.widgets.playback_control import PlaybackRegion
+        if hasattr(self, '_playback_control') and self._playback_control._helper is None:
+            self._playback_control.set_helper(helper)
+        if hasattr(self, '_playback_control') and self._playback_control._helper is not None:
+            self._playback_control._handle_region_press(PlaybackRegion.SKIP_FORWARD, QPointF(0, 0))
+            self._playback_control._clear_all_pressed()
 
     # -- Bookmark handlers ---------------------------------------------------
 
@@ -5876,15 +5794,22 @@ class FloatingSettingsPanel(QWidget):
         super().keyPressEvent(event)
 
     def _step_playback_speed(self, delta: int) -> None:
-        """Step the playback speed combo up (``+1``) or down (``-1``).
+        """Step the playback speed up (+1) or down (-1) via circular control.
 
-        Clamps at combo bounds so the index never goes out of range.
+        Uses the circular control's speed index cycling mechanism.
         """
-        combo = self._playback_speed_combo
-        new_index = combo.currentIndex() + delta
-        new_index = max(0, min(new_index, combo.count() - 1))
-        if new_index != combo.currentIndex():
-            combo.setCurrentIndex(new_index)
+        if not hasattr(self, '_playback_control'):
+            return
+        ctrl = self._playback_control
+        from meetandread.widgets.playback_control import SPEED_RATES
+        new_index = ctrl.current_speed_index + delta
+        new_index = max(0, min(new_index, len(SPEED_RATES) - 1))
+        if new_index != ctrl.current_speed_index:
+            ctrl._speed_index = new_index
+            ctrl._update_speed_label()
+            helper = self._playback_helper
+            if helper is not None and helper.is_audio_available:
+                helper.set_rate(SPEED_RATES[new_index])
 
     @staticmethod
     def _extract_transcript_body(md_path: Optional[Path]) -> str:
