@@ -444,9 +444,8 @@ class TestAethericPlaybackToolbarCss:
     """Verify aetheric_playback_toolbar_css returns scoped styles."""
 
     EXPECTED_KEYS = {
-        "play_button", "skip_button", "progress_slider",
-        "speed_combo", "volume_slider",
-        "volume_icon", "status_label", "status_label_error",
+        "progress_slider",
+        "status_label", "status_label_error",
         "bookmark_button", "bookmark_combo", "bookmark_delete_button",
     }
 
@@ -458,27 +457,6 @@ class TestAethericPlaybackToolbarCss:
         result = aetheric_playback_toolbar_css(DARK_PALETTE)
         assert set(result.keys()) == self.EXPECTED_KEYS
 
-    def test_play_button_uses_scoped_selector(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
-        assert "QPushButton#AethericHistoryPlaybackButton" in css
-        # Must NOT use bare QPushButton selector (global leak risk)
-        lines = [l.strip() for l in css.strip().splitlines() if l.strip() and not l.strip().startswith("//")]
-        for line in lines:
-            if "QPushButton" in line and "{" in line:
-                assert "#" in line, f"Bare QPushButton selector found: {line}"
-
-    def test_speed_combo_uses_scoped_selector(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["speed_combo"]
-        assert "QComboBox#AethericHistoryPlaybackSpeedCombo" in css
-
-    def test_volume_slider_uses_scoped_selector(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["volume_slider"]
-        assert "QSlider#AethericHistoryPlaybackVolumeSlider" in css
-
-    def test_volume_icon_uses_scoped_selector(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["volume_icon"]
-        assert "QLabel#AethericHistoryPlaybackVolumeIcon" in css
-
     def test_status_label_uses_scoped_selector(self):
         css = aetheric_playback_toolbar_css(DARK_PALETTE)["status_label"]
         assert "QLabel#AethericHistoryPlaybackStatusLabel" in css
@@ -487,52 +465,10 @@ class TestAethericPlaybackToolbarCss:
         css = aetheric_playback_toolbar_css(DARK_PALETTE)["status_label_error"]
         assert "QLabel#AethericHistoryPlaybackStatusLabel" in css
 
-    def test_play_button_has_hover_state(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
-        assert ":hover" in css
-
-    def test_play_button_has_disabled_state(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
-        assert ":disabled" in css
-
-    def test_speed_combo_has_disabled_state(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["speed_combo"]
-        assert ":disabled" in css
-
-    def test_volume_slider_has_disabled_state(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["volume_slider"]
-        assert ":disabled" in css
-
     def test_all_values_are_nonempty(self):
         result = aetheric_playback_toolbar_css(DARK_PALETTE)
         for key, css in result.items():
             assert len(css.strip()) > 50, f"Key {key!r} produced suspiciously short CSS"
-
-    def test_dark_and_light_produce_different_play_button(self):
-        dark_css = aetheric_playback_toolbar_css(DARK_PALETTE)["play_button"]
-        light_css = aetheric_playback_toolbar_css(LIGHT_PALETTE)["play_button"]
-        # Light uses different text_secondary, so CSS should differ
-        assert dark_css != light_css
-
-    def test_skip_button_uses_scoped_selectors(self):
-        """Skip back/fwd buttons use scoped #AethericHistoryPlaybackSkip* selectors."""
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
-        assert "QPushButton#AethericHistoryPlaybackSkipBackButton" in css
-        assert "QPushButton#AethericHistoryPlaybackSkipFwdButton" in css
-
-    def test_skip_button_has_hover_state(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
-        assert ":hover" in css
-
-    def test_skip_button_has_disabled_state(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
-        assert ":disabled" in css
-
-    def test_skip_button_has_directional_borders(self):
-        """Skip buttons use Aetheric directional border cues."""
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["skip_button"]
-        assert "border-top" in css
-        assert "border-bottom" in css
 
     def test_progress_slider_uses_scoped_selector(self):
         css = aetheric_playback_toolbar_css(DARK_PALETTE)["progress_slider"]
