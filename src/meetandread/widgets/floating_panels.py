@@ -3146,6 +3146,131 @@ class CCOverlayPanel(QWidget):
                 )
 
 
+class _HistoryRowWidget(QWidget):
+    """Compact row widget for history list items with hover-reveal action buttons.
+
+    Each row contains a text label and right-aligned Scrub/Delete QPushButtons.
+    Buttons start hidden and are revealed when the row is hovered or selected.
+    Button clicks call setCurrentItem then route to existing panel handlers
+    (MEM103: always set currentItem before invoking handlers).
+
+    The widget is transparent so the list's selection highlight shows through.
+    Left-clicks on the label area forward to the list's item-click handler.
+    Right-clicks (context menu) are forwarded to the panel's context-menu handler.
+    """
+
+    def __init__(
+        self,
+        display_text: str,
+        path: Optional[str],
+        panel: "FloatingSettingsPanel",
+        item: QListWidgetItem,
+        parent: QWidget,
+    ) -> None:
+        super().__init__(parent)
+        self._item = item
+        self._panel = panel
+        self._path = path
+
+        # Transparent background so selection highlight shows through
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 4, 2)
+        layout.setSpacing(4)
+
+        # Text label (mirrors QListWidgetItem text for accessibility)
+        self._label = QLabel(display_text)
+        self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self._label, stretch=1)
+
+        p = current_palette()
+        btn_css = aetheric_history_action_button_css(p)
+
+        # Inline Scrub button
+        self._scrub_btn = QPushButton("🔄")
+        self._scrub_btn.setObjectName("AethericHistoryActionButton")
+        self._scrub_btn.setProperty("action", "scrub")
+        self._scrub_btn.setFixedSize(30, 22)
+        self._scrub_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._scrub_btn.setToolTip("Scrub Recording")
+        self._scrub_btn.setAccessibleName("Scrub recording")
+        self._scrub_btn.setStyleSheet(btn_css)
+        self._scrub_btn.hide()
+        self._scrub_btn.clicked.connect(self._on_scrub)
+        layout.addWidget(self._scrub_btn)
+
+        # Inline Delete button
+        self._delete_btn = QPushButton("🗑")
+        self._delete_btn.setObjectName("AethericHistoryActionButton")
+        self._delete_btn.setProperty("action", "delete")
+        self._delete_btn.setFixedSize(30, 22)
+        self._delete_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._delete_btn.setToolTip("Delete Recording")
+        self._delete_btn.setAccessibleName("Delete recording")
+        self._delete_btn.setStyleSheet(btn_css)
+        self._delete_btn.hide()
+        self._delete_btn.clicked.connect(self._on_delete)
+        layout.addWidget(self._delete_btn)
+
+        # Disable buttons when there's no path
+        if not path:
+            self._scrub_btn.setEnabled(False)
+            self._delete_btn.setEnabled(False)
+
+    # ------------------------------------------------------------------
+    # Public API for hover/selection visibility
+    # ------------------------------------------------------------------
+
+    def show_actions(self) -> None:
+        """Reveal the inline Scrub and Delete buttons."""
+        self._scrub_btn.show()
+        self._delete_btn.show()
+
+    def hide_actions(self) -> None:
+        """Hide the inline Scrub and Delete buttons."""
+        self._scrub_btn.hide()
+        self._delete_btn.hide()
+
+    def actions_visible(self) -> bool:
+        """Return True if action buttons are currently visible."""
+        return self._scrub_btn.isVisible()
+
+    # ------------------------------------------------------------------
+    # Button handlers — route to existing panel handlers
+    # ------------------------------------------------------------------
+
+    def _on_scrub(self) -> None:
+        """Set current item and delegate to panel's existing scrub handler."""
+        self._panel._history_list.setCurrentItem(self._item)
+        self._panel._on_scrub_clicked()
+
+    def _on_delete(self) -> None:
+        """Set current item and delegate to panel's existing delete handler."""
+        self._panel._history_list.setCurrentItem(self._item)
+        self._panel._delete_recording(self._item)
+
+    # ------------------------------------------------------------------
+    # Mouse event forwarding
+    # ------------------------------------------------------------------
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        """Forward left-clicks to the parent list for item selection."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._panel._history_list.setCurrentItem(self._item)
+            self._panel._on_history_item_clicked(self._item)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        """Forward context menu to the panel's history context-menu handler."""
+        list_pos = self._panel._history_list.mapFrom(self, event.pos())
+        self._panel._on_history_context_menu(list_pos)
+        event.accept()
+
+
 class FloatingSettingsPanel(QWidget):
     """Frameless Aetheric Glass settings shell with sidebar navigation.
 
@@ -3542,6 +3667,98 @@ class FloatingSettingsPanel(QWidget):
         self._waveform_checkbox.stateChanged.connect(self._on_waveform_toggled)
         settings_layout.addWidget(self._waveform_checkbox)
 
+        # Separator before storage paths
+        storage_sep = QFrame()
+        storage_sep.setFrameShape(QFrame.Shape.HLine)
+        storage_sep.setObjectName("AethericSeparator")
+        settings_layout.addWidget(storage_sep)
+
+        # Storage Paths section
+        storage_header = QLabel("Storage Paths")
+        storage_header.setStyleSheet("color: #E0E0E0; font-size: 13px; font-weight: bold;")
+        settings_layout.addWidget(storage_header)
+
+        storage_note = QLabel("Leave blank for default ~/Documents/meetandread/*")
+        storage_note.setStyleSheet("color: #888; font-size: 10px;")
+        storage_note.setWordWrap(True)
+        settings_layout.addWidget(storage_note)
+
+        # Transcripts path row
+        self._transcripts_path_edit = QLineEdit()
+        self._transcripts_path_edit.setPlaceholderText("Transcripts directory (default)")
+        self._transcripts_path_edit.setObjectName("AethericPathEdit")
+        self._transcripts_path_edit.setStyleSheet(
+            "QLineEdit { color: #E0E0E0; background: #1e1d1e; border: 1px solid rgba(255,255,255,30); "
+            "border-radius: 6px; padding: 4px 8px; font-size: 11px; }"
+            "QLineEdit:focus { border-color: #ff5545; }"
+        )
+        transcripts_browse = QPushButton("Browse")
+        transcripts_browse.setFixedWidth(60)
+        transcripts_browse.clicked.connect(lambda: self._browse_storage_path("transcripts"))
+        transcripts_reset = QPushButton("Reset")
+        transcripts_reset.setFixedWidth(50)
+        transcripts_reset.clicked.connect(lambda: self._reset_storage_path("transcripts"))
+        tr_row = QHBoxLayout()
+        tr_row.setSpacing(4)
+        tr_row.addWidget(self._transcripts_path_edit, 1)
+        tr_row.addWidget(transcripts_browse)
+        tr_row.addWidget(transcripts_reset)
+        settings_layout.addLayout(tr_row)
+
+        # Recordings path row
+        self._recordings_path_edit = QLineEdit()
+        self._recordings_path_edit.setPlaceholderText("Recordings directory (default)")
+        self._recordings_path_edit.setObjectName("AethericPathEdit")
+        self._recordings_path_edit.setStyleSheet(
+            "QLineEdit { color: #E0E0E0; background: #1e1d1e; border: 1px solid rgba(255,255,255,30); "
+            "border-radius: 6px; padding: 4px 8px; font-size: 11px; }"
+            "QLineEdit:focus { border-color: #ff5545; }"
+        )
+        recordings_browse = QPushButton("Browse")
+        recordings_browse.setFixedWidth(60)
+        recordings_browse.clicked.connect(lambda: self._browse_storage_path("recordings"))
+        recordings_reset = QPushButton("Reset")
+        recordings_reset.setFixedWidth(50)
+        recordings_reset.clicked.connect(lambda: self._reset_storage_path("recordings"))
+        rec_row = QHBoxLayout()
+        rec_row.setSpacing(4)
+        rec_row.addWidget(self._recordings_path_edit, 1)
+        rec_row.addWidget(recordings_browse)
+        rec_row.addWidget(recordings_reset)
+        settings_layout.addLayout(rec_row)
+
+        # Logs path row
+        self._logs_path_edit = QLineEdit()
+        self._logs_path_edit.setPlaceholderText("Logs directory (default)")
+        self._logs_path_edit.setObjectName("AethericPathEdit")
+        self._logs_path_edit.setStyleSheet(
+            "QLineEdit { color: #E0E0E0; background: #1e1d1e; border: 1px solid rgba(255,255,255,30); "
+            "border-radius: 6px; padding: 4px 8px; font-size: 11px; }"
+            "QLineEdit:focus { border-color: #ff5545; }"
+        )
+        logs_browse = QPushButton("Browse")
+        logs_browse.setFixedWidth(60)
+        logs_browse.clicked.connect(lambda: self._browse_storage_path("logs"))
+        logs_reset = QPushButton("Reset")
+        logs_reset.setFixedWidth(50)
+        logs_reset.clicked.connect(lambda: self._reset_storage_path("logs"))
+        lg_row = QHBoxLayout()
+        lg_row.setSpacing(4)
+        lg_row.addWidget(self._logs_path_edit, 1)
+        lg_row.addWidget(logs_browse)
+        lg_row.addWidget(logs_reset)
+        settings_layout.addLayout(lg_row)
+
+        # Save storage paths button
+        self._save_storage_btn = QPushButton("Save Storage Paths")
+        self._save_storage_btn.setObjectName("AethericHistoryActionButton")
+        self._save_storage_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._save_storage_btn.clicked.connect(self._on_save_storage_paths)
+        settings_layout.addWidget(self._save_storage_btn)
+
+        # Restore current storage path values from config
+        self._restore_storage_paths()
+
         settings_layout.addStretch()
         self._content_stack.addWidget(settings_page)
 
@@ -3687,6 +3904,13 @@ class FloatingSettingsPanel(QWidget):
         self._history_list.itemClicked.connect(self._on_history_item_clicked)
         self._history_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._history_list.customContextMenuRequested.connect(self._on_history_context_menu)
+
+        # Hover-reveal action state for inline Scrub/Delete buttons
+        self._hovered_history_row: int = -1
+        self._history_row_widgets: Dict[int, _HistoryRowWidget] = {}
+        self._history_list.viewport().installEventFilter(self)
+        self._history_list.currentItemChanged.connect(self._on_history_current_item_changed)
+
         self._history_splitter.addWidget(self._history_list)
 
         # Bottom: detail header bar + transcript viewer
@@ -4876,6 +5100,100 @@ class FloatingSettingsPanel(QWidget):
             logger.warning("Failed to save waveform setting: %s", exc)
         logger.info("Waveform visualization %s", "enabled" if enabled else "disabled")
 
+    # ------------------------------------------------------------------
+    # Storage path management
+    # ------------------------------------------------------------------
+
+    def _restore_storage_paths(self) -> None:
+        """Populate storage path fields from current config."""
+        try:
+            from meetandread.config import get_config
+            settings = get_config()
+            sp = getattr(settings, "storage_paths", None)
+            if sp is None:
+                return
+            self._transcripts_path_edit.setText(sp.transcripts_path or "")
+            self._recordings_path_edit.setText(sp.recordings_path or "")
+            self._logs_path_edit.setText(sp.logs_path or "")
+        except Exception:
+            pass
+
+    def _browse_storage_path(self, field: str) -> None:
+        """Open a directory picker and populate the corresponding path field."""
+        from PyQt6.QtWidgets import QFileDialog
+        directory = QFileDialog.getExistingDirectory(
+            self, f"Select {field.replace('_', ' ').title()} Directory"
+        )
+        if directory:
+            edit_map = {
+                "transcripts": self._transcripts_path_edit,
+                "recordings": self._recordings_path_edit,
+                "logs": self._logs_path_edit,
+            }
+            edit = edit_map.get(field)
+            if edit:
+                edit.setText(directory)
+
+    def _reset_storage_path(self, field: str) -> None:
+        """Clear the custom path field so it falls back to default."""
+        edit_map = {
+            "transcripts": self._transcripts_path_edit,
+            "recordings": self._recordings_path_edit,
+            "logs": self._logs_path_edit,
+        }
+        edit = edit_map.get(field)
+        if edit:
+            edit.setText("")
+
+    def _on_save_storage_paths(self) -> None:
+        """Validate and save storage path configuration.
+
+        Validates all non-empty paths. If validation fails, shows a
+        QMessageBox warning and leaves prior values intact.
+        """
+        from meetandread.config import (
+            get_config_manager,
+            validate_storage_paths,
+        )
+        from meetandread.config.models import StoragePaths
+
+        candidate = StoragePaths(
+            transcripts_path=self._transcripts_path_edit.text().strip() or None,
+            recordings_path=self._recordings_path_edit.text().strip() or None,
+            logs_path=self._logs_path_edit.text().strip() or None,
+        )
+
+        errors = validate_storage_paths(candidate)
+        if errors:
+            msgs = [f"  • {field.replace('_', ' ').title()}: {reason}"
+                    for field, reason in errors.items()]
+            QMessageBox.warning(
+                self,
+                "Invalid Storage Paths",
+                "The following paths could not be validated:\n\n"
+                + "\n".join(msgs)
+                + "\n\nPrevious values have been kept.",
+            )
+            # Restore prior values
+            self._restore_storage_paths()
+            return
+
+        # Validation passed — commit to config
+        try:
+            cm = get_config_manager()
+            cm._settings.storage_paths = candidate
+            cm._dirty_paths.add("storage_paths")
+            cm.save()
+            logger.info("Storage paths saved successfully")
+        except Exception as exc:
+            logger.warning("Failed to save storage paths: %s", exc)
+            QMessageBox.warning(
+                self,
+                "Save Error",
+                f"Could not save storage paths:\n{exc}",
+            )
+            self._restore_storage_paths()
+
     def _refresh_dropdown_wer(self) -> None:
         """Update all dropdown item texts with latest WER from config."""
         self._populate_model_dropdown(self._live_model_combo, "realtime_model_size")
@@ -5408,10 +5726,17 @@ class FloatingSettingsPanel(QWidget):
     def _populate_history_list(self, recordings: list) -> None:
         """Populate the history QListWidget from a list of RecordingMeta.
 
+        Each row uses an embedded ``_HistoryRowWidget`` with hover-reveal
+        Scrub and Delete action buttons.  The item's text and UserRole data
+        are preserved for accessibility and downstream handler use.
+
         Args:
             recordings: List of RecordingMeta objects (expected sorted newest-first).
         """
         self._history_list.clear()
+        self._history_row_widgets.clear()
+        self._hovered_history_row = -1
+
         for meta in recordings:
             display_date = meta.recording_time
             if display_date:
@@ -5430,9 +5755,46 @@ class FloatingSettingsPanel(QWidget):
                     f" | {meta.speaker_count} speakers"
                 )
 
+            path_str = str(meta.path)
             item = QListWidgetItem(display_text)
-            item.setData(Qt.ItemDataRole.UserRole, str(meta.path))
+            item.setData(Qt.ItemDataRole.UserRole, path_str)
             self._history_list.addItem(item)
+
+            # Create embedded row widget with hover-reveal action buttons
+            row_widget = _HistoryRowWidget(
+                display_text=display_text,
+                path=path_str,
+                panel=self,
+                item=item,
+                parent=self._history_list.viewport(),
+            )
+            self._history_list.setItemWidget(item, row_widget)
+            row_index = self._history_list.row(item)
+            self._history_row_widgets[row_index] = row_widget
+
+    def _on_history_current_item_changed(self, current, previous) -> None:
+        """Update inline action button visibility when list selection changes."""
+        self._update_history_row_visibility()
+
+    def _update_history_row_visibility(self) -> None:
+        """Show inline action buttons for the hovered or selected row; hide all others.
+
+        The active row is determined by hover state first, then selection.
+        When the pointer leaves the viewport, the selected row keeps its
+        buttons visible for keyboard/focus accessibility.
+        """
+        selected_row = -1
+        current = self._history_list.currentItem()
+        if current is not None:
+            selected_row = self._history_list.row(current)
+
+        active_row = self._hovered_history_row if self._hovered_history_row >= 0 else selected_row
+
+        for row, widget in self._history_row_widgets.items():
+            if row == active_row:
+                widget.show_actions()
+            else:
+                widget.hide_actions()
 
     def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
         """Load and display the transcript for the clicked history item.
@@ -5735,11 +6097,30 @@ class FloatingSettingsPanel(QWidget):
             logger.info("speed_changed: rate=%.2f", rate)
 
     def eventFilter(self, obj, event) -> bool:
-        """Track volume popup close for toggle guard."""
+        """Route volume popup close tracking and history viewport hover events."""
         from PyQt6.QtCore import QEvent
+
+        # Volume popup close tracking
         if obj is self._volume_popup and event.type() == QEvent.Type.Hide:
             import time
             self._volume_popup_closed_at = time.monotonic()
+            return False
+
+        # History viewport hover tracking for inline action buttons
+        if obj is self._history_list.viewport():
+            if event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter):
+                pos = event.position().toPoint() if hasattr(event, 'position') else event.pos()
+                item = self._history_list.itemAt(pos)
+                if item is not None:
+                    self._hovered_history_row = self._history_list.row(item)
+                else:
+                    self._hovered_history_row = -1
+                self._update_history_row_visibility()
+            elif event.type() == QEvent.Type.Leave:
+                self._hovered_history_row = -1
+                self._update_history_row_visibility()
+            return False
+
         return False
 
     def _on_playback_volume_btn_clicked(self) -> None:

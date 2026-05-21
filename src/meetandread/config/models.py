@@ -355,6 +355,47 @@ class SpeakerSettings:
 
 
 @dataclass
+class StoragePaths:
+    """Configurable storage paths for recordings, transcripts, and logs.
+
+    All fields are optional — when None, the application falls back to the
+    default ~/Documents/meetandread/* layout.
+
+    Attributes:
+        transcripts_path: Custom directory for transcript .md files.
+        recordings_path: Custom directory for audio recordings (.wav, .pcm).
+        logs_path: Custom directory for log files.
+    """
+    transcripts_path: Optional[str] = field(
+        default=None,
+        metadata={"description": "Custom transcripts directory (None = default)"}
+    )
+    recordings_path: Optional[str] = field(
+        default=None,
+        metadata={"description": "Custom recordings directory (None = default)"}
+    )
+    logs_path: Optional[str] = field(
+        default=None,
+        metadata={"description": "Custom logs directory (None = default)"}
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "StoragePaths":
+        """Create from dictionary, using defaults for missing fields."""
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            transcripts_path=data.get("transcripts_path"),
+            recordings_path=data.get("recordings_path"),
+            logs_path=data.get("logs_path"),
+        )
+
+
+@dataclass
 class AppSettings:
     """Root container for all application settings.
     
@@ -370,7 +411,7 @@ class AppSettings:
         ui: UI behavior and appearance settings.
     """
     config_version: int = field(
-        default=7,
+        default=8,
         metadata={"description": "Configuration schema version for migrations"}
     )
     model: ModelSettings = field(default_factory=ModelSettings)
@@ -378,6 +419,7 @@ class AppSettings:
     hardware: HardwareSettings = field(default_factory=HardwareSettings)
     ui: UISettings = field(default_factory=UISettings)
     speaker: SpeakerSettings = field(default_factory=SpeakerSettings)
+    storage_paths: StoragePaths = field(default_factory=StoragePaths)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -388,6 +430,7 @@ class AppSettings:
             "hardware": self.hardware.to_dict(),
             "ui": self.ui.to_dict(),
             "speaker": self.speaker.to_dict(),
+            "storage_paths": self.storage_paths.to_dict(),
         }
 
     @classmethod
@@ -399,6 +442,7 @@ class AppSettings:
         hardware_data = data.get("hardware", {})
         ui_data = data.get("ui", {})
         speaker_data = data.get("speaker", {})
+        storage_paths_data = data.get("storage_paths", {})
         
         return cls(
             config_version=data.get("config_version", cls.config_version),
@@ -407,6 +451,7 @@ class AppSettings:
             hardware=HardwareSettings.from_dict(hardware_data) if isinstance(hardware_data, dict) else HardwareSettings(),
             ui=UISettings.from_dict(ui_data) if isinstance(ui_data, dict) else UISettings(),
             speaker=SpeakerSettings.from_dict(speaker_data) if isinstance(speaker_data, dict) else SpeakerSettings(),
+            storage_paths=StoragePaths.from_dict(storage_paths_data) if isinstance(storage_paths_data, dict) else StoragePaths(),
         )
 
     @classmethod

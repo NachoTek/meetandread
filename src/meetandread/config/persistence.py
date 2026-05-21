@@ -32,7 +32,7 @@ class ConfigVersion:
 
 
 # Current config version - bump this when schema changes
-CURRENT_CONFIG_VERSION = 7
+CURRENT_CONFIG_VERSION = 8
 
 # Version history for migrations
 VERSION_HISTORY: Dict[int, ConfigVersion] = {
@@ -42,6 +42,8 @@ VERSION_HISTORY: Dict[int, ConfigVersion] = {
     4: ConfigVersion(4, "Added min_duration_on/min_duration_off to SpeakerSettings for noisy-room diarization tuning"),
     5: ConfigVersion(5, "Changed microphone denoising default to disabled due to spectral gate artifacts"),
     6: ConfigVersion(6, "Added CC overlay font size and auto-open settings to TranscriptionSettings"),
+    7: ConfigVersion(7, "Added waveform_enabled to UISettings"),
+    8: ConfigVersion(8, "Added StoragePaths for configurable storage directories"),
 }
 
 
@@ -359,6 +361,11 @@ class SettingsPersistence:
             if "waveform_enabled" not in ui:
                 ui["waveform_enabled"] = True
             config_dict["ui"] = ui
+
+        if from_version == 7 and to_version == 8:
+            # Add storage_paths section for configurable directories
+            if "storage_paths" not in config_dict:
+                config_dict["storage_paths"] = {}
         
         return config_dict
     

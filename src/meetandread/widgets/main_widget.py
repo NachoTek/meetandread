@@ -388,6 +388,9 @@ to avoid clipping issues and enable proper text rendering.
         self._cc_overlay.segment_ready.connect(self._on_cc_segment)
         logging.debug("Created CC overlay panel")
 
+        # Validate custom storage paths from config; warn and fall back on invalid
+        self._validate_startup_storage_paths()
+
     def _on_panel_segment(self, text: str, confidence: int, segment_index: int, is_final: bool, phrase_start: bool, speaker_id: object = None):
         """Handle segment signal (kept for compatibility — CC overlay handles its own updates)."""
         pass
@@ -427,6 +430,42 @@ to avoid clipping issues and enable proper text rendering.
         """Apply CC overlay font size change immediately."""
         if self._cc_overlay:
             self._cc_overlay.set_font_size(size_px)
+
+    def _validate_startup_storage_paths(self) -> None:
+        """Validate custom storage paths loaded from config.
+
+        If any path is invalid, logs a warning, resets it to None (fallback),
+        and shows a user-visible warning. Called once during widget init
+        after config is available but before normal recording use.
+        """
+        try:
+            from meetandread.config import get_config_manager, validate_storage_paths
+            cm = get_config_manager()
+            sp = cm.get_settings().storage_paths
+            errors = validate_storage_paths(sp)
+            if not errors:
+                return
+            # Reset invalid paths to None for runtime fallback
+            for field, _reason in errors.items():
+                setattr(sp, field, None)
+                logging.warning(
+                    "startup_storage_path_reset field=%s reason=validation_failed",
+                    field,
+                )
+            cm._dirty_paths.add("storage_paths")
+            cm.save()
+            # Show user-visible warning
+            from PyQt6.QtWidgets import QMessageBox
+            msgs = [f"  • {f.replace('_', ' ').title()}" for f in errors]
+            QMessageBox.warning(
+                self,
+                "Storage Paths Reset",
+                "The following custom storage paths were invalid and have been "
+                "reset to defaults:\n\n" + "\n".join(msgs)
+                + "\n\nYou can reconfigure them in Settings → Storage Paths.",
+            )
+        except Exception as exc:
+            logging.debug("Storage path startup validation skipped: %s", exc)
     
     def _layout_components(self):
         """Position all components."""

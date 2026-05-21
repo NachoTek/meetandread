@@ -40,11 +40,13 @@ from meetandread.config.manager import (
     get_config_manager,
     save_config,
     set_config,
+    validate_storage_paths,
 )
 from meetandread.config.models import (
     AppSettings,
     HardwareSettings,
     ModelSettings,
+    StoragePaths,
     TranscriptionSettings,
     UISettings,
 )
@@ -61,9 +63,12 @@ __all__ = [
     "TranscriptionSettings",
     "HardwareSettings",
     "UISettings",
+    "StoragePaths",
     # Manager
     "ConfigManager",
     "get_config_manager",
+    # Validation
+    "validate_storage_paths",
     # Convenience functions
     "get_config",
     "set_config",

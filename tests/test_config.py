@@ -16,12 +16,14 @@ from meetandread.config import (
     HardwareSettings,
     ModelSettings,
     SettingsPersistence,
+    StoragePaths,
     TranscriptionSettings,
     UISettings,
     get_config,
     get_config_manager,
     save_config,
     set_config,
+    validate_storage_paths,
 )
 
 
@@ -265,7 +267,7 @@ class TestAppSettings:
     def test_default_values(self):
         """Test default values and nested settings."""
         settings = AppSettings()
-        assert settings.config_version == 7
+        assert settings.config_version == 8
         assert isinstance(settings.model, ModelSettings)
         assert isinstance(settings.transcription, TranscriptionSettings)
         assert isinstance(settings.hardware, HardwareSettings)
@@ -275,11 +277,12 @@ class TestAppSettings:
         """Test full serialization."""
         settings = AppSettings()
         d = settings.to_dict()
-        assert d["config_version"] == 7
+        assert d["config_version"] == 8
         assert "model" in d
         assert "transcription" in d
         assert "hardware" in d
         assert "ui" in d
+        assert "storage_paths" in d
     
     def test_from_dict(self):
         """Test full deserialization."""
@@ -354,7 +357,7 @@ class TestSettingsPersistence:
         """Test loading when file doesn't exist returns defaults."""
         loaded = persistence.load_settings()
         assert loaded.model.realtime_model_size == "auto"
-        assert loaded.config_version == 7
+        assert loaded.config_version == 8
     
     def test_load_corrupted_json_returns_defaults(self, persistence):
         """Test loading corrupted file returns defaults."""
@@ -404,7 +407,7 @@ class TestSettingsPersistence:
         assert "path" in info
         assert "exists" in info
         assert info["exists"] is False  # No file yet
-        assert info["current_version"] == 7
+        assert info["current_version"] == 8
     
     def test_config_info_after_save(self, persistence):
         """Test config info after saving."""
@@ -413,7 +416,7 @@ class TestSettingsPersistence:
         
         info = persistence.get_config_info()
         assert info["exists"] is True
-        assert info["version"] == 7
+        assert info["version"] == 8
         assert info["needs_migration"] is False
 
 
@@ -428,7 +431,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 0)
-        assert migrated["config_version"] == 7
+        assert migrated["config_version"] == 8
         assert "transcription" in migrated
         assert "hardware" in migrated
         assert "ui" in migrated
@@ -448,7 +451,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 2)
-        assert migrated["config_version"] == 7
+        assert migrated["config_version"] == 8
         
         # Denoising defaults added (disabled by default)
         ts = migrated["transcription"]
@@ -496,7 +499,7 @@ class TestConfigMigration:
         }
 
         migrated = persistence.migrate_config(old_config, 3)
-        assert migrated["config_version"] == 7
+        assert migrated["config_version"] == 8
 
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
@@ -544,7 +547,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(current_config, 5)
-        assert migrated["config_version"] == 7
+        assert migrated["config_version"] == 8
 
 
 # ============================================================================
@@ -925,6 +928,194 @@ class TestConfigPersistence:
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.8
         assert speaker["min_duration_off"] == 1.5
+
+
+# ============================================================================
+# StoragePaths Tests
+# ============================================================================
+
+class TestStoragePaths:
+    """Tests for StoragePaths dataclass."""
+
+    def test_default_values(self):
+        """All fields default to None."""
+        sp = StoragePaths()
+        assert sp.transcripts_path is None
+        assert sp.recordings_path is None
+        assert sp.logs_path is None
+
+    def test_to_dict(self):
+        """Serialization produces expected keys."""
+        sp = StoragePaths(transcripts_path="/tmp/t", recordings_path="/tmp/r")
+        d = sp.to_dict()
+        assert d["transcripts_path"] == "/tmp/t"
+        assert d["recordings_path"] == "/tmp/r"
+        assert d["logs_path"] is None
+
+    def test_from_dict(self):
+        """Deserialization works from dict."""
+        d = {"transcripts_path": "/a", "recordings_path": "/b", "logs_path": "/c"}
+        sp = StoragePaths.from_dict(d)
+        assert sp.transcripts_path == "/a"
+        assert sp.recordings_path == "/b"
+        assert sp.logs_path == "/c"
+
+    def test_from_dict_missing_keys(self):
+        """Missing keys default to None."""
+        sp = StoragePaths.from_dict({})
+        assert sp.transcripts_path is None
+        assert sp.recordings_path is None
+        assert sp.logs_path is None
+
+    def test_from_dict_non_dict(self):
+        """Non-dict input returns defaults."""
+        sp = StoragePaths.from_dict("not a dict")
+        assert sp.transcripts_path is None
+
+    def test_roundtrip(self):
+        """to_dict → from_dict round-trip preserves values."""
+        original = StoragePaths(transcripts_path="/x", logs_path="/y")
+        restored = StoragePaths.from_dict(original.to_dict())
+        assert restored.transcripts_path == "/x"
+        assert restored.recordings_path is None
+        assert restored.logs_path == "/y"
+
+    def test_in_app_settings_defaults(self):
+        """AppSettings includes storage_paths by default."""
+        settings = AppSettings()
+        assert isinstance(settings.storage_paths, StoragePaths)
+        assert settings.storage_paths.transcripts_path is None
+
+    def test_app_settings_roundtrip_with_storage(self):
+        """Storage paths survive AppSettings round-trip."""
+        settings = AppSettings()
+        settings.storage_paths.recordings_path = "/custom/recordings"
+        d = settings.to_dict()
+        assert d["storage_paths"]["recordings_path"] == "/custom/recordings"
+
+        restored = AppSettings.from_dict(d)
+        assert restored.storage_paths.recordings_path == "/custom/recordings"
+
+    def test_app_settings_from_dict_missing_storage_paths(self):
+        """Missing storage_paths section defaults to empty StoragePaths."""
+        d = {"config_version": 8}
+        settings = AppSettings.from_dict(d)
+        assert isinstance(settings.storage_paths, StoragePaths)
+        assert settings.storage_paths.transcripts_path is None
+
+
+# ============================================================================
+# validate_storage_paths Tests
+# ============================================================================
+
+class TestValidateStoragePaths:
+    """Tests for the validate_storage_paths function."""
+
+    def test_all_none_returns_empty(self):
+        """All-None paths produce no errors."""
+        errors = validate_storage_paths(StoragePaths())
+        assert errors == {}
+
+    def test_valid_paths_returns_empty(self, tmp_path):
+        """Valid, writable directories produce no errors."""
+        sp = StoragePaths(
+            transcripts_path=str(tmp_path / "t"),
+            recordings_path=str(tmp_path / "r"),
+            logs_path=str(tmp_path / "l"),
+        )
+        errors = validate_storage_paths(sp)
+        assert errors == {}
+        # Directories should have been created
+        assert (tmp_path / "t").is_dir()
+        assert (tmp_path / "r").is_dir()
+        assert (tmp_path / "l").is_dir()
+
+    def test_unresolvable_path_returns_error(self):
+        """A path that cannot be resolved returns an error."""
+        sp = StoragePaths(transcripts_path="\x00invalid")
+        errors = validate_storage_paths(sp)
+        assert "transcripts_path" in errors
+
+    def test_non_writable_returns_error(self, tmp_path):
+        """A directory that is not writable returns an error."""
+        import stat
+        import platform
+        if platform.system() == "Windows":
+            pytest.skip("Unix permissions not enforced on Windows")
+        ro_dir = tmp_path / "readonly"
+        ro_dir.mkdir()
+        # Make read-only
+        ro_dir.chmod(stat.S_IRUSR | stat.S_IXUSR)
+        try:
+            sp = StoragePaths(transcripts_path=str(ro_dir))
+            errors = validate_storage_paths(sp)
+            assert "transcripts_path" in errors
+        finally:
+            # Restore permissions for cleanup
+            ro_dir.chmod(stat.S_IRWXU)
+
+    def test_tilde_expansion(self, tmp_path):
+        """Paths with ~ are expanded properly."""
+        sp = StoragePaths(transcripts_path="~/Documents/test_meetandread_t1")
+        errors = validate_storage_paths(sp)
+        assert errors == {}
+        # Clean up created directory
+        expanded = Path("~/Documents/test_meetandread_t1").expanduser()
+        if expanded.exists():
+            expanded.rmdir()
+
+    def test_partial_valid(self, tmp_path):
+        """Only invalid fields appear in errors."""
+        sp = StoragePaths(
+            transcripts_path=str(tmp_path / "good"),
+            recordings_path="\x00bad",
+        )
+        errors = validate_storage_paths(sp)
+        assert "transcripts_path" not in errors
+        assert "recordings_path" in errors
+        assert "logs_path" not in errors
+
+
+# ============================================================================
+# Storage Paths Persistence / Migration Tests
+# ============================================================================
+
+class TestStoragePathsMigration:
+    """Tests for config migration adding storage_paths."""
+
+    def test_migration_from_version_7_adds_storage_paths(self, persistence):
+        """v7→v8 migration adds storage_paths section."""
+        old_config = {
+            "config_version": 7,
+            "model": {"realtime_model_size": "small"},
+        }
+        migrated = persistence.migrate_config(old_config, 7)
+        assert migrated["config_version"] == 8
+        assert "storage_paths" in migrated
+
+    def test_migration_preserves_existing_storage_paths(self, persistence):
+        """Existing storage_paths values survive migration."""
+        old_config = {
+            "config_version": 7,
+            "storage_paths": {"recordings_path": "/custom"},
+        }
+        migrated = persistence.migrate_config(old_config, 7)
+        assert migrated["config_version"] == 8
+        assert migrated["storage_paths"]["recordings_path"] == "/custom"
+
+    def test_storage_paths_save_load_roundtrip(self, persistence):
+        """Storage paths survive save/load round-trip."""
+        settings = AppSettings()
+        settings.storage_paths.transcripts_path = "/tmp/transcripts"
+        settings.storage_paths.recordings_path = "/tmp/recordings"
+        settings.storage_paths.logs_path = "/tmp/logs"
+
+        persistence.save_settings(settings)
+        loaded = persistence.load_settings()
+
+        assert loaded.storage_paths.transcripts_path == "/tmp/transcripts"
+        assert loaded.storage_paths.recordings_path == "/tmp/recordings"
+        assert loaded.storage_paths.logs_path == "/tmp/logs"
 
 
 if __name__ == "__main__":

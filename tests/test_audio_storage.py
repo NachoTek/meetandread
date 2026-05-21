@@ -17,6 +17,8 @@ import pytest
 
 from meetandread.audio.storage import (
     get_recordings_dir,
+    get_transcripts_dir,
+    get_logs_dir,
     new_recording_stem,
     PcmPartWriter,
     PcmMetadata,
@@ -476,3 +478,86 @@ class TestIntegration:
         # 5. Verify original partial is backed up
         backup = tmp_path / f"{stem}.pcm.part.recovered.bak"
         assert backup.exists()
+
+
+# ---------------------------------------------------------------------------
+# Custom storage path resolution tests
+# ---------------------------------------------------------------------------
+
+class TestCustomPathResolution:
+    """Verify get_recordings_dir / get_transcripts_dir / get_logs_dir
+    resolve custom config paths and fall back gracefully.
+    """
+
+    def test_get_recordings_dir_uses_base_dir_when_provided(self, tmp_path):
+        """Explicit base_dir always wins, even with custom config."""
+        base = tmp_path / "custom_base"
+        result = get_recordings_dir(base_dir=base)
+        assert result == base / "meetandread" / "recordings"
+
+    def test_get_transcripts_dir_uses_base_dir_when_provided(self, tmp_path):
+        """Explicit base_dir always wins for transcripts."""
+        base = tmp_path / "custom_base"
+        result = get_transcripts_dir(base_dir=base)
+        assert result == base / "meetandread" / "transcripts"
+
+    def test_get_logs_dir_default(self, tmp_path):
+        """get_logs_dir with base_dir creates logs subdir."""
+        base = tmp_path / "custom_base"
+        result = get_logs_dir(base_dir=base)
+        assert result == base / "meetandread" / "logs"
+        assert result.is_dir()
+
+    def test_get_logs_dir_returns_path_object(self, tmp_path):
+        """get_logs_dir returns a Path."""
+        result = get_logs_dir(base_dir=tmp_path)
+        assert isinstance(result, Path)
+
+    def test_custom_recordings_path_from_config(self, tmp_path):
+        """get_recordings_dir resolves custom config path when no base_dir given."""
+        from meetandread.config import ConfigManager, SettingsPersistence
+        from meetandread.config.models import StoragePaths
+
+        custom_dir = tmp_path / "custom_recordings"
+        custom_dir.mkdir()
+
+        # Reset singleton
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+
+        pers = SettingsPersistence(config_dir=tmp_path / "cfg")
+        cm = ConfigManager(persistence=pers)
+        cm._settings.storage_paths = StoragePaths(recordings_path=str(custom_dir))
+        cm._dirty_paths.add("storage_paths")
+        cm.save()
+
+        result = get_recordings_dir(base_dir=None)
+        assert result == custom_dir
+
+        # Cleanup singleton
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+
+    def test_fallback_on_invalid_custom_path(self, tmp_path):
+        """get_recordings_dir falls back to default on invalid config path."""
+        from meetandread.config import ConfigManager, SettingsPersistence
+        from meetandread.config.models import StoragePaths
+
+        # Reset singleton
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+
+        pers = SettingsPersistence(config_dir=tmp_path / "cfg")
+        cm = ConfigManager(persistence=pers)
+        cm._settings.storage_paths = StoragePaths(recordings_path="\x00bad")
+        cm._dirty_paths.add("storage_paths")
+        cm.save()
+
+        result = get_recordings_dir(base_dir=None)
+        # Should fall back to default ~/Documents/meetandread/recordings
+        assert result.name == "recordings"
+        assert "meetandread" in str(result)
+
+        # Cleanup singleton
+        ConfigManager._instance = None
+        ConfigManager._initialized = False

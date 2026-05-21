@@ -5,6 +5,8 @@ setting, and saving application settings with smart defaults tracking.
 """
 
 import logging
+import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from meetandread.config.models import (
@@ -12,6 +14,7 @@ from meetandread.config.models import (
     HardwareSettings,
     ModelSettings,
     SpeakerSettings,
+    StoragePaths,
     TranscriptionSettings,
     UISettings
 )
@@ -19,6 +22,57 @@ from meetandread.config.persistence import SettingsPersistence
 
 
 logger = logging.getLogger(__name__)
+
+
+def validate_storage_paths(paths: StoragePaths) -> Dict[str, str]:
+    """Validate custom storage paths by expanding, creating, and write-testing.
+
+    For each non-None path in *paths*, the function:
+    1. Expands ``~`` and environment variables via ``Path.expanduser()`` /
+       ``Path.resolve()``.
+    2. Creates the directory if it doesn't exist.
+    3. Writes and removes a temporary sentinel file to confirm write access.
+    4. Returns field-specific error messages on failure.
+
+    Returns a dict mapping field names to error strings — empty means all OK.
+    Only field names and generic error types are logged (no raw paths or content).
+    """
+    errors: Dict[str, str] = {}
+
+    field_map: List[Tuple[str, Optional[str]]] = [
+        ("transcripts_path", paths.transcripts_path),
+        ("recordings_path", paths.recordings_path),
+        ("logs_path", paths.logs_path),
+    ]
+
+    for field_name, raw_value in field_map:
+        if raw_value is None:
+            continue
+        try:
+            resolved = Path(raw_value).expanduser().resolve()
+        except Exception:
+            errors[field_name] = "Path could not be resolved"
+            logger.warning("storage_path_validation_failed field=%s reason=resolve_error", field_name)
+            continue
+
+        try:
+            resolved.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            errors[field_name] = "Directory could not be created"
+            logger.warning("storage_path_validation_failed field=%s reason=mkdir_error", field_name)
+            continue
+
+        # Write-test with a sentinel file
+        try:
+            sentinel = resolved / f".meetandread_write_test_{id(paths)}"
+            sentinel.write_text("ok", encoding="utf-8")
+            sentinel.unlink(missing_ok=True)
+        except OSError:
+            errors[field_name] = "Directory is not writable"
+            logger.warning("storage_path_validation_failed field=%s reason=write_test_error", field_name)
+            continue
+
+    return errors
 
 
 class ConfigManager:
@@ -270,6 +324,10 @@ class ConfigManager:
             "transcription.microphone_denoising_enabled",
             "transcription.microphone_denoising_provider",
             "transcription.microphone_denoising_latency_budget_ms",
+            # Storage path settings
+            "storage_paths.transcripts_path",
+            "storage_paths.recordings_path",
+            "storage_paths.logs_path",
         }
     
     def get_config_path(self) -> str:

@@ -13,6 +13,7 @@ Key components:
 from meetandread.audio.storage.paths import (
     get_recordings_dir,
     get_transcripts_dir,
+    get_logs_dir,
     new_recording_stem,
     get_part_filename,
     get_part_metadata_filename,
@@ -39,6 +40,7 @@ __all__ = [
     # paths
     "get_recordings_dir",
     "get_transcripts_dir",
+    "get_logs_dir",
     "new_recording_stem",
     "get_part_filename",
     "get_part_metadata_filename",
