@@ -10,7 +10,8 @@ from PyQt6.QtWidgets import (
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
     QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
-    QCheckBox, QLineEdit, QSlider,
+    QCheckBox, QLineEdit, QSlider, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
@@ -4225,6 +4226,17 @@ class FloatingSettingsPanel(QWidget):
         self._identity_delete_btn.clicked.connect(self._on_identity_delete)
         _id_header_layout.addWidget(self._identity_delete_btn)
 
+        # Prune button — in the header area, always visible when header is visible
+        self._identity_prune_btn = QPushButton("🧹  Prune unused")
+        self._identity_prune_btn.setObjectName("AethericIdentityActionButton")
+        self._identity_prune_btn.setProperty("action", "prune")
+        self._identity_prune_btn.setFixedHeight(26)
+        self._identity_prune_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._identity_prune_btn.setToolTip("Remove identities with zero recordings")
+        self._identity_prune_btn.setAccessibleName("Prune unused identities")
+        self._identity_prune_btn.clicked.connect(self._on_identity_prune)
+        _id_header_layout.addWidget(self._identity_prune_btn)
+
         self._identity_detail_header.hide()
         identity_detail_layout.addWidget(self._identity_detail_header)
 
@@ -4251,10 +4263,31 @@ class FloatingSettingsPanel(QWidget):
         self._identity_last_used_label.setObjectName("AethericIdentityDetailLabel")
         _detail_fields_layout.addWidget(self._identity_last_used_label)
 
-        self._identity_recordings_label = QLabel("Associated recordings: —")
-        self._identity_recordings_label.setObjectName("AethericIdentityDetailLabel")
-        self._identity_recordings_label.setWordWrap(True)
-        _detail_fields_layout.addWidget(self._identity_recordings_label)
+        self._identity_recordings_table = QTableWidget(0, 3)
+        self._identity_recordings_table.setObjectName("AethericIdentityRecordingsTable")
+        self._identity_recordings_table.setHorizontalHeaderLabels(["Recording", "Mentions", "Date"])
+        self._identity_recordings_table.horizontalHeader().setStretchLastSection(True)
+        self._identity_recordings_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self._identity_recordings_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._identity_recordings_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._identity_recordings_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._identity_recordings_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self._identity_recordings_table.verticalHeader().setVisible(False)
+        self._identity_recordings_table.setAccessibleName("Associated recordings")
+        self._identity_recordings_table.setToolTip("Click a recording to navigate to it in History")
+        self._identity_recordings_table.setMaximumHeight(160)
+        self._identity_recordings_table.cellDoubleClicked.connect(self._on_recording_row_double_clicked)
+        _detail_fields_layout.addWidget(self._identity_recordings_table)
 
         _detail_fields_layout.addStretch()
 
@@ -4542,7 +4575,7 @@ class FloatingSettingsPanel(QWidget):
         self._identity_sample_count_label.setStyleSheet(_id_detail_css)
         self._identity_recording_count_label.setStyleSheet(_id_detail_css)
         self._identity_last_used_label.setStyleSheet(_id_detail_css)
-        self._identity_recordings_label.setStyleSheet(_id_detail_css)
+        self._identity_recordings_table.setStyleSheet(_id_detail_css)
 
         # Resize grip — draws its own textured triangle via paintEvent
 
@@ -5394,7 +5427,7 @@ class FloatingSettingsPanel(QWidget):
         self._identity_sample_count_label.setText("Samples: —")
         self._identity_recording_count_label.setText("Recordings: —")
         self._identity_last_used_label.setText("Last used: —")
-        self._identity_recordings_label.setText("Associated recordings: —")
+        self._identity_recordings_table.setRowCount(0)
         self._identity_rename_btn.setEnabled(False)
         self._identity_merge_btn.setEnabled(False)
         self._identity_delete_btn.setEnabled(False)
@@ -5457,23 +5490,13 @@ class FloatingSettingsPanel(QWidget):
                 self._identity_last_used_label.setText("Last used: —")
 
             if identity_usage.recordings:
-                rec_paths = [
-                    r.path.stem for r in identity_usage.recordings[:10]
-                ]
-                extra = (
-                    f" (+{len(identity_usage.recordings) - 10} more)"
-                    if len(identity_usage.recordings) > 10
-                    else ""
-                )
-                self._identity_recordings_label.setText(
-                    f"Associated recordings: {', '.join(rec_paths)}{extra}"
-                )
+                self._populate_recordings_table(identity_usage.recordings)
             else:
-                self._identity_recordings_label.setText("Associated recordings: none")
+                self._identity_recordings_table.setRowCount(0)
         else:
             self._identity_recording_count_label.setText("Recordings: 0")
             self._identity_last_used_label.setText("Last used: —")
-            self._identity_recordings_label.setText("Associated recordings: —")
+            self._identity_recordings_table.setRowCount(0)
 
     # ------------------------------------------------------------------
     # Identity mutation handlers (T03)
@@ -5693,6 +5716,175 @@ class FloatingSettingsPanel(QWidget):
 
         logger.info("Identity delete completed via Settings UI")
         # After delete, the identity is gone — clear detail and refresh
+        self._refresh_and_reselect(target_name=None)
+
+    # ------------------------------------------------------------------
+    # Recordings table and navigation (T04)
+    # ------------------------------------------------------------------
+
+    def _populate_recordings_table(
+        self,
+        recordings: list,
+    ) -> None:
+        """Populate the recordings table from IdentityRecordingRef list.
+
+        Each row shows recording stem, mention count, and formatted date.
+        The recording path is stored in UserRole data for navigation.
+
+        Args:
+            recordings: List of IdentityRecordingRef objects.
+        """
+        self._identity_recordings_table.setRowCount(0)
+
+        for ref in recordings:
+            row = self._identity_recordings_table.rowCount()
+            self._identity_recordings_table.insertRow(row)
+
+            # Stem name
+            stem_item = QTableWidgetItem(ref.path.stem)
+            stem_item.setData(Qt.ItemDataRole.UserRole, str(ref.path))
+            stem_item.setToolTip(str(ref.path))
+            self._identity_recordings_table.setItem(row, 0, stem_item)
+
+            # Mention count
+            mentions_item = QTableWidgetItem(str(ref.recording_count))
+            mentions_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._identity_recordings_table.setItem(row, 1, mentions_item)
+
+            # Date
+            date_text = "—"
+            if ref.last_modified is not None:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromtimestamp(ref.last_modified)
+                    date_text = dt.strftime("%Y-%m-%d %H:%M")
+                except (OSError, ValueError):
+                    pass
+            date_item = QTableWidgetItem(date_text)
+            date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._identity_recordings_table.setItem(row, 2, date_item)
+
+    def _populate_recordings_table_with_error(
+        self,
+        error_message: str,
+    ) -> None:
+        """Show a single error row in the recordings table.
+
+        Used when transcript metadata is malformed and cannot be parsed.
+
+        Args:
+            error_message: User-facing error description.
+        """
+        self._identity_recordings_table.setRowCount(1)
+        error_item = QTableWidgetItem(f"⚠ {error_message}")
+        error_item.setFlags(error_item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+        self._identity_recordings_table.setItem(0, 0, error_item)
+        self._identity_recordings_table.setItem(0, 1, QTableWidgetItem("—"))
+        self._identity_recordings_table.setItem(0, 2, QTableWidgetItem("—"))
+
+    def _on_recording_row_double_clicked(self, row: int, column: int) -> None:
+        """Navigate to History and select the recording matching this row."""
+        item = self._identity_recordings_table.item(row, 0)
+        if item is None:
+            return
+        path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not path_str:
+            return
+        self._navigate_to_history_recording(path_str)
+
+    def _navigate_to_history_recording(self, md_path_str: str) -> None:
+        """Switch to History tab, refresh, select and load the matching transcript.
+
+        Args:
+            md_path_str: String path to the transcript .md file.
+        """
+        # Stop any current playback
+        self._stop_playback()
+
+        # Navigate to History tab (triggers _refresh_history via _on_nav_clicked)
+        self._on_nav_clicked(self._NAV_HISTORY)
+
+        # Find the matching item in history list
+        target_item = None
+        for i in range(self._history_list.count()):
+            item = self._history_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == md_path_str:
+                target_item = item
+                break
+
+        if target_item is not None:
+            self._history_list.setCurrentItem(target_item)
+            self._on_history_item_clicked(target_item)
+        # If not found after refresh, the recording may have been deleted
+        # — silently stay on History tab with current selection.
+
+    # ------------------------------------------------------------------
+    # Prune unused identities (T04)
+    # ------------------------------------------------------------------
+
+    def _on_identity_prune(self) -> None:
+        """Handle the Prune action: confirm, prune, show summary, refresh."""
+        # Confirmation
+        reply = QMessageBox.question(
+            self,
+            "Confirm Prune",
+            "Remove all identities with zero recordings?\n\n"
+            "This will delete voice signatures that are not referenced "
+            "in any transcript. Transcript files are not modified.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            store, transcripts_dir = self._get_identity_store_and_transcripts_dir()
+            try:
+                from meetandread.speaker.identity_management import prune_unused_identities
+                summary = prune_unused_identities(store, transcripts_dir)
+            finally:
+                store.close()
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Prune Failed", f"Could not prune identities: {exc}"
+            )
+            self._refresh_identities()
+            return
+
+        # Build summary message
+        if summary.failed == 0:
+            msg = (
+                f"Pruned {summary.deleted} unused identit"
+                f"{'y' if summary.deleted == 1 else 'ies'}.\n\n"
+                f"Scanned {summary.total_scanned} identities total."
+            )
+            QMessageBox.information(self, "Prune Complete", msg)
+        else:
+            msg = (
+                f"Pruned {summary.deleted} unused identit"
+                f"{'y' if summary.deleted == 1 else 'ies'}.\n"
+                f"{summary.failed} deletion(s) failed.\n\n"
+                f"Scanned {summary.total_scanned} identities total."
+            )
+            QMessageBox.warning(self, "Prune Partial", msg)
+
+            # Optionally enqueue failed cleanups if there are recoverable failures
+            if summary.failed_identities:
+                try:
+                    from meetandread.recording.cleanup_queue import CleanupQueue
+                    queue = CleanupQueue()
+                    for name in summary.failed_identities:
+                        queue.enqueue_identity_cleanup(name)
+                    logger.info(
+                        "Enqueued %d failed identity cleanup(s) for retry",
+                        len(summary.failed_identities),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to enqueue identity cleanup(s): %s", exc
+                    )
+
+        logger.info("Identity prune completed via Settings UI")
         self._refresh_and_reselect(target_name=None)
 
     # ------------------------------------------------------------------

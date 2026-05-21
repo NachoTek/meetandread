@@ -95,6 +95,26 @@ class IdentityUsage:
         return len(self.recordings)
 
 
+@dataclass
+class PruneSummary:
+    """Result of pruning unused identities.
+
+    Attributes:
+        deleted: Number of identities successfully deleted.
+        failed: Number of identities that could not be deleted.
+        total_scanned: Total number of identities examined.
+        failed_identities: List of identity names that failed deletion
+            (kept for optional cleanup queue enrollment).  Names are
+            stored here for queue integration only — logger messages
+            must still avoid PII.
+    """
+
+    deleted: int = 0
+    failed: int = 0
+    total_scanned: int = 0
+    failed_identities: List[str] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Metadata parsing helpers
 # ---------------------------------------------------------------------------
@@ -550,8 +570,78 @@ def delete_identity(
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Prune unused identities
 # ---------------------------------------------------------------------------
+
+
+def prune_unused_identities(
+    store: Any,
+    transcripts_dir: Path,
+) -> PruneSummary:
+    """Delete identities with zero associated recordings.
+
+    Scans transcript metadata for usage, then attempts to delete each
+    identity with recording_count == 0.  Continues after individual
+    failures so partial progress is preserved.
+
+    Args:
+        store: VoiceSignatureStore instance.
+        transcripts_dir: Directory containing transcript .md files.
+
+    Returns:
+        PruneSummary with deleted/failed counts and failed identity
+        names for optional cleanup queue enrollment.
+    """
+    profiles = store.load_signatures()
+    identity_names = [p.name for p in profiles]
+
+    if not identity_names:
+        return PruneSummary(total_scanned=0)
+
+    usage = scan_identity_usage(transcripts_dir, identity_names)
+
+    # Identify identities with zero recordings
+    unused = [
+        name for name in identity_names
+        if usage.get(name, IdentityUsage(identity_name=name)).recording_count == 0
+    ]
+
+    summary = PruneSummary(total_scanned=len(identity_names))
+
+    if not unused:
+        logger.info(
+            "Identity prune: no unused identities out of %d scanned",
+            summary.total_scanned,
+        )
+        return summary
+
+    for name in unused:
+        try:
+            deleted = store.delete_signature(name)
+            if deleted:
+                summary.deleted += 1
+            else:
+                # Signature was gone already (concurrent prune or race)
+                summary.failed += 1
+                summary.failed_identities.append(name)
+                logger.info(
+                    "Identity prune: signature already gone for 1 identity"
+                )
+        except Exception as exc:
+            summary.failed += 1
+            summary.failed_identities.append(name)
+            logger.warning(
+                "Identity prune: deletion failed for 1 identity: error=%s",
+                exc,
+            )
+
+    logger.info(
+        "Identity prune complete: %d deleted, %d failed, %d total scanned",
+        summary.deleted,
+        summary.failed,
+        summary.total_scanned,
+    )
+    return summary
 
 
 def _find_profile(profiles: Sequence[Any], name: str) -> Any:

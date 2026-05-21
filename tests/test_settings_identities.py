@@ -1171,14 +1171,14 @@ class TestIdentitiesSelectionDetail:
         item = panel._identity_list.item(0)
         panel._on_identity_item_clicked(item)
         qapp.processEvents()
-        text = panel._identity_recordings_label.text()
-        assert "rec1" in text
-        assert "rec2" in text
+        assert panel._identity_recordings_table.rowCount() == 2
+        assert "rec1" in panel._identity_recordings_table.item(0, 0).text()
+        assert "rec2" in panel._identity_recordings_table.item(1, 0).text()
 
-    def test_click_many_recordings_truncates(
+    def test_click_many_recordings_shows_all(
         self, settings_panel_on_identities, qapp
     ):
-        """More than 10 recordings shows truncation."""
+        """Many recordings all appear in the recordings table."""
         panel = settings_panel_on_identities
         recs = [
             IdentityRecordingRef(Path(f"/rec{i}.md"), 1)
@@ -1196,8 +1196,7 @@ class TestIdentitiesSelectionDetail:
         item = panel._identity_list.item(0)
         panel._on_identity_item_clicked(item)
         qapp.processEvents()
-        text = panel._identity_recordings_label.text()
-        assert "+5 more" in text
+        assert panel._identity_recordings_table.rowCount() == 15
 
     def test_click_no_data_item_is_noop(self, settings_panel_on_identities, qapp):
         """Clicking an item with no UserRole data does nothing."""
@@ -2075,3 +2074,600 @@ class TestDeleteShortcutIdentities:
             )
             panel.keyPressEvent(event)
             mock_del.assert_not_called()
+
+
+# ===========================================================================
+# T04 Tests — Identity prune and recordings navigation
+# ===========================================================================
+
+from meetandread.speaker.identity_management import (
+    PruneSummary,
+    prune_unused_identities,
+)
+from PyQt6.QtWidgets import QTableWidget
+
+
+# ---------------------------------------------------------------------------
+# Prune service tests
+# ---------------------------------------------------------------------------
+
+
+class TestPruneUnusedIdentities:
+    """Test the prune_unused_identities service function."""
+
+    def test_no_unused_identities(self, tmp_path):
+        """All identities have recordings — nothing pruned."""
+        store = _make_store_with_identities(
+            tmp_path,
+            {"Alice": (_random_embedding(1), 2), "Bob": (_random_embedding(2), 3)},
+        )
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        # Alice has a recording
+        _make_md(
+            transcripts,
+            [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "Alice"}],
+            [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "Alice"}],
+            name="rec1.md",
+        )
+        # Bob has a recording
+        _make_md(
+            transcripts,
+            [{"text": "Yo", "start_time": 0.0, "end_time": 0.5, "confidence": 88, "speaker_id": "Bob"}],
+            [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "Bob"}],
+            name="rec2.md",
+        )
+
+        result = prune_unused_identities(store, transcripts)
+        assert result.deleted == 0
+        assert result.failed == 0
+        assert result.total_scanned == 2
+        assert result.failed_identities == []
+
+    def test_prune_deletes_unused(self, tmp_path):
+        """Unused identities are deleted from the store."""
+        store = _make_store_with_identities(
+            tmp_path,
+            {
+                "Alice": (_random_embedding(1), 2),
+                "Bob": (_random_embedding(2), 3),
+                "Charlie": (_random_embedding(3), 1),
+            },
+        )
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        # Only Alice has a recording
+        _make_md(
+            transcripts,
+            [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "Alice"}],
+            [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "Alice"}],
+            name="rec1.md",
+        )
+
+        result = prune_unused_identities(store, transcripts)
+        assert result.deleted == 2  # Bob and Charlie
+        assert result.failed == 0
+        assert result.total_scanned == 3
+
+        # Verify store only has Alice
+        remaining = [p.name for p in store.load_signatures()]
+        assert remaining == ["Alice"]
+
+    def test_prune_partial_failure(self, tmp_path):
+        """Partial failure: some deletions fail, summary reflects it."""
+        store = _make_store_with_identities(
+            tmp_path,
+            {
+                "Alice": (_random_embedding(1), 2),
+                "Bob": (_random_embedding(2), 3),
+            },
+        )
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        # No recordings — both should be pruned
+
+        # Make Bob's deletion fail
+        original_delete = store.delete_signature
+
+        def flaky_delete(name):
+            if name == "Bob":
+                raise RuntimeError("DB locked")
+            return original_delete(name)
+
+        with patch.object(store, "delete_signature", side_effect=flaky_delete):
+            result = prune_unused_identities(store, transcripts)
+
+        assert result.deleted == 1
+        assert result.failed == 1
+        assert result.failed_identities == ["Bob"]
+        assert result.total_scanned == 2
+
+    def test_prune_empty_store(self, tmp_path):
+        """Empty store returns zero counts."""
+        store = _make_store_with_identities(tmp_path, {})
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+
+        result = prune_unused_identities(store, transcripts)
+        assert result.deleted == 0
+        assert result.failed == 0
+        assert result.total_scanned == 0
+
+    def test_prune_signature_already_gone(self, tmp_path):
+        """Identity not found in store during deletion is counted as failed."""
+        store = _make_store_with_identities(
+            tmp_path,
+            {"Alice": (_random_embedding(1), 2)},
+        )
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+
+        # Make delete_signature return False (simulating concurrent delete)
+        with patch.object(store, "delete_signature", return_value=False):
+            result = prune_unused_identities(store, transcripts)
+
+        assert result.deleted == 0
+        assert result.failed == 1
+        assert "Alice" in result.failed_identities
+
+
+# ---------------------------------------------------------------------------
+# Prune PII-safe logging tests
+# ---------------------------------------------------------------------------
+
+
+class TestPrunePIISafeLogging:
+    def test_prune_no_identity_names_in_logs(self, tmp_path, caplog):
+        store = _make_store_with_identities(
+            tmp_path,
+            {"SecretUnused": (_random_embedding(1), 1)},
+        )
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+
+        with caplog.at_level(logging.DEBUG, logger="meetandread.speaker.identity_management"):
+            prune_unused_identities(store, transcripts)
+        for r in caplog.records:
+            assert "SecretUnused" not in r.message
+
+
+# ---------------------------------------------------------------------------
+# Recordings table population tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecordingsTablePopulation:
+    """Test that the recordings table populates correctly on identity selection."""
+
+    def test_table_populated_with_recordings(self, settings_panel_on_identities, qapp):
+        panel = settings_panel_on_identities
+        usage = {
+            "Alice": IdentityUsage(
+                identity_name="Alice",
+                recordings=[
+                    IdentityRecordingRef(Path("/rec1.md"), 5, 1700000000.0),
+                    IdentityRecordingRef(Path("/rec2.md"), 3, 1700100000.0),
+                ],
+                total_mentions=8,
+            ),
+        }
+        panel._identity_usage = usage
+        panel._populate_identity_list(["Alice"], usage)
+        item = panel._identity_list.item(0)
+        panel._on_identity_item_clicked(item)
+        qapp.processEvents()
+
+        assert panel._identity_recordings_table.rowCount() == 2
+        assert "rec1" in panel._identity_recordings_table.item(0, 0).text()
+        assert "rec2" in panel._identity_recordings_table.item(1, 0).text()
+        # Mentions
+        assert panel._identity_recordings_table.item(0, 1).text() == "5"
+        assert panel._identity_recordings_table.item(1, 1).text() == "3"
+        # Date should be populated
+        assert "2023" in panel._identity_recordings_table.item(0, 2).text()
+
+    def test_table_empty_when_no_recordings(self, settings_panel_on_identities, qapp):
+        panel = settings_panel_on_identities
+        panel._identity_usage = {}
+        panel._populate_identity_list(["Alice"], {})
+        item = panel._identity_list.item(0)
+        panel._on_identity_item_clicked(item)
+        qapp.processEvents()
+        assert panel._identity_recordings_table.rowCount() == 0
+
+    def test_table_sorted_by_recording_order(self, settings_panel_on_identities, qapp):
+        """Recordings appear in the order returned by the usage scan."""
+        panel = settings_panel_on_identities
+        usage = {
+            "Alice": IdentityUsage(
+                identity_name="Alice",
+                recordings=[
+                    IdentityRecordingRef(Path("/alpha.md"), 2),
+                    IdentityRecordingRef(Path("/beta.md"), 5),
+                    IdentityRecordingRef(Path("/gamma.md"), 1),
+                ],
+                total_mentions=8,
+            ),
+        }
+        panel._identity_usage = usage
+        panel._populate_identity_list(["Alice"], usage)
+        item = panel._identity_list.item(0)
+        panel._on_identity_item_clicked(item)
+        qapp.processEvents()
+
+        assert panel._identity_recordings_table.rowCount() == 3
+        assert "alpha" in panel._identity_recordings_table.item(0, 0).text()
+        assert "beta" in panel._identity_recordings_table.item(1, 0).text()
+        assert "gamma" in panel._identity_recordings_table.item(2, 0).text()
+
+    def test_table_date_shows_dash_for_none(self, settings_panel_on_identities, qapp):
+        """Recording with no last_modified shows '—'."""
+        panel = settings_panel_on_identities
+        usage = {
+            "Alice": IdentityUsage(
+                identity_name="Alice",
+                recordings=[
+                    IdentityRecordingRef(Path("/rec.md"), 1, None),
+                ],
+                total_mentions=1,
+            ),
+        }
+        panel._identity_usage = usage
+        panel._populate_identity_list(["Alice"], usage)
+        item = panel._identity_list.item(0)
+        panel._on_identity_item_clicked(item)
+        qapp.processEvents()
+        assert panel._identity_recordings_table.item(0, 2).text() == "—"
+
+    def test_table_cleared_on_clear_detail(self, settings_panel_on_identities, qapp):
+        """_clear_identity_detail empties the table."""
+        panel = settings_panel_on_identities
+        usage = {
+            "Alice": IdentityUsage(
+                identity_name="Alice",
+                recordings=[IdentityRecordingRef(Path("/rec1.md"), 5)],
+                total_mentions=5,
+            ),
+        }
+        panel._identity_usage = usage
+        panel._populate_identity_list(["Alice"], usage)
+        item = panel._identity_list.item(0)
+        panel._on_identity_item_clicked(item)
+        qapp.processEvents()
+        assert panel._identity_recordings_table.rowCount() == 1
+
+        panel._clear_identity_detail()
+        assert panel._identity_recordings_table.rowCount() == 0
+
+
+# ---------------------------------------------------------------------------
+# Recordings table error row test
+# ---------------------------------------------------------------------------
+
+
+class TestRecordingsTableError:
+    """Test that malformed transcript data shows an error row, not a crash."""
+
+    def test_error_row_display(self, settings_panel_on_identities, qapp):
+        panel = settings_panel_on_identities
+        panel._populate_recordings_table_with_error("Corrupt metadata")
+        assert panel._identity_recordings_table.rowCount() == 1
+        text = panel._identity_recordings_table.item(0, 0).text()
+        assert "Corrupt metadata" in text
+
+
+# ---------------------------------------------------------------------------
+# Click-to-navigate tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecordingNavigation:
+    """Test that double-clicking a recording row navigates to History."""
+
+    def test_navigate_to_history_switches_tab(self, settings_panel_on_identities, qapp):
+        """Navigation switches to the History tab."""
+        panel = settings_panel_on_identities
+        usage = {
+            "Alice": IdentityUsage(
+                identity_name="Alice",
+                recordings=[IdentityRecordingRef(Path("/rec1.md"), 5)],
+                total_mentions=5,
+            ),
+        }
+        panel._identity_usage = usage
+        panel._populate_identity_list(["Alice"], usage)
+        item = panel._identity_list.item(0)
+        panel._on_identity_item_clicked(item)
+        qapp.processEvents()
+
+        # Navigate — should switch to History tab
+        panel._navigate_to_history_recording(str(Path("/rec1.md")))
+        qapp.processEvents()
+        assert panel._content_stack.currentIndex() == FloatingSettingsPanel._NAV_HISTORY
+
+    def test_navigate_stops_playback(self, settings_panel_on_identities, qapp):
+        """Navigation stops any active playback."""
+        panel = settings_panel_on_identities
+        with patch.object(panel, "_stop_playback") as mock_stop:
+            panel._navigate_to_history_recording("/some/path.md")
+            mock_stop.assert_called_once()
+
+    def test_navigate_refreshes_history(self, settings_panel_on_identities, qapp):
+        """Navigation calls _on_nav_clicked which refreshes History."""
+        panel = settings_panel_on_identities
+        with patch.object(panel, "_refresh_history") as mock_refresh:
+            panel._navigate_to_history_recording("/some/path.md")
+            qapp.processEvents()
+            mock_refresh.assert_called_once()
+
+    def test_navigate_selects_matching_item(self, settings_panel_on_identities, qapp):
+        """When history has the recording, it gets selected and loaded."""
+        panel = settings_panel_on_identities
+
+        # Create a mock recording meta for _populate_history_list
+        from unittest.mock import MagicMock
+        mock_meta = MagicMock()
+        mock_meta.path = Path("/rec1.md")
+        mock_meta.recording_time = "2026-04-22T14:30:00"
+        mock_meta.word_count = 10
+        mock_meta.speaker_count = 1
+
+        # Navigate to History first, populate, then go back to Identities
+        panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+        qapp.processEvents()
+        panel._populate_history_list([mock_meta])
+        qapp.processEvents()
+
+        # Go to Identities
+        panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+        qapp.processEvents()
+
+        # Now navigate from identities to the recording
+        # Mock _refresh_history to repopulate with the same data so the item is found
+        def fake_refresh():
+            panel._populate_history_list([mock_meta])
+
+        path_to_match = str(mock_meta.path)
+        with patch.object(panel, "_refresh_history", side_effect=fake_refresh), \
+             patch.object(panel, "_on_history_item_clicked") as mock_click:
+            panel._navigate_to_history_recording(path_to_match)
+            qapp.processEvents()
+            # Should have found and clicked the item
+            mock_click.assert_called_once()
+
+    def test_navigate_missing_recording_stays_on_history(self, settings_panel_on_identities, qapp):
+        """When the recording is not found, stays on History tab."""
+        panel = settings_panel_on_identities
+        panel._navigate_to_history_recording("/nonexistent.md")
+        qapp.processEvents()
+        assert panel._content_stack.currentIndex() == FloatingSettingsPanel._NAV_HISTORY
+
+
+# ---------------------------------------------------------------------------
+# Prune UI tests
+# ---------------------------------------------------------------------------
+
+
+class TestIdentitiesPruneAction:
+    """Verify prune flow: confirmation, service call, summary, refresh."""
+
+    def test_prune_success_shows_summary(self, settings_panel_on_identities, qapp):
+        """Successful prune shows info dialog with counts."""
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice", "Bob"])
+
+        mock_summary = PruneSummary(deleted=2, failed=0, total_scanned=3)
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir"
+        ) as mock_get:
+            mock_store = MagicMock()
+            mock_get.return_value = (mock_store, Path("/tmp/t"))
+
+            with patch(
+                "meetandread.speaker.identity_management.prune_unused_identities",
+                return_value=mock_summary,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.information"
+            ) as mock_info, patch.object(
+                panel, "_refresh_and_reselect"
+            ):
+                panel._on_identity_prune()
+                qapp.processEvents()
+                mock_info.assert_called_once()
+                assert "2" in mock_info.call_args[0][2]
+
+    def test_prune_cancel_no_mutation(self, settings_panel_on_identities, qapp):
+        """Cancelling prune confirmation does nothing."""
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+
+        with patch(
+            "meetandread.widgets.floating_panels.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.No,
+        ), patch(
+            "meetandread.speaker.identity_management.prune_unused_identities"
+        ) as mock_prune:
+            panel._on_identity_prune()
+            mock_prune.assert_not_called()
+
+    def test_prune_partial_failure_shows_warning(self, settings_panel_on_identities, qapp):
+        """Partial prune failure shows warning with failed count."""
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice", "Bob"])
+
+        mock_summary = PruneSummary(
+            deleted=1, failed=1, total_scanned=2, failed_identities=["Bob"]
+        )
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir"
+        ) as mock_get:
+            mock_store = MagicMock()
+            mock_get.return_value = (mock_store, Path("/tmp/t"))
+
+            with patch(
+                "meetandread.speaker.identity_management.prune_unused_identities",
+                return_value=mock_summary,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.warning"
+            ) as mock_warn, patch.object(
+                panel, "_refresh_and_reselect"
+            ):
+                panel._on_identity_prune()
+                qapp.processEvents()
+                mock_warn.assert_called_once()
+                assert "1 deletion(s) failed" in mock_warn.call_args[0][2]
+
+    def test_prune_service_error_shows_warning(self, settings_panel_on_identities, qapp):
+        """Service error is shown as warning and UI refreshes."""
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir"
+        ) as mock_get:
+            mock_store = MagicMock()
+            mock_get.return_value = (mock_store, Path("/tmp/t"))
+
+            with patch(
+                "meetandread.speaker.identity_management.prune_unused_identities",
+                side_effect=RuntimeError("db locked"),
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.warning"
+            ) as mock_warn, patch.object(
+                panel, "_refresh_identities"
+            ):
+                panel._on_identity_prune()
+                mock_warn.assert_called_once()
+                assert "Prune Failed" in mock_warn.call_args[0][1]
+
+    def test_prune_refreshes_identity_list(self, settings_panel_on_identities, qapp):
+        """Prune calls _refresh_and_reselect to update the list."""
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+
+        mock_summary = PruneSummary(deleted=1, failed=0, total_scanned=1)
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir"
+        ) as mock_get:
+            mock_store = MagicMock()
+            mock_get.return_value = (mock_store, Path("/tmp/t"))
+
+            with patch(
+                "meetandread.speaker.identity_management.prune_unused_identities",
+                return_value=mock_summary,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.information"
+            ), patch.object(
+                panel, "_refresh_and_reselect"
+            ) as mock_refresh:
+                panel._on_identity_prune()
+                qapp.processEvents()
+                mock_refresh.assert_called_once_with(target_name=None)
+
+    def test_prune_button_exists(self, settings_panel_on_identities):
+        """Prune button exists with correct properties."""
+        panel = settings_panel_on_identities
+        assert hasattr(panel, "_identity_prune_btn")
+        assert panel._identity_prune_btn.accessibleName() != ""
+        assert panel._identity_prune_btn.toolTip() != ""
+
+    def test_prune_enqueue_failed_cleanups(self, settings_panel_on_identities, qapp):
+        """Failed identities are enqueued in the cleanup queue."""
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice", "Bob"])
+
+        mock_summary = PruneSummary(
+            deleted=1, failed=1, total_scanned=2, failed_identities=["Bob"]
+        )
+
+        with patch.object(
+            panel, "_get_identity_store_and_transcripts_dir"
+        ) as mock_get:
+            mock_store = MagicMock()
+            mock_get.return_value = (mock_store, Path("/tmp/t"))
+
+            with patch(
+                "meetandread.speaker.identity_management.prune_unused_identities",
+                return_value=mock_summary,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ), patch(
+                "meetandread.widgets.floating_panels.QMessageBox.warning"
+            ), patch.object(
+                panel, "_refresh_and_reselect"
+            ), patch(
+                "meetandread.recording.cleanup_queue.CleanupQueue"
+            ) as MockQueue:
+                mock_queue = MagicMock()
+                MockQueue.return_value = mock_queue
+                panel._on_identity_prune()
+                qapp.processEvents()
+                # Should have enqueued the failed identity
+                mock_queue.enqueue_identity_cleanup.assert_called_once_with("Bob")
+
+
+# ---------------------------------------------------------------------------
+# R011 refresh preservation tests
+# ---------------------------------------------------------------------------
+
+
+class TestNavRefreshPreservation:
+    """Verify that navigation and refresh behavior is preserved for
+    both History and Identities tabs after T04 additions (R011).
+    """
+
+    def test_history_refresh_guard_still_works(self, settings_panel, qapp):
+        """refresh_history_if_visible only fires when History is active."""
+        # On Settings page — should not refresh
+        with patch.object(
+            settings_panel, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel.refresh_history_if_visible()
+        mock_refresh.assert_not_called()
+
+        # Navigate to History — should refresh
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+        qapp.processEvents()
+        with patch.object(
+            settings_panel, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel.refresh_history_if_visible()
+        mock_refresh.assert_called_once()
+
+    def test_identities_refresh_guard_still_works(self, settings_panel, qapp):
+        """refresh_identities_if_visible only fires when Identities is active."""
+        # On Settings page — should not refresh
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel.refresh_identities_if_visible()
+        mock_refresh.assert_not_called()
+
+        # Navigate to Identities — should refresh
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+        qapp.processEvents()
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel.refresh_identities_if_visible()
+        mock_refresh.assert_called_once()
+
+    def test_recordings_table_object_name(self, settings_panel):
+        """Recordings table has correct object name."""
+        assert settings_panel._identity_recordings_table.objectName() == "AethericIdentityRecordingsTable"
