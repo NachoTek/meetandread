@@ -1170,7 +1170,7 @@ class RecordButtonItem(QGraphicsEllipseItem):
         self.swirl_phase = 0.0
 
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
         # State transition animation (~200ms eased cross-fade)
         self._state_t = 1.0  # 0.0 (old state) → 1.0 (new state)
@@ -1626,7 +1626,7 @@ class ToggleLobeItem(QGraphicsEllipseItem):
         self._pulse_opacity: float = 1.0
         
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setTransformOriginPoint(20, 20)  # Center of 40×40
         self._hovered = False
     
@@ -1747,7 +1747,7 @@ class ToggleLobeItem(QGraphicsEllipseItem):
         self._is_locked = locked
         self.setCursor(
             Qt.CursorShape.ForbiddenCursor if locked
-            else Qt.CursorShape.PointingHandCursor
+            else Qt.CursorShape.ArrowCursor
         )
         self.update()
 
@@ -1756,7 +1756,7 @@ class ToggleLobeItem(QGraphicsEllipseItem):
         self._is_unavailable = unavailable
         self.setCursor(
             Qt.CursorShape.ForbiddenCursor if unavailable
-            else Qt.CursorShape.PointingHandCursor
+            else Qt.CursorShape.ArrowCursor
         )
         self.update()
 
@@ -1769,7 +1769,7 @@ class SettingsLobeItem(QGraphicsEllipseItem):
         self.parent_widget = parent_widget
         
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setTransformOriginPoint(11, 11)  # Center of 22×22
         self._hovered = False
     
@@ -1831,7 +1831,7 @@ class TranscriptLobeItem(QGraphicsEllipseItem):
         self.parent_widget = parent_widget
         
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.setTransformOriginPoint(11, 11)  # Center of 22×22
         self._hovered = False
     

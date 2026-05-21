@@ -858,7 +858,7 @@ class FloatingTranscriptPanel(QWidget):
         # Legend toggle button (?)
         self._legend_btn = QPushButton("?")
         self._legend_btn.setFixedSize(24, 24)
-        self._legend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._legend_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._legend_btn.setToolTip("Confidence legend")
         self._legend_btn.setCheckable(True)
         self._legend_btn.clicked.connect(self._toggle_legend)
@@ -867,7 +867,7 @@ class FloatingTranscriptPanel(QWidget):
         # Close button
         self._close_btn = QPushButton("×")
         self._close_btn.setFixedSize(24, 24)
-        self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._close_btn.setToolTip("Close panel")
         self._close_btn.clicked.connect(self.hide_panel)
         header_layout.addWidget(self._close_btn)
@@ -938,14 +938,14 @@ class FloatingTranscriptPanel(QWidget):
 
         self._scrub_btn = QPushButton("🔄 Scrub")
         self._scrub_btn.setFixedHeight(26)
-        self._scrub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._scrub_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._scrub_btn.setToolTip("Re-transcribe with a different model")
         self._scrub_btn.clicked.connect(self._on_scrub_clicked)
         detail_header_layout.addWidget(self._scrub_btn)
 
         self._delete_btn = QPushButton("🗑 Delete")
         self._delete_btn.setFixedHeight(26)
-        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._delete_btn.setToolTip("Delete this recording")
         self._delete_btn.clicked.connect(self._on_delete_btn_clicked)
         detail_header_layout.addWidget(self._delete_btn)
@@ -1112,7 +1112,7 @@ class FloatingTranscriptPanel(QWidget):
         """Build the '↓ N new' badge that appears when auto-scroll is paused."""
         self._new_content_badge = QPushButton("↓ 0 new", self.text_edit)
         self._new_content_badge.setFixedSize(120, 32)
-        self._new_content_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._new_content_badge.setCursor(Qt.CursorShape.ArrowCursor)
         self._new_content_badge.clicked.connect(self._on_badge_clicked)
         self._position_new_content_badge()
         self._new_content_badge.hide()
@@ -1968,14 +1968,14 @@ class FloatingTranscriptPanel(QWidget):
                     background-color: {p.surface};
                 }}
             """)
-            self._scrub_accept_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
             self._scrub_accept_btn.clicked.connect(self._on_scrub_accept)
 
             # Create Reject button
             self._scrub_reject_btn = QPushButton("✗ Reject")
             self._scrub_reject_btn.setFixedHeight(26)
             self._scrub_reject_btn.setStyleSheet(action_button_css(p, "delete"))
-            self._scrub_reject_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
             self._scrub_reject_btn.clicked.connect(self._on_scrub_reject)
 
             # Insert into detail header layout (before delete button)
@@ -3209,7 +3209,7 @@ class FloatingSettingsPanel(QWidget):
         self._title_close_btn = QPushButton("×")
         self._title_close_btn.setObjectName("AethericTitleCloseButton")
         self._title_close_btn.setFixedSize(20, 20)
-        self._title_close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._title_close_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._title_close_btn.setToolTip("Close settings")
         self._title_close_btn.setStyleSheet("""
             QPushButton {
@@ -3262,7 +3262,7 @@ class FloatingSettingsPanel(QWidget):
         self._nav_settings_btn.setObjectName("AethericNavButton")
         self._nav_settings_btn.setCheckable(True)
         self._nav_settings_btn.setChecked(True)
-        self._nav_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_settings_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._nav_settings_btn.setProperty("nav_id", "settings")
         self._nav_settings_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_SETTINGS))
         sidebar_layout.addWidget(self._nav_settings_btn)
@@ -3272,7 +3272,7 @@ class FloatingSettingsPanel(QWidget):
         self._nav_performance_btn = QPushButton("📊  Performance")
         self._nav_performance_btn.setObjectName("AethericNavButton")
         self._nav_performance_btn.setCheckable(True)
-        self._nav_performance_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_performance_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._nav_performance_btn.setProperty("nav_id", "performance")
         self._nav_performance_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_PERFORMANCE))
         sidebar_layout.addWidget(self._nav_performance_btn)
@@ -3282,7 +3282,7 @@ class FloatingSettingsPanel(QWidget):
         self._nav_history_btn = QPushButton("🕐  History")
         self._nav_history_btn.setObjectName("AethericNavButton")
         self._nav_history_btn.setCheckable(True)
-        self._nav_history_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_history_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._nav_history_btn.setProperty("nav_id", "history")
         self._nav_history_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_HISTORY))
         sidebar_layout.addWidget(self._nav_history_btn)
@@ -3292,7 +3292,7 @@ class FloatingSettingsPanel(QWidget):
         self._nav_identities_btn = QPushButton("👤  Identities")
         self._nav_identities_btn.setObjectName("AethericNavButton")
         self._nav_identities_btn.setCheckable(True)
-        self._nav_identities_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nav_identities_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._nav_identities_btn.setToolTip("Manage stored voice identities")
         self._nav_identities_btn.setAccessibleName("Identities tab")
         self._nav_identities_btn.setProperty("nav_id", "identities")
@@ -3369,7 +3369,7 @@ class FloatingSettingsPanel(QWidget):
         # Noise filter toggle
         self._noise_filter_checkbox = QCheckBox("Background Noise Filter")
         self._noise_filter_checkbox.setObjectName("AethericCheckBox")
-        self._noise_filter_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._noise_filter_checkbox.setCursor(Qt.CursorShape.ArrowCursor)
         self._noise_filter_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
         self._noise_filter_checkbox.setToolTip(
             "Enable spectral gate noise reduction on microphone input.\n"
@@ -3458,7 +3458,7 @@ class FloatingSettingsPanel(QWidget):
                 height: 12px;
             }}
         """)
-        self._cc_font_spin.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cc_font_spin.setCursor(Qt.CursorShape.ArrowCursor)
         # Restore from config
         try:
             from meetandread.config import get_config
@@ -3477,7 +3477,7 @@ class FloatingSettingsPanel(QWidget):
         # CC auto-open checkbox
         self._cc_auto_open_checkbox = QCheckBox("Auto-open CC overlay on recording")
         self._cc_auto_open_checkbox.setObjectName("AethericCheckBox")
-        self._cc_auto_open_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cc_auto_open_checkbox.setCursor(Qt.CursorShape.ArrowCursor)
         self._cc_auto_open_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
         self._cc_auto_open_checkbox.setToolTip(
             "When enabled, the CC overlay panel opens automatically when recording starts."
@@ -3495,7 +3495,7 @@ class FloatingSettingsPanel(QWidget):
         # Waveform visualization checkbox
         self._waveform_checkbox = QCheckBox("Show waveform visualization during recording")
         self._waveform_checkbox.setObjectName("AethericCheckBox")
-        self._waveform_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._waveform_checkbox.setCursor(Qt.CursorShape.ArrowCursor)
         self._waveform_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
         self._waveform_checkbox.setToolTip(
             "When disabled, the recording button shows a minimal pulse animation "
@@ -3626,7 +3626,7 @@ class FloatingSettingsPanel(QWidget):
 
         # --- Benchmark Button ---
         self._benchmark_btn = QPushButton("Run Benchmark")
-        self._benchmark_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._benchmark_btn.setCursor(Qt.CursorShape.ArrowCursor)
         perf_layout.addWidget(self._benchmark_btn)
 
         # --- Benchmark History ---
@@ -3782,7 +3782,7 @@ class FloatingSettingsPanel(QWidget):
         self._bookmark_add_btn.setAccessibleDescription("Save a playback bookmark at the current audio position")
         self._bookmark_add_btn.setFixedHeight(26)
         self._bookmark_add_btn.setFixedWidth(32)
-        self._bookmark_add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._bookmark_add_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._bookmark_add_btn.setToolTip("Add bookmark (M)")
         self._bookmark_add_btn.setEnabled(False)
         self._bookmark_add_btn.clicked.connect(self._on_bookmark_add_clicked)
@@ -3809,7 +3809,7 @@ class FloatingSettingsPanel(QWidget):
         self._bookmark_delete_btn.setAccessibleDescription("Delete the currently selected bookmark from this transcript")
         self._bookmark_delete_btn.setFixedHeight(26)
         self._bookmark_delete_btn.setFixedWidth(26)
-        self._bookmark_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._bookmark_delete_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._bookmark_delete_btn.setToolTip("Delete selected bookmark")
         self._bookmark_delete_btn.setEnabled(False)
         self._bookmark_delete_btn.clicked.connect(self._on_bookmark_delete_clicked)
@@ -3835,7 +3835,7 @@ class FloatingSettingsPanel(QWidget):
         self._scrub_btn.setObjectName("AethericHistoryActionButton")
         self._scrub_btn.setProperty("action", "scrub")
         self._scrub_btn.setFixedHeight(26)
-        self._scrub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._scrub_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._scrub_btn.setToolTip("Re-transcribe with a different model")
         self._scrub_btn.clicked.connect(self._on_scrub_clicked)
         detail_header_layout.addWidget(self._scrub_btn)
@@ -3844,7 +3844,7 @@ class FloatingSettingsPanel(QWidget):
         self._delete_btn.setObjectName("AethericHistoryActionButton")
         self._delete_btn.setProperty("action", "delete")
         self._delete_btn.setFixedHeight(26)
-        self._delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._delete_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._delete_btn.setToolTip("Delete this recording")
         self._delete_btn.clicked.connect(self._on_delete_btn_clicked)
         detail_header_layout.addWidget(self._delete_btn)
@@ -3932,7 +3932,7 @@ class FloatingSettingsPanel(QWidget):
         self._identity_rename_btn.setObjectName("AethericIdentityActionButton")
         self._identity_rename_btn.setProperty("action", "rename")
         self._identity_rename_btn.setFixedHeight(26)
-        self._identity_rename_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._identity_rename_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._identity_rename_btn.setToolTip("Rename this identity")
         self._identity_rename_btn.setAccessibleName("Rename identity")
         self._identity_rename_btn.setEnabled(False)
@@ -3943,7 +3943,7 @@ class FloatingSettingsPanel(QWidget):
         self._identity_merge_btn.setObjectName("AethericIdentityActionButton")
         self._identity_merge_btn.setProperty("action", "merge")
         self._identity_merge_btn.setFixedHeight(26)
-        self._identity_merge_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._identity_merge_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._identity_merge_btn.setToolTip("Merge into another identity")
         self._identity_merge_btn.setAccessibleName("Merge identity")
         self._identity_merge_btn.setEnabled(False)
@@ -3954,7 +3954,7 @@ class FloatingSettingsPanel(QWidget):
         self._identity_delete_btn.setObjectName("AethericIdentityActionButton")
         self._identity_delete_btn.setProperty("action", "delete")
         self._identity_delete_btn.setFixedHeight(26)
-        self._identity_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._identity_delete_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._identity_delete_btn.setToolTip("Delete this identity")
         self._identity_delete_btn.setAccessibleName("Delete identity")
         self._identity_delete_btn.setEnabled(False)
@@ -7051,7 +7051,7 @@ class FloatingSettingsPanel(QWidget):
             self._scrub_accept_btn.setFixedHeight(26)
             p = current_palette()
             self._scrub_accept_btn.setStyleSheet(aetheric_history_action_button_css(p))
-            self._scrub_accept_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
             self._scrub_accept_btn.clicked.connect(self._on_scrub_accept)
 
             self._scrub_reject_btn = QPushButton("✗ Reject")
@@ -7059,7 +7059,7 @@ class FloatingSettingsPanel(QWidget):
             self._scrub_reject_btn.setProperty("action", "reject")
             self._scrub_reject_btn.setFixedHeight(26)
             self._scrub_reject_btn.setStyleSheet(aetheric_history_action_button_css(p))
-            self._scrub_reject_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._scrub_reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
             self._scrub_reject_btn.clicked.connect(self._on_scrub_reject)
 
             header_layout = self._history_detail_header.layout()
