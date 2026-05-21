@@ -388,6 +388,9 @@ class TestBookmarkNegativeCases:
         mgr = BookmarkManager(md)
 
         bm1 = mgr.add(position_ms=1000, name="Same")
+        # Ensure different timestamp (microsecond-precision clocks can match)
+        import time
+        time.sleep(0.001)
         bm2 = mgr.add(position_ms=2000, name="Same")
 
         assert bm1.created_at != bm2.created_at
