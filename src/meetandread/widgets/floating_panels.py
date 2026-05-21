@@ -5387,10 +5387,6 @@ class FloatingSettingsPanel(QWidget):
 
         self._current_history_md_path = md_path
         self._history_detail_header.show()
-        print(f"[HEADER-SHOWN] play_btn enabled={self._playback_play_btn.isEnabled()} visible={self._playback_play_btn.isVisible()} geometry={self._playback_play_btn.geometry()}")
-        print(f"[HEADER-SHOWN] speed_btn enabled={self._playback_speed_btn.isEnabled()} geometry={self._playback_speed_btn.geometry()}")
-        print(f"[HEADER-SHOWN] vol_btn enabled={self._playback_volume_btn.isEnabled()} geometry={self._playback_volume_btn.geometry()}")
-        print(f"[HEADER-SHOWN] slider enabled={self._playback_progress_slider.isEnabled()} geometry={self._playback_progress_slider.geometry()}")
 
         # Reset highlight state and extract timed words for the new transcript
         self._reset_highlight_state()
@@ -5560,13 +5556,10 @@ class FloatingSettingsPanel(QWidget):
             QMediaPlayer.MediaStatus.LoadedMedia,
             QMediaPlayer.MediaStatus.BufferedMedia,
         ):
-            print(f"[MEDIA-STATUS] media loaded ({status}), re-syncing controls")
             self._sync_playback_controls()
         elif status == QMediaPlayer.MediaStatus.EndOfMedia:
-            print("[MEDIA-STATUS] media ended, resetting play icon")
             self._playback_play_btn.setIcon(create_play_icon())
         elif status == QMediaPlayer.MediaStatus.InvalidMedia:
-            print("[MEDIA-STATUS] media invalid, re-syncing controls")
             self._sync_playback_controls()
 
     def _load_playback_audio(self, md_path: Path) -> None:
@@ -5587,7 +5580,6 @@ class FloatingSettingsPanel(QWidget):
         """Sync toolbar enabled/disabled state and status from the helper."""
         helper = self._playback_helper
         if helper is None:
-            print("[SYNC] helper=None → all controls DISABLED")
             self._playback_play_btn.setEnabled(False)
             self._playback_speed_btn.setEnabled(False)
             self._playback_volume_btn.setEnabled(False)
@@ -5597,7 +5589,6 @@ class FloatingSettingsPanel(QWidget):
             return
 
         available = helper.is_audio_available
-        print(f"[SYNC] helper present, audio_available={available} → play={available} speed={available} vol={available}")
         self._playback_play_btn.setEnabled(available)
         self._playback_speed_btn.setEnabled(available)
         self._playback_volume_btn.setEnabled(available)
@@ -5625,7 +5616,6 @@ class FloatingSettingsPanel(QWidget):
 
     def _on_playback_play_clicked(self) -> None:
         """Toggle play/pause on the playback helper."""
-        print(f"[PLAY-CLICK] handler fired! helper={self._playback_helper}")
         logger.debug("[PLAY-CLICK] handler called, helper=%s", self._playback_helper)
         helper = self._playback_helper
         if helper is None or not helper.is_audio_available:
@@ -5640,11 +5630,9 @@ class FloatingSettingsPanel(QWidget):
         ) or (
             str(state) in ('PlaybackState.PlayingState', 'PlayingState')
         )
-        print(f"[PLAY-CLICK] state={state} is_playing={is_playing}")
         if is_playing:
             helper.pause()
             self._playback_play_btn.setIcon(create_play_icon())
-            print("[PLAY-CLICK] -> paused")
         else:
             # If at end, reset to start before playing
             try:
@@ -5654,11 +5642,9 @@ class FloatingSettingsPanel(QWidget):
                 pass
             helper.play()
             self._playback_play_btn.setIcon(create_pause_icon())
-            print("[PLAY-CLICK] -> playing")
 
     def _on_playback_speed_clicked(self) -> None:
         """Cycle to the next speed preset and apply it."""
-        print(f"[SPEED-CLICK] handler fired! index={self._speed_preset_index}")
         logger.debug("[SPEED-CLICK] handler called, current index=%d", self._speed_preset_index)
         self._speed_preset_index = (self._speed_preset_index + 1) % len(self._SPEED_PRESETS)
         rate = self._SPEED_PRESETS[self._speed_preset_index]
@@ -7189,7 +7175,6 @@ class FloatingSettingsPanel(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             child = self.childAt(event.position().toPoint())
             pt = event.position().toPoint()
-            print(f"[MOUSE-PRESS] panel pos=({pt.x()},{pt.y()}) child={type(child).__name__ if child else None}")
             logger.debug(
                 "[MOUSE-PRESS] panel mousePressEvent pos=(%d,%d) child=%s",
                 pt.x(), pt.y(),
