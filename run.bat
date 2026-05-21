@@ -14,3 +14,4 @@ if errorlevel 1 (
     echo Application exited with error code %errorlevel%
     pause
 )
+pause
