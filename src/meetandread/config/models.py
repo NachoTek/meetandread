@@ -238,6 +238,10 @@ class UISettings:
         default=None,
         metadata={"description": "CC overlay position and size as (x, y, width, height)"}
     )
+    settings_panel_geometry: Optional[Tuple[int, int, int, int]] = field(
+        default=None,
+        metadata={"description": "Settings panel position and size as (x, y, width, height)"}
+    )
     waveform_enabled: bool = field(
         default=True,
         metadata={"description": "Whether to show real-time waveform visualization on the recording button"}
@@ -251,6 +255,8 @@ class UISettings:
             result["widget_position"] = list(result["widget_position"])
         if result.get("cc_panel_geometry") is not None:
             result["cc_panel_geometry"] = list(result["cc_panel_geometry"])
+        if result.get("settings_panel_geometry") is not None:
+            result["settings_panel_geometry"] = list(result["settings_panel_geometry"])
         return result
 
     @classmethod
@@ -267,6 +273,7 @@ class UISettings:
             widget_dock_edge=data.get("widget_dock_edge"),
             audio_sources=data.get("audio_sources"),
             cc_panel_geometry=tuple(data["cc_panel_geometry"]) if data.get("cc_panel_geometry") else None,
+            settings_panel_geometry=tuple(data["settings_panel_geometry"]) if data.get("settings_panel_geometry") else None,
             waveform_enabled=data.get("waveform_enabled", cls.waveform_enabled),
         )
 

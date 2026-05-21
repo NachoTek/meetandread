@@ -680,6 +680,119 @@ class TestSettingsScrubAcceptReject:
 
 
 # ---------------------------------------------------------------------------
+# Qt-safe scrub signal tests (FloatingSettingsPanel)
+# ---------------------------------------------------------------------------
+
+class TestSettingsScrubQtSafeSignals:
+    """Verify scrub callbacks use PyQt signals instead of QTimer.singleShot.
+
+    Tests that:
+    - _on_scrub_progress emits _scrub_progress_sig → button text updates
+    - _on_scrub_complete emits _scrub_complete_sig → _handle_scrub_complete
+    """
+
+    def test_progress_signal_updates_button_text(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._scrub_btn.setEnabled(False)
+        settings_panel_on_history._scrub_btn.setText("Scrubbing... 0%")
+
+        settings_panel_on_history._on_scrub_progress(42)
+        qapp.processEvents()
+
+        assert settings_panel_on_history._scrub_btn.text() == "Scrubbing... 42%"
+
+    def test_progress_signal_reaches_100(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._scrub_btn.setEnabled(False)
+
+        settings_panel_on_history._on_scrub_progress(100)
+        qapp.processEvents()
+
+        assert settings_panel_on_history._scrub_btn.text() == "Scrubbing... 100%"
+
+    def test_complete_signal_success_shows_comparison(self, settings_panel_on_history, qapp, tmp_path):
+        settings_panel_on_history._is_scrubbing = True
+        settings_panel_on_history._scrub_btn.setEnabled(False)
+        settings_panel_on_history._scrub_model_size = "small"
+
+        sidecar = tmp_path / "test_rec_scrub_small.md"
+        sidecar.write_text("**SPK_0**\nNew text.\n", encoding="utf-8")
+
+        settings_panel_on_history._on_scrub_complete(str(sidecar), None)
+        qapp.processEvents()
+
+        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._scrub_btn.isEnabled()
+        assert settings_panel_on_history._is_comparison_mode is True
+
+    def test_complete_signal_error_reenables_button(self, settings_panel_on_history, qapp):
+        settings_panel_on_history._is_scrubbing = True
+        settings_panel_on_history._scrub_btn.setEnabled(False)
+
+        with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
+            settings_panel_on_history._on_scrub_complete("/fake/path.md", "Model load failed")
+            qapp.processEvents()
+
+        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._scrub_btn.isEnabled()
+        assert settings_panel_on_history._scrub_btn.text() == "🔄 Scrub"
+
+
+class TestSettingsScrubStartupFailure:
+    """Verify ScrubRunner construction and startup failures are caught.
+
+    Tests that exceptions during ScrubRunner() or scrub_recording()
+    restore scrub state and show a warning dialog.
+    """
+
+    def test_scrub_runner_construction_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
+        wav_path = tmp_path / "test.wav"
+        wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
+        md_path = tmp_path / "test.md"
+        md_path.write_text("# Transcript\n")
+
+        with patch(
+            "meetandread.transcription.scrub.ScrubRunner",
+            side_effect=RuntimeError("Whisper not available"),
+        ), patch(
+            "meetandread.widgets.floating_panels.QMessageBox.warning",
+        ) as mock_warn:
+            settings_panel_on_history._start_scrub(wav_path, md_path, "tiny")
+            qapp.processEvents()
+
+        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._scrub_btn.isEnabled()
+        assert settings_panel_on_history._scrub_btn.text() == "🔄 Scrub"
+        assert settings_panel_on_history._is_comparison_mode is False
+        assert settings_panel_on_history._scrub_runner is None
+        assert settings_panel_on_history._scrub_sidecar_path is None
+        mock_warn.assert_called_once()
+        call_args = mock_warn.call_args
+        assert "Scrub Failed" in call_args[0][1]
+
+    def test_scrub_recording_startup_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
+        wav_path = tmp_path / "test.wav"
+        wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
+        md_path = tmp_path / "test.md"
+        md_path.write_text("# Transcript\n")
+
+        mock_runner = MagicMock()
+        mock_runner.scrub_recording.side_effect = FileNotFoundError("Audio file vanished")
+
+        with patch(
+            "meetandread.transcription.scrub.ScrubRunner",
+            return_value=mock_runner,
+        ), patch(
+            "meetandread.widgets.floating_panels.QMessageBox.warning",
+        ) as mock_warn:
+            settings_panel_on_history._start_scrub(wav_path, md_path, "base")
+            qapp.processEvents()
+
+        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._scrub_btn.isEnabled()
+        assert settings_panel_on_history._scrub_btn.text() == "🔄 Scrub"
+        mock_warn.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # Speaker rename workflow tests
 # ---------------------------------------------------------------------------
 
@@ -1134,3 +1247,339 @@ class TestHistoryAnchorRefreshesList:
             settings_panel_on_history._on_history_anchor_clicked(url)
 
         mock_refresh.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# T01: Signal-based reactivity tests
+# ---------------------------------------------------------------------------
+
+class TestSignalBasedReactivity:
+    """Verify MeetAndReadWidget signals are connected to panel refresh methods.
+
+    Tests that identity_data_changed and history_data_changed signals
+    wired in _create_floating_panels dispatch refreshes to the visible
+    settings panel tabs, while hidden/inactive tabs are not refreshed
+    (MEM242/MEM292 guard pattern).
+    """
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def settings_panel(self, qapp):
+        panel = FloatingSettingsPanel()
+        panel.show()
+        qapp.processEvents()
+        yield panel
+        panel.close()
+
+    def test_history_signal_refreshes_visible_history_tab(
+        self, settings_panel, qapp
+    ):
+        """history_data_changed signal refreshes History tab when visible."""
+        # Navigate to History so it's the active tab
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel, "_refresh_history"
+        ) as mock_refresh:
+            # Simulate the signal emission that MeetAndReadWidget would do
+            settings_panel.refresh_history_if_visible()
+
+        mock_refresh.assert_called_once()
+
+    def test_history_signal_skips_when_not_on_history(
+        self, settings_panel, qapp
+    ):
+        """history_data_changed signal is a no-op when not on History tab."""
+        # Stay on Settings tab (default)
+        assert settings_panel._content_stack.currentIndex() == FloatingSettingsPanel._NAV_SETTINGS
+
+        with patch.object(
+            settings_panel, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel.refresh_history_if_visible()
+
+        mock_refresh.assert_not_called()
+
+    def test_identity_signal_refreshes_visible_identities_tab(
+        self, settings_panel, qapp
+    ):
+        """identity_data_changed signal refreshes Identities tab when visible."""
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel.refresh_identities_if_visible()
+
+        mock_refresh.assert_called_once()
+
+    def test_identity_signal_skips_when_not_on_identities(
+        self, settings_panel, qapp
+    ):
+        """identity_data_changed signal is a no-op when not on Identities tab."""
+        # Stay on Settings tab
+        assert settings_panel._content_stack.currentIndex() == FloatingSettingsPanel._NAV_SETTINGS
+
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel.refresh_identities_if_visible()
+
+        mock_refresh.assert_not_called()
+
+    def test_hidden_panel_history_not_refreshed(
+        self, settings_panel, qapp
+    ):
+        """When panel is hidden, history_data_changed does not scan."""
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+        qapp.processEvents()
+        settings_panel.hide()
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel.refresh_history_if_visible()
+
+        mock_refresh.assert_not_called()
+
+    def test_hidden_panel_identities_not_refreshed(
+        self, settings_panel, qapp
+    ):
+        """When panel is hidden, identity_data_changed does not scan."""
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+        qapp.processEvents()
+        settings_panel.hide()
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel.refresh_identities_if_visible()
+
+        mock_refresh.assert_not_called()
+
+    def test_nav_to_dirty_history_tab_refreshes(
+        self, settings_panel, qapp
+    ):
+        """After mutation while panel hidden, navigating to History refreshes."""
+        # Hide panel, simulate mutation (nav handles refresh)
+        settings_panel.hide()
+        qapp.processEvents()
+
+        # Navigate to History while hidden
+        with patch.object(
+            settings_panel, "_refresh_history"
+        ) as mock_refresh:
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+            qapp.processEvents()
+            mock_refresh.assert_called_once()
+
+    def test_nav_to_dirty_identities_tab_refreshes(
+        self, settings_panel, qapp
+    ):
+        """After mutation while panel hidden, navigating to Identities refreshes."""
+        settings_panel.hide()
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+            qapp.processEvents()
+            mock_refresh.assert_called_once()
+
+
+class TestMeetAndReadWidgetSignals:
+    """Verify MeetAndReadWidget emits identity/history signals correctly.
+
+    Tests the signal emission from key mutation paths without requiring
+    a full application context — patches the controller and verifies
+    signal delivery.
+    """
+
+    @pytest.fixture
+    def qapp(self):
+        app = QApplication.instance()
+        if app is None:
+            app = QApplication([])
+        return app
+
+    @pytest.fixture
+    def main_widget(self, qapp):
+        from meetandread.widgets.main_widget import MeetAndReadWidget
+        widget = MeetAndReadWidget()
+        qapp.processEvents()
+        yield widget
+        widget.close()
+
+    def test_widget_has_identity_signal(self, main_widget):
+        """MeetAndReadWidget defines identity_data_changed signal."""
+        assert hasattr(main_widget, 'identity_data_changed')
+        assert main_widget.identity_data_changed is not None
+
+    def test_widget_has_history_signal(self, main_widget):
+        """MeetAndReadWidget defines history_data_changed signal."""
+        assert hasattr(main_widget, 'history_data_changed')
+        assert main_widget.history_data_changed is not None
+
+    def test_signals_connected_to_panel(self, main_widget, qapp):
+        """identity/history signals are connected to settings panel methods."""
+        panel = main_widget._floating_settings_panel
+        assert panel is not None
+
+        # Show panel and navigate to History
+        panel.show_panel()
+        panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+        qapp.processEvents()
+
+        with patch.object(panel, "_refresh_history") as mock_refresh:
+            main_widget.history_data_changed.emit()
+            qapp.processEvents()
+            mock_refresh.assert_called_once()
+
+    def test_identity_signal_connected_to_panel(self, main_widget, qapp):
+        """identity_data_changed reaches panel.refresh_identities_if_visible."""
+        panel = main_widget._floating_settings_panel
+        panel.show_panel()
+        panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+        qapp.processEvents()
+
+        with patch.object(panel, "_refresh_identities") as mock_refresh:
+            main_widget.identity_data_changed.emit()
+            qapp.processEvents()
+            mock_refresh.assert_called_once()
+
+    def test_recording_complete_emits_history_signal(self, main_widget, qapp):
+        """_on_recording_complete emits history_data_changed."""
+        with patch.object(main_widget, 'history_data_changed') as mock_signal:
+            # Patch the actual emit to avoid double-call via connected slot
+            main_widget._on_recording_complete("/fake/path.wav", "/fake/transcript.md")
+            mock_signal.emit.assert_called_once()
+
+    def test_post_process_complete_emits_history_signal(self, main_widget, qapp):
+        """_on_post_process_complete emits history_data_changed."""
+        # Patch update_wer_display to avoid AttributeError
+        panel = main_widget._floating_settings_panel
+        with patch.object(panel, 'update_wer_display'), \
+             patch.object(main_widget, 'history_data_changed') as mock_signal:
+            main_widget._on_post_process_complete("job123", "/fake/transcript.md")
+            mock_signal.emit.assert_called_once()
+
+    def test_speaker_pin_emits_both_signals(self, main_widget, qapp):
+        """_on_speaker_name_pinned emits both identity and history signals (MEM243)."""
+        with patch.object(main_widget._controller, 'pin_speaker_name'), \
+             patch.object(main_widget._controller, 'get_speaker_names', return_value={}), \
+             patch.object(main_widget, 'identity_data_changed') as mock_identity, \
+             patch.object(main_widget, 'history_data_changed') as mock_history:
+            main_widget._on_speaker_name_pinned("spk0", "Alice")
+            mock_identity.emit.assert_called_once()
+            mock_history.emit.assert_called_once()
+
+    def test_speaker_pin_updates_cc_overlay(self, main_widget, qapp):
+        """_on_speaker_name_pinned still updates CC overlay speaker names."""
+        with patch.object(main_widget._controller, 'pin_speaker_name'), \
+             patch.object(main_widget._controller, 'get_speaker_names',
+                          return_value={"spk0": "Alice"}), \
+             patch.object(main_widget, 'identity_data_changed'), \
+             patch.object(main_widget, 'history_data_changed'), \
+             patch.object(main_widget._cc_overlay, 'set_speaker_names') as mock_set:
+            main_widget._on_speaker_name_pinned("spk0", "Alice")
+            mock_set.assert_called_once_with({"spk0": "Alice"})
+
+
+# ---------------------------------------------------------------------------
+# DELETE keyboard shortcut tests
+# ---------------------------------------------------------------------------
+
+class TestDeleteShortcutHistory:
+    """Verify DELETE key triggers history delete on the History page."""
+
+    def test_delete_key_calls_history_delete(self, settings_panel_on_history, qapp, tmp_path):
+        """DELETE with a selected history item should call _on_delete_btn_clicked."""
+        from PyQt6.QtGui import QKeyEvent
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch.object(settings_panel_on_history, '_on_delete_btn_clicked') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel_on_history.keyPressEvent(event)
+            mock_del.assert_called_once()
+            assert event.isAccepted()
+
+    def test_delete_key_no_selection_ignored(self, settings_panel_on_history, qapp):
+        """DELETE without a selected history item should pass to super."""
+        from PyQt6.QtGui import QKeyEvent
+        with patch.object(settings_panel_on_history, '_on_delete_btn_clicked') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel_on_history.keyPressEvent(event)
+            mock_del.assert_not_called()
+
+    def test_delete_key_with_modifier_ignored(self, settings_panel_on_history, qapp, tmp_path):
+        """DELETE with Ctrl modifier should not trigger delete."""
+        from PyQt6.QtGui import QKeyEvent
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch.object(settings_panel_on_history, '_on_delete_btn_clicked') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.ControlModifier,
+            )
+            settings_panel_on_history.keyPressEvent(event)
+            mock_del.assert_not_called()
+
+    def test_delete_key_not_on_history_page_ignored(self, settings_panel, qapp):
+        """DELETE on Settings page (not History) should not trigger delete."""
+        from PyQt6.QtGui import QKeyEvent
+        # Stay on default page (Settings)
+        with patch.object(settings_panel, '_on_delete_btn_clicked') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel.keyPressEvent(event)
+            mock_del.assert_not_called()
+
+    def test_delete_key_editable_focus_ignored(self, settings_panel_on_history, qapp, tmp_path):
+        """DELETE should not trigger delete when an editable widget has focus."""
+        from PyQt6.QtGui import QKeyEvent
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch.object(settings_panel_on_history, '_is_editable_focus',
+                          return_value=True), \
+             patch.object(settings_panel_on_history, '_on_delete_btn_clicked') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel_on_history.keyPressEvent(event)
+            mock_del.assert_not_called()
+
+    def test_playback_shortcuts_still_work(self, settings_panel_on_history, qapp):
+        """Existing playback shortcuts should still fire after DELETE handling."""
+        from PyQt6.QtGui import QKeyEvent
+        mock_helper = MagicMock()
+        mock_helper.is_audio_available = True
+        settings_panel_on_history._playback_helper = mock_helper
+
+        with patch.object(settings_panel_on_history, '_on_playback_play_clicked') as mock_play:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Space,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel_on_history.keyPressEvent(event)
+            mock_play.assert_called_once()
+            assert event.isAccepted()

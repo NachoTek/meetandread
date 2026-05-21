@@ -223,6 +223,41 @@ class TestUISettings:
         settings = UISettings.from_dict({"audio_sources": None})
         assert settings.audio_sources is None
 
+    def test_settings_panel_geometry_default(self):
+        """Test settings_panel_geometry defaults to None."""
+        settings = UISettings()
+        assert settings.settings_panel_geometry is None
+
+    def test_settings_panel_geometry_roundtrip(self):
+        """Test settings_panel_geometry tuple serialization round-trip."""
+        settings = UISettings(settings_panel_geometry=(100, 200, 900, 600))
+        d = settings.to_dict()
+        assert d["settings_panel_geometry"] == [100, 200, 900, 600]
+
+        restored = UISettings.from_dict(d)
+        assert restored.settings_panel_geometry == (100, 200, 900, 600)
+
+    def test_settings_panel_geometry_none_roundtrip(self):
+        """Test settings_panel_geometry None survives round-trip."""
+        settings = UISettings(settings_panel_geometry=None)
+        d = settings.to_dict()
+        assert d["settings_panel_geometry"] is None
+
+        restored = UISettings.from_dict(d)
+        assert restored.settings_panel_geometry is None
+
+    def test_settings_panel_geometry_from_dict_list(self):
+        """Test from_dict converts list to tuple."""
+        d = {"settings_panel_geometry": [50, 75, 800, 500]}
+        settings = UISettings.from_dict(d)
+        assert settings.settings_panel_geometry == (50, 75, 800, 500)
+        assert isinstance(settings.settings_panel_geometry, tuple)
+
+    def test_settings_panel_geometry_from_dict_missing(self):
+        """Test from_dict returns None when key is absent."""
+        settings = UISettings.from_dict({})
+        assert settings.settings_panel_geometry is None
+
 
 class TestAppSettings:
     """Tests for AppSettings root container."""

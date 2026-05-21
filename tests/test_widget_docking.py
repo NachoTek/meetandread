@@ -207,3 +207,196 @@ class TestFreeFloatingPanelPositioning:
 
         # Clean up
         overlay.hide_panel()
+
+
+# ---------------------------------------------------------------------------
+# Tests — settings panel geometry persistence
+# ---------------------------------------------------------------------------
+
+class TestSettingsPanelGeometryPersistence:
+    """Settings panel geometry should persist across show/hide cycles."""
+
+    def test_hide_panel_saves_geometry(self, widget, qapp):
+        """Hiding the settings panel should save its geometry to config."""
+        from meetandread.config import get_config
+
+        widget.move(300, 200)
+        panel = widget._floating_settings_panel
+
+        # Open panel
+        widget._toggle_settings_panel()
+        for _ in range(20):
+            qapp.processEvents()
+
+        # Move panel to a known position
+        panel.move(400, 300)
+        panel.resize(800, 550)
+
+        # Hide panel (should save geometry)
+        panel.hide_panel()
+        for _ in range(20):
+            qapp.processEvents()
+
+        # Verify geometry was saved
+        geom = get_config("ui.settings_panel_geometry")
+        assert geom is not None
+        assert len(geom) == 4
+        assert geom[0] == 400  # x
+        assert geom[1] == 300  # y
+        assert geom[2] == 800  # width
+        assert geom[3] == 550  # height
+
+    def test_close_event_saves_geometry(self, widget, qapp):
+        """Closing the settings panel via closeEvent should save geometry."""
+        from meetandread.config import get_config
+        from PyQt6.QtGui import QCloseEvent
+
+        widget.move(300, 200)
+        panel = widget._floating_settings_panel
+
+        # Open panel
+        widget._toggle_settings_panel()
+        for _ in range(20):
+            qapp.processEvents()
+
+        panel.move(350, 250)
+        panel.resize(750, 500)
+
+        # Simulate close event
+        close_event = QCloseEvent()
+        panel.closeEvent(close_event)
+        for _ in range(10):
+            qapp.processEvents()
+
+        # Verify geometry was saved
+        geom = get_config("ui.settings_panel_geometry")
+        assert geom is not None
+        assert geom[0] == 350
+        assert geom[1] == 250
+        assert geom[2] == 750
+        assert geom[3] == 500
+
+
+class TestSettingsPanelGeometryUnit:
+    """Unit tests for FloatingSettingsPanel geometry save/restore methods."""
+
+    def test_save_geometry_stores_to_config(self, qapp):
+        """save_geometry() should write (x, y, w, h) to ui.settings_panel_geometry."""
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+        from meetandread.config import get_config, set_config, ConfigManager, SettingsPersistence
+        import tempfile
+        from pathlib import Path
+
+        # Use a temp config to avoid polluting real config
+        tmp = Path(tempfile.mkdtemp())
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        import meetandread.config.manager as mgr_mod
+        mgr_mod._config_manager = None
+        persistence = SettingsPersistence(config_dir=tmp)
+        cm = ConfigManager(persistence=persistence)
+        mgr_mod._config_manager = cm
+
+        try:
+            panel = FloatingSettingsPanel()
+            panel.resize(700, 450)
+            panel.move(120, 80)
+            panel.show()
+            for _ in range(10):
+                qapp.processEvents()
+
+            panel.save_geometry()
+
+            geom = get_config("ui.settings_panel_geometry")
+            assert geom is not None
+            assert geom == (120, 80, 700, 450)
+
+            panel.hide()
+            panel.close()
+        finally:
+            ConfigManager._instance = None
+            ConfigManager._initialized = False
+            mgr_mod._config_manager = None
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_restore_geometry_applies_saved_position(self, qapp):
+        """_restore_geometry() should apply saved geometry from config."""
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+        from meetandread.config import set_config, save_config, ConfigManager, SettingsPersistence
+        import tempfile
+        from pathlib import Path
+
+        # Use a temp config
+        tmp = Path(tempfile.mkdtemp())
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        import meetandread.config.manager as mgr_mod
+        mgr_mod._config_manager = None
+        persistence = SettingsPersistence(config_dir=tmp)
+        cm = ConfigManager(persistence=persistence)
+        mgr_mod._config_manager = cm
+
+        try:
+            # Pre-set saved geometry
+            set_config("ui.settings_panel_geometry", (250, 150, 800, 550))
+            save_config()
+
+            panel = FloatingSettingsPanel()
+            for _ in range(10):
+                qapp.processEvents()
+
+            # Panel should have been restored to saved geometry
+            assert panel.x() == 250
+            assert panel.y() == 150
+            assert panel.width() == 800
+            assert panel.height() == 550
+
+            panel.hide()
+            panel.close()
+        finally:
+            ConfigManager._instance = None
+            ConfigManager._initialized = False
+            mgr_mod._config_manager = None
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_save_geometry_noop_when_hidden(self, qapp):
+        """save_geometry() should not overwrite config when panel is hidden."""
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+        from meetandread.config import get_config, set_config, save_config, ConfigManager, SettingsPersistence
+        import tempfile
+        from pathlib import Path
+
+        tmp = Path(tempfile.mkdtemp())
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        import meetandread.config.manager as mgr_mod
+        mgr_mod._config_manager = None
+        persistence = SettingsPersistence(config_dir=tmp)
+        cm = ConfigManager(persistence=persistence)
+        mgr_mod._config_manager = cm
+
+        try:
+            # Pre-set a saved geometry
+            set_config("ui.settings_panel_geometry", (100, 100, 600, 400))
+            save_config()
+
+            panel = FloatingSettingsPanel()
+            panel.hide()
+            for _ in range(10):
+                qapp.processEvents()
+
+            # Save geometry while hidden — should NOT overwrite
+            panel.save_geometry()
+
+            geom = get_config("ui.settings_panel_geometry")
+            assert geom == (100, 100, 600, 400)  # unchanged
+
+            panel.close()
+        finally:
+            ConfigManager._instance = None
+            ConfigManager._initialized = False
+            mgr_mod._config_manager = None
+            import shutil
+            shutil.rmtree(tmp, ignore_errors=True)

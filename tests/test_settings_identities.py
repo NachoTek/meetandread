@@ -1917,3 +1917,161 @@ class TestIdentityDoubleDelete:
         mock_warn.assert_called_once()
         call_args = mock_warn.call_args
         assert "Delete Failed" in call_args[0][1]
+
+
+# ---------------------------------------------------------------------------
+# T01: refresh_identities_if_visible guard pattern tests
+# ---------------------------------------------------------------------------
+
+class TestRefreshIdentitiesIfVisible:
+    """Verify refresh_identities_if_visible guards with visibility and active tab."""
+
+    def test_refreshes_when_on_identities_and_visible(
+        self, settings_panel_on_identities, qapp
+    ):
+        """Identities refreshes when panel is visible and Identities tab is active."""
+        with patch.object(
+            settings_panel_on_identities, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel_on_identities.refresh_identities_if_visible()
+        mock_refresh.assert_called_once()
+
+    def test_skips_when_on_different_page(self, settings_panel, qapp):
+        """Panel is on Settings page (index 0), not Identities."""
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel.refresh_identities_if_visible()
+        mock_refresh.assert_not_called()
+
+    def test_skips_when_not_visible(self, settings_panel_on_identities, qapp):
+        """Panel is on Identities but hidden — skip refresh."""
+        settings_panel_on_identities.hide()
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel_on_identities, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel_on_identities.refresh_identities_if_visible()
+        mock_refresh.assert_not_called()
+
+    def test_skips_when_on_history_page(self, settings_panel, qapp):
+        """Panel is on History page — identities should not refresh."""
+        settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
+        qapp.processEvents()
+
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel.refresh_identities_if_visible()
+        mock_refresh.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# T01: Nav-away-and-back refreshes Identities (dirty flag via nav refresh)
+# ---------------------------------------------------------------------------
+
+class TestIdentitiesNavAwayBackRefresh:
+    """Verify navigating away and back to Identities triggers fresh refresh.
+
+    When the Identities tab is not visible, mutations are not propagated.
+    But navigating back to Identities always calls _refresh_identities,
+    ensuring stale data is never shown.
+    """
+
+    def test_nav_away_and_back_refreshes(
+        self, settings_panel, qapp
+    ):
+        """Navigating away and back triggers a fresh refresh."""
+        with patch.object(
+            settings_panel, "_refresh_identities"
+        ) as mock_refresh:
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+            qapp.processEvents()
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_SETTINGS)
+            qapp.processEvents()
+            settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
+            qapp.processEvents()
+            # Two navigations to Identities = two refresh calls
+            assert mock_refresh.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# T03: DELETE keyboard shortcut tests (Identities page)
+# ---------------------------------------------------------------------------
+
+class TestDeleteShortcutIdentities:
+    """Verify DELETE key triggers identity delete on the Identities page."""
+
+    def test_delete_key_calls_identity_delete(self, settings_panel_on_identities, qapp):
+        """DELETE with a selected identity should call _on_identity_delete."""
+        from PyQt6.QtGui import QKeyEvent
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+        _select_identity(panel, "Alice", qapp)
+
+        with patch.object(panel, '_on_identity_delete') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            panel.keyPressEvent(event)
+            mock_del.assert_called_once()
+            assert event.isAccepted()
+
+    def test_delete_key_no_selection_ignored(self, settings_panel_on_identities, qapp):
+        """DELETE without a selected identity should not trigger delete."""
+        from PyQt6.QtGui import QKeyEvent
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+        # Do NOT select any item
+
+        with patch.object(panel, '_on_identity_delete') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            panel.keyPressEvent(event)
+            mock_del.assert_not_called()
+
+    def test_delete_key_with_modifier_ignored(self, settings_panel_on_identities, qapp):
+        """DELETE with Shift modifier should not trigger identity delete."""
+        from PyQt6.QtGui import QKeyEvent
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+        _select_identity(panel, "Alice", qapp)
+
+        with patch.object(panel, '_on_identity_delete') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.ShiftModifier,
+            )
+            panel.keyPressEvent(event)
+            mock_del.assert_not_called()
+
+    def test_delete_key_not_on_identities_page_ignored(self, settings_panel, qapp):
+        """DELETE on Settings page (not Identities) should not trigger delete."""
+        from PyQt6.QtGui import QKeyEvent
+        with patch.object(settings_panel, '_on_identity_delete') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel.keyPressEvent(event)
+            mock_del.assert_not_called()
+
+    def test_delete_key_editable_focus_ignored(self, settings_panel_on_identities, qapp):
+        """DELETE should not trigger identity delete when an editable widget has focus."""
+        from PyQt6.QtGui import QKeyEvent
+        panel = settings_panel_on_identities
+        _make_panel_with_identities(qapp, panel, ["Alice"])
+        _select_identity(panel, "Alice", qapp)
+
+        with patch.object(panel, '_is_editable_focus', return_value=True), \
+             patch.object(panel, '_on_identity_delete') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            panel.keyPressEvent(event)
+            mock_del.assert_not_called()

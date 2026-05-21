@@ -188,6 +188,12 @@ class MeetAndReadWidget(QGraphicsView):
 to avoid clipping issues and enable proper text rendering.
     """
     
+    # Signals for reactive UI updates — emitted when underlying data changes.
+    # Connected to FloatingSettingsPanel refresh methods so visible tabs update
+    # immediately; hidden tabs refresh on navigation (MEM242/MEM292 guard pattern).
+    identity_data_changed = pyqtSignal()   # Voice signatures or transcript speaker_matches changed
+    history_data_changed = pyqtSignal()    # Recording list or transcript metadata changed
+    
     def __init__(self, parent=None, tray_manager=None):
         super().__init__(parent)
         
@@ -354,6 +360,15 @@ to avoid clipping issues and enable proper text rendering.
         # Connect CC font size signal to apply font size live
         self._floating_settings_panel.cc_font_size_changed.connect(
             self._on_cc_font_size_changed
+        )
+
+        # Connect reactive data signals — visible tabs refresh immediately;
+        # hidden/inactive tabs refresh on next navigation (MEM242/MEM292).
+        self.identity_data_changed.connect(
+            self._floating_settings_panel.refresh_identities_if_visible
+        )
+        self.history_data_changed.connect(
+            self._floating_settings_panel.refresh_history_if_visible
         )
 
         logging.debug("Created floating settings panel")
@@ -927,9 +942,8 @@ to avoid clipping issues and enable proper text rendering.
         if transcript_path:
             logging.info("Transcript saved to: %s", transcript_path)
 
-        # Refresh history list so new recording appears immediately
-        if self._floating_settings_panel:
-            self._floating_settings_panel.refresh_history_if_visible()
+        # Notify that history data changed — connected panels refresh if visible
+        self.history_data_changed.emit()
 
     def _on_post_process_complete(self, job_id, transcript_path):
         """Handle post-processing completion.
@@ -943,8 +957,9 @@ to avoid clipping issues and enable proper text rendering.
         if self._floating_settings_panel:
             wer = self._controller.get_last_wer()
             self._floating_settings_panel.update_wer_display(wer)
-            # Refresh history list — post-processing may change word/speaker counts
-            self._floating_settings_panel.refresh_history_if_visible()
+
+        # Notify that history data changed — post-processing may change word/speaker counts
+        self.history_data_changed.emit()
 
     def _on_frames_dropped(self, count: int) -> None:
         """Handle frame-drop events forwarded through the Qt bridge.
@@ -978,6 +993,11 @@ to avoid clipping issues and enable proper text rendering.
         Saves the voice signature for the named speaker and refreshes
         all speaker labels in the transcript display.
 
+        Emits identity_data_changed and history_data_changed so the
+        Settings panel refreshes visible tabs immediately (MEM243:
+        speaker assignment changes both identity counts and history
+        speaker names across views).
+
         Args:
             raw_label: Raw speaker label from diarization (e.g. "spk0")
             name: User-chosen display name for this speaker
@@ -995,6 +1015,11 @@ to avoid clipping issues and enable proper text rendering.
             speaker_names = self._controller.get_speaker_names()
             if speaker_names:
                 self._cc_overlay.set_speaker_names(speaker_names)
+
+        # Notify reactive panels — speaker pinning changes both identity
+        # and history data (MEM243)
+        self.identity_data_changed.emit()
+        self.history_data_changed.emit()
 
     def toggle_transcript_panel(self):
         """Toggle CC overlay visibility via the transcript lobe.
@@ -1014,18 +1039,29 @@ to avoid clipping issues and enable proper text rendering.
         """Toggle floating settings panel visibility.
 
         Opening: positions the settings panel with a default offset from
-        the widget. Closing: simply hides the panel. Panels are
-        independent free-floating windows — no docking or z-order sync.
+        the widget only when no saved geometry exists. When a saved
+        geometry is present, uses the restored/current position. Closing:
+        saves geometry and hides the panel. Panels are independent
+        free-floating windows — no docking or z-order sync.
         """
         if self._floating_settings_panel:
             if self._floating_settings_panel.isVisible():
                 self._floating_settings_panel.hide_panel()
             else:
-                # Position with offset to the right of the widget
-                offset_x = self.x() + self.width() + 10
-                offset_y = self.y()
-                self._floating_settings_panel.move(offset_x, offset_y)
-                ensure_on_screen(self._floating_settings_panel)
+                # Only apply default offset when no saved geometry exists;
+                # otherwise the panel keeps its restored/current position.
+                try:
+                    saved_geom = get_config("ui.settings_panel_geometry")
+                except Exception:
+                    saved_geom = None
+                if saved_geom is None:
+                    # Position with offset to the right of the widget
+                    offset_x = self.x() + self.width() + 10
+                    offset_y = self.y()
+                    self._floating_settings_panel.move(offset_x, offset_y)
+                    ensure_on_screen(self._floating_settings_panel)
+                else:
+                    ensure_on_screen(self._floating_settings_panel)
                 self._floating_settings_panel.show_panel()
     
     def toggle_recording(self):

@@ -410,3 +410,176 @@ class TestAcceptRejectUI:
 
         # No crash, no selection
         assert panel._history_list.currentItem() is None
+
+
+# ---------------------------------------------------------------------------
+# Qt-safe scrub signal tests
+# ---------------------------------------------------------------------------
+
+class TestScubQtSafeSignals:
+    """Verify scrub callbacks use PyQt signals instead of QTimer.singleShot.
+
+    Tests that:
+    - _on_scrub_progress (background thread callback) emits _scrub_progress_sig
+    - _scrub_progress_sig delivers to _on_scrub_progress_gui which updates button
+    - _on_scrub_complete (background thread callback) emits _scrub_complete_sig
+    - _scrub_complete_sig delivers to _on_scrub_complete_gui → _handle_scrub_complete
+    """
+
+    @staticmethod
+    def _fake_meta(path: Path, word_count: int, recording_time: str = "2026-04-26T12:00:00"):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeMeta:
+            path: Path
+            recording_time: str
+            word_count: int
+            speaker_count: int
+            speakers: list
+            duration_seconds: float
+            wav_exists: bool
+
+        return FakeMeta(
+            path=path,
+            recording_time=recording_time,
+            word_count=word_count,
+            speaker_count=1,
+            speakers=["SPK_0"],
+            duration_seconds=30.0,
+            wav_exists=True,
+        )
+
+    def test_progress_signal_updates_button_text(self, panel, qapp):
+        """_on_scrub_progress emits signal that updates button text on GUI thread."""
+        panel._scrub_btn.setEnabled(False)
+        panel._scrub_btn.setText("Scrubbing... 0%")
+
+        # Simulate background thread calling the callback
+        panel._on_scrub_progress(42)
+        qapp.processEvents()
+
+        assert panel._scrub_btn.text() == "Scrubbing... 42%"
+
+    def test_progress_signal_reaches_100(self, panel, qapp):
+        """Progress signal delivers 100% correctly."""
+        panel._scrub_btn.setEnabled(False)
+
+        panel._on_scrub_progress(100)
+        qapp.processEvents()
+
+        assert panel._scrub_btn.text() == "Scrubbing... 100%"
+
+    def test_complete_signal_success_shows_comparison(self, panel, qapp, tmp_path):
+        """_on_scrub_complete emits signal that triggers comparison view."""
+        panel._is_scrubbing = True
+        panel._scrub_btn.setEnabled(False)
+        panel._scrub_model_size = "small"
+
+        sidecar = tmp_path / "test_scrub_small.md"
+        sidecar.write_text("**SPK_0**\nNew text.\n", encoding="utf-8")
+
+        # Simulate background thread calling the completion callback
+        panel._on_scrub_complete(str(sidecar), None)
+        qapp.processEvents()
+
+        assert panel._is_scrubbing is False
+        assert panel._scrub_btn.isEnabled()
+        assert panel._is_comparison_mode is True
+
+    def test_complete_signal_error_reenables_button(self, panel, qapp):
+        """_on_scrub_complete with error re-enables controls."""
+        panel._is_scrubbing = True
+        panel._scrub_btn.setEnabled(False)
+
+        with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
+            panel._on_scrub_complete("/fake/path.md", "Model load failed")
+            qapp.processEvents()
+
+        assert panel._is_scrubbing is False
+        assert panel._scrub_btn.isEnabled()
+        assert panel._scrub_btn.text() == "🔄 Scrub"
+
+
+class TestScrubStartupFailure:
+    """Verify ScrubRunner construction and startup failures are caught.
+
+    Tests that exceptions during ScrubRunner() or scrub_recording()
+    restore scrub state and show a warning dialog.
+    """
+
+    @staticmethod
+    def _fake_meta(path: Path, word_count: int, recording_time: str = "2026-04-26T12:00:00"):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeMeta:
+            path: Path
+            recording_time: str
+            word_count: int
+            speaker_count: int
+            speakers: list
+            duration_seconds: float
+            wav_exists: bool
+
+        return FakeMeta(
+            path=path,
+            recording_time=recording_time,
+            word_count=word_count,
+            speaker_count=1,
+            speakers=["SPK_0"],
+            duration_seconds=30.0,
+            wav_exists=True,
+        )
+
+    def test_scrub_runner_construction_failure_resets_state(self, panel, qapp, tmp_path):
+        """If ScrubRunner() raises, scrub state is fully reset."""
+        wav_path = tmp_path / "test.wav"
+        wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
+        md_path = tmp_path / "test.md"
+        md_path.write_text("# Transcript\n")
+
+        with patch(
+            "meetandread.transcription.scrub.ScrubRunner",
+            side_effect=RuntimeError("Whisper not available"),
+        ), patch(
+            "meetandread.widgets.floating_panels.QMessageBox.warning",
+        ) as mock_warn:
+            panel._start_scrub(wav_path, md_path, "tiny")
+            qapp.processEvents()
+
+        # State should be fully reset
+        assert panel._is_scrubbing is False
+        assert panel._scrub_btn.isEnabled()
+        assert panel._scrub_btn.text() == "🔄 Scrub"
+        assert panel._is_comparison_mode is False
+        assert panel._scrub_runner is None
+        assert panel._scrub_sidecar_path is None
+        # Warning shown
+        mock_warn.assert_called_once()
+        call_args = mock_warn.call_args
+        assert "Scrub Failed" in call_args[0][1]
+
+    def test_scrub_recording_startup_failure_resets_state(self, panel, qapp, tmp_path):
+        """If scrub_recording() raises, scrub state is fully reset."""
+        wav_path = tmp_path / "test.wav"
+        wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
+        md_path = tmp_path / "test.md"
+        md_path.write_text("# Transcript\n")
+
+        mock_runner = MagicMock()
+        mock_runner.scrub_recording.side_effect = FileNotFoundError("Audio file vanished")
+
+        with patch(
+            "meetandread.transcription.scrub.ScrubRunner",
+            return_value=mock_runner,
+        ), patch(
+            "meetandread.widgets.floating_panels.QMessageBox.warning",
+        ) as mock_warn:
+            panel._start_scrub(wav_path, md_path, "base")
+            qapp.processEvents()
+
+        assert panel._is_scrubbing is False
+        assert panel._scrub_btn.isEnabled()
+        assert panel._scrub_btn.text() == "🔄 Scrub"
+        mock_warn.assert_called_once()

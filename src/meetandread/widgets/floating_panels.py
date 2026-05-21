@@ -814,6 +814,8 @@ class FloatingTranscriptPanel(QWidget):
     closed = pyqtSignal()  # Emitted when user closes panel
     segment_ready = pyqtSignal(str, int, int, bool, bool, object)  # text, confidence, segment_index, is_final, phrase_start, speaker_id
     speaker_name_pinned = pyqtSignal(str, str)  # raw_speaker_label, user_chosen_name
+    _scrub_progress_sig = pyqtSignal(int)  # Qt-safe scrub progress (pct)
+    _scrub_complete_sig = pyqtSignal(str, object)  # Qt-safe scrub completion (sidecar_path, error_or_None)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -984,7 +986,11 @@ class FloatingTranscriptPanel(QWidget):
         self._scrub_original_html: Optional[str] = None  # original transcript HTML
         self._is_scrubbing: bool = False  # True while scrub is in progress
         self._is_comparison_mode: bool = False  # True when showing side-by-side
-        
+
+        # Connect Qt-safe scrub signals to GUI-thread handlers
+        self._scrub_progress_sig.connect(self._on_scrub_progress_gui)
+        self._scrub_complete_sig.connect(self._on_scrub_complete_gui)
+
         # Dragging
         self._dragging = False
         self._drag_pos = None
@@ -1819,15 +1825,31 @@ class FloatingTranscriptPanel(QWidget):
         self._scrub_btn.setEnabled(False)
         self._scrub_btn.setText("Scrubbing... 0%")
 
-        # Create and start runner
-        self._scrub_runner = ScrubRunner(
-            settings=self._get_app_settings(),
-            on_progress=self._on_scrub_progress,
-            on_complete=self._on_scrub_complete,
-        )
-        self._scrub_sidecar_path = self._scrub_runner.scrub_recording(
-            wav_path, md_path, model_size,
-        )
+        try:
+            # Create and start runner
+            self._scrub_runner = ScrubRunner(
+                settings=self._get_app_settings(),
+                on_progress=self._on_scrub_progress,
+                on_complete=self._on_scrub_complete,
+            )
+            self._scrub_sidecar_path = self._scrub_runner.scrub_recording(
+                wav_path, md_path, model_size,
+            )
+        except Exception as exc:
+            logger.error("Scrub startup failed: %s", exc, exc_info=True)
+            # Restore all scrub state so the UI is not stuck
+            self._is_scrubbing = False
+            self._is_comparison_mode = False
+            self._scrub_btn.setEnabled(True)
+            self._scrub_btn.setText("🔄 Scrub")
+            self._scrub_runner = None
+            self._scrub_sidecar_path = None
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Scrub Failed",
+                f"Could not start re-transcription:\n\n{exc}",
+            )
 
     def _get_app_settings(self):
         """Get the current AppSettings from config."""
@@ -1839,21 +1861,26 @@ class FloatingTranscriptPanel(QWidget):
             return AppSettings()
 
     def _on_scrub_progress(self, pct: int) -> None:
-        """Update scrub button text with progress percentage.
+        """ScrubRunner progress callback (background thread).
 
-        Called from the ScrubRunner background thread — uses
-        QTimer.singleShot to marshal the update to the GUI thread.
+        Emits a Qt signal so the GUI update happens on the main thread.
         """
-        QTimer.singleShot(0, lambda: self._scrub_btn.setText(f"Scrubbing... {pct}%"))
+        self._scrub_progress_sig.emit(pct)
+
+    def _on_scrub_progress_gui(self, pct: int) -> None:
+        """GUI-thread handler for scrub progress updates."""
+        self._scrub_btn.setText(f"Scrubbing... {pct}%")
 
     def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
-        """Handle scrub completion — show comparison or error.
+        """ScrubRunner completion callback (background thread).
 
-        Called from the ScrubRunner background thread — schedules the
-        heavy UI work on the GUI thread via QTimer.singleShot.
+        Emits a Qt signal so the heavy UI work happens on the main thread.
         """
-        # Use QTimer to run on GUI thread
-        QTimer.singleShot(0, lambda: self._handle_scrub_complete(sidecar_path, error))
+        self._scrub_complete_sig.emit(sidecar_path, error)
+
+    def _on_scrub_complete_gui(self, sidecar_path: str, error: Optional[str]) -> None:
+        """GUI-thread handler for scrub completion."""
+        self._handle_scrub_complete(sidecar_path, error)
 
     def _handle_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """Process scrub completion on the GUI thread."""
@@ -3130,6 +3157,8 @@ class FloatingSettingsPanel(QWidget):
     closed = pyqtSignal()
     model_changed = pyqtSignal(str)  # Emit model name when changed
     cc_font_size_changed = pyqtSignal(int)  # Emit font size in px when changed
+    _scrub_progress_sig = pyqtSignal(int)  # Qt-safe scrub progress (pct)
+    _scrub_complete_sig = pyqtSignal(str, object)  # Qt-safe scrub completion (sidecar_path, error_or_None)
 
     # Nav page indices — correspond to QStackedWidget indices
     _NAV_SETTINGS = 0
@@ -4016,6 +4045,10 @@ class FloatingSettingsPanel(QWidget):
         self._is_scrubbing: bool = False
         self._is_comparison_mode: bool = False
 
+        # Connect Qt-safe scrub signals to GUI-thread handlers
+        self._scrub_progress_sig.connect(self._on_scrub_progress_gui)
+        self._scrub_complete_sig.connect(self._on_scrub_complete_gui)
+
         # ------------------------------------------------------------------
         # Resize grip — direct child of panel, positioned at bottom-right
         # ------------------------------------------------------------------
@@ -4042,6 +4075,37 @@ class FloatingSettingsPanel(QWidget):
                 hints.colorSchemeChanged.connect(lambda: self._apply_theme())
         except (ImportError, RuntimeError):
             pass
+
+        # Restore persisted geometry (position + size)
+        self._restore_geometry()
+
+        logger.debug("FloatingSettingsPanel created")
+
+    def _restore_geometry(self) -> None:
+        """Restore settings panel position and size from config."""
+        try:
+            from meetandread.config import get_config
+            geom = get_config("ui.settings_panel_geometry")
+            if geom is not None and len(geom) == 4:
+                x, y, w, h = geom
+                self.resize(w, h)
+                self.move(x, y)
+                ensure_on_screen(self)
+                logger.debug("Restored settings panel geometry: (%d, %d, %d, %d)", x, y, w, h)
+        except Exception as e:
+            logger.warning("Failed to restore settings panel geometry: %s", e)
+
+    def save_geometry(self) -> None:
+        """Save settings panel position and size to config."""
+        try:
+            from meetandread.config import set_config, save_config
+            if self.isVisible():
+                set_config("ui.settings_panel_geometry", (self.x(), self.y(), self.width(), self.height()))
+                save_config()
+                logger.debug("Saved settings panel geometry: (%d, %d, %d, %d)",
+                             self.x(), self.y(), self.width(), self.height())
+        except Exception as e:
+            logger.warning("Failed to save settings panel geometry: %s", e)
 
     def resizeEvent(self, event) -> None:
         """Reposition resize grip on resize."""
@@ -4279,6 +4343,7 @@ class FloatingSettingsPanel(QWidget):
     
     def hide_panel(self):
         """Hide the panel with a 150ms fade-out and stop monitoring."""
+        self.save_geometry()
         self._stop_resource_monitor()
         self._metrics_timer.stop()
         self._stop_playback()
@@ -5312,11 +5377,24 @@ class FloatingSettingsPanel(QWidget):
         to trigger a history refresh after recording or post-processing
         completes.  Avoids unnecessary work when the History page is not
         visible — the next navigation to it will call ``_refresh_history``
-        via ``_on_nav_clicked``.
+        via ``_on_nav_clicked`` (MEM242/MEM292 guard pattern).
         """
         if (self._content_stack.currentIndex() == self._NAV_HISTORY
                 and self.isVisible()):
             self._refresh_history()
+
+    def refresh_identities_if_visible(self) -> None:
+        """Refresh the identities list when the Identities page is currently shown.
+
+        Public entry point for external callers (e.g. MeetAndReadWidget)
+        to trigger an identity refresh after speaker pinning or cross-view
+        mutations.  Avoids unnecessary work when the Identities page is
+        not visible — the next navigation to it will call
+        ``_refresh_identities`` via ``_on_nav_clicked`` (MEM242/MEM292).
+        """
+        if (self._content_stack.currentIndex() == self._NAV_IDENTITIES
+                and self.isVisible()):
+            self._refresh_identities()
 
     def _refresh_history(self) -> None:
         """Re-scan recordings and repopulate the history list."""
@@ -5913,21 +5991,74 @@ class FloatingSettingsPanel(QWidget):
 
     # -- Keyboard shortcuts for History playback -----------------------------
 
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        """Handle keyboard shortcuts for History playback.
+    @staticmethod
+    def _is_editable_focus() -> bool:
+        """Return True if the currently focused widget is an editable control.
 
-        Shortcuts only fire when the History nav page is active and audio is
-        available:
+        Guards DELETE shortcut dispatch so that text editing, combo boxes,
+        and line edits continue to receive the key event normally.
+        """
+        from PyQt6.QtWidgets import (
+            QApplication, QTextEdit, QLineEdit, QComboBox,
+        )
+        focus = QApplication.focusWidget()
+        if focus is None:
+            return False
+        if isinstance(focus, (QTextEdit, QLineEdit)):
+            return True
+        if isinstance(focus, QComboBox) and focus.isEditable():
+            return True
+        # QTextBrowser is read-only by default; only intercept if editable
+        from PyQt6.QtWidgets import QTextBrowser
+        if isinstance(focus, QTextBrowser) and not focus.isReadOnly():
+            return True
+        return False
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        """Handle keyboard shortcuts for History playback and DELETE actions.
+
+        Playback shortcuts only fire when the History nav page is active and
+        audio is available:
 
         - Space: toggle play/pause
         - ``+`` / ``=``: cycle to next playback speed
         - ``-``: cycle to previous playback speed
         - M: add bookmark
+
+        DELETE shortcuts fire on the History or Identities page when an item
+        is selected and no editable widget has keyboard focus:
+
+        - Delete (History page): delete the selected recording
+        - Delete (Identities page): delete the selected identity
         """
         key = event.key()
         modifier = event.modifiers()
 
-        # Only handle shortcuts when on the History page
+        # -- DELETE key handling (History + Identities pages) ----------------
+        if (key == Qt.Key.Key_Delete and modifier == Qt.KeyboardModifier.NoModifier
+                and not self._is_editable_focus()):
+            action = None
+            current_page = self._content_stack.currentIndex()
+
+            if current_page == self._NAV_HISTORY:
+                if self._history_list.currentItem() is not None:
+                    action = "delete_history"
+                    self._on_delete_btn_clicked()
+
+            elif current_page == self._NAV_IDENTITIES:
+                if self._identity_list.currentItem() is not None:
+                    action = "delete_identity"
+                    self._on_identity_delete()
+
+            if action is not None:
+                logger.info(
+                    "keyboard_shortcut_triggered key=%s action=%s",
+                    event.text() or str(key), action,
+                )
+                event.accept()
+                return
+
+        # -- Playback shortcuts (History page only) -------------------------
         if self._content_stack.currentIndex() == self._NAV_HISTORY:
             helper = self._playback_helper
             if helper is not None and helper.is_audio_available:
@@ -6944,26 +7075,52 @@ class FloatingSettingsPanel(QWidget):
         self._scrub_btn.setEnabled(False)
         self._scrub_btn.setText("Scrubbing... 0%")
 
-        self._scrub_runner = ScrubRunner(
-            settings=self._get_app_settings(),
-            on_progress=self._on_scrub_progress,
-            on_complete=self._on_scrub_complete,
-        )
-        self._scrub_sidecar_path = self._scrub_runner.scrub_recording(
-            wav_path, md_path, model_size,
-        )
+        try:
+            self._scrub_runner = ScrubRunner(
+                settings=self._get_app_settings(),
+                on_progress=self._on_scrub_progress,
+                on_complete=self._on_scrub_complete,
+            )
+            self._scrub_sidecar_path = self._scrub_runner.scrub_recording(
+                wav_path, md_path, model_size,
+            )
+        except Exception as exc:
+            logger.error("Scrub startup failed: %s", exc, exc_info=True)
+            # Restore all scrub state so the UI is not stuck
+            self._is_scrubbing = False
+            self._is_comparison_mode = False
+            self._scrub_btn.setEnabled(True)
+            self._scrub_btn.setText("🔄 Scrub")
+            self._scrub_runner = None
+            self._scrub_sidecar_path = None
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Scrub Failed",
+                f"Could not start re-transcription:\n\n{exc}",
+            )
 
     def _on_scrub_progress(self, pct: int) -> None:
-        """Update scrub button text with progress percentage.
+        """ScrubRunner progress callback (background thread).
 
-        Called from the ScrubRunner background thread — uses
-        QTimer.singleShot to marshal the update to the GUI thread.
+        Emits a Qt signal so the GUI update happens on the main thread.
         """
-        QTimer.singleShot(0, lambda: self._scrub_btn.setText(f"Scrubbing... {pct}%"))
+        self._scrub_progress_sig.emit(pct)
+
+    def _on_scrub_progress_gui(self, pct: int) -> None:
+        """GUI-thread handler for scrub progress updates."""
+        self._scrub_btn.setText(f"Scrubbing... {pct}%")
 
     def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
-        """Handle scrub completion."""
-        QTimer.singleShot(0, lambda: self._handle_scrub_complete(sidecar_path, error))
+        """ScrubRunner completion callback (background thread).
+
+        Emits a Qt signal so the heavy UI work happens on the main thread.
+        """
+        self._scrub_complete_sig.emit(sidecar_path, error)
+
+    def _on_scrub_complete_gui(self, sidecar_path: str, error: Optional[str]) -> None:
+        """GUI-thread handler for scrub completion."""
+        self._handle_scrub_complete(sidecar_path, error)
 
     def _handle_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """Process scrub completion on the GUI thread."""
@@ -7163,6 +7320,7 @@ class FloatingSettingsPanel(QWidget):
 
     def closeEvent(self, event):
         """Handle close event."""
+        self.save_geometry()
         self.closed.emit()
         event.accept()
 
