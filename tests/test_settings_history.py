@@ -1583,3 +1583,367 @@ class TestDeleteShortcutHistory:
             settings_panel_on_history.keyPressEvent(event)
             mock_play.assert_called_once()
             assert event.isAccepted()
+
+
+# ---------------------------------------------------------------------------
+# T02: Hover reveal actions in History rows
+# ---------------------------------------------------------------------------
+
+class TestHistoryRowWidgetStructure:
+    """Verify _HistoryRowWidget structure: buttons, labels, object names."""
+
+    def test_row_widget_created_per_item(self, settings_panel_on_history, qapp):
+        """Each history list item gets an embedded row widget."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        assert len(settings_panel_on_history._history_row_widgets) == 2
+
+    def test_row_widget_has_scrub_button(self, settings_panel_on_history, qapp):
+        """Row widget has a Scrub button with correct object name."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+        assert row_widget._scrub_btn.objectName() == "AethericHistoryActionButton"
+        assert row_widget._scrub_btn.property("action") == "scrub"
+
+    def test_row_widget_has_delete_button(self, settings_panel_on_history, qapp):
+        """Row widget has a Delete button with correct object name."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+        assert row_widget._delete_btn.objectName() == "AethericHistoryActionButton"
+        assert row_widget._delete_btn.property("action") == "delete"
+
+    def test_buttons_initially_hidden(self, settings_panel_on_history, qapp):
+        """Inline action buttons start hidden."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+        assert row_widget._scrub_btn.isHidden()
+        assert row_widget._delete_btn.isHidden()
+
+    def test_buttons_have_tooltips(self, settings_panel_on_history, qapp):
+        """Inline buttons have accessible tooltips."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+        assert row_widget._scrub_btn.toolTip() != ""
+        assert row_widget._delete_btn.toolTip() != ""
+
+    def test_buttons_have_accessible_names(self, settings_panel_on_history, qapp):
+        """Inline buttons have accessible names for screen readers."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+        assert row_widget._scrub_btn.accessibleName() == "Scrub recording"
+        assert row_widget._delete_btn.accessibleName() == "Delete recording"
+
+    def test_item_text_preserved_for_accessibility(self, settings_panel_on_history, qapp):
+        """QListWidgetItem text is preserved for screen readers / accessibility."""
+        recordings = [_make_meta("/fake/test.md", recording_time="2026-01-15T10:30:00",
+                                 word_count=42, speaker_count=2)]
+        settings_panel_on_history._populate_history_list(recordings)
+        item = settings_panel_on_history._history_list.item(0)
+        assert "42 words" in item.text()
+        assert "2 speakers" in item.text()
+
+    def test_item_user_role_data_preserved(self, settings_panel_on_history, qapp):
+        """QListWidgetItem UserRole path data is preserved."""
+        recordings = [_make_meta("/fake/test.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        item = settings_panel_on_history._history_list.item(0)
+        # Path is stored as string — on Windows, pathlib normalizes separators
+        assert item.data(Qt.ItemDataRole.UserRole) == str(recordings[0].path)
+
+
+class TestHistoryRowWidgetVisibility:
+    """Verify hover/selection reveal and hide of inline action buttons."""
+
+    def test_selection_shows_actions(self, settings_panel_on_history, qapp):
+        """Selecting a row reveals its inline action buttons."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+
+        item = settings_panel_on_history._history_list.item(0)
+        settings_panel_on_history._history_list.setCurrentItem(item)
+        settings_panel_on_history._update_history_row_visibility()
+
+        row0 = settings_panel_on_history._history_row_widgets[0]
+        row1 = settings_panel_on_history._history_row_widgets[1]
+        assert row0.actions_visible()
+        assert not row1.actions_visible()
+
+    def test_selection_change_hides_previous_actions(self, settings_panel_on_history, qapp):
+        """Moving selection from row A to row B hides A's buttons and shows B's."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+
+        item0 = settings_panel_on_history._history_list.item(0)
+        item1 = settings_panel_on_history._history_list.item(1)
+
+        settings_panel_on_history._history_list.setCurrentItem(item0)
+        settings_panel_on_history._update_history_row_visibility()
+        assert settings_panel_on_history._history_row_widgets[0].actions_visible()
+        assert not settings_panel_on_history._history_row_widgets[1].actions_visible()
+
+        settings_panel_on_history._history_list.setCurrentItem(item1)
+        settings_panel_on_history._update_history_row_visibility()
+        assert not settings_panel_on_history._history_row_widgets[0].actions_visible()
+        assert settings_panel_on_history._history_row_widgets[1].actions_visible()
+
+    def test_hover_shows_actions(self, settings_panel_on_history, qapp):
+        """Setting hovered row reveals buttons for that row."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+
+        settings_panel_on_history._hovered_history_row = 1
+        settings_panel_on_history._update_history_row_visibility()
+
+        assert not settings_panel_on_history._history_row_widgets[0].actions_visible()
+        assert settings_panel_on_history._history_row_widgets[1].actions_visible()
+
+    def test_hover_change_hides_previous(self, settings_panel_on_history, qapp):
+        """Moving hover from row A to row B hides A's buttons and shows B's."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+
+        settings_panel_on_history._hovered_history_row = 0
+        settings_panel_on_history._update_history_row_visibility()
+        assert settings_panel_on_history._history_row_widgets[0].actions_visible()
+
+        settings_panel_on_history._hovered_history_row = 1
+        settings_panel_on_history._update_history_row_visibility()
+        assert not settings_panel_on_history._history_row_widgets[0].actions_visible()
+        assert settings_panel_on_history._history_row_widgets[1].actions_visible()
+
+    def test_hover_overrides_selection(self, settings_panel_on_history, qapp):
+        """When hovering a different row than selected, hover takes priority."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+
+        item0 = settings_panel_on_history._history_list.item(0)
+        settings_panel_on_history._history_list.setCurrentItem(item0)
+
+        settings_panel_on_history._hovered_history_row = 1
+        settings_panel_on_history._update_history_row_visibility()
+
+        # Hovered row shows, selected row hidden
+        assert not settings_panel_on_history._history_row_widgets[0].actions_visible()
+        assert settings_panel_on_history._history_row_widgets[1].actions_visible()
+
+    def test_leave_falls_back_to_selection(self, settings_panel_on_history, qapp):
+        """When hover leaves viewport, selected row keeps its buttons."""
+        recordings = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+
+        item0 = settings_panel_on_history._history_list.item(0)
+        settings_panel_on_history._history_list.setCurrentItem(item0)
+
+        # Simulate hover then leave
+        settings_panel_on_history._hovered_history_row = 1
+        settings_panel_on_history._update_history_row_visibility()
+        settings_panel_on_history._hovered_history_row = -1
+        settings_panel_on_history._update_history_row_visibility()
+
+        # Falls back to selected row (0)
+        assert settings_panel_on_history._history_row_widgets[0].actions_visible()
+        assert not settings_panel_on_history._history_row_widgets[1].actions_visible()
+
+    def test_no_selection_no_hover_hides_all(self, settings_panel_on_history, qapp):
+        """With no selection and no hover, all buttons are hidden."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        settings_panel_on_history._hovered_history_row = -1
+        settings_panel_on_history._history_list.clearSelection()
+        settings_panel_on_history._update_history_row_visibility()
+
+        assert not settings_panel_on_history._history_row_widgets[0].actions_visible()
+
+    def test_empty_list_no_crash(self, settings_panel_on_history, qapp):
+        """Updating visibility on empty list does not crash."""
+        settings_panel_on_history._populate_history_list([])
+        settings_panel_on_history._update_history_row_visibility()
+        assert len(settings_panel_on_history._history_row_widgets) == 0
+
+    def test_repopulate_clears_old_widgets(self, settings_panel_on_history, qapp):
+        """Repopulating the list clears old row widget references."""
+        recordings1 = [_make_meta("/fake/a.md"), _make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings1)
+        assert len(settings_panel_on_history._history_row_widgets) == 2
+
+        recordings2 = [_make_meta("/fake/c.md")]
+        settings_panel_on_history._populate_history_list(recordings2)
+        assert len(settings_panel_on_history._history_row_widgets) == 1
+        # Only the new item's widget exists
+        assert 0 in settings_panel_on_history._history_row_widgets
+
+
+class TestHistoryRowWidgetButtonActions:
+    """Verify inline button clicks route to existing handlers."""
+
+    def test_scrub_button_routes_to_handler(self, settings_panel_on_history, qapp):
+        """Inline scrub button calls setCurrentItem then _on_scrub_clicked."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+
+        with patch.object(settings_panel_on_history, '_on_scrub_clicked') as mock_scrub:
+            row_widget._on_scrub()
+            mock_scrub.assert_called_once()
+
+        # Verify item was selected (MEM103)
+        current = settings_panel_on_history._history_list.currentItem()
+        assert current is not None
+        assert current.data(Qt.ItemDataRole.UserRole) == str(recordings[0].path)
+
+    def test_delete_button_routes_to_handler(self, settings_panel_on_history, qapp):
+        """Inline delete button calls setCurrentItem then _delete_recording."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+        item = settings_panel_on_history._history_list.item(0)
+
+        with patch.object(settings_panel_on_history, '_delete_recording') as mock_del:
+            row_widget._on_delete()
+            mock_del.assert_called_once_with(item)
+
+        # Verify item was selected (MEM103)
+        current = settings_panel_on_history._history_list.currentItem()
+        assert current is not None
+
+    def test_scrub_button_disabled_when_no_path(self, settings_panel_on_history, qapp):
+        """Scrub button is disabled when item has no path."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        # Simulate empty path by creating widget with empty path
+        from meetandread.widgets.floating_panels import _HistoryRowWidget
+        item = QListWidgetItem("test")
+        item.setData(Qt.ItemDataRole.UserRole, "")
+        widget = _HistoryRowWidget("test", "", settings_panel_on_history, item,
+                                   settings_panel_on_history._history_list.viewport())
+        assert not widget._scrub_btn.isEnabled()
+        assert not widget._delete_btn.isEnabled()
+
+    def test_scrub_button_disabled_when_none_path(self, settings_panel_on_history, qapp):
+        """Scrub button is disabled when path is None."""
+        from meetandread.widgets.floating_panels import _HistoryRowWidget
+        item = QListWidgetItem("test")
+        item.setData(Qt.ItemDataRole.UserRole, None)
+        widget = _HistoryRowWidget("test", None, settings_panel_on_history, item,
+                                   settings_panel_on_history._history_list.viewport())
+        assert not widget._scrub_btn.isEnabled()
+        assert not widget._delete_btn.isEnabled()
+
+    def test_row_widget_click_selects_item(self, settings_panel_on_history, qapp, tmp_path):
+        """Clicking the row widget area selects the item and loads transcript."""
+        md_path = tmp_path / "transcripts" / "test.md"
+        metadata = {
+            "words": [{"speaker_id": "SPK_0", "start_time": 0.0, "end_time": 1.0, "text": "Hi"}],
+            "segments": [],
+        }
+        _write_transcript(md_path, "**SPK_0**\nHi.\n", metadata)
+
+        meta = _make_meta(str(md_path))
+        settings_panel_on_history._populate_history_list([meta])
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+
+        with patch.object(settings_panel_on_history, '_on_history_item_clicked') as mock_click:
+            from PyQt6.QtGui import QMouseEvent
+            from PyQt6.QtCore import QPointF
+            event = QMouseEvent(
+                QMouseEvent.Type.MouseButtonPress,
+                QPointF(10, 5),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel_on_history.mousePressEvent(event)  # won't intercept
+            row_widget.mousePressEvent(event)
+
+        mock_click.assert_called_once()
+        current = settings_panel_on_history._history_list.currentItem()
+        assert current is not None
+
+
+class TestHistoryRowWidgetContextMenu:
+    """Verify context menu still works with row widgets."""
+
+    def test_context_menu_forwards_to_handler(self, settings_panel_on_history, qapp):
+        """Right-click on a row widget forwards to _on_history_context_menu."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        row_widget = settings_panel_on_history._history_row_widgets[0]
+
+        from PyQt6.QtGui import QContextMenuEvent
+        from PyQt6.QtCore import QPoint
+        event = QContextMenuEvent(
+            QContextMenuEvent.Reason.Mouse,
+            QPoint(10, 5),
+        )
+        with patch.object(settings_panel_on_history, '_on_history_context_menu') as mock_cm:
+            row_widget.contextMenuEvent(event)
+            mock_cm.assert_called_once()
+
+
+class TestHistoryRowWidgetExistingFlows:
+    """Verify existing flows (DELETE key, header buttons, item click) still work."""
+
+    def test_delete_key_still_works(self, settings_panel_on_history, qapp, tmp_path):
+        """DELETE keyboard shortcut still triggers delete after row widget changes."""
+        from PyQt6.QtGui import QKeyEvent
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch.object(settings_panel_on_history, '_on_delete_btn_clicked') as mock_del:
+            event = QKeyEvent(
+                QKeyEvent.Type.KeyPress, Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            settings_panel_on_history.keyPressEvent(event)
+            mock_del.assert_called_once()
+
+    def test_header_scrub_button_still_works(self, settings_panel_on_history, qapp, tmp_path):
+        """Header Scrub button still triggers scrub handler."""
+        _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch.object(settings_panel_on_history, '_on_scrub_clicked') as mock_scrub:
+            settings_panel_on_history._on_scrub_clicked()
+            mock_scrub.assert_called_once()
+
+    def test_header_delete_button_still_works(self, settings_panel_on_history, qapp, tmp_path):
+        """Header Delete button still triggers delete handler."""
+        md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
+
+        with patch.object(settings_panel_on_history, '_delete_recording') as mock_del:
+            settings_panel_on_history._on_delete_btn_clicked()
+            mock_del.assert_called_once_with(item)
+
+    def test_item_click_still_loads_transcript(self, settings_panel_on_history, qapp, tmp_path):
+        """Clicking a history item still loads the transcript in the viewer."""
+        md_path = tmp_path / "transcripts" / "test.md"
+        metadata = {
+            "words": [
+                {"speaker_id": "SPK_0", "start_time": 0.0, "end_time": 1.0, "text": "Hello"},
+            ],
+            "segments": [],
+        }
+        _write_transcript(md_path, "**SPK_0**\nHello world.\n", metadata)
+
+        meta = _make_meta(str(md_path))
+        settings_panel_on_history._populate_history_list([meta])
+        item = settings_panel_on_history._history_list.item(0)
+        settings_panel_on_history._on_history_item_clicked(item)
+        qapp.processEvents()
+
+        assert settings_panel_on_history._current_history_md_path == md_path
+        html = settings_panel_on_history._history_viewer.toHtml()
+        assert "speaker:SPK_0" in html
+
+    def test_populate_clears_hover_state(self, settings_panel_on_history, qapp):
+        """Repopulating the list resets hover state."""
+        recordings = [_make_meta("/fake/a.md")]
+        settings_panel_on_history._populate_history_list(recordings)
+        settings_panel_on_history._hovered_history_row = 0
+
+        recordings2 = [_make_meta("/fake/b.md")]
+        settings_panel_on_history._populate_history_list(recordings2)
+        assert settings_panel_on_history._hovered_history_row == -1
