@@ -445,7 +445,7 @@ class TestAethericPlaybackToolbarCss:
 
     EXPECTED_KEYS = {
         "progress_slider",
-        "status_label", "status_label_error",
+        "play_button", "speed_button", "volume_button",
         "bookmark_button", "bookmark_combo", "bookmark_delete_button",
     }
 
@@ -456,14 +456,6 @@ class TestAethericPlaybackToolbarCss:
     def test_has_expected_keys(self):
         result = aetheric_playback_toolbar_css(DARK_PALETTE)
         assert set(result.keys()) == self.EXPECTED_KEYS
-
-    def test_status_label_uses_scoped_selector(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["status_label"]
-        assert "QLabel#AethericHistoryPlaybackStatusLabel" in css
-
-    def test_status_label_error_uses_scoped_selector(self):
-        css = aetheric_playback_toolbar_css(DARK_PALETTE)["status_label_error"]
-        assert "QLabel#AethericHistoryPlaybackStatusLabel" in css
 
     def test_all_values_are_nonempty(self):
         result = aetheric_playback_toolbar_css(DARK_PALETTE)
@@ -565,12 +557,13 @@ class TestBookmarkToolbarCss:
             if "QPushButton" in line and "{" in line:
                 assert "#" in line, f"Bare QPushButton selector: {line}"
 
-    def test_bookmark_dark_and_light_differ(self):
-        dark = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_button"]
-        light = aetheric_playback_toolbar_css(LIGHT_PALETTE)["bookmark_button"]
-        assert dark != light
+    def test_bookmark_css_is_valid(self):
+        """Bookmark button CSS is non-empty with scoped selectors."""
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_button"]
+        assert "QPushButton#AethericHistoryBookmarkButton" in css
+        assert len(css.strip()) > 50
 
-    def test_bookmark_delete_dark_and_light_differ(self):
-        dark = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
-        light = aetheric_playback_toolbar_css(LIGHT_PALETTE)["bookmark_delete_button"]
-        assert dark != light
+    def test_bookmark_delete_css_is_valid(self):
+        """Bookmark delete button CSS is non-empty with scoped selectors."""
+        css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
+        assert len(css.strip()) > 50

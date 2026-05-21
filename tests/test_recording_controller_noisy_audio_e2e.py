@@ -617,6 +617,7 @@ class TestRecordingControllerDenoisingDiarizationIntegration:
     is exercised end-to-end.
     """
 
+    @pytest.mark.slow(reason="Full E2E recording pipeline with denoising+diarization")
     def test_denoising_diarization_end_to_end(self, tmp_path: Path):
         """Record a noisy two-speaker fake WAV, finalize, and verify
         diagnostics expose both denoising activity and diarization metadata.

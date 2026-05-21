@@ -787,7 +787,7 @@ AETHERIC_BORDER_DARK = "rgba(0, 0, 0, 80)"
 # Navigation pill colours
 AETHERIC_NAV_ACTIVE_BG = "rgba(255, 85, 69, 0.2)"  # red-500/20
 AETHERIC_NAV_ACTIVE_GLOW = "rgba(255, 85, 69, 0.4)"  # red glow
-AETHERIC_NAV_INACTIVE_TEXT = "rgba(255, 255, 255, 0.9)"  # white/90
+AETHERIC_NAV_INACTIVE_TEXT = "rgba(255, 255, 255, 0.4)"  # white/40
 AETHERIC_NAV_HOVER_BG = "rgba(255, 255, 255, 0.05)"  # white/5
 
 # Accent colours for the Aetheric theme
@@ -1293,18 +1293,11 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
     """Aetheric Glass playback toolbar controls for the History header.
 
     Returns a dict of scoped QSS strings keyed by widget role:
-    'progress_slider', 'status_label', 'status_label_error',
+    'play_button', 'speed_button', 'volume_button', 'progress_slider',
     'bookmark_button', 'bookmark_combo', 'bookmark_delete_button'.
 
-    All selectors are scoped to object names so they cannot
-    leak to unrelated widgets.
-
-    Object name selectors used:
-    - ``QSlider#AethericHistoryPlaybackProgressSlider``
-    - ``QLabel#AethericHistoryPlaybackStatusLabel``
-    - ``QPushButton#AethericHistoryBookmarkButton``
-    - ``QComboBox#AethericHistoryBookmarkCombo``
-    - ``QPushButton#AethericHistoryBookmarkDeleteButton``
+    All selectors are scoped to object names so they cannot leak to
+    unrelated widgets.
 
     Args:
         p: Active theme palette.
@@ -1313,22 +1306,107 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
         Dict of named QSS strings, one per playback widget role.
     """
     return {
+        "play_button": f"""
+            QPushButton#AethericHistoryPlaybackButton {{
+                background-color: {AETHERIC_GLASS_ROW_BG};
+                color: #ffffff;
+                border: 1px solid transparent;
+                border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+                border-right: 1px solid {AETHERIC_BORDER_DARK};
+                border-radius: 6px;
+                padding: 2px 4px;
+                font-size: 14px;
+                font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;
+            }}
+            QPushButton#AethericHistoryPlaybackButton:hover {{
+                background-color: {AETHERIC_NAV_HOVER_BG};
+                border: 1px solid {AETHERIC_RED};
+                color: {AETHERIC_RED};
+            }}
+            QPushButton#AethericHistoryPlaybackButton:pressed {{
+                background-color: {AETHERIC_NAV_ACTIVE_BG};
+            }}
+            QPushButton#AethericHistoryPlaybackButton:disabled {{
+                color: rgba(255, 255, 255, 130);
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+        "speed_button": f"""
+            QPushButton#AethericHistoryPlaybackSpeedButton {{
+                background-color: {AETHERIC_GLASS_ROW_BG};
+                color: #ffffff;
+                border: 1px solid transparent;
+                border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+                border-right: 1px solid {AETHERIC_BORDER_DARK};
+                border-radius: 6px;
+                padding: 2px 4px;
+                font-size: 11px;
+                font-weight: bold;
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            QPushButton#AethericHistoryPlaybackSpeedButton:hover {{
+                background-color: {AETHERIC_NAV_HOVER_BG};
+                border: 1px solid {AETHERIC_RED};
+                color: {AETHERIC_RED};
+            }}
+            QPushButton#AethericHistoryPlaybackSpeedButton:pressed {{
+                background-color: {AETHERIC_NAV_ACTIVE_BG};
+            }}
+            QPushButton#AethericHistoryPlaybackSpeedButton:disabled {{
+                color: rgba(255, 255, 255, 130);
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
+        "volume_button": f"""
+            QPushButton#AethericHistoryPlaybackVolumeButton {{
+                background-color: {AETHERIC_GLASS_ROW_BG};
+                color: #ffffff;
+                border: 1px solid transparent;
+                border-top: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-left: 1px solid {AETHERIC_BORDER_LIGHT};
+                border-bottom: 1px solid {AETHERIC_BORDER_DARK};
+                border-right: 1px solid {AETHERIC_BORDER_DARK};
+                border-radius: 6px;
+                padding: 2px 4px;
+                font-size: 11px;
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            QPushButton#AethericHistoryPlaybackVolumeButton:hover {{
+                background-color: {AETHERIC_NAV_HOVER_BG};
+                border: 1px solid {AETHERIC_RED};
+                color: {AETHERIC_RED};
+            }}
+            QPushButton#AethericHistoryPlaybackVolumeButton:pressed {{
+                background-color: {AETHERIC_NAV_ACTIVE_BG};
+            }}
+            QPushButton#AethericHistoryPlaybackVolumeButton:disabled {{
+                color: rgba(255, 255, 255, 130);
+                border-color: transparent;
+                background-color: transparent;
+            }}
+        """,
         "progress_slider": f"""
             QSlider#AethericHistoryPlaybackProgressSlider {{
                 background: transparent;
                 height: 6px;
             }}
             QSlider#AethericHistoryPlaybackProgressSlider::groove:horizontal {{
-                background: {AETHERIC_BORDER_DARK};
+                background: rgba(255, 255, 255, 120);
                 height: 4px;
                 border-radius: 2px;
             }}
             QSlider#AethericHistoryPlaybackProgressSlider::handle:horizontal {{
-                background: {p.text_secondary};
-                width: 10px;
-                height: 10px;
-                margin: -3px 0;
-                border-radius: 5px;
+                background: #eeeeee;
+                width: 14px;
+                height: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
             }}
             QSlider#AethericHistoryPlaybackProgressSlider::handle:horizontal:hover {{
                 background: {AETHERIC_RED};
@@ -1337,30 +1415,16 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
                 background: transparent;
             }}
             QSlider#AethericHistoryPlaybackProgressSlider::groove:horizontal:disabled {{
-                background: transparent;
+                background: rgba(255, 255, 255, 60);
             }}
             QSlider#AethericHistoryPlaybackProgressSlider::handle:horizontal:disabled {{
-                background: {AETHERIC_BORDER_DARK};
-            }}
-        """,
-        "status_label": f"""
-            QLabel#AethericHistoryPlaybackStatusLabel {{
-                color: {p.text_tertiary};
-                font-size: 10px;
-                padding: 0 4px;
-            }}
-        """,
-        "status_label_error": f"""
-            QLabel#AethericHistoryPlaybackStatusLabel {{
-                color: {p.text_disabled};
-                font-size: 10px;
-                padding: 0 4px;
+                background: rgba(255, 255, 255, 130);
             }}
         """,
         "bookmark_button": f"""
             QPushButton#AethericHistoryBookmarkButton {{
                 background-color: {AETHERIC_GLASS_ROW_BG};
-                color: {p.text_secondary};
+                color: #ffffff;
                 border: 1px solid transparent;
                 border-top: 1px solid {AETHERIC_BORDER_LIGHT};
                 border-left: 1px solid {AETHERIC_BORDER_LIGHT};
@@ -1369,6 +1433,7 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
                 border-radius: 6px;
                 padding: 2px 4px;
                 font-size: 13px;
+                font-family: 'Segoe UI Symbol', 'Segoe UI', sans-serif;
             }}
             QPushButton#AethericHistoryBookmarkButton:hover {{
                 background-color: {AETHERIC_NAV_HOVER_BG};
@@ -1379,7 +1444,7 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
                 background-color: {AETHERIC_NAV_ACTIVE_BG};
             }}
             QPushButton#AethericHistoryBookmarkButton:disabled {{
-                color: {AETHERIC_BORDER_DARK};
+                color: rgba(255, 255, 255, 130);
                 border-color: transparent;
                 background-color: transparent;
             }}
@@ -1387,12 +1452,13 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
         "bookmark_combo": f"""
             QComboBox#AethericHistoryBookmarkCombo {{
                 background-color: {AETHERIC_SETTINGS_BG};
-                color: {p.text_tertiary};
+                color: {p.text_secondary};
                 border: 1px solid {AETHERIC_BORDER_LIGHT};
                 border-radius: 6px;
                 padding: 2px 6px;
                 font-size: 11px;
                 min-height: 20px;
+                font-family: 'Segoe UI', sans-serif;
             }}
             QComboBox#AethericHistoryBookmarkCombo:hover {{
                 border-color: {AETHERIC_RED};
@@ -1423,7 +1489,7 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
                 selection-color: {AETHERIC_RED};
             }}
             QComboBox#AethericHistoryBookmarkCombo:disabled {{
-                color: {AETHERIC_BORDER_DARK};
+                color: rgba(255, 255, 255, 130);
                 border-color: transparent;
                 background-color: transparent;
             }}
@@ -1450,7 +1516,7 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
                 background-color: {AETHERIC_NAV_ACTIVE_BG};
             }}
             QPushButton#AethericHistoryBookmarkDeleteButton:disabled {{
-                color: {AETHERIC_BORDER_DARK};
+                color: rgba(255, 255, 255, 130);
                 border-color: transparent;
                 background-color: transparent;
             }}

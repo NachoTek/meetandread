@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
     QCheckBox, QLineEdit, QSlider,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QPointF
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -81,6 +81,7 @@ from meetandread.widgets.theme import (
     aetheric_cc_overlay_css,
     AETHERIC_RED,
     AETHERIC_BORDER_DARK,
+    AETHERIC_BORDER_LIGHT,
     AETHERIC_SETTINGS_BG,
     AETHERIC_RADIUS,
     ARROW_UP_SVG,
@@ -89,6 +90,8 @@ from meetandread.widgets.theme import (
 )
 
 import logging
+
+from meetandread.widgets.icons import create_play_icon, create_pause_icon, create_speaker_icon
 
 logger = logging.getLogger(__name__)
 
@@ -2767,8 +2770,18 @@ class CCOverlayPanel(QWidget):
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Start drag on left-button press (anywhere except resize grip)."""
+        """Start drag on left-button press (anywhere except interactive children)."""
         if event.button() == Qt.MouseButton.LeftButton:
+            # Don't start drag if click landed on an interactive child widget
+            child = self.childAt(event.position().toPoint())
+            if child is not None:
+                # Check if the child or any ancestor up to self is interactive
+                w = child
+                while w is not None and w is not self:
+                    if isinstance(w, (QPushButton, QSlider, QComboBox)):
+                        super().mousePressEvent(event)
+                        return
+                    w = w.parent() if hasattr(w, 'parent') else None
             self._dragging = True
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -3660,40 +3673,109 @@ class FloatingSettingsPanel(QWidget):
         detail_header_layout.setContentsMargins(6, 2, 6, 2)
         detail_header_layout.setSpacing(4)
 
-        # -- Status label (kept for playback diagnostics) --
-        self._playback_status_label = QLabel("")
-        self._playback_status_label.setObjectName("AethericHistoryPlaybackStatusLabel")
-        self._playback_status_label.setAccessibleName("Audio playback status")
-        self._playback_status_label.setAccessibleDescription("Current status of audio playback or error message")
-        self._playback_status_label.setFixedHeight(20)
-        self._playback_status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        detail_header_layout.addWidget(self._playback_status_label)
+        # -- Playback controls: Play | Progress slider | Speed toggle | Volume popup --
+        self._playback_play_btn = QPushButton()
+        self._playback_play_btn.setIcon(create_play_icon())
+        self._playback_play_btn.setIconSize(QSize(16, 16))
+        self._playback_play_btn.setObjectName("AethericHistoryPlaybackButton")
+        self._playback_play_btn.setProperty("playback_action", "play_pause")
+        self._playback_play_btn.setAccessibleName("Play or pause audio")
+        self._playback_play_btn.setAccessibleDescription("Toggle audio playback for the selected transcript recording")
+        self._playback_play_btn.setFixedHeight(26)
+        self._playback_play_btn.setFixedWidth(32)
+        self._playback_play_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._playback_play_btn.setToolTip("Play / Pause audio")
+        self._playback_play_btn.setEnabled(False)
+        self._playback_play_btn.clicked.connect(self._on_playback_play_clicked)
+        detail_header_layout.addWidget(self._playback_play_btn)
 
-        # Progress slider for transport position
+        # Progress / seek slider (expands to fill available space)
         self._playback_progress_slider = QSlider(Qt.Orientation.Horizontal)
         self._playback_progress_slider.setObjectName("AethericHistoryPlaybackProgressSlider")
         self._playback_progress_slider.setAccessibleName("Playback position")
         self._playback_progress_slider.setAccessibleDescription("Seek within the audio recording by dragging or clicking the progress bar")
         self._playback_progress_slider.setFixedHeight(22)
-        self._playback_progress_slider.setMinimumWidth(100)
-        self._playback_progress_slider.setMaximumWidth(200)
+        self._playback_progress_slider.setMinimumWidth(80)
         self._playback_progress_slider.setRange(0, 1000)
         self._playback_progress_slider.setValue(0)
+        self._playback_progress_slider.setCursor(Qt.CursorShape.SplitHCursor)
         self._playback_progress_slider.setToolTip("Playback position")
         self._playback_progress_slider.setEnabled(False)
         self._playback_progress_slider.sliderPressed.connect(self._on_progress_slider_pressed)
         self._playback_progress_slider.sliderReleased.connect(self._on_progress_slider_released)
         self._playback_progress_slider.valueChanged.connect(self._on_progress_slider_value_changed)
-        detail_header_layout.addWidget(self._playback_progress_slider)
+        detail_header_layout.addWidget(self._playback_progress_slider, stretch=1)
 
-        # -- Circular playback control (positioned as overlay in bottom-left) --
-        from meetandread.widgets.playback_control import CircularPlaybackControl
-        self._playback_control = CircularPlaybackControl(parent=history_page)
-        self._playback_control.setObjectName("CircularPlaybackControl")
-        self._playback_control.hide()  # shown when audio is available
+        # Speed toggle button — click to cycle through preset speeds
+        self._SPEED_PRESETS: List[float] = [0.5, 0.7, 1.0, 1.25, 1.5, 1.7, 1.8, 2.0]
+        self._speed_preset_index: int = 2  # default = 1.0x
+        self._playback_speed_btn = QPushButton("1x")
+        self._playback_speed_btn.setObjectName("AethericHistoryPlaybackSpeedButton")
+        self._playback_speed_btn.setProperty("playback_action", "speed_toggle")
+        self._playback_speed_btn.setAccessibleName("Playback speed")
+        self._playback_speed_btn.setAccessibleDescription("Click to cycle playback speed")
+        self._playback_speed_btn.setFixedHeight(26)
+        self._playback_speed_btn.setFixedWidth(38)
+        self._playback_speed_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._playback_speed_btn.setToolTip("Playback speed (click to change)")
+        self._playback_speed_btn.setEnabled(False)
+        self._playback_speed_btn.clicked.connect(self._on_playback_speed_clicked)
+        detail_header_layout.addWidget(self._playback_speed_btn)
+
+        # Volume button — click toggles a vertical popup slider
+        self._playback_volume_btn = QPushButton()
+        self._playback_volume_btn.setIcon(create_speaker_icon(volume=80))
+        self._playback_volume_btn.setIconSize(QSize(20, 20))
+        self._playback_volume_btn.setObjectName("AethericHistoryPlaybackVolumeButton")
+        self._playback_volume_btn.setProperty("playback_action", "volume_popup")
+        self._playback_volume_btn.setAccessibleName("Volume control")
+        self._playback_volume_btn.setAccessibleDescription("Click to adjust volume; click mute icon to mute")
+        self._playback_volume_btn.setFixedHeight(26)
+        self._playback_volume_btn.setFixedWidth(32)
+        self._playback_volume_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._playback_volume_btn.setToolTip("Volume (click to adjust)")
+        self._playback_volume_btn.setEnabled(False)
+        self._playback_volume_btn.clicked.connect(self._on_playback_volume_btn_clicked)
+        detail_header_layout.addWidget(self._playback_volume_btn)
+
+        # Volume popup (frameless QFrame with vertical slider + mute button)
+        self._volume_popup = QFrame(self)
+        self._volume_popup.setObjectName("AethericVolumePopup")
+        self._volume_popup.setWindowFlags(
+            Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+        )
+        self._volume_popup.setFixedWidth(40)
+        self._volume_popup.setFixedHeight(140)
+        _vp_layout = QVBoxLayout(self._volume_popup)
+        _vp_layout.setContentsMargins(4, 6, 4, 6)
+        _vp_layout.setSpacing(4)
+        self._volume_popup_slider = QSlider(Qt.Orientation.Vertical)
+        self._volume_popup_slider.setObjectName("AethericVolumePopupSlider")
+        self._volume_popup_slider.setCursor(Qt.CursorShape.SplitVCursor)
+        self._volume_popup_slider.setAccessibleName("Volume slider")
+        self._volume_popup_slider.setRange(0, 100)
+        self._volume_popup_slider.setValue(80)
+        self._volume_popup_slider.valueChanged.connect(self._on_playback_volume_changed)
+        _vp_layout.addWidget(self._volume_popup_slider)
+        self._volume_mute_btn = QPushButton()
+        self._volume_mute_btn.setIcon(create_speaker_icon(volume=0, muted=True))
+        self._volume_mute_btn.setIconSize(QSize(18, 18))
+        self._volume_mute_btn.setObjectName("AethericVolumePopupMuteButton")
+        self._volume_mute_btn.setAccessibleName("Mute")
+        self._volume_mute_btn.setToolTip("Mute / Unmute")
+        self._volume_mute_btn.setFixedHeight(24)
+        self._volume_mute_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._volume_mute_btn.clicked.connect(self._on_volume_mute_clicked)
+        _vp_layout.addWidget(self._volume_mute_btn)
+        self._pre_mute_volume: int = 80  # stored volume before mute
+
+        # Track when popup closes so the toggle button ignores the
+        # spurious click that Qt delivers right after Popup auto-close.
+        self._volume_popup_closed_at: float = 0.0
+        self._volume_popup.installEventFilter(self)
 
         # Bookmark button (🔖)
-        self._bookmark_add_btn = QPushButton("🔖")
+        self._bookmark_add_btn = QPushButton("BM")
         self._bookmark_add_btn.setObjectName("AethericHistoryBookmarkButton")
         self._bookmark_add_btn.setProperty("playback_action", "bookmark_add")
         self._bookmark_add_btn.setAccessibleName("Add bookmark at current position")
@@ -3720,7 +3802,7 @@ class FloatingSettingsPanel(QWidget):
         detail_header_layout.addWidget(self._bookmark_combo)
 
         # Bookmark delete button — removes selected bookmark by created_at
-        self._bookmark_delete_btn = QPushButton("✕")
+        self._bookmark_delete_btn = QPushButton("X")
         self._bookmark_delete_btn.setObjectName("AethericHistoryBookmarkDeleteButton")
         self._bookmark_delete_btn.setProperty("playback_action", "bookmark_delete")
         self._bookmark_delete_btn.setAccessibleName("Delete selected bookmark")
@@ -3732,6 +3814,11 @@ class FloatingSettingsPanel(QWidget):
         self._bookmark_delete_btn.setEnabled(False)
         self._bookmark_delete_btn.clicked.connect(self._on_bookmark_delete_clicked)
         detail_header_layout.addWidget(self._bookmark_delete_btn)
+
+        # Hide bookmark widgets — feature deferred
+        self._bookmark_add_btn.hide()
+        self._bookmark_combo.hide()
+        self._bookmark_delete_btn.hide()
 
         # Drag state flag for progress slider
         self._is_dragging_progress_slider = False
@@ -3800,7 +3887,7 @@ class FloatingSettingsPanel(QWidget):
         # Debounce timestamp (monotonic seconds) for word anchor clicks.
         self._last_word_click_time: float = 0.0
         # Minimum interval (seconds) between word-click seeks.
-        _WORD_CLICK_DEBOUNCE_S: float = 0.1
+        self._WORD_CLICK_DEBOUNCE_S: float = 0.1
         # Timestamp (monotonic ms) of the last highlight re-render.
         self._last_highlight_update_ms: int = 0
         # Highlight throttle interval in milliseconds.
@@ -3957,21 +4044,12 @@ class FloatingSettingsPanel(QWidget):
             pass
 
     def resizeEvent(self, event) -> None:
-        """Reposition resize grip and circular playback control on resize."""
+        """Reposition resize grip on resize."""
         if hasattr(self, '_resize_grip'):
             self._resize_grip.move(
                 self.width() - self._resize_grip.width(),
                 self.height() - self._resize_grip.height(),
             )
-        if hasattr(self, '_playback_control'):
-            # Position circular control in bottom-left of the content area,
-            # above the resize grip with matching insets.
-            inset = 24
-            grip_h = 16 if hasattr(self, '_resize_grip') else 0
-            ctrl_size = self._playback_control.width()
-            x = inset
-            y = self.height() - ctrl_size - grip_h - (inset - grip_h)
-            self._playback_control.move(x, y)
         super().resizeEvent(event)
 
     def paintEvent(self, event) -> None:
@@ -4099,11 +4177,52 @@ class FloatingSettingsPanel(QWidget):
 
         # Playback controls styling (scoped Aetheric toolbar styles)
         playback_css = aetheric_playback_toolbar_css(p)
-        self._playback_status_label.setStyleSheet(playback_css["status_label"])
+        self._playback_play_btn.setStyleSheet(playback_css["play_button"])
+        self._playback_speed_btn.setStyleSheet(playback_css["speed_button"])
+        self._playback_volume_btn.setStyleSheet(playback_css["volume_button"])
         self._playback_progress_slider.setStyleSheet(playback_css["progress_slider"])
         self._bookmark_add_btn.setStyleSheet(playback_css["bookmark_button"])
         self._bookmark_combo.setStyleSheet(playback_css["bookmark_combo"])
         self._bookmark_delete_btn.setStyleSheet(playback_css["bookmark_delete_button"])
+
+        # Volume popup styling
+        vp_bg = AETHERIC_SETTINGS_BG
+        vp_border = AETHERIC_BORDER_LIGHT
+        self._volume_popup.setStyleSheet(f"""
+            QFrame#AethericVolumePopup {{
+                background-color: {vp_bg};
+                border: 1px solid {vp_border};
+                border-radius: 8px;
+            }}
+            QSlider#AethericVolumePopupSlider {{
+                background: transparent;
+            }}
+            QSlider#AethericVolumePopupSlider::groove:vertical {{
+                background: rgba(255, 255, 255, 120);
+                width: 4px;
+                border-radius: 2px;
+            }}
+            QSlider#AethericVolumePopupSlider::handle:vertical {{
+                background: #eeeeee;
+                width: 14px;
+                height: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }}
+            QSlider#AethericVolumePopupSlider::handle:vertical:hover {{
+                background: {AETHERIC_RED};
+            }}
+            QPushButton#AethericVolumePopupMuteButton {{
+                background-color: transparent;
+                color: #ffffff;
+                border: none;
+                font-size: 11px;
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            QPushButton#AethericVolumePopupMuteButton:hover {{
+                color: {AETHERIC_RED};
+            }}
+        """)
 
         # Identities page — reuse history CSS patterns with Identity object names
         identities_page = self._content_stack.widget(self._NAV_IDENTITIES)
@@ -5268,6 +5387,10 @@ class FloatingSettingsPanel(QWidget):
 
         self._current_history_md_path = md_path
         self._history_detail_header.show()
+        print(f"[HEADER-SHOWN] play_btn enabled={self._playback_play_btn.isEnabled()} visible={self._playback_play_btn.isVisible()} geometry={self._playback_play_btn.geometry()}")
+        print(f"[HEADER-SHOWN] speed_btn enabled={self._playback_speed_btn.isEnabled()} geometry={self._playback_speed_btn.geometry()}")
+        print(f"[HEADER-SHOWN] vol_btn enabled={self._playback_volume_btn.isEnabled()} geometry={self._playback_volume_btn.geometry()}")
+        print(f"[HEADER-SHOWN] slider enabled={self._playback_progress_slider.isEnabled()} geometry={self._playback_progress_slider.geometry()}")
 
         # Reset highlight state and extract timed words for the new transcript
         self._reset_highlight_state()
@@ -5314,9 +5437,6 @@ class FloatingSettingsPanel(QWidget):
                 self._playback_helper = HistoryPlaybackController()
                 # Wire player signals to progress slider (once per helper)
                 self._wire_player_signals()
-                # Inject helper into circular playback control
-                if hasattr(self, '_playback_control'):
-                    self._playback_control.set_helper(self._playback_helper)
             except ImportError as exc:
                 logger.warning("QtMultimedia unavailable — playback disabled: %s", exc)
                 self._playback_helper = None
@@ -5326,15 +5446,24 @@ class FloatingSettingsPanel(QWidget):
         """Connect player.positionChanged / durationChanged to the slider.
 
         Called once after helper creation. Guards against None helper or
-        missing player.
+        missing player or signals (e.g., mock players in tests).
         """
         helper = self._playback_helper
         if helper is None:
             return
         player = helper.player
-        player.positionChanged.connect(self._on_player_position_changed)
-        player.durationChanged.connect(self._on_player_duration_changed)
-        logger.info("player_signals_wired: positionChanged, durationChanged")
+        signals = []
+        if hasattr(player, 'positionChanged'):
+            player.positionChanged.connect(self._on_player_position_changed)
+            signals.append("positionChanged")
+        if hasattr(player, 'durationChanged'):
+            player.durationChanged.connect(self._on_player_duration_changed)
+            signals.append("durationChanged")
+        if hasattr(player, 'mediaStatusChanged'):
+            player.mediaStatusChanged.connect(self._on_player_media_status_changed)
+            signals.append("mediaStatusChanged")
+        if signals:
+            logger.info("player_signals_wired: %s", ", ".join(signals))
 
     # Minimum interval (ms) between slider updates from player position
     _POSITION_UPDATE_INTERVAL_MS = 50
@@ -5417,6 +5546,29 @@ class FloatingSettingsPanel(QWidget):
                 self._playback_progress_slider.setValue(0)
                 self._playback_progress_slider.blockSignals(False)
 
+    def _on_player_media_status_changed(self, status) -> None:
+        """Re-sync playback controls when media finishes loading or ends.
+
+        Audio loading is asynchronous — when a recording is selected,
+        _sync_playback_controls() runs before the media is ready, so
+        buttons are disabled. This handler fires when media becomes
+        LoadedMedia/BufferedMedia and re-enables the controls.
+        Also handles EndOfMedia to reset the play icon.
+        """
+        from PyQt6.QtMultimedia import QMediaPlayer
+        if status in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        ):
+            print(f"[MEDIA-STATUS] media loaded ({status}), re-syncing controls")
+            self._sync_playback_controls()
+        elif status == QMediaPlayer.MediaStatus.EndOfMedia:
+            print("[MEDIA-STATUS] media ended, resetting play icon")
+            self._playback_play_btn.setIcon(create_play_icon())
+        elif status == QMediaPlayer.MediaStatus.InvalidMedia:
+            print("[MEDIA-STATUS] media invalid, re-syncing controls")
+            self._sync_playback_controls()
+
     def _load_playback_audio(self, md_path: Path) -> None:
         """Load audio for the given transcript and update toolbar state."""
         helper = self._ensure_playback_helper()
@@ -5435,16 +5587,20 @@ class FloatingSettingsPanel(QWidget):
         """Sync toolbar enabled/disabled state and status from the helper."""
         helper = self._playback_helper
         if helper is None:
+            print("[SYNC] helper=None → all controls DISABLED")
+            self._playback_play_btn.setEnabled(False)
+            self._playback_speed_btn.setEnabled(False)
+            self._playback_volume_btn.setEnabled(False)
             self._playback_progress_slider.setEnabled(False)
             self._bookmark_add_btn.setEnabled(False)
             self._bookmark_combo.setEnabled(False)
-            self._playback_status_label.setText("")
-            if hasattr(self, '_playback_control'):
-                self._playback_control.set_helper(None)
-                self._playback_control.hide()
             return
 
         available = helper.is_audio_available
+        print(f"[SYNC] helper present, audio_available={available} → play={available} speed={available} vol={available}")
+        self._playback_play_btn.setEnabled(available)
+        self._playback_speed_btn.setEnabled(available)
+        self._playback_volume_btn.setEnabled(available)
         self._playback_progress_slider.setEnabled(available)
 
         # Bookmark add requires both audio and a selected transcript
@@ -5454,67 +5610,112 @@ class FloatingSettingsPanel(QWidget):
         has_bookmarks = len(self._bookmark_items) > 0
         self._bookmark_combo.setEnabled(has_transcript and has_bookmarks)
 
-        # Sync circular control visibility and helper
-        if hasattr(self, '_playback_control'):
-            if available:
-                self._playback_control.set_helper(helper)
-                self._playback_control.show()
+        # Update play/pause icon based on actual player state
+        if available:
+            state = helper.player.playbackState()
+            is_playing = (state == 1) or (
+                hasattr(state, 'value') and state.value == 1
+            )
+            if is_playing:
+                self._playback_play_btn.setIcon(create_pause_icon())
             else:
-                self._playback_control.set_helper(None)
-                self._playback_control.hide()
-
-        if helper.last_error:
-            self._playback_status_label.setText(helper.last_error)
-            # Apply error-tinted status style
-            p = current_palette()
-            playback_css = aetheric_playback_toolbar_css(p)
-            self._playback_status_label.setStyleSheet(playback_css["status_label_error"])
+                self._playback_play_btn.setIcon(create_play_icon())
         else:
-            status = helper.status_text
-            self._playback_status_label.setText(status)
-            # Restore normal status style
-            p = current_palette()
-            playback_css = aetheric_playback_toolbar_css(p)
-            self._playback_status_label.setStyleSheet(playback_css["status_label"])
+            self._playback_play_btn.setIcon(create_play_icon())
 
     def _on_playback_play_clicked(self) -> None:
-        """Toggle play/pause — delegates to circular control's center click."""
+        """Toggle play/pause on the playback helper."""
+        print(f"[PLAY-CLICK] handler fired! helper={self._playback_helper}")
+        logger.debug("[PLAY-CLICK] handler called, helper=%s", self._playback_helper)
         helper = self._playback_helper
         if helper is None or not helper.is_audio_available:
+            logger.debug("[PLAY-CLICK] no helper or no audio, returning")
             return
-        from meetandread.widgets.playback_control import PlaybackRegion
-        if hasattr(self, '_playback_control') and self._playback_control._helper is None:
-            self._playback_control.set_helper(helper)
-        if hasattr(self, '_playback_control') and self._playback_control._helper is not None:
-            self._playback_control._handle_region_press(
-                PlaybackRegion.CENTER,
-                QPointF(0, 0),
-            )
-            self._playback_control._clear_all_pressed()
+        # Check current state from the helper's player
+        player = helper.player
+        state = player.playbackState()
+        # PlayingState == 1 (works with both real QMediaPlayer and mock)
+        is_playing = (state == 1) or (
+            hasattr(state, 'value') and state.value == 1
+        ) or (
+            str(state) in ('PlaybackState.PlayingState', 'PlayingState')
+        )
+        print(f"[PLAY-CLICK] state={state} is_playing={is_playing}")
+        if is_playing:
+            helper.pause()
+            self._playback_play_btn.setIcon(create_play_icon())
+            print("[PLAY-CLICK] -> paused")
+        else:
+            # If at end, reset to start before playing
+            try:
+                if player.position() >= player.duration() and player.duration() > 0:
+                    player.setPosition(0)
+            except (TypeError, AttributeError):
+                pass
+            helper.play()
+            self._playback_play_btn.setIcon(create_pause_icon())
+            print("[PLAY-CLICK] -> playing")
 
-    def _on_playback_skip_back_clicked(self) -> None:
-        """Skip backward — delegates to circular control."""
+    def _on_playback_speed_clicked(self) -> None:
+        """Cycle to the next speed preset and apply it."""
+        print(f"[SPEED-CLICK] handler fired! index={self._speed_preset_index}")
+        logger.debug("[SPEED-CLICK] handler called, current index=%d", self._speed_preset_index)
+        self._speed_preset_index = (self._speed_preset_index + 1) % len(self._SPEED_PRESETS)
+        rate = self._SPEED_PRESETS[self._speed_preset_index]
+        # Format: show "1x" for whole numbers, "1.5x" otherwise
+        label = f"{rate:g}x"
+        self._playback_speed_btn.setText(label)
         helper = self._playback_helper
-        if helper is None or not helper.is_audio_available:
-            return
-        from meetandread.widgets.playback_control import PlaybackRegion
-        if hasattr(self, '_playback_control') and self._playback_control._helper is None:
-            self._playback_control.set_helper(helper)
-        if hasattr(self, '_playback_control') and self._playback_control._helper is not None:
-            self._playback_control._handle_region_press(PlaybackRegion.SKIP_BACK, QPointF(0, 0))
-            self._playback_control._clear_all_pressed()
+        if helper is not None and helper.is_audio_available:
+            helper.set_rate(rate)
+            logger.info("speed_changed: rate=%.2f", rate)
 
-    def _on_playback_skip_fwd_clicked(self) -> None:
-        """Skip forward — delegates to circular control."""
+    def eventFilter(self, obj, event) -> bool:
+        """Track volume popup close for toggle guard."""
+        from PyQt6.QtCore import QEvent
+        if obj is self._volume_popup and event.type() == QEvent.Type.Hide:
+            import time
+            self._volume_popup_closed_at = time.monotonic()
+        return False
+
+    def _on_playback_volume_btn_clicked(self) -> None:
+        """Toggle the volume popup below the volume button."""
+        # Qt auto-closes Popup windows when clicking outside, then immediately
+        # delivers the click to the underlying button. Use a timestamp guard
+        # to ignore clicks that happen right after the popup closes.
+        import time
+        now = time.monotonic()
+        if now - getattr(self, '_volume_popup_closed_at', 0) < 0.3:
+            return  # Ignore click — popup just closed
+        logger.debug("[VOLUME-CLICK] showing popup")
+        btn_pos = self._playback_volume_btn.mapToGlobal(QPoint(0, 0))
+        # Position popup below the button, right-aligned
+        x = btn_pos.x() + self._playback_volume_btn.width() - self._volume_popup.width()
+        y = btn_pos.y() + self._playback_volume_btn.height() + 2
+        self._volume_popup.move(x, y)
+        self._volume_popup.show()
+
+    def _on_playback_volume_changed(self, value: int) -> None:
+        """Route volume slider change to the playback helper."""
         helper = self._playback_helper
         if helper is None or not helper.is_audio_available:
             return
-        from meetandread.widgets.playback_control import PlaybackRegion
-        if hasattr(self, '_playback_control') and self._playback_control._helper is None:
-            self._playback_control.set_helper(helper)
-        if hasattr(self, '_playback_control') and self._playback_control._helper is not None:
-            self._playback_control._handle_region_press(PlaybackRegion.SKIP_FORWARD, QPointF(0, 0))
-            self._playback_control._clear_all_pressed()
+        normalized = value / 100.0
+        helper.set_volume(normalized)
+        self._update_volume_icon(value)
+
+    def _update_volume_icon(self, value: int) -> None:
+        """Update the volume button icon based on current slider value."""
+        self._playback_volume_btn.setIcon(create_speaker_icon(volume=value))
+
+    def _on_volume_mute_clicked(self) -> None:
+        """Toggle mute: save current volume on mute, restore on unmute."""
+        current = self._volume_popup_slider.value()
+        if current > 0:
+            self._pre_mute_volume = current
+            self._volume_popup_slider.setValue(0)
+        else:
+            self._volume_popup_slider.setValue(self._pre_mute_volume)
 
     # -- Bookmark handlers ---------------------------------------------------
 
@@ -5562,7 +5763,6 @@ class FloatingSettingsPanel(QWidget):
             )
         except Exception as exc:
             logger.warning("bookmark_add_failed: stem=%s error=%s", md_path.stem, exc)
-            self._playback_status_label.setText(f"Bookmark error: {exc}")
             return
 
         # Refresh the bookmark combo
@@ -5591,10 +5791,7 @@ class FloatingSettingsPanel(QWidget):
                 position_ms,
             )
         else:
-            # Audio unavailable — show status, don't seek
-            self._playback_status_label.setText(
-                "Cannot navigate: audio unavailable"
-            )
+            # Audio unavailable — don't seek
             logger.info(
                 "bookmark_navigation_skipped: reason=audio_unavailable position_ms=%d",
                 position_ms,
@@ -5682,7 +5879,6 @@ class FloatingSettingsPanel(QWidget):
             # If not found (already deleted), silently refresh
         except Exception as exc:
             logger.warning("bookmark_delete_failed: stem=%s error=%s", md_path.stem, exc)
-            self._playback_status_label.setText(f"Bookmark delete error: {exc}")
             return
 
         self._refresh_bookmark_combo()
@@ -5738,10 +5934,9 @@ class FloatingSettingsPanel(QWidget):
         available:
 
         - Space: toggle play/pause
-        - Arrow Left: skip backward 5 seconds
-        - Arrow Right: skip forward 5 seconds
-        - ``+`` / ``=``: increase playback speed
-        - ``-`` / ``_``: decrease playback speed
+        - ``+`` / ``=``: cycle to next playback speed
+        - ``-``: cycle to previous playback speed
+        - M: add bookmark
         """
         key = event.key()
         modifier = event.modifiers()
@@ -5757,25 +5952,15 @@ class FloatingSettingsPanel(QWidget):
                     action = "play_pause"
                     self._on_playback_play_clicked()
 
-                # Arrow Left — skip backward (no modifier)
-                elif key == Qt.Key.Key_Left and modifier == Qt.KeyboardModifier.NoModifier:
-                    action = "skip_backward"
-                    self._on_playback_skip_back_clicked()
-
-                # Arrow Right — skip forward (no modifier)
-                elif key == Qt.Key.Key_Right and modifier == Qt.KeyboardModifier.NoModifier:
-                    action = "skip_forward"
-                    self._on_playback_skip_fwd_clicked()
-
-                # Plus / Equal — increase speed (no modifier)
+                # Plus / Equal — cycle to next speed preset
                 elif key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal) and modifier == Qt.KeyboardModifier.NoModifier:
                     action = "speed_up"
-                    self._step_playback_speed(1)
+                    self._on_playback_speed_clicked()
 
-                # Minus — decrease speed (no modifier)
+                # Minus — cycle to previous speed preset
                 elif key == Qt.Key.Key_Minus and modifier == Qt.KeyboardModifier.NoModifier:
                     action = "speed_down"
-                    self._step_playback_speed(-1)
+                    self._step_playback_speed_prev()
 
                 # M — add bookmark (no modifier)
                 elif key == Qt.Key.Key_M and modifier == Qt.KeyboardModifier.NoModifier:
@@ -5793,23 +5978,16 @@ class FloatingSettingsPanel(QWidget):
         # Not a shortcut we handle — pass to base class
         super().keyPressEvent(event)
 
-    def _step_playback_speed(self, delta: int) -> None:
-        """Step the playback speed up (+1) or down (-1) via circular control.
-
-        Uses the circular control's speed index cycling mechanism.
-        """
-        if not hasattr(self, '_playback_control'):
-            return
-        ctrl = self._playback_control
-        from meetandread.widgets.playback_control import SPEED_RATES
-        new_index = ctrl.current_speed_index + delta
-        new_index = max(0, min(new_index, len(SPEED_RATES) - 1))
-        if new_index != ctrl.current_speed_index:
-            ctrl._speed_index = new_index
-            ctrl._update_speed_label()
-            helper = self._playback_helper
-            if helper is not None and helper.is_audio_available:
-                helper.set_rate(SPEED_RATES[new_index])
+    def _step_playback_speed_prev(self) -> None:
+        """Cycle to the previous speed preset (for minus key shortcut)."""
+        self._speed_preset_index = (self._speed_preset_index - 1) % len(self._SPEED_PRESETS)
+        rate = self._SPEED_PRESETS[self._speed_preset_index]
+        label = f"{rate:g}x"
+        self._playback_speed_btn.setText(label)
+        helper = self._playback_helper
+        if helper is not None and helper.is_audio_available:
+            helper.set_rate(rate)
+            logger.info("speed_changed: rate=%.2f", rate)
 
     @staticmethod
     def _extract_transcript_body(md_path: Optional[Path]) -> str:
@@ -5934,32 +6112,6 @@ class FloatingSettingsPanel(QWidget):
                 result.append((None, None))
 
         self._cached_timed_words = result
-
-        # --- PII-safe diagnostics for timed-word cache quality ---
-        if result:
-            timed_count = sum(1 for s, e in result if s is not None and e is not None)
-            untimed_count = len(result) - timed_count
-            first_gap_start = None
-            last_gap_end = None
-            gap_count = 0
-            prev_end = None
-            for i, (s, e) in enumerate(result):
-                if s is not None and e is not None:
-                    if prev_end is not None and s > prev_end:
-                        gap_count += 1
-                        if first_gap_start is None:
-                            first_gap_start = prev_end
-                        last_gap_end = s
-                    prev_end = max(prev_end or 0, e)
-            logger.debug(
-                "timed_word_cache: total=%d timed=%d untimed=%d "
-                "gaps=%d first_gap_start_ms=%s last_gap_end_ms=%s",
-                len(result), timed_count, untimed_count,
-                gap_count,
-                first_gap_start if first_gap_start is not None else "n/a",
-                last_gap_end if last_gap_end is not None else "n/a",
-            )
-
         return result
 
     def _find_active_word_index(self, position_ms: int) -> int:
@@ -6036,9 +6188,7 @@ class FloatingSettingsPanel(QWidget):
     def _render_highlighted_transcript(self, md_path: Path, highlight_idx: int) -> None:
         """Re-render the transcript with the word at *highlight_idx* highlighted.
 
-        Preserves vertical scroll position around the re-render.  Skips
-        the re-render entirely if the HTML content would be identical
-        (e.g., same highlight index as current).
+        Scrolls to keep the highlighted word visible during playback.
 
         Args:
             md_path: Path to the transcript .md file.
@@ -6048,17 +6198,38 @@ class FloatingSettingsPanel(QWidget):
             # No change — skip expensive setHtml() call
             return
 
-        # Save scroll position
-        scrollbar = self._history_viewer.verticalScrollBar()
-        scroll_pos = scrollbar.value()
-
         self._current_highlight_word_idx = highlight_idx
         html = self._render_history_transcript_highlighted(md_path, highlight_idx)
         if html is not None:
             self._history_viewer.setHtml(html)
 
-        # Restore scroll position
-        scrollbar.setValue(scroll_pos)
+        # Scroll to the highlighted word after the document is laid out.
+        # setHtml() triggers async layout, so defer the scroll.
+        if highlight_idx >= 0 and self._cached_timed_words is not None:
+            words = self._cached_timed_words
+            if highlight_idx < len(words):
+                word_info = words[highlight_idx]
+                if word_info is not None:
+                    start_ms = word_info[0] if isinstance(word_info, (list, tuple)) else word_info.get('start', 0)
+                    anchor = f"word:{highlight_idx}:{start_ms}"
+                    QTimer.singleShot(0, lambda: self._scroll_to_word_anchor(anchor))
+
+    def _scroll_to_word_anchor(self, anchor: str) -> None:
+        """Scroll the transcript so the highlighted word is vertically centered.
+
+        scrollToAnchor puts the anchor at the top of the viewport, so we
+        offset the scrollbar back by half the viewport height.
+        """
+        try:
+            viewer = self._history_viewer
+            viewer.scrollToAnchor(anchor)
+            # Re-center: shift back by half the visible area
+            sb = viewer.verticalScrollBar()
+            viewport_height = viewer.viewport().height()
+            target = sb.value() - (viewport_height // 2)
+            sb.setValue(max(sb.minimum(), min(target, sb.maximum())))
+        except Exception:
+            pass
 
     def _render_history_transcript_highlighted(
         self, md_path: Path, highlight_idx: int
@@ -6151,13 +6322,13 @@ class FloatingSettingsPanel(QWidget):
             if start_ms is not None and word_text:
                 if idx == highlight_idx:
                     html_lines.append(
-                        f'<a href="word:{idx}:{start_ms}" '
+                        f'<a id="word:{idx}:{start_ms}" href="word:{idx}:{start_ms}" '
                         f'style="color:#ffffff; text-decoration:none; {highlight_style}">'
                         f'{word_text}</a>'
                     )
                 else:
                     html_lines.append(
-                        f'<a href="word:{idx}:{start_ms}" '
+                        f'<a id="word:{idx}:{start_ms}" href="word:{idx}:{start_ms}" '
                         f'style="color:#eeeeee; text-decoration:none;">'
                         f'{word_text}</a>'
                     )
@@ -6259,7 +6430,7 @@ class FloatingSettingsPanel(QWidget):
                 start_ms = self._validate_timed_word(w, idx)
                 if start_ms is not None and word_text:
                     html_lines.append(
-                        f'<a href="word:{idx}:{start_ms}" '
+                        f'<a id="word:{idx}:{start_ms}" href="word:{idx}:{start_ms}" '
                         f'style="color:#eeeeee; text-decoration:none;">'
                         f'{word_text}</a>'
                     )
@@ -6448,22 +6619,16 @@ class FloatingSettingsPanel(QWidget):
             self._refresh_history()
             self._reselect_history_item(md_path)
 
-    # Minimum interval (seconds) between word-click seeks
-    _WORD_CLICK_DEBOUNCE_S = 0.1
-
     def _on_word_anchor_clicked(self, link: str) -> None:
         """Handle a ``word:{index}:{start_ms}`` anchor click.
 
         Validates the payload, checks helper/audio availability, then
-        calls ``seek_to(start_ms)``.  Only calls ``play()`` when the
-        player was already playing before the click (state-preserving seek).
-
-        Implements a 100 ms debounce to suppress rapid double-clicks.
-        Auto-loads audio when no helper exists or when the transcript
-        differs from the currently loaded one.
+        seeks to the word position.  Playback state is preserved:
+        paused/stopped → seek-only; playing → seek and continue playing.
+        Includes 100ms debounce to prevent rapid-fire seeks.
 
         Logs structured diagnostics for success, skipped seeks, and
-        malformed payloads — never logs transcript body text.
+        malformed payloads.
         """
         payload = link[len("word:"):]
         parts = payload.split(":")
@@ -6486,52 +6651,46 @@ class FloatingSettingsPanel(QWidget):
             )
             return
 
-        # -- Debounce: suppress rapid clicks within 100 ms ---------------
-        now = time.monotonic()
-        if (now - self._last_word_click_time) < self._WORD_CLICK_DEBOUNCE_S:
+        # Debounce: suppress rapid-fire clicks within the debounce window
+        import time as _time
+        now = _time.monotonic()
+        if now - self._last_word_click_time < self._WORD_CLICK_DEBOUNCE_S:
             logger.info(
-                "word_seek_skipped: index=%d start_ms=%d reason=debounced",
+                "word_seek_skipped: index=%d start_ms=%d reason=debounce",
                 word_index, start_ms,
             )
             return
         self._last_word_click_time = now
 
-        # -- Determine pre-click playback state ---------------------------
+        # Check helper availability — attempt auto-load if None
         helper = self._playback_helper
-        md_path = self._current_history_md_path
-
-        # Capture was_playing before any load/seek that might change state
-        was_playing = False
         auto_loaded = False
-        track_switched = False
-
-        if helper is not None:
-            try:
-                was_playing = helper.player.playbackState() == 1  # PlayingState
-            except Exception:
-                was_playing = False
-
-        # -- Ensure helper exists (auto-load) ----------------------------
         if helper is None:
+            helper = self._ensure_playback_helper()
+            if helper is not None:
+                auto_loaded = True
+
+        if helper is None:
+            logger.info(
+                "word_seek_skipped: index=%d start_ms=%d reason=no_helper",
+                word_index, start_ms,
+            )
+            return
+
+        # Auto-load transcript audio if needed
+        if auto_loaded or helper != self._playback_helper:
+            md_path = self._current_history_md_path
             if md_path is not None:
-                self._load_playback_audio(md_path)
-                helper = self._playback_helper
-                auto_loaded = helper is not None
-            if helper is None:
+                helper.load_transcript_audio(md_path)
+                self._playback_helper = helper
+                self._wire_player_signals()
+            else:
                 logger.info(
-                    "word_seek_skipped: index=%d start_ms=%d reason=no_helper",
+                    "word_seek_skipped: index=%d start_ms=%d reason=no_transcript",
                     word_index, start_ms,
                 )
                 return
 
-        # -- Check / load correct transcript ------------------------------
-        if md_path is not None and helper.current_transcript_path != md_path:
-            track_switched = True
-            self._load_playback_audio(md_path)
-            helper = self._playback_helper
-            auto_loaded = True
-
-        # -- Audio availability check ------------------------------------
         if not helper.is_audio_available:
             logger.info(
                 "word_seek_skipped: index=%d start_ms=%d reason=audio_unavailable",
@@ -6539,35 +6698,26 @@ class FloatingSettingsPanel(QWidget):
             )
             return
 
-        # -- Determine playback state name for logging -------------------
-        try:
-            state_val = helper.player.playbackState()
-            if state_val == 1:
-                state_name = "playing"
-            elif state_val == 2:
-                state_name = "paused"
-            else:
-                state_name = "stopped"
-        except Exception:
-            state_name = "unknown"
+        # Capture pre-click playback state to preserve user intent
+        was_playing = helper.player.playbackState() == 1  # PlayingState
 
-        # -- Seek --------------------------------------------------------
         helper.seek_to(start_ms)
 
-        # -- Play only if was_playing before the click -------------------
+        # Preserve playback state: only play if already playing
         if was_playing:
             helper.play()
 
-        # -- Immediate highlight render ----------------------------------
-        if md_path is not None:
-            self._render_highlighted_transcript(md_path, word_index)
+        # Immediate highlight update for visual feedback
+        if self._current_history_md_path is not None:
+            self._render_highlighted_transcript(
+                self._current_history_md_path, word_index
+            )
 
-        # -- Structured log ----------------------------------------------
         logger.info(
-            "word_seek_success: index=%d start_ms=%d playback_state=%s"
-            " auto_loaded=%s track_switched=%s was_playing=%s",
-            word_index, start_ms, state_name,
-            auto_loaded, track_switched, was_playing,
+            "word_seek_success: index=%d start_ms=%d playback_state=%s auto_loaded=%s",
+            word_index, start_ms,
+            "playing" if was_playing else "paused",
+            auto_loaded,
         )
 
     def _rename_speaker_in_file(
@@ -7029,25 +7179,59 @@ class FloatingSettingsPanel(QWidget):
         """Handle close event."""
         self.closed.emit()
         event.accept()
-    
-    def mousePressEvent(self, event):
-        """Start dragging."""
+
+    # ------------------------------------------------------------------
+    # Drag handlers — entire panel is draggable except interactive children
+    # ------------------------------------------------------------------
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Start drag on left-button press (anywhere except interactive children)."""
         if event.button() == Qt.MouseButton.LeftButton:
+            child = self.childAt(event.position().toPoint())
+            pt = event.position().toPoint()
+            print(f"[MOUSE-PRESS] panel pos=({pt.x()},{pt.y()}) child={type(child).__name__ if child else None}")
+            logger.debug(
+                "[MOUSE-PRESS] panel mousePressEvent pos=(%d,%d) child=%s",
+                pt.x(), pt.y(),
+                type(child).__name__ if child else None,
+            )
+            if child is not None:
+                w = child
+                while w is not None and w is not self:
+                    if isinstance(w, (QPushButton, QSlider, QComboBox)):
+                        logger.debug(
+                            "[MOUSE-PRESS] -> interactive child %s, passing to super",
+                            type(w).__name__,
+                        )
+                        super().mousePressEvent(event)
+                        return
+                    w = w.parent() if hasattr(w, 'parent') else None
+            logger.debug("[MOUSE-PRESS] -> starting panel drag")
             self._dragging = True
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
-    
-    def mouseMoveEvent(self, event):
-        """Handle dragging."""
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Move panel with mouse during drag, clamped to screen boundaries."""
         if self._dragging and self._drag_pos is not None:
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            raw_pos = event.globalPosition().toPoint() - self._drag_pos
+            self.move(clamp_to_screen(self, raw_pos))
             event.accept()
-    
-    def mouseReleaseEvent(self, event):
-        """Stop dragging."""
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """End drag on left-button release."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
+            self._drag_pos = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
             event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 
 if __name__ == "__main__":

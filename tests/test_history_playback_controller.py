@@ -64,6 +64,8 @@ class _MockQMediaPlayer:
         self.errorOccurred = MagicMock()
         self.mediaStatusChanged = MagicMock()
         self.playbackStateChanged = MagicMock()
+        self.positionChanged = MagicMock()
+        self.durationChanged = MagicMock()
 
     def setAudioOutput(self, output):
         self._audio_output = output
