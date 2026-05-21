@@ -162,8 +162,8 @@ class DragSurfaceItem(QGraphicsRectItem):
         # No visible border
         self.setPen(QPen(Qt.PenStyle.NoPen))
         
-        # Near-invisible fill (alpha=1) - hit-testable but effectively transparent
-        self.setBrush(QBrush(QColor(0, 0, 0, 1)))
+        # Dark translucent fill — visible for glass aesthetic but still hit-testable
+        self.setBrush(QBrush(QColor(0, 0, 0, 40)))
         
         # Stay behind all other items
         self.setZValue(-1000)
@@ -509,11 +509,11 @@ to avoid clipping issues and enable proper text rendering.
             self.move(new_x, new_y)
     
     # -- Glass opacity constants for visual state ----------------------------
-    _IDLE_OPACITY = 0.87      # translucent glass when idle
+    _IDLE_OPACITY = 0.92      # translucent glass when idle (visible on light/dark backgrounds)
     _ACTIVE_OPACITY = 1.0     # fully opaque when recording/processing
 
     def _update_visual_state_opacity(self):
-        """Interpolate window opacity between IDLE (0.87) and active (1.0).
+        """Interpolate window opacity between IDLE (0.92) and active (1.0).
 
         Uses the state machine's eased progress so the opacity change is
         smooth over ~200 ms (6 frames at 33 ms).  Called every frame from

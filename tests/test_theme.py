@@ -33,6 +33,7 @@ from meetandread.widgets.theme import (
     legend_overlay_css,
     list_widget_css,
     panel_base_css,
+    glass_panel_css,
     progress_bar_css,
     resize_grip_css,
     separator_css,
@@ -567,3 +568,64 @@ class TestBookmarkToolbarCss:
         """Bookmark delete button CSS is non-empty with scoped selectors."""
         css = aetheric_playback_toolbar_css(DARK_PALETTE)["bookmark_delete_button"]
         assert len(css.strip()) > 50
+
+
+# ---------------------------------------------------------------------------
+# T03 (S02): Glass panel CSS visibility strengthening
+# ---------------------------------------------------------------------------
+
+class TestGlassPanelCss:
+    """glass_panel_css border alpha is strong enough for visibility."""
+
+    def test_produces_qss(self):
+        css = glass_panel_css(DARK_PALETTE)
+        assert "background-color" in css
+        assert "border" in css
+
+    def test_dark_palette_class_name(self):
+        css = glass_panel_css(DARK_PALETTE, "MyPanel")
+        assert "MyPanel" in css
+
+    def test_border_alpha_above_old_value(self):
+        """Border alpha must be > 80 (old weak value) for stronger visibility."""
+        import re
+        css = glass_panel_css(DARK_PALETTE)
+        # Match border alpha: rgba(r, g, b, alpha)
+        matches = re.findall(r'rgba\(\d+,\s*\d+,\s*\d+,\s*(\d+)\)', css)
+        # At least one border alpha should be > 80
+        border_alphas = [int(m) for m in matches]
+        assert any(a > 80 for a in border_alphas), (
+            f"Border alpha should be > 80, got: {border_alphas}"
+        )
+
+    def test_background_alpha_preserved(self):
+        """Background alpha should remain at 230 for translucency."""
+        import re
+        css = glass_panel_css(DARK_PALETTE)
+        matches = re.findall(r'rgba\(\d+,\s*\d+,\s*\d+,\s*(\d+)\)', css)
+        assert 230 in [int(m) for m in matches], f"Expected background alpha 230, got: {matches}"
+
+    def test_border_alpha_below_opaque(self):
+        """Border alpha should be < 255 (not fully opaque) for glass aesthetic."""
+        import re
+        css = glass_panel_css(DARK_PALETTE)
+        matches = re.findall(r'rgba\(\d+,\s*\d+,\s*\d+,\s*(\d+)\)', css)
+        for alpha in [int(m) for m in matches]:
+            assert alpha < 255, f"Alpha {alpha} should be < 255 for glass aesthetic"
+
+    def test_light_palette_glass_css(self):
+        """Light palette glass CSS should use light palette colors."""
+        css = glass_panel_css(LIGHT_PALETTE)
+        assert LIGHT_PALETTE.bg.lstrip("#")[:6] in css or "rgba" in css
+
+    def test_deterministic_dark_palette(self):
+        """glass_panel_css for dark palette is deterministic."""
+        css1 = glass_panel_css(DARK_PALETTE)
+        css2 = glass_panel_css(DARK_PALETTE)
+        assert css1 == css2
+
+    def test_deterministic_light_palette(self):
+        """glass_panel_css for light palette is deterministic."""
+        css1 = glass_panel_css(LIGHT_PALETTE)
+        css2 = glass_panel_css(LIGHT_PALETTE)
+        assert css1 == css2

@@ -214,7 +214,7 @@ def glass_panel_css(p: ThemePalette, class_name: str = "QWidget") -> str:
     return f"""
         {class_name} {{
             background-color: rgba({bg_r}, {bg_g}, {bg_b}, 230);
-            border: 1px solid rgba({br_r}, {br_g}, {br_b}, 80);
+            border: 1px solid rgba({br_r}, {br_g}, {br_b}, 140);
             border-radius: 10px;
         }}
     """
