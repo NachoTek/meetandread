@@ -1618,13 +1618,10 @@ class FloatingTranscriptPanel(QWidget):
         self._delete_recording(current)
 
     def _delete_recording(self, item: QListWidgetItem) -> None:
-        """Delete a recording after user confirmation.
+        """Delete a recording after user confirmation with structured results.
 
-        Extracts the .md path from the item, enumerates associated files,
-        shows a confirmation dialog, and performs the deletion.
-
-        Args:
-            item: The QListWidgetItem representing the recording.
+        Uses delete_recording_structured from T02 for partial-failure handling.
+        Only clears the viewer when the transcript is actually gone.
         """
         md_path_str = item.data(Qt.ItemDataRole.UserRole)
         if not md_path_str:
@@ -1638,7 +1635,7 @@ class FloatingTranscriptPanel(QWidget):
 
         # Enumerate files to show count in confirmation
         try:
-            from meetandread.recording.management import enumerate_recording_files, delete_recording
+            from meetandread.recording.management import enumerate_recording_files, delete_recording_structured
             files = enumerate_recording_files(stem)
         except Exception as exc:
             logger.error("Failed to enumerate recording files: %s", exc)
@@ -1660,12 +1657,12 @@ class FloatingTranscriptPanel(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        # Perform deletion
+        # Perform deletion with structured results
         try:
-            count, deleted = delete_recording(stem)
+            result = delete_recording_structured(stem)
             logger.info(
-                "Deleted recording '%s': %d files removed",
-                recording_name, count,
+                "Deleted recording '%s': %d/%d files removed",
+                recording_name, result.success_count, file_count,
             )
         except Exception as exc:
             logger.error("Failed to delete recording '%s': %s", recording_name, exc)
@@ -1676,11 +1673,25 @@ class FloatingTranscriptPanel(QWidget):
             )
             return
 
-        # Clear viewer state
-        self._current_history_md_path = None
-        self._history_viewer.clear()
-        self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
-        self._detail_header.hide()
+        if not result.all_succeeded:
+            failed_names = [p for p, _ in result.failed[:5]]
+            detail = "\n".join(failed_names)
+            logger.warning(
+                "Partial delete for '%s': %d files remain",
+                recording_name, result.failure_count,
+            )
+            QMessageBox.warning(
+                parent, "Delete Partially Failed",
+                f"Could not delete all files for '{recording_name}'.\n\n"
+                f"{result.success_count} deleted, {result.failure_count} failed:\n{detail}",
+            )
+
+        # Clear viewer state only if the transcript is actually gone
+        if not md_path.exists():
+            self._current_history_md_path = None
+            self._history_viewer.clear()
+            self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
+            self._detail_header.hide()
 
         # Refresh the history list
         self._refresh_history()
@@ -6999,8 +7010,10 @@ class FloatingSettingsPanel(QWidget):
         menu.setStyleSheet(context_menu_css(p, accent_color=p.danger))
 
         scrub_action = menu.addAction("🔄  Scrub Recording")
+        rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
         scrub_action.triggered.connect(lambda: self._on_scrub_clicked())
+        rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
         delete_action.triggered.connect(lambda: self._delete_recording(item))
         menu.exec(self._history_list.mapToGlobal(pos))
 
@@ -7011,8 +7024,101 @@ class FloatingSettingsPanel(QWidget):
             return
         self._delete_recording(current)
 
+    def _rename_recording_dialog(self, item: QListWidgetItem) -> None:
+        """Show a rename dialog for a recording, sanitize input, and rename files.
+
+        Sanitizes user input into a safe recording stem (alphanumerics,
+        hyphens, underscores, dots). Rejects empty and unchanged names.
+        Surfaces validation and FileExistsError conflicts via QMessageBox
+        without mutating any files.
+        """
+        from meetandread.recording.management import rename_recording, _validate_stem
+
+        md_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+
+        md_path = Path(md_path_str)
+        old_stem = md_path.stem
+        recording_name = item.text().split("|")[0].strip()
+
+        parent = self.parent() if self.parent() else self
+        new_name, ok = QInputDialog.getText(
+            parent,
+            "Rename Recording",
+            f"New name for '{old_stem}':",
+            text=old_stem,
+        )
+
+        if not ok or not new_name:
+            return
+
+        # Sanitize: strip whitespace, replace spaces with hyphens
+        new_stem = new_name.strip().replace(" ", "-")
+
+        # Reject empty
+        if not new_stem:
+            QMessageBox.warning(parent, "Rename Failed", "Name must not be empty.")
+            return
+
+        # Reject unchanged
+        if new_stem == old_stem:
+            return
+
+        # Validate stem characters
+        try:
+            _validate_stem(new_stem)
+        except ValueError as exc:
+            QMessageBox.warning(
+                parent, "Invalid Name",
+                f"Cannot rename to '{new_stem}'.\n\n{exc}",
+            )
+            return
+
+        # Perform rename
+        try:
+            result = rename_recording(old_stem, new_stem)
+        except Exception as exc:
+            logger.error("Rename failed for %s -> %s: %s", old_stem, new_stem, exc)
+            QMessageBox.warning(
+                parent, "Rename Failed",
+                f"Could not rename recording.\n\n{exc}",
+            )
+            return
+
+        if result.failed:
+            # Conflicts or rename failures
+            conflict_names = [p for p, _ in result.failed[:5]]
+            detail = "\n".join(conflict_names)
+            QMessageBox.warning(
+                parent, "Rename Failed",
+                f"Could not rename '{old_stem}' to '{new_stem}'.\n\n"
+                f"Conflicting or failed files:\n{detail}",
+            )
+            logger.warning(
+                "Rename UI: %d failures for %s -> %s",
+                len(result.failed), old_stem, new_stem,
+            )
+            return
+
+        logger.info(
+            "Rename UI: successfully renamed %s -> %s (%d files)",
+            old_stem, new_stem, len(result.renamed),
+        )
+
+        # Build expected new transcript path for reselection
+        new_md_path = md_path.parent / f"{new_stem}.md"
+
+        self._refresh_history()
+        self._reselect_history_item(new_md_path)
+
     def _delete_recording(self, item: QListWidgetItem) -> None:
-        """Delete a recording after user confirmation."""
+        """Delete a recording after user confirmation with resilient failure handling.
+
+        Uses delete_recording_structured from T02 for structured results. On
+        partial failure, shows a dialog offering Retry and Mark for cleanup
+        options. Only clears the viewer when the transcript is actually gone.
+        """
         md_path_str = item.data(Qt.ItemDataRole.UserRole)
         if not md_path_str:
             return
@@ -7022,7 +7128,7 @@ class FloatingSettingsPanel(QWidget):
         recording_name = item.text().split("|")[0].strip()
 
         try:
-            from meetandread.recording.management import enumerate_recording_files, delete_recording
+            from meetandread.recording.management import enumerate_recording_files, delete_recording_structured
             files = enumerate_recording_files(stem)
         except Exception as exc:
             logger.error("Failed to enumerate recording files: %s", exc)
@@ -7044,10 +7150,10 @@ class FloatingSettingsPanel(QWidget):
             return
 
         try:
-            count, deleted = delete_recording(stem)
+            result = delete_recording_structured(stem)
             logger.info(
-                "Deleted recording '%s': %d files removed",
-                recording_name, count,
+                "Delete recording '%s': %d/%d files removed",
+                recording_name, result.success_count, file_count,
             )
         except Exception as exc:
             logger.error("Failed to delete recording '%s': %s", recording_name, exc)
@@ -7058,12 +7164,83 @@ class FloatingSettingsPanel(QWidget):
             )
             return
 
-        self._current_history_md_path = None
-        self._history_viewer.clear()
-        self._history_viewer.setPlaceholderText("Select a recording to view its transcript")
-        self._history_detail_header.hide()
-        self._stop_playback()
-        self._sync_playback_controls()
+        if not result.all_succeeded:
+            # Partial or total failure
+            failed_names = [p for p, _ in result.failed[:5]]
+            detail = "\n".join(failed_names)
+
+            msg = QMessageBox(parent)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Delete Partially Failed")
+            msg.setText(
+                f"Could not delete all files for '{recording_name}'.\n\n"
+                f"{result.success_count} deleted, {result.failure_count} failed:\n{detail}"
+            )
+
+            retry_btn = msg.addButton("Retry", QMessageBox.ButtonRole.AcceptRole)
+            cleanup_btn = msg.addButton(
+                "Mark for Cleanup", QMessageBox.ButtonRole.RejectRole,
+            )
+            msg.addButton("Cancel", QMessageBox.ButtonRole.DestructiveRole)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+
+            if clicked == retry_btn:
+                # Retry the whole delete operation
+                try:
+                    retry_result = delete_recording_structured(stem)
+                    logger.info(
+                        "Delete retry '%s': %d/%d removed",
+                        recording_name, retry_result.success_count,
+                        retry_result.success_count + retry_result.failure_count,
+                    )
+                    if not retry_result.all_succeeded:
+                        QMessageBox.warning(
+                            parent, "Delete Still Failed",
+                            f"Retry could not delete all files.\n\n"
+                            f"{retry_result.failure_count} file(s) remain.",
+                        )
+                except Exception as exc:
+                    logger.error("Delete retry failed for '%s': %s", recording_name, exc)
+                    QMessageBox.warning(
+                        parent, "Retry Failed",
+                        f"Retry failed with error:\n\n{exc}",
+                    )
+
+            elif clicked == cleanup_btn:
+                # Enqueue failed paths to cleanup queue
+                try:
+                    from meetandread.recording.cleanup_queue import CleanupQueue
+                    queue = CleanupQueue()
+                    failed_paths = [p for p, _ in result.failed]
+                    queue.enqueue_file_deletion(stem, paths=failed_paths)
+                    logger.info(
+                        "Enqueued %d failed paths for cleanup: stem=%s",
+                        len(failed_paths), stem,
+                    )
+                    QMessageBox.information(
+                        parent, "Marked for Cleanup",
+                        f"{len(failed_paths)} file(s) have been queued for later cleanup.\n\n"
+                        "They will be removed automatically when no longer in use.",
+                    )
+                except Exception as exc:
+                    logger.error("Cleanup enqueue failed: %s", exc)
+                    QMessageBox.warning(
+                        parent, "Cleanup Enqueue Failed",
+                        f"Could not enqueue files for cleanup.\n\n{exc}",
+                    )
+
+        # Clear viewer only if the transcript is actually gone
+        if not md_path.exists():
+            self._current_history_md_path = None
+            self._history_viewer.clear()
+            self._history_viewer.setPlaceholderText(
+                "Select a recording to view its transcript",
+            )
+            self._history_detail_header.hide()
+            self._stop_playback()
+            self._sync_playback_controls()
 
         self._refresh_history()
 
