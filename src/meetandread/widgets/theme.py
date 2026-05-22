@@ -854,7 +854,8 @@ def aetheric_sidebar_css(p: ThemePalette) -> str:
         QWidget#AethericSidebar {{
             background-color: {AETHERIC_SIDEBAR_BG};
             border: none;
-            border-right: 2px solid rgba(255, 85, 69, 60);
+            border-right: 5px solid;
+            border-right-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgb(255, 85, 69), stop:1 rgb(30, 29, 30));
             border-top-left-radius: 0px;
             border-bottom-left-radius: {AETHERIC_RADIUS};
             min-width: {AETHERIC_SIDEBAR_WIDTH};
@@ -955,7 +956,7 @@ def aetheric_placeholder_css(p: ThemePalette) -> str:
 # Aetheric CC overlay helper — compact closed-caption live transcript
 # ---------------------------------------------------------------------------
 
-def aetheric_cc_overlay_css(p: ThemePalette) -> str:
+def aetheric_cc_overlay_css(p: ThemePalette, font_color: str | None = None) -> str:
     """CC overlay styling — monospace grey text, transparent background.
 
     Background is painted manually in paintEvent() because QSS
@@ -964,7 +965,13 @@ def aetheric_cc_overlay_css(p: ThemePalette) -> str:
 
     Object name selector: ``QWidget#AethericCCOverlay``
     Child text selector: ``QTextEdit#AethericCCText``
+
+    Args:
+        p: Active theme palette.
+        font_color: Optional color override as CSS string (e.g. "rgba(255, 255, 255, 230)").
+            When None, falls back to AETHERIC_CC_TEXT default.
     """
+    color = font_color or AETHERIC_CC_TEXT
     return f"""
         QWidget#AethericCCOverlay {{
             background-color: transparent;
@@ -972,7 +979,7 @@ def aetheric_cc_overlay_css(p: ThemePalette) -> str:
             padding: {AETHERIC_CC_PADDING};
         }}
         QTextEdit#AethericCCText {{
-            color: {AETHERIC_CC_TEXT};
+            color: {color};
             font-family: {AETHERIC_CC_FONT_FAMILY};
             font-size: {AETHERIC_CC_FONT_SIZE};
             background-color: transparent;
@@ -1115,11 +1122,7 @@ def aetheric_history_list_css(p: ThemePalette) -> str:
         }}
         QListWidget#AethericHistoryList::item {{
             background-color: {AETHERIC_GLASS_ROW_BG};
-            border: 1px solid transparent;
-            border-top: 1px solid {AETHERIC_BORDER_LIGHT};
-            border-left: 1px solid {AETHERIC_BORDER_LIGHT};
-            border-bottom: 1px solid {AETHERIC_BORDER_DARK};
-            border-right: 1px solid {AETHERIC_BORDER_DARK};
+            border: 1px solid {AETHERIC_BORDER_LIGHT};
             border-radius: 8px;
             padding: 8px 12px;
             margin: 2px 4px;
@@ -1236,13 +1239,9 @@ def aetheric_history_action_button_css(p: ThemePalette) -> str:
         QPushButton#AethericHistoryActionButton {{
             background-color: {AETHERIC_GLASS_ROW_BG};
             color: {AETHERIC_NAV_INACTIVE_TEXT};
-            border: 1px solid transparent;
-            border-top: 1px solid {AETHERIC_BORDER_LIGHT};
-            border-left: 1px solid {AETHERIC_BORDER_LIGHT};
-            border-bottom: 1px solid {AETHERIC_BORDER_DARK};
-            border-right: 1px solid {AETHERIC_BORDER_DARK};
-            border-radius: 8px;
-            padding: 4px 12px;
+            border: 1px solid {AETHERIC_BORDER_LIGHT};
+            border-radius: 6px;
+            padding: 2px 8px;
             font-size: 11px;
             font-weight: bold;
         }}

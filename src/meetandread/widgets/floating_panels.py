@@ -1910,6 +1910,18 @@ class FloatingTranscriptPanel(QWidget):
             logger.error("Scrub failed: %s", error)
             return
 
+        # Emit history data changed — scrub adds a new sidecar recording
+        try:
+            from meetandread.widgets.main_widget import MeetAndReadWidget
+            widget = self.parent()
+            while widget is not None:
+                if isinstance(widget, MeetAndReadWidget):
+                    widget.history_data_changed.emit()
+                    break
+                widget = widget.parent()
+        except Exception:
+            pass
+
         # Show side-by-side comparison
         self._show_scrub_comparison(sidecar_path)
 
@@ -2770,9 +2782,21 @@ class CCOverlayPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _apply_theme(self) -> None:
-        """Apply Aetheric CC overlay styling."""
+        """Apply Aetheric CC overlay styling.
+
+        Reads custom font color from config if available, otherwise uses
+        the theme default (AETHERIC_CC_TEXT).
+        """
         p = current_palette()
-        self.setStyleSheet(aetheric_cc_overlay_css(p))
+        font_color = None
+        try:
+            from meetandread.config import get_config
+            _color = get_config("transcription.cc_font_color")
+            if isinstance(_color, str) and _color.strip():
+                font_color = _color.strip()
+        except Exception:
+            pass
+        self.setStyleSheet(aetheric_cc_overlay_css(p, font_color=font_color))
         # Grip draws its own textured triangle via paintEvent
 
     # ------------------------------------------------------------------
@@ -2823,7 +2847,7 @@ class CCOverlayPanel(QWidget):
                     w = w.parent() if hasattr(w, 'parent') else None
             self._dragging = True
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -2842,7 +2866,7 @@ class CCOverlayPanel(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
             self._drag_pos = None
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -3109,6 +3133,30 @@ class CCOverlayPanel(QWidget):
             )
         logger.debug("CC overlay font size set to %dpx", size_px)
 
+    def set_font_color(self, color_str: str) -> None:
+        """Apply font color to the CC text display immediately.
+
+        Args:
+            color_str: CSS color string (e.g. "rgba(255, 255, 255, 230)").
+        """
+        if not color_str or not color_str.strip():
+            return
+        color_str = color_str.strip()
+        current_ss = self.text_edit.styleSheet()
+        if current_ss:
+            # Replace existing color property
+            new_ss = re.sub(r'color:\s*[^;]+;?', f'color: {color_str};', current_ss)
+            if new_ss == current_ss:
+                # No color property found — append
+                new_ss = current_ss.rstrip() + f"\ncolor: {color_str};"
+            self.text_edit.setStyleSheet(new_ss)
+        else:
+            from meetandread.widgets.theme import AETHERIC_CC_FONT_FAMILY
+            self.text_edit.setStyleSheet(
+                f"font-family: {AETHERIC_CC_FONT_FAMILY}; color: {color_str};"
+            )
+        logger.debug("CC overlay font color set to %s", color_str)
+
     # ------------------------------------------------------------------
     # Fade helpers (matching FloatingTranscriptPanel pattern)
     # ------------------------------------------------------------------
@@ -3187,6 +3235,7 @@ class _HistoryRowWidget(QWidget):
         # Transparent background so selection highlight shows through
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 4, 2)
@@ -3195,16 +3244,18 @@ class _HistoryRowWidget(QWidget):
         # Text label (mirrors QListWidgetItem text for accessibility)
         self._label = QLabel(display_text)
         self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._label.setCursor(Qt.CursorShape.ArrowCursor)
         layout.addWidget(self._label, stretch=1)
 
         p = current_palette()
         btn_css = aetheric_history_action_button_css(p)
 
         # Inline Scrub button
-        self._scrub_btn = QPushButton("🔄")
+        self._scrub_btn = QPushButton("🔄 Scrub")
         self._scrub_btn.setObjectName("AethericHistoryActionButton")
         self._scrub_btn.setProperty("action", "scrub")
-        self._scrub_btn.setFixedSize(30, 22)
+        self._scrub_btn.setFixedHeight(26)
+        self._scrub_btn.setMinimumWidth(50)
         self._scrub_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._scrub_btn.setToolTip("Scrub Recording")
         self._scrub_btn.setAccessibleName("Scrub recording")
@@ -3214,10 +3265,11 @@ class _HistoryRowWidget(QWidget):
         layout.addWidget(self._scrub_btn)
 
         # Inline Delete button
-        self._delete_btn = QPushButton("🗑")
+        self._delete_btn = QPushButton("🗑 Delete")
         self._delete_btn.setObjectName("AethericHistoryActionButton")
         self._delete_btn.setProperty("action", "delete")
-        self._delete_btn.setFixedSize(30, 22)
+        self._delete_btn.setFixedHeight(26)
+        self._delete_btn.setMinimumWidth(50)
         self._delete_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._delete_btn.setToolTip("Delete Recording")
         self._delete_btn.setAccessibleName("Delete recording")
@@ -3294,6 +3346,7 @@ class FloatingSettingsPanel(QWidget):
     closed = pyqtSignal()
     model_changed = pyqtSignal(str)  # Emit model name when changed
     cc_font_size_changed = pyqtSignal(int)  # Emit font size in px when changed
+    cc_font_color_changed = pyqtSignal(str)  # Emit font color as rgba() string when changed
     _scrub_progress_sig = pyqtSignal(int)  # Qt-safe scrub progress (pct)
     _scrub_complete_sig = pyqtSignal(str, object)  # Qt-safe scrub completion (sidecar_path, error_or_None)
 
@@ -3363,7 +3416,7 @@ class FloatingSettingsPanel(QWidget):
         self._title_bar = QWidget()
         self._title_bar.setObjectName("AethericTitleBar")
         self._title_bar.setFixedHeight(25)
-        self._title_bar.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._title_bar.setCursor(Qt.CursorShape.ArrowCursor)
         title_bar_layout = QHBoxLayout(self._title_bar)
         title_bar_layout.setContentsMargins(12, 0, 12, 0)
         title_label = QLabel("Meet and Read")
@@ -3639,6 +3692,55 @@ class FloatingSettingsPanel(QWidget):
         cc_font_row.addWidget(self._cc_font_spin)
         cc_font_row.addStretch()
         settings_layout.addLayout(cc_font_row)
+
+        # CC font color picker
+        cc_color_row = QHBoxLayout()
+        cc_color_row.setSpacing(8)
+        cc_color_label = QLabel("CC Font Color:")
+        cc_color_label.setStyleSheet("color: #E0E0E0; font-size: 12px;")
+        cc_color_row.addWidget(cc_color_label)
+
+        self._cc_color_swatch = QPushButton()
+        self._cc_color_swatch.setFixedSize(32, 24)
+        self._cc_color_swatch.setCursor(Qt.CursorShape.ArrowCursor)
+        self._cc_color_swatch.setToolTip("Click to pick a custom CC font color")
+        # Restore from config
+        self._cc_current_color_str: str = "rgba(180, 180, 180, 230)"
+        try:
+            from meetandread.config import get_config
+            _saved_color = get_config("transcription.cc_font_color")
+            if isinstance(_saved_color, str) and _saved_color.strip():
+                self._cc_current_color_str = _saved_color.strip()
+        except Exception:
+            pass
+        self._update_color_swatch(self._cc_current_color_str)
+        self._cc_color_swatch.clicked.connect(self._on_cc_color_picker_clicked)
+        cc_color_row.addWidget(self._cc_color_swatch)
+
+        # Reset button
+        self._cc_color_reset = QPushButton("Reset")
+        self._cc_color_reset.setFixedHeight(24)
+        self._cc_color_reset.setCursor(Qt.CursorShape.ArrowCursor)
+        self._cc_color_reset.setStyleSheet("""
+            QPushButton {
+                color: #A0A0A0;
+                background-color: transparent;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                color: #E0E0E0;
+                border-color: rgba(255, 255, 255, 80);
+            }
+        """)
+        self._cc_color_reset.setToolTip("Reset to default CC font color")
+        self._cc_color_reset.clicked.connect(self._on_cc_color_reset_clicked)
+        cc_color_row.addWidget(self._cc_color_reset)
+
+        cc_color_row.addStretch()
+        settings_layout.addLayout(cc_color_row)
 
         # CC auto-open checkbox
         self._cc_auto_open_checkbox = QCheckBox("Auto-open CC overlay on recording")
@@ -4096,24 +4198,6 @@ class FloatingSettingsPanel(QWidget):
 
         detail_header_layout.addStretch()
 
-        self._scrub_btn = QPushButton("🔄 Scrub")
-        self._scrub_btn.setObjectName("AethericHistoryActionButton")
-        self._scrub_btn.setProperty("action", "scrub")
-        self._scrub_btn.setFixedHeight(26)
-        self._scrub_btn.setCursor(Qt.CursorShape.ArrowCursor)
-        self._scrub_btn.setToolTip("Re-transcribe with a different model")
-        self._scrub_btn.clicked.connect(self._on_scrub_clicked)
-        detail_header_layout.addWidget(self._scrub_btn)
-
-        self._delete_btn = QPushButton("🗑 Delete")
-        self._delete_btn.setObjectName("AethericHistoryActionButton")
-        self._delete_btn.setProperty("action", "delete")
-        self._delete_btn.setFixedHeight(26)
-        self._delete_btn.setCursor(Qt.CursorShape.ArrowCursor)
-        self._delete_btn.setToolTip("Delete this recording")
-        self._delete_btn.clicked.connect(self._on_delete_btn_clicked)
-        detail_header_layout.addWidget(self._delete_btn)
-
         self._history_detail_header.hide()
         viewer_layout.addWidget(self._history_detail_header)
 
@@ -4226,7 +4310,16 @@ class FloatingSettingsPanel(QWidget):
         self._identity_delete_btn.clicked.connect(self._on_identity_delete)
         _id_header_layout.addWidget(self._identity_delete_btn)
 
-        # Prune button — in the header area, always visible when header is visible
+        self._identity_detail_header.hide()
+        identity_detail_layout.addWidget(self._identity_detail_header)
+
+        # Always-visible Prune bar (independent of identity selection)
+        self._identity_prune_bar = QFrame()
+        self._identity_prune_bar.setObjectName("AethericIdentityHeader")
+        _prune_bar_layout = QHBoxLayout(self._identity_prune_bar)
+        _prune_bar_layout.setContentsMargins(6, 2, 6, 2)
+        _prune_bar_layout.setSpacing(4)
+        _prune_bar_layout.addStretch()
         self._identity_prune_btn = QPushButton("🧹  Prune unused")
         self._identity_prune_btn.setObjectName("AethericIdentityActionButton")
         self._identity_prune_btn.setProperty("action", "prune")
@@ -4235,10 +4328,8 @@ class FloatingSettingsPanel(QWidget):
         self._identity_prune_btn.setToolTip("Remove identities with zero recordings")
         self._identity_prune_btn.setAccessibleName("Prune unused identities")
         self._identity_prune_btn.clicked.connect(self._on_identity_prune)
-        _id_header_layout.addWidget(self._identity_prune_btn)
-
-        self._identity_detail_header.hide()
-        identity_detail_layout.addWidget(self._identity_detail_header)
+        _prune_bar_layout.addWidget(self._identity_prune_btn)
+        identity_detail_layout.addWidget(self._identity_prune_bar)
 
         # Detail fields (read-only labels)
         self._identity_detail_widget = QWidget()
@@ -4502,9 +4593,6 @@ class FloatingSettingsPanel(QWidget):
         self._history_splitter.setStyleSheet(aetheric_history_splitter_css(p))
         self._history_list.setStyleSheet(aetheric_history_list_css(p))
         self._history_detail_header.setStyleSheet(aetheric_history_header_css(p))
-        history_btn_css = aetheric_history_action_button_css(p)
-        self._scrub_btn.setStyleSheet(history_btn_css)
-        self._delete_btn.setStyleSheet(history_btn_css)
         self._history_viewer.setStyleSheet(aetheric_history_viewer_css(p))
 
         # Playback controls styling (scoped Aetheric toolbar styles)
@@ -4565,10 +4653,12 @@ class FloatingSettingsPanel(QWidget):
         self._identities_splitter.setStyleSheet(aetheric_history_splitter_css(p))
         self._identity_list.setStyleSheet(aetheric_history_list_css(p))
         self._identity_detail_header.setStyleSheet(aetheric_history_header_css(p))
+        self._identity_prune_bar.setStyleSheet(aetheric_history_header_css(p))
         identity_btn_css = aetheric_history_action_button_css(p)
         self._identity_rename_btn.setStyleSheet(identity_btn_css)
         self._identity_merge_btn.setStyleSheet(identity_btn_css)
         self._identity_delete_btn.setStyleSheet(identity_btn_css)
+        self._identity_prune_btn.setStyleSheet(identity_btn_css)
         # Detail labels — theme-aware info styling
         _id_detail_css = info_label_css(p)
         self._identity_name_label.setStyleSheet(_id_detail_css)
@@ -4588,7 +4678,7 @@ class FloatingSettingsPanel(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._title_dragging = True
             self._title_drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self._title_bar.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self._title_bar.setCursor(Qt.CursorShape.SizeAllCursor)
 
     def _title_bar_mouse_move(self, event: QMouseEvent) -> None:
         if self._title_dragging and self._title_drag_pos is not None:
@@ -4599,7 +4689,7 @@ class FloatingSettingsPanel(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._title_dragging = False
             self._title_drag_pos = None
-            self._title_bar.setCursor(Qt.CursorShape.OpenHandCursor)
+            self._title_bar.setCursor(Qt.CursorShape.ArrowCursor)
 
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""
@@ -4668,6 +4758,27 @@ class FloatingSettingsPanel(QWidget):
     
     # ------------------------------------------------------------------
     # Performance tab wiring (T03)
+    # ------------------------------------------------------------------
+    # Signal helpers — emit widget-level data signals via _main_widget
+    # so all subscribers (not just this panel) are notified of mutations
+    # ------------------------------------------------------------------
+
+    def _emit_history_changed(self) -> None:
+        """Emit history_data_changed signal via main widget."""
+        if self._main_widget is not None:
+            try:
+                self._main_widget.history_data_changed.emit()
+            except Exception:
+                pass
+
+    def _emit_identity_changed(self) -> None:
+        """Emit identity_data_changed signal via main widget."""
+        if self._main_widget is not None:
+            try:
+                self._main_widget.identity_data_changed.emit()
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
 
     def _on_nav_clicked(self, page_index: int) -> None:
@@ -5113,6 +5224,67 @@ class FloatingSettingsPanel(QWidget):
             logger.warning("Failed to save CC font size: %s", exc)
         self.cc_font_size_changed.emit(value)
         logger.info("CC font size set to %dpx", value)
+
+    def _on_cc_color_picker_clicked(self) -> None:
+        """Handle CC font color swatch click — open QColorDialog."""
+        from PyQt6.QtWidgets import QColorDialog
+        from PyQt6.QtGui import QColor
+
+        # Parse current color for dialog initial value
+        initial = self._parse_rgba_color(self._cc_current_color_str) or QColor(180, 180, 180, 230)
+        color = QColorDialog.getColor(initial, self, "Select CC Font Color",
+                                      QColorDialog.ColorDialogOption.ShowAlphaChannel)
+        if not color.isValid():
+            return  # User cancelled
+
+        rgba_str = f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})"
+        self._cc_current_color_str = rgba_str
+        self._apply_cc_font_color(rgba_str)
+
+    def _on_cc_color_reset_clicked(self) -> None:
+        """Reset CC font color to theme default."""
+        default_color = "rgba(180, 180, 180, 230)"
+        self._cc_current_color_str = default_color
+        self._apply_cc_font_color(default_color)
+
+    def _apply_cc_font_color(self, color_str: str) -> None:
+        """Persist color, update swatch, and emit signal."""
+        self._update_color_swatch(color_str)
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("transcription.cc_font_color", color_str)
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save CC font color: %s", exc)
+        self.cc_font_color_changed.emit(color_str)
+        logger.info("CC font color set to %s", color_str)
+
+    @staticmethod
+    def _parse_rgba_color(rgba_str: str):
+        """Parse an rgba(r, g, b, a) string to QColor. Returns None on failure."""
+        from PyQt6.QtGui import QColor
+        import re
+        m = re.match(r'rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)', rgba_str)
+        if not m:
+            return None
+        r, g, b = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        a = int(m.group(4)) if m.group(4) is not None else 255
+        return QColor(r, g, b, a)
+
+    def _update_color_swatch(self, color_str: str) -> None:
+        """Update the color swatch button background to show current color."""
+        qc = self._parse_rgba_color(color_str)
+        display_hex = qc.name(QColor.NameFormat.HexRgb) if qc else "#b4b4b4"
+        self._cc_color_swatch.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {display_hex};
+                border: 2px solid rgba(255, 255, 255, 60);
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                border-color: rgba(255, 255, 255, 120);
+            }}
+        """)
 
     def _on_cc_auto_open_toggled(self, state: int) -> None:
         """Handle CC auto-open checkbox toggle.
@@ -5593,6 +5765,7 @@ class FloatingSettingsPanel(QWidget):
 
         logger.info("Identity rename completed via Settings UI")
         self._refresh_and_reselect(target_name=new_name)
+        self._emit_identity_changed()
 
     def _on_identity_merge(self) -> None:
         """Handle the Merge action: pick target, confirm, merge."""
@@ -5667,6 +5840,7 @@ class FloatingSettingsPanel(QWidget):
 
         logger.info("Identity merge completed via Settings UI")
         self._refresh_and_reselect(target_name=target_name)
+        self._emit_identity_changed()
 
     def _on_identity_delete(self) -> None:
         """Handle the Delete action: confirm, delete from store, refresh."""
@@ -5717,6 +5891,7 @@ class FloatingSettingsPanel(QWidget):
         logger.info("Identity delete completed via Settings UI")
         # After delete, the identity is gone — clear detail and refresh
         self._refresh_and_reselect(target_name=None)
+        self._emit_identity_changed()
 
     # ------------------------------------------------------------------
     # Recordings table and navigation (T04)
@@ -5886,6 +6061,7 @@ class FloatingSettingsPanel(QWidget):
 
         logger.info("Identity prune completed via Settings UI")
         self._refresh_and_reselect(target_name=None)
+        self._emit_identity_changed()
 
     # ------------------------------------------------------------------
     # History page methods (adapted from FloatingTranscriptPanel)
@@ -5959,7 +6135,7 @@ class FloatingSettingsPanel(QWidget):
                 )
 
             path_str = str(meta.path)
-            item = QListWidgetItem(display_text)
+            item = QListWidgetItem("")  # Text rendered by _HistoryRowWidget; empty here to avoid double-render shadow
             item.setData(Qt.ItemDataRole.UserRole, path_str)
             self._history_list.addItem(item)
 
@@ -7303,6 +7479,7 @@ class FloatingSettingsPanel(QWidget):
 
         self._refresh_history()
         self._reselect_history_item(new_md_path)
+        self._emit_history_changed()
 
     def _delete_recording(self, item: QListWidgetItem) -> None:
         """Delete a recording after user confirmation with resilient failure handling.
@@ -7435,6 +7612,7 @@ class FloatingSettingsPanel(QWidget):
             self._sync_playback_controls()
 
         self._refresh_history()
+        self._emit_history_changed()
 
     def _on_history_anchor_clicked(self, url: QUrl) -> None:
         """Handle clicks on speaker and word anchors in the history viewer.
@@ -7479,6 +7657,7 @@ class FloatingSettingsPanel(QWidget):
         # Refresh the identities list so the newly linked identity appears
         # immediately when the user switches to the Identities tab.
         self._refresh_identities()
+        self._emit_identity_changed()
 
         # Refresh the history list so speaker counts update immediately,
         # and re-select the current item so the user stays on the same recording.
@@ -7822,9 +8001,6 @@ class FloatingSettingsPanel(QWidget):
 
         self._scrub_original_html = self._history_viewer.toHtml()
 
-        self._scrub_btn.setEnabled(False)
-        self._scrub_btn.setText("Scrubbing... 0%")
-
         try:
             self._scrub_runner = ScrubRunner(
                 settings=self._get_app_settings(),
@@ -7839,8 +8015,6 @@ class FloatingSettingsPanel(QWidget):
             # Restore all scrub state so the UI is not stuck
             self._is_scrubbing = False
             self._is_comparison_mode = False
-            self._scrub_btn.setEnabled(True)
-            self._scrub_btn.setText("🔄 Scrub")
             self._scrub_runner = None
             self._scrub_sidecar_path = None
             parent = self.parent() if self.parent() else self
@@ -7859,7 +8033,7 @@ class FloatingSettingsPanel(QWidget):
 
     def _on_scrub_progress_gui(self, pct: int) -> None:
         """GUI-thread handler for scrub progress updates."""
-        self._scrub_btn.setText(f"Scrubbing... {pct}%")
+        logger.debug("Scrub progress: %d%%", pct)
 
     def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """ScrubRunner completion callback (background thread).
@@ -7875,8 +8049,6 @@ class FloatingSettingsPanel(QWidget):
     def _handle_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """Process scrub completion on the GUI thread."""
         self._is_scrubbing = False
-        self._scrub_btn.setEnabled(True)
-        self._scrub_btn.setText("🔄 Scrub")
 
         if error:
             parent = self.parent() if self.parent() else self
@@ -7887,6 +8059,10 @@ class FloatingSettingsPanel(QWidget):
             )
             logger.error("Scrub failed: %s", error)
             return
+
+        # Refresh history list — scrub adds a new sidecar recording
+        self._refresh_history()
+        self._emit_history_changed()
 
         self._show_scrub_comparison(sidecar_path)
 
@@ -7948,9 +8124,7 @@ class FloatingSettingsPanel(QWidget):
         self._show_scrub_accept_reject()
 
     def _show_scrub_accept_reject(self) -> None:
-        """Replace the scrub button with Accept/Reject during comparison mode."""
-        self._scrub_btn.hide()
-
+        """Show Accept/Reject buttons during comparison mode."""
         if not hasattr(self, '_scrub_accept_btn'):
             self._scrub_accept_btn = QPushButton("✓ Accept")
             self._scrub_accept_btn.setObjectName("AethericHistoryActionButton")
@@ -7970,20 +8144,18 @@ class FloatingSettingsPanel(QWidget):
             self._scrub_reject_btn.clicked.connect(self._on_scrub_reject)
 
             header_layout = self._history_detail_header.layout()
-            delete_idx = header_layout.indexOf(self._delete_btn)
-            header_layout.insertWidget(delete_idx, self._scrub_accept_btn)
-            header_layout.insertWidget(delete_idx + 1, self._scrub_reject_btn)
+            header_layout.insertWidget(-1, self._scrub_accept_btn)
+            header_layout.insertWidget(-1, self._scrub_reject_btn)
         else:
             self._scrub_accept_btn.show()
             self._scrub_reject_btn.show()
 
     def _hide_scrub_accept_reject(self) -> None:
-        """Hide Accept/Reject buttons and show the scrub button again."""
+        """Hide Accept/Reject buttons."""
         if hasattr(self, '_scrub_accept_btn'):
             self._scrub_accept_btn.hide()
         if hasattr(self, '_scrub_reject_btn'):
             self._scrub_reject_btn.hide()
-        self._scrub_btn.show()
         self._is_comparison_mode = False
 
     def _on_scrub_accept(self) -> None:
@@ -8044,6 +8216,7 @@ class FloatingSettingsPanel(QWidget):
         md_path = self._current_history_md_path
 
         self._refresh_history()
+        self._emit_history_changed()
 
         if md_path is not None:
             self._reselect_history_item(md_path)
@@ -8102,7 +8275,7 @@ class FloatingSettingsPanel(QWidget):
             logger.debug("[MOUSE-PRESS] -> starting panel drag")
             self._dragging = True
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -8121,7 +8294,7 @@ class FloatingSettingsPanel(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
             self._drag_pos = None
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
