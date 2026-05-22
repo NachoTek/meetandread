@@ -277,6 +277,7 @@ class TestCircularPlaybackControlStructure:
             parent = parent.parent()
         assert found_history_page
 
+    @pytest.mark.skip(reason="Scrub/Delete buttons removed from playback toolbar — inline hover buttons replace them")
     def test_controls_before_scrub_delete(self, settings_panel):
         """Progress slider should appear before Scrub/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
@@ -2657,6 +2658,7 @@ class TestBookmarkToolbarStructure:
         assert btn_idx > slider_idx
         assert combo_idx > slider_idx
 
+    @pytest.mark.skip(reason="Scrub/Delete buttons removed from playback toolbar — inline hover buttons replace them")
     def test_bookmark_controls_before_scrub_delete(self, settings_panel):
         """Bookmark controls should appear before Scrub/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
@@ -3252,6 +3254,7 @@ class TestBookmarkDeleteButtonStructure:
         delete_idx = layout.indexOf(settings_panel._bookmark_delete_btn)
         assert delete_idx > combo_idx
 
+    @pytest.mark.skip(reason="Scrub/Delete buttons removed from playback toolbar — inline hover buttons replace them")
     def test_delete_button_before_scrub_delete(self, settings_panel):
         """Delete button appears before Scrub/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()

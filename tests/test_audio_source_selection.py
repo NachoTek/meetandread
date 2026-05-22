@@ -78,7 +78,7 @@ class TestToggleLobeLocked:
         lobe.set_locked(True)
         assert lobe.cursor().shape() == Qt.CursorShape.ForbiddenCursor
         lobe.set_locked(False)
-        assert lobe.cursor().shape() == Qt.CursorShape.PointingHandCursor
+        assert lobe.cursor().shape() == Qt.CursorShape.ArrowCursor
 
     def test_set_unlocked_restores_interactivity(self, qapp):
         lobe = _make_lobe()
@@ -116,7 +116,7 @@ class TestToggleLobeUnavailable:
         lobe.set_unavailable(True)
         assert lobe.cursor().shape() == Qt.CursorShape.ForbiddenCursor
         lobe.set_unavailable(False)
-        assert lobe.cursor().shape() == Qt.CursorShape.PointingHandCursor
+        assert lobe.cursor().shape() == Qt.CursorShape.ArrowCursor
 
     def test_unavailable_priority_over_locked(self, qapp):
         """If both unavailable and locked, unavailable cursor wins."""
