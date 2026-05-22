@@ -121,6 +121,10 @@ class TranscriptionSettings:
         default=True,
         metadata={"description": "Whether the CC overlay automatically opens when recording starts"}
     )
+    cc_font_color: str = field(
+        default="rgba(180, 180, 180, 230)",
+        metadata={"description": "CC overlay font color as rgba() string (theme-aware default: grey)"}
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -143,6 +147,7 @@ class TranscriptionSettings:
             microphone_denoising_latency_budget_ms=data.get("microphone_denoising_latency_budget_ms", 200),
             cc_font_size=data.get("cc_font_size", 48),
             cc_auto_open=data.get("cc_auto_open", True),
+            cc_font_color=data.get("cc_font_color", "rgba(180, 180, 180, 230)"),
         )
 
 

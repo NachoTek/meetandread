@@ -2455,3 +2455,86 @@ class TestSettingsDeleteRoutingConsolidation:
             qapp.processEvents()
 
         assert settings_panel_on_history._current_history_md_path is None
+
+
+# ------------------------------------------------------------------
+# CC Font Color Picker Tests
+# ------------------------------------------------------------------
+
+
+class TestCCFontColorPicker:
+    """Tests for CC font color picker in FloatingSettingsPanel."""
+
+    def test_color_swatch_exists(self, settings_panel_on_history):
+        """Color swatch button is created during panel init."""
+        assert hasattr(settings_panel_on_history, '_cc_color_swatch')
+        assert settings_panel_on_history._cc_color_swatch is not None
+
+    def test_reset_button_exists(self, settings_panel_on_history):
+        """Reset button is created during panel init."""
+        assert hasattr(settings_panel_on_history, '_cc_color_reset')
+        assert settings_panel_on_history._cc_color_reset is not None
+
+    def test_initial_color_from_config(self, settings_panel_on_history):
+        """Panel reads cc_font_color from config on init."""
+        assert hasattr(settings_panel_on_history, '_cc_current_color_str')
+        # Default is the theme constant
+        assert settings_panel_on_history._cc_current_color_str == "rgba(180, 180, 180, 230)"
+
+    def test_parse_rgba_color_valid(self):
+        """_parse_rgba_color correctly parses rgba string."""
+        from PyQt6.QtGui import QColor
+        result = settings_panel_on_history.__class__._parse_rgba_color("rgba(255, 128, 0, 200)")
+        assert result is not None
+        assert result.red() == 255
+        assert result.green() == 128
+        assert result.blue() == 0
+        assert result.alpha() == 200
+
+    def test_parse_rgba_color_no_alpha(self):
+        """_parse_rgba_color handles rgb without alpha."""
+        result = settings_panel_on_history.__class__._parse_rgba_color("rgb(100, 200, 50)")
+        assert result is not None
+        assert result.red() == 100
+        assert result.alpha() == 255  # defaults to 255
+
+    def test_parse_rgba_color_invalid(self):
+        """_parse_rgba_color returns None for invalid strings."""
+        result = settings_panel_on_history.__class__._parse_rgba_color("not-a-color")
+        assert result is None
+
+    def test_reset_applies_default(self, settings_panel_on_history, qapp):
+        """Reset button restores theme default color."""
+        settings_panel_on_history._cc_current_color_str = "rgba(255, 0, 0, 255)"
+        settings_panel_on_history._on_cc_color_reset_clicked()
+        assert settings_panel_on_history._cc_current_color_str == "rgba(180, 180, 180, 230)"
+
+    def test_signal_emitted_on_reset(self, settings_panel_on_history, qapp):
+        """Reset emits cc_font_color_changed signal."""
+        emitted = []
+        settings_panel_on_history.cc_font_color_changed.connect(lambda c: emitted.append(c))
+        settings_panel_on_history._on_cc_color_reset_clicked()
+        assert len(emitted) == 1
+        assert emitted[0] == "rgba(180, 180, 180, 230)"
+
+    def test_signal_emitted_on_apply(self, settings_panel_on_history, qapp):
+        """_apply_cc_font_color emits signal with color string."""
+        emitted = []
+        settings_panel_on_history.cc_font_color_changed.connect(lambda c: emitted.append(c))
+        settings_panel_on_history._apply_cc_font_color("rgba(0, 128, 255, 200)")
+        assert len(emitted) == 1
+        assert emitted[0] == "rgba(0, 128, 255, 200)"
+
+    def test_swatch_style_updated_on_apply(self, settings_panel_on_history, qapp):
+        """Color swatch stylesheet updates after applying color."""
+        settings_panel_on_history._apply_cc_font_color("rgba(255, 0, 0, 255)")
+        ss = settings_panel_on_history._cc_color_swatch.styleSheet()
+        assert "#ff0000" in ss.lower() or "background-color" in ss
+
+    def test_cc_font_size_signal_still_works(self, settings_panel_on_history, qapp):
+        """cc_font_size_changed signal still works after adding color signal."""
+        emitted = []
+        settings_panel_on_history.cc_font_size_changed.connect(lambda s: emitted.append(s))
+        settings_panel_on_history._on_cc_font_size_changed(60)
+        assert len(emitted) == 1
+        assert emitted[0] == 60

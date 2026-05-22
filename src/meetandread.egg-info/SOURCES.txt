@@ -36,8 +36,10 @@ src/meetandread/performance/benchmark.py
 src/meetandread/performance/monitor.py
 src/meetandread/performance/wer.py
 src/meetandread/playback/__init__.py
+src/meetandread/playback/bookmark.py
 src/meetandread/playback/history.py
 src/meetandread/recording/__init__.py
+src/meetandread/recording/cleanup_queue.py
 src/meetandread/recording/controller.py
 src/meetandread/recording/management.py
 src/meetandread/speaker/__init__.py
@@ -91,6 +93,7 @@ tests/test_hardware_warning.py
 tests/test_history_identity_link_dialog.py
 tests/test_history_identity_link_flow.py
 tests/test_history_playback_controller.py
+tests/test_history_transcript_highlighting.py
 tests/test_live_speaker_names.py
 tests/test_noisy_diarization_validation.py
 tests/test_offscreen_recovery.py

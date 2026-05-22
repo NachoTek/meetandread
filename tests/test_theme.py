@@ -44,6 +44,8 @@ from meetandread.widgets.theme import (
     text_area_css,
     title_css,
     aetheric_playback_toolbar_css,
+    aetheric_cc_overlay_css,
+    AETHERIC_CC_TEXT,
 )
 
 
@@ -629,3 +631,44 @@ class TestGlassPanelCss:
         css1 = glass_panel_css(LIGHT_PALETTE)
         css2 = glass_panel_css(LIGHT_PALETTE)
         assert css1 == css2
+
+
+class TestCCOverlayCSS:
+    """Tests for CC overlay CSS with font_color parameter."""
+
+    def test_default_color_uses_aetheric_cc_text(self):
+        """With no font_color param, CSS uses AETHERIC_CC_TEXT constant."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        assert AETHERIC_CC_TEXT in css
+        assert "rgba(180, 180, 180, 230)" in css
+
+    def test_custom_font_color_applied(self):
+        """Custom font_color appears in CSS output."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE, font_color="rgba(255, 255, 0, 200)")
+        assert "rgba(255, 255, 0, 200)" in css
+        assert AETHERIC_CC_TEXT not in css or "rgba(255, 255, 0, 200)" in css
+
+    def test_none_font_color_falls_back_to_default(self):
+        """Explicit None falls back to AETHERIC_CC_TEXT."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE, font_color=None)
+        assert AETHERIC_CC_TEXT in css
+
+    def test_empty_string_uses_default(self):
+        """Empty string font_color falls back to AETHERIC_CC_TEXT (falsy)."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE, font_color="")
+        assert AETHERIC_CC_TEXT in css
+
+    def test_cc_text_selector_present(self):
+        """CSS always targets QTextEdit#AethericCCText."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE, font_color="rgba(255, 0, 0, 255)")
+        assert "QTextEdit#AethericCCText" in css
+
+    def test_overlay_selector_present(self):
+        """CSS always targets QWidget#AethericCCOverlay."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE)
+        assert "QWidget#AethericCCOverlay" in css
+
+    def test_transparent_background_always(self):
+        """CC overlay background is always transparent."""
+        css = aetheric_cc_overlay_css(DARK_PALETTE, font_color="rgba(0, 255, 0, 128)")
+        assert "background-color: transparent" in css

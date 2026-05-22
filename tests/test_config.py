@@ -152,6 +152,37 @@ class TestTranscriptionSettings:
         assert restored.min_chunk_size_sec == 2.0
         assert restored.agreement_threshold == 3
 
+    def test_cc_font_color_default(self):
+        """Test cc_font_color default matches AETHERIC_CC_TEXT theme constant."""
+        settings = TranscriptionSettings()
+        assert settings.cc_font_color == "rgba(180, 180, 180, 230)"
+
+    def test_cc_font_color_roundtrip(self):
+        """Test cc_font_color survives serialization roundtrip."""
+        original = TranscriptionSettings(cc_font_color="rgba(255, 255, 0, 200)")
+        d = original.to_dict()
+        assert d["cc_font_color"] == "rgba(255, 255, 0, 200)"
+        restored = TranscriptionSettings.from_dict(d)
+        assert restored.cc_font_color == "rgba(255, 255, 0, 200)"
+
+    def test_cc_font_color_default_from_empty_dict(self):
+        """Test cc_font_color gets default when missing from dict."""
+        settings = TranscriptionSettings.from_dict({})
+        assert settings.cc_font_color == "rgba(180, 180, 180, 230)"
+
+    def test_cc_font_color_preserves_cc_font_size_and_auto_open(self):
+        """Test adding cc_font_color doesn't break adjacent CC settings."""
+        original = TranscriptionSettings(
+            cc_font_size=72,
+            cc_auto_open=False,
+            cc_font_color="rgba(0, 255, 0, 255)",
+        )
+        d = original.to_dict()
+        restored = TranscriptionSettings.from_dict(d)
+        assert restored.cc_font_size == 72
+        assert restored.cc_auto_open is False
+        assert restored.cc_font_color == "rgba(0, 255, 0, 255)"
+
 
 class TestHardwareSettings:
     """Tests for HardwareSettings dataclass."""

@@ -233,9 +233,9 @@ class TestWidgetIntegration:
 # ---------------------------------------------------------------------------
 
 class TestGlassOpacity:
-    """Window opacity smoothly transitions between idle (0.92) and active (1.0)."""
+    """Window opacity smoothly transitions between idle (1.0) and active (1.0)."""
 
-    IDLE_OPACITY = 0.92
+    IDLE_OPACITY = 1.0
     ACTIVE_OPACITY = 1.0
 
     @pytest.fixture
@@ -265,7 +265,7 @@ class TestGlassOpacity:
     # -- Initial state -------------------------------------------------------
 
     def test_initial_opacity_is_idle(self, widget):
-        """Widget starts translucent (0.92) since initial state is IDLE."""
+        """Widget starts translucent (1.0) since initial state is IDLE."""
         assert widget.windowOpacity() == pytest.approx(self.IDLE_OPACITY, abs=0.01)
 
     # -- Idle → Recording transition -----------------------------------------
@@ -277,11 +277,12 @@ class TestGlassOpacity:
         assert widget.windowOpacity() == pytest.approx(self.IDLE_OPACITY, abs=0.01)
 
     def test_idle_to_recording_opacity_transitions_toward_active(self, widget):
+        """With idle=active=1.0, opacity remains at 1.0 throughout transition."""
         from meetandread.recording import ControllerState
         widget._on_controller_state_change(ControllerState.RECORDING)
         widget._update_animations()  # one tick
         opacity = widget.windowOpacity()
-        assert self.IDLE_OPACITY < opacity < self.ACTIVE_OPACITY
+        assert opacity == pytest.approx(self.ACTIVE_OPACITY, abs=0.01)
 
     def test_idle_to_recording_opacity_converges_to_active(self, widget):
         from meetandread.recording import ControllerState
@@ -326,7 +327,7 @@ class TestGlassOpacity:
     def test_show_event_resets_opacity_for_idle_state(self, widget):
         """showEvent sets correct opacity for current visual state."""
         from PyQt6.QtGui import QShowEvent
-        # Widget is idle, opacity should be 0.92
+        # Widget is idle, opacity should be 1.0
         widget.setWindowOpacity(1.0)  # force wrong value
         widget.showEvent(QShowEvent())
         assert widget.windowOpacity() == pytest.approx(self.IDLE_OPACITY, abs=0.01)
@@ -482,10 +483,10 @@ class TestIntegratedStateTransitions:
     # -- Step 4-6: End-to-end transition tests --
 
     def test_idle_to_recording_transition(self, widget):
-        """idle→recording: opacity 0.92→1.0, state key idle→recording, cross-fade."""
+        """idle→recording: opacity 1.0→1.0, state key idle→recording, cross-fade."""
         from meetandread.recording import ControllerState
         # Start idle
-        assert widget.windowOpacity() == pytest.approx(0.92, abs=0.01)
+        assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
         assert widget.record_button._to_key == 'idle'
 
         # Trigger recording
@@ -494,10 +495,10 @@ class TestIntegratedStateTransitions:
         assert widget.record_button._to_key == 'recording'
         assert widget.record_button._state_t == 0.0  # cross-fade starting
 
-        # Advance animation — opacity should move toward 1.0
+        # Advance animation — opacity stays at 1.0 (idle=active)
         widget._update_animations()
         opacity = widget.windowOpacity()
-        assert 0.92 < opacity < 1.0, f"Opacity should be mid-transition, got {opacity}"
+        assert opacity == pytest.approx(1.0, abs=0.01)
 
         # Settle
         for _ in range(20):
@@ -534,7 +535,7 @@ class TestIntegratedStateTransitions:
         assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
 
     def test_processing_to_idle_transition(self, widget):
-        """processing→idle: swirl→glass gradient, opacity 1.0→0.92."""
+        """processing→idle: swirl→glass gradient, opacity 1.0→1.0."""
         from meetandread.recording import ControllerState
         # Setup: go through recording→processing
         widget._on_controller_state_change(ControllerState.RECORDING)
@@ -550,15 +551,15 @@ class TestIntegratedStateTransitions:
         assert widget._visual_state.current == WidgetVisualState.IDLE
         assert widget.record_button._to_key == 'idle'
 
-        # During transition, opacity should move from 1.0 toward 0.92
+        # During transition, opacity stays at 1.0 (idle=active)
         widget._update_animations()
         opacity = widget.windowOpacity()
-        assert 0.92 < opacity < 1.0
+        assert opacity == pytest.approx(1.0, abs=0.01)
 
         # Settle
         for _ in range(20):
             widget._update_animations()
-        assert widget.windowOpacity() == pytest.approx(0.92, abs=0.01)
+        assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
         assert widget.record_button._state_t >= 1.0
 
     # -- Step 7: Visual smoke test — full lifecycle --
@@ -606,7 +607,7 @@ class TestIntegratedStateTransitions:
             opacity_values.append(widget.windowOpacity())
 
         # Final state: idle opacity
-        assert widget.windowOpacity() == pytest.approx(0.92, abs=0.01)
+        assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
         assert widget.record_button._state_t >= 1.0
         assert widget.pulse_phase == 0.0  # settled → reset
         assert widget.record_button.pulse_phase == 0.0
@@ -636,7 +637,7 @@ class TestIntegratedStateTransitions:
         # Settle to idle
         for _ in range(20):
             widget._update_animations()
-        assert widget.windowOpacity() == pytest.approx(0.92, abs=0.01)
+        assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
 
     def test_error_recovery_resets_to_idle(self, widget):
         """Recording error should transition both state systems cleanly to idle."""
@@ -655,7 +656,7 @@ class TestIntegratedStateTransitions:
         # Settle
         for _ in range(20):
             widget._update_animations()
-        assert widget.windowOpacity() == pytest.approx(0.92, abs=0.01)
+        assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -738,36 +739,25 @@ class TestOrbitConfig:
 # ---------------------------------------------------------------------------
 
 class TestDragSurfaceItemVisibility:
-    """DragSurfaceItem brush alpha is visible but still translucent."""
+    """DragSurfaceItem is invisible — hit-test only, no visible fill."""
 
-    def test_drag_surface_brush_alpha_is_visible(self):
-        """Brush alpha should be > 1 (old near-invisible value) for visibility."""
+    def test_drag_surface_brush_alpha_is_zero(self):
+        """Brush alpha should be 0 (invisible, hit-test only)."""
         from meetandread.widgets.main_widget import DragSurfaceItem
         from unittest.mock import MagicMock, patch
-        # Create without full widget — just test the class constant
-        # DragSurfaceItem uses QColor(0, 0, 0, alpha) in __init__
-        # We can test by constructing one with a mock parent
         mock_parent = MagicMock()
         item = DragSurfaceItem.__new__(DragSurfaceItem)
-        # __init__ calls super().__init__, which needs a real QGraphicsRectItem
-        # Instead, just verify the alpha via import
         from PyQt6.QtGui import QColor, QBrush
-        # Re-read the source constant: alpha must be > 1 and < 255
-        # Let's just verify the brush constructed by the actual class
-        # Since DragSurfaceItem is a QGraphicsItem, we need a scene
-        # Use a simpler approach: check the value from source inspection
         import inspect
         source = inspect.getsource(DragSurfaceItem.__init__)
-        # Find QColor alpha value
         import re
         match = re.search(r'QColor\(0,\s*0,\s*0,\s*(\d+)\)', source)
         assert match, "Could not find QColor(0,0,0,alpha) in DragSurfaceItem.__init__"
         alpha = int(match.group(1))
-        assert alpha > 1, f"DragSurfaceItem brush alpha ({alpha}) must be > 1 for visibility"
-        assert alpha < 255, f"DragSurfaceItem brush alpha ({alpha}) must be < 255 for translucency"
+        assert alpha == 0, f"DragSurfaceItem brush alpha ({alpha}) must be 0 for invisible hit-test surface"
 
     def test_drag_surface_alpha_below_half_opaque(self):
-        """Brush alpha should be well below 128 to preserve glass aesthetic."""
+        """Brush alpha should be 0 (invisible)."""
         from meetandread.widgets.main_widget import DragSurfaceItem
         import inspect, re
         source = inspect.getsource(DragSurfaceItem.__init__)
@@ -778,23 +768,17 @@ class TestDragSurfaceItemVisibility:
 
 
 class TestIdleOpacityVisibility:
-    """Idle opacity is high enough for visibility on light backgrounds."""
+    """Idle opacity is 1.0 — widget fully transparent, darkness on button only."""
 
-    def test_idle_opacity_above_old_value(self):
-        """Idle opacity must be > 0.87 (old value) for better visibility."""
+    def test_idle_opacity_is_one(self):
+        """Idle opacity is 1.0 — no widget-level dimming."""
         from meetandread.widgets.main_widget import MeetAndReadWidget
-        assert MeetAndReadWidget._IDLE_OPACITY > 0.87
+        assert MeetAndReadWidget._IDLE_OPACITY == 1.0
 
-    def test_idle_opacity_below_active(self):
-        """Idle opacity must remain below active (1.0) for glass differentiation."""
+    def test_idle_opacity_equals_active(self):
+        """Idle and active opacity are both 1.0 — differentiation is on the button paint."""
         from meetandread.widgets.main_widget import MeetAndReadWidget
-        assert MeetAndReadWidget._IDLE_OPACITY <= MeetAndReadWidget._ACTIVE_OPACITY
-        assert MeetAndReadWidget._IDLE_OPACITY < 1.0
-
-    def test_idle_opacity_at_least_0_9(self):
-        """Idle opacity should be at least 0.90 for visibility on light backgrounds."""
-        from meetandread.widgets.main_widget import MeetAndReadWidget
-        assert MeetAndReadWidget._IDLE_OPACITY >= 0.90
+        assert MeetAndReadWidget._IDLE_OPACITY == MeetAndReadWidget._ACTIVE_OPACITY
 
     def test_active_opacity_is_one(self):
         """Active opacity remains fully opaque."""

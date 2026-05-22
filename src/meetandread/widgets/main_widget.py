@@ -162,8 +162,8 @@ class DragSurfaceItem(QGraphicsRectItem):
         # No visible border
         self.setPen(QPen(Qt.PenStyle.NoPen))
         
-        # Dark translucent fill — visible for glass aesthetic but still hit-testable
-        self.setBrush(QBrush(QColor(0, 0, 0, 40)))
+        # Invisible hit-test surface — no visible fill, click-through prevention only
+        self.setBrush(QBrush(QColor(0, 0, 0, 0)))
         
         # Stay behind all other items
         self.setZValue(-1000)
@@ -362,6 +362,11 @@ to avoid clipping issues and enable proper text rendering.
             self._on_cc_font_size_changed
         )
 
+        # Connect CC font color signal to apply font color live
+        self._floating_settings_panel.cc_font_color_changed.connect(
+            self._on_cc_font_color_changed
+        )
+
         # Connect reactive data signals — visible tabs refresh immediately;
         # hidden/inactive tabs refresh on next navigation (MEM242/MEM292).
         self.identity_data_changed.connect(
@@ -430,6 +435,11 @@ to avoid clipping issues and enable proper text rendering.
         """Apply CC overlay font size change immediately."""
         if self._cc_overlay:
             self._cc_overlay.set_font_size(size_px)
+
+    def _on_cc_font_color_changed(self, color_str: str) -> None:
+        """Apply CC overlay font color change immediately."""
+        if self._cc_overlay:
+            self._cc_overlay.set_font_color(color_str)
 
     def _validate_startup_storage_paths(self) -> None:
         """Validate custom storage paths loaded from config.
@@ -548,8 +558,8 @@ to avoid clipping issues and enable proper text rendering.
             self.move(new_x, new_y)
     
     # -- Glass opacity constants for visual state ----------------------------
-    _IDLE_OPACITY = 0.92      # translucent glass when idle (visible on light/dark backgrounds)
-    _ACTIVE_OPACITY = 1.0     # fully opaque when recording/processing
+    _IDLE_OPACITY = 1.0        # fully opaque — widget background is transparent, darkness lives on the button itself
+    _ACTIVE_OPACITY = 1.0      # fully opaque when recording/processing
 
     def _update_visual_state_opacity(self):
         """Interpolate window opacity between IDLE (0.92) and active (1.0).
@@ -1162,8 +1172,9 @@ to avoid clipping issues and enable proper text rendering.
     def _exit_application(self):
         """Exit the application cleanly (full quit, even with tray)."""
         self._save_position()
-        # Hide all floating panels first
+        # Save floating panel geometry before hiding
         if self._floating_settings_panel:
+            self._floating_settings_panel.save_geometry()
             self._floating_settings_panel.hide()
         if self._cc_overlay:
             self._cc_overlay.save_geometry()
@@ -1206,6 +1217,11 @@ to avoid clipping issues and enable proper text rendering.
         normally (ALT+F4, etc.).
         """
         self._save_position()
+        # Save floating panel geometry on app exit
+        if self._floating_settings_panel:
+            self._floating_settings_panel.save_geometry()
+        if self._cc_overlay:
+            self._cc_overlay.save_geometry()
         
         if self._tray_manager is not None:
             # Close-to-tray: hide the widget instead of quitting
@@ -1591,15 +1607,15 @@ class RecordButtonItem(QGraphicsEllipseItem):
             self._paint_idle(painter, rect)
     
     def _paint_idle(self, painter, rect):
-        """Paint idle state - translucent glass."""
-        # Glass gradient
+        """Paint idle state - translucent glass with dark fill for visibility."""
+        # Glass gradient — dark enough to read on white/light backgrounds
         gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        gradient.setColorAt(0, QColor(255, 255, 255, 40))
-        gradient.setColorAt(0.5, QColor(255, 255, 255, 20))
-        gradient.setColorAt(1, QColor(255, 255, 255, 40))
-        
+        gradient.setColorAt(0, QColor(50, 48, 50, 160))
+        gradient.setColorAt(0.5, QColor(40, 38, 40, 180))
+        gradient.setColorAt(1, QColor(50, 48, 50, 160))
+
         painter.setBrush(QBrush(gradient))
-        painter.setPen(QPen(QColor(255, 255, 255, 60), 2))
+        painter.setPen(QPen(QColor(255, 255, 255, 80), 2))
         painter.drawEllipse(rect)
     
     def _paint_recording(self, painter, rect):
