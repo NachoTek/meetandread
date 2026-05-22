@@ -43,6 +43,8 @@ dev = [
     "pytest-qt>=4.0.0",
     "black>=22.0.0",
     "mypy>=1.0.0",
+    "flake8>=7.0.0",
+    "bandit>=1.8.0",
 ]
 
 [project.scripts]
@@ -60,3 +62,23 @@ pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow (requires model download, deselect with '-m \"not slow\"')",
 ]
+
+[tool.flake8]
+max-line-length = 120
+extend-ignore = ["E203", "E261", "W293", "E501"]
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+    ".gsd",
+]
+per-file-ignores = [
+    "src/meetandread/__init__.py:F401",
+    "tests/*:F401,F811",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".gsd", "build", "dist"]
+skips = ["B101", "B311"]
