@@ -6152,19 +6152,17 @@ class FloatingSettingsPanel(QWidget):
     # ------------------------------------------------------------------
 
     def refresh_history_if_visible(self) -> None:
-        """Refresh the history list when the History page is currently shown.
+        """Refresh the history list after recording or post-processing.
 
         Public entry point for external callers (e.g. MeetAndReadWidget)
-        to trigger a history refresh after recording or post-processing
-        completes.  Avoids unnecessary work when the History page is not
-        visible — the next navigation to it will call ``_refresh_history``
-        via ``_on_nav_clicked`` (MEM242/MEM292 guard pattern).
+        to trigger a history refresh. Always refreshes when the History
+        page is active (even if the panel is hidden behind another window)
+        so the data is current when the user returns.
 
         If a transcript is currently being viewed, re-renders it so
         speaker labels from post-processing appear immediately.
         """
-        if (self._content_stack.currentIndex() == self._NAV_HISTORY
-                and self.isVisible()):
+        if self._content_stack.currentIndex() == self._NAV_HISTORY:
             self._refresh_history()
             # Re-render the currently-viewed transcript (speaker labels
             # may have been added by post-processing diarization).
@@ -6174,16 +6172,13 @@ class FloatingSettingsPanel(QWidget):
                     self._on_history_item_clicked(current)
 
     def refresh_identities_if_visible(self) -> None:
-        """Refresh the identities list when the Identities page is currently shown.
+        """Refresh the identities list after speaker pinning or cross-view mutations.
 
-        Public entry point for external callers (e.g. MeetAndReadWidget)
-        to trigger an identity refresh after speaker pinning or cross-view
-        mutations.  Avoids unnecessary work when the Identities page is
-        not visible — the next navigation to it will call
-        ``_refresh_identities`` via ``_on_nav_clicked`` (MEM242/MEM292).
+        Public entry point for external callers (e.g. MeetAndReadWidget).
+        Always refreshes when the Identities page is active so data is
+        current when the user returns to the panel.
         """
-        if (self._content_stack.currentIndex() == self._NAV_IDENTITIES
-                and self.isVisible()):
+        if self._content_stack.currentIndex() == self._NAV_IDENTITIES:
             self._refresh_identities()
 
     def _refresh_history(self) -> None:
