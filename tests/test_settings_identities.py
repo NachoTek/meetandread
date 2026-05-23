@@ -1943,8 +1943,9 @@ class TestRefreshIdentitiesIfVisible:
             settings_panel.refresh_identities_if_visible()
         mock_refresh.assert_not_called()
 
-    def test_skips_when_not_visible(self, settings_panel_on_identities, qapp):
-        """Panel is on Identities but hidden — skip refresh."""
+    def test_refreshes_even_when_hidden(self, settings_panel_on_identities, qapp):
+        """Panel is on Identities but hidden — still refreshes so data is
+        current when the user returns (isVisible guard removed)."""
         settings_panel_on_identities.hide()
         qapp.processEvents()
 
@@ -1952,7 +1953,7 @@ class TestRefreshIdentitiesIfVisible:
             settings_panel_on_identities, "_refresh_identities"
         ) as mock_refresh:
             settings_panel_on_identities.refresh_identities_if_visible()
-        mock_refresh.assert_not_called()
+        mock_refresh.assert_called_once()
 
     def test_skips_when_on_history_page(self, settings_panel, qapp):
         """Panel is on History page — identities should not refresh."""

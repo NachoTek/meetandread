@@ -1185,7 +1185,9 @@ class TestRefreshHistoryIfVisible:
 
         mock_refresh.assert_not_called()
 
-    def test_skips_when_not_visible(self, settings_panel_on_history, qapp):
+    def test_refreshes_even_when_hidden(self, settings_panel_on_history, qapp):
+        """Panel is on History but hidden — still refreshes so data is
+        current when the user returns (isVisible guard removed)."""
         settings_panel_on_history.hide()
         qapp.processEvents()
 
@@ -1194,7 +1196,7 @@ class TestRefreshHistoryIfVisible:
         ) as mock_refresh:
             settings_panel_on_history.refresh_history_if_visible()
 
-        mock_refresh.assert_not_called()
+        mock_refresh.assert_called_once()
 
 
 class TestHistoryAnchorRefreshesList:
