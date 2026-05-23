@@ -3483,7 +3483,7 @@ class FloatingSettingsPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         # Size — wider to accommodate sidebar + content stack
-        self.setMinimumSize(545, 425)
+        self.setMinimumSize(545, 300)
         self.resize(900, 600)
 
         # ------------------------------------------------------------------

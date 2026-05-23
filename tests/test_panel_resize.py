@@ -104,7 +104,7 @@ class TestSettingsPanelConstraints:
         assert settings_panel.minimumWidth() == 545
 
     def test_minimum_height(self, settings_panel):
-        assert settings_panel.minimumHeight() == 425
+        assert settings_panel.minimumHeight() == 300
 
     def test_maximum_width(self, settings_panel):
         # Max size cap removed — panel can be freely resized
