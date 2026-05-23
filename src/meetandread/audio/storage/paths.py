@@ -15,7 +15,7 @@ resolves them with safe fallback to defaults on invalid/unset config.
 
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 
 # Default subdirectory name within user's Documents folder

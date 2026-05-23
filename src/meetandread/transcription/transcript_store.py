@@ -205,7 +205,7 @@ class TranscriptStore:
             self._last_segment_time = 0.0
     
     def to_markdown(self, include_confidence: bool = True,
-                   include_timestamps: bool = True) -> str:
+                    include_timestamps: bool = True) -> str:
         """Export transcript to markdown format.
         
         Args:
@@ -273,7 +273,7 @@ class TranscriptStore:
         with self._lock:
             result: Dict[str, Any] = {
                 "recording_start_time": self._recording_start_time.isoformat()
-                    if self._recording_start_time else None,
+                if self._recording_start_time else None,
                 "word_count": len(self._words),
                 "words": [w.to_dict() for w in self._words],
                 "segments": [s.to_dict() for s in self._get_segments_internal()],

@@ -15,7 +15,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from meetandread.audio.storage.paths import get_recordings_dir
 from meetandread.playback.bookmark import Bookmark, _parse_bookmark_entry

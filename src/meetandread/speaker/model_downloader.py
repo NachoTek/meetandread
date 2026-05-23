@@ -8,7 +8,6 @@ Model files are verified by existence; re-downloads are skipped if present.
 """
 
 import logging
-import platform
 import shutil
 import tarfile
 import urllib.request
@@ -69,7 +68,7 @@ def _download_file(url: str, dest: Path, label: str = "") -> None:
     logger.info("Downloading %s from %s", label or dest.name, url)
     tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
     try:
-        urllib.request.urlretrieve(url, tmp_dest)
+        urllib.request.urlretrieve(url, tmp_dest)  # nosec B310
         shutil.move(str(tmp_dest), str(dest))
         logger.info("Downloaded %s (%.1f MB)", label or dest.name, dest.stat().st_size / 1e6)
     except Exception:
@@ -98,7 +97,11 @@ def ensure_segmentation_model(cache_dir: Optional[Path] = None) -> Path:
 
     logger.info("Extracting segmentation model to %s", cache)
     with tarfile.open(str(tarball_path), "r:bz2") as tar:
-        tar.extractall(path=str(cache))
+        # Validate members before extraction to prevent path traversal (B202)
+        for member in tar.getmembers():
+            if member.name.startswith("/") or ".." in member.name:
+                raise ValueError(f"Unsafe tar member: {member.name}")
+        tar.extractall(path=str(cache))  # nosec B202
     tarball_path.unlink()
 
     model_onnx = model_dir / "model.onnx"

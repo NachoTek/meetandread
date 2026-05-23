@@ -10,6 +10,8 @@ from meetandread.playback.bookmark import Bookmark, BookmarkError, BookmarkManag
 __all__ = ["Bookmark", "BookmarkError", "BookmarkManager"]
 
 # Lazy import — only resolve when actually needed at runtime
+
+
 def __getattr__(name: str):
     if name == "HistoryPlaybackController":
         from meetandread.playback.history import HistoryPlaybackController

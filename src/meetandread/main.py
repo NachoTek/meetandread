@@ -245,6 +245,7 @@ def setup_signal_handlers(app):
     if sys.platform == 'win32':
         try:
             import win32api
+
             def win_handler(dwCtrlType):
                 if dwCtrlType == 0:  # CTRL_C_EVENT
                     print("\nReceived CTRL+C event, shutting down gracefully...")
@@ -260,7 +261,7 @@ def setup_signal_handlers(app):
 def main():
     """Application entry point."""
     # Setup logging first
-    log_file = setup_logging()
+    log_file = setup_logging()  # noqa: F841
     logging.info("Starting meetandread")
     
     # Enable high DPI support
@@ -307,6 +308,19 @@ def main():
     except Exception as e:
         # Log error but don't block startup
         print(f"Recovery check failed: {e}")
+
+    # Process pending cleanup queue (orphaned files from prior sessions)
+    try:
+        from meetandread.recording.cleanup_queue import CleanupQueue
+        cleanup_queue = CleanupQueue()
+        result = cleanup_queue.process_pending()
+        if result.processed > 0 or result.failed > 0:
+            logging.info(
+                "Startup cleanup: processed=%d, failed=%d",
+                result.processed, result.failed,
+            )
+    except Exception as e:
+        logging.warning("Startup cleanup queue processing failed: %s", e)
     
     # Create and show the main widget
     widget = MeetAndReadWidget()

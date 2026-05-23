@@ -153,7 +153,7 @@ class ModelRecommender:
         >>> rec = recommender.detect_and_recommend()
         >>> print(f"Recommended: {rec}")
         Recommended: small
-        >>> 
+        >>>
         >>> # Get recommendation info
         >>> info = recommender.get_recommended_info()
         >>> print(info.description)

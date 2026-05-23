@@ -7,7 +7,7 @@ Examples:
     # Record from microphone for 5 seconds
     python -m meetandread.audio.cli record --mic
 
-    # Record from system audio for 10 seconds  
+    # Record from system audio for 10 seconds
     python -m meetandread.audio.cli record --system --seconds 10
 
     # Record both mic and system simultaneously
@@ -26,14 +26,14 @@ from pathlib import Path
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 
-from meetandread.audio import (
+from meetandread.audio import (  # noqa: E402
     AudioSession,
     SessionConfig,
     SourceConfig,
     list_mic_inputs,
     list_loopback_outputs,
 )
-from meetandread.audio.capture import AudioSourceError
+from meetandread.audio.capture import AudioSourceError  # noqa: E402
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -197,7 +197,7 @@ def cmd_record(args) -> int:
     
     # Report success
     stats = session.get_stats()
-    print(f"\nRecording complete!")
+    print("\nRecording complete!")
     print(f"  WAV file: {wav_path}")
     print(f"  Duration: {stats.duration_seconds:.2f}s")
     print(f"  Frames recorded: {stats.frames_recorded}")

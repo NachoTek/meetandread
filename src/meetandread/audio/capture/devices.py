@@ -97,10 +97,10 @@ def _probe_loopback_windows(device: Dict[str, Any]) -> Tuple[bool, Optional[str]
     so we check if we can at least access the device for potential loopback capture.
     """
     try:
-        device_id = device.get('index')
-        sample_rate = device.get('default_samplerate', 48000)
+        device_id = device.get('index')  # noqa: F841
+        sample_rate = device.get('default_samplerate', 48000)  # noqa: F841
         max_channels = device.get('max_output_channels', 2)
-        channels = min(2, max(1, max_channels))
+        channels = min(2, max(1, max_channels))  # noqa: F841
         
         # On Windows, we check if the device is accessible
         # Actual loopback capture requires Windows Core Audio API
@@ -228,7 +228,7 @@ def print_device_summary():
                 print(f"  [{device['index']}] {device['name']}")
                 print(f"       Channels: {device['max_output_channels']} out")
                 print(f"       Sample rate: {device['default_samplerate']} Hz")
-                print(f"       WASAPI: Yes")
+                print("       WASAPI: Yes")
     else:
         print("\n[FAIL] No loopback-capable devices found")
         print("\nPer-device failure table:")

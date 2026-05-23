@@ -676,3 +676,56 @@ class TestRenameThenEnumerate:
         assert f"{new_stem}.wav" in names
         assert f"{new_stem}.md" in names
         assert f"{new_stem}_scrub_v1.md" in names
+
+
+class TestStartupCleanupIntegration:
+    """Verify CleanupQueue.process_pending() runs at app startup (R026)."""
+
+    def test_startup_cleanup_processes_pending_files(self, tmp_path):
+        """Simulate startup: queue with pending file_delete should be processed."""
+        # Create a recording file to be cleaned up
+        recordings_dir = tmp_path / "recordings"
+        recordings_dir.mkdir(exist_ok=True)
+        target_wav = recordings_dir / "orphan.wav"
+        target_wav.write_bytes(b"RIFF" + b"\x00" * 100)
+
+        # Create a queue with a pending file_delete operation
+        queue_file = tmp_path / "cleanup_queue.json"
+        q = CleanupQueue(
+            queue_file,
+            recordings_dir=recordings_dir,
+            transcripts_dir=tmp_path / "transcripts",
+        )
+        q.enqueue_file_deletion(
+            stem="orphan",
+            paths=[str(target_wav)],
+        )
+
+        # Simulate startup processing
+        q2 = CleanupQueue(
+            queue_file,
+            recordings_dir=recordings_dir,
+            transcripts_dir=tmp_path / "transcripts",
+        )
+        result = q2.process_pending()
+
+        assert result.processed == 1
+        assert not target_wav.exists()
+
+    def test_startup_cleanup_handles_corrupt_queue(self, tmp_path):
+        """Startup should not crash if the queue file is corrupt."""
+        queue_file = tmp_path / "cleanup_queue.json"
+        queue_file.write_text("{invalid json", encoding="utf-8")
+
+        # Simulate startup — should not raise
+        q = CleanupQueue(queue_file)
+        result = q.process_pending()
+        assert result.processed == 0
+
+    def test_startup_cleanup_empty_queue(self, tmp_path):
+        """Startup with no pending operations should succeed cleanly."""
+        queue_file = tmp_path / "cleanup_queue.json"
+        q = CleanupQueue(queue_file)
+        result = q.process_pending()
+        assert result.processed == 0
+        assert result.failed == 0

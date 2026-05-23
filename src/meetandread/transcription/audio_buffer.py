@@ -6,7 +6,6 @@ Designed for real-time transcription pipelines.
 
 import threading
 import numpy as np
-from typing import Optional
 
 
 class AudioRingBuffer:

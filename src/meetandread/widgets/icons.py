@@ -159,7 +159,6 @@ def create_speaker_icon(volume: int = 80, muted: bool = False,
     return QIcon(pixmap)
 
 
-
 def create_app_icon() -> QIcon:
     """Create the default green application icon.
 

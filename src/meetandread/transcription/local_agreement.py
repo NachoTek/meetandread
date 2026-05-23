@@ -6,8 +6,6 @@ committing text after N consecutive iterations agree on the same content.
 Based on whisper_streaming implementation pattern.
 """
 
-from typing import Optional
-
 
 class LocalAgreementBuffer:
     """Buffer that prevents text flickering through local agreement policy.

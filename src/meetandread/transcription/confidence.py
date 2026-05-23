@@ -4,7 +4,7 @@ Provides confidence normalization from Whisper log probabilities to 0-100 scale,
 color coding by confidence level, and visual distortion effects for low confidence text.
 """
 
-from typing import Dict, Any, List
+from typing import List
 from enum import Enum
 from dataclasses import dataclass
 
@@ -268,5 +268,3 @@ def format_confidence_for_display(confidence: int, text: str) -> dict:
         "level": level.value,
         "distortion": get_distortion_intensity(confidence),
     }
-
-

@@ -389,7 +389,7 @@ def rename_identity(
     profiles = store.load_signatures()
     old_profile = _find_profile(profiles, old_name)
     if old_profile is None:
-        raise RenameError(f"Source identity not found in store")
+        raise RenameError("Source identity not found in store")
 
     # Check target doesn't already exist
     existing_names = {p.name for p in profiles}

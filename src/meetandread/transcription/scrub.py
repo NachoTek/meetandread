@@ -24,7 +24,7 @@ import logging
 import shutil
 import threading
 from pathlib import Path
-from typing import Callable, Dict, Optional, Any
+from typing import Callable, Dict, Optional
 
 import numpy as np
 
@@ -319,7 +319,20 @@ class ScrubRunner:
                 return
 
             store = self._create_transcript_from_segments(segments)
-            self._notify_progress(90)
+            self._notify_progress(85)
+
+            # Run speaker diarization on the audio (R025)
+            try:
+                store = self._run_speaker_identification(
+                    audio_path, store
+                )
+            except Exception as diar_exc:
+                logger.warning(
+                    "Speaker identification during scrub failed (non-fatal): %s",
+                    diar_exc,
+                )
+
+            self._notify_progress(95)
 
             # Ensure parent directory exists
             sidecar_path.parent.mkdir(parents=True, exist_ok=True)
@@ -339,3 +352,98 @@ class ScrubRunner:
     def _notify_progress(self, pct: int) -> None:
         if self._on_progress:
             self._on_progress(pct)
+
+    # -- Speaker identification (diarization + signature matching) -------
+
+    def _run_speaker_identification(
+        self, audio_path: Path, store: TranscriptStore,
+    ) -> TranscriptStore:
+        """Run diarization and speaker matching, tag transcript words.
+
+        Follows the same pipeline as RecordingController's
+        _run_diarization_for_postprocess but adapted for the scrub context.
+        Gracefully degrades — if diarization fails, returns the store
+        unchanged (no speaker labels).
+
+        Args:
+            audio_path: Path to the source WAV audio.
+            store: TranscriptStore with words from transcription.
+
+        Returns:
+            The same TranscriptStore with speaker_id populated on words.
+        """
+        try:
+            from meetandread.speaker.diarizer import Diarizer
+        except ImportError:
+            logger.info(
+                "sherpa-onnx not installed — speaker diarization skipped"
+            )
+            return store
+
+        # Check if speaker diarization is enabled
+        speaker_cfg = getattr(self._settings, "speaker", None)
+        if speaker_cfg is None:
+            return store
+        if hasattr(speaker_cfg, "enabled") and not speaker_cfg.enabled:
+            logger.info("Speaker diarization disabled — skipped")
+            return store
+
+        # (1) Run diarization
+        diarizer = Diarizer(
+            clustering_threshold=getattr(speaker_cfg, "clustering_threshold", 0.5),
+            min_duration_on=getattr(speaker_cfg, "min_duration_on", 0.3),
+            min_duration_off=getattr(speaker_cfg, "min_duration_off", 0.5),
+        )
+        result = diarizer.diarize(audio_path)
+
+        if not result.succeeded or not result.segments:
+            logger.info("No speaker segments from diarization — skipping")
+            return store
+
+        if result.num_speakers == 0:
+            logger.warning("Diarization returned 0 speakers — skipping")
+            return store
+
+        logger.info(
+            "Scrub diarization: %d segments, %d speakers",
+            len(result.segments), result.num_speakers,
+        )
+
+        # (2) Match speakers against known signatures
+        matches: Dict[str, str] = {}
+        try:
+            from meetandread.speaker.signatures import VoiceSignatureStore
+            from meetandread.audio.storage.paths import get_recordings_dir
+
+            db_path = get_recordings_dir() / "speaker_signatures.db"
+            with VoiceSignatureStore(db_path=db_path) as sig_store:
+                threshold = getattr(
+                    speaker_cfg, "confidence_threshold", 0.6,
+                )
+                for label, sig in result.signatures.items():
+                    emb = np.asarray(
+                        sig.embedding, dtype=np.float32,
+                    ) if not isinstance(sig.embedding, np.ndarray) else sig.embedding
+                    match = sig_store.find_match(emb, threshold=threshold)
+                    if match:
+                        matches[label] = match
+        except Exception as exc:
+            logger.warning("Speaker signature matching failed: %s", exc)
+
+        # (3) Tag transcript words with speaker labels by time overlap
+        words = store.get_all_words()
+        for word in words:
+            for seg in result.segments:
+                # Check if word midpoint falls within the segment
+                word_mid = (word.start_time + word.end_time) / 2.0
+                if seg.start <= word_mid < seg.end:
+                    raw_label = seg.speaker
+                    display_label = matches.get(raw_label, raw_label)
+                    word.speaker_id = display_label
+                    break
+
+        logger.info(
+            "Scrub speaker identification complete: %d speakers matched",
+            len(matches),
+        )
+        return store

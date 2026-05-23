@@ -15,7 +15,7 @@ from typing import Callable, List, Optional
 
 import numpy as np
 
-from meetandread.performance.wer import calculate_wer, calculate_wer_details
+from meetandread.performance.wer import calculate_wer
 
 logger = logging.getLogger(__name__)
 

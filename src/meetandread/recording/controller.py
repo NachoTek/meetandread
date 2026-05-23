@@ -9,15 +9,19 @@ and state management for UI integration. Includes hybrid transcription:
 import logging
 import threading
 import time as _time
-
-
-def _ts(): return _time.strftime("%H:%M:%S")
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from typing import Optional, Set, Callable, List
 
-from meetandread.audio import (
+import numpy as np  # noqa: E402
+from meetandread.speaker.models import DiarizationResult  # noqa: E402
+
+
+def _ts(): return _time.strftime("%H:%M:%S")
+
+
+from meetandread.audio import (  # noqa: E402
     AudioSession,
     SessionConfig,
     SourceConfig,
@@ -25,11 +29,11 @@ from meetandread.audio import (
     SessionError,
     NoSourcesError,
 )
-from meetandread.audio.capture import AudioSourceError
-from meetandread.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult
-from meetandread.transcription.transcript_store import TranscriptStore, Word
-from meetandread.transcription.post_processor import PostProcessingQueue, PostProcessStatus
-from meetandread.config.manager import ConfigManager
+from meetandread.audio.capture import AudioSourceError  # noqa: E402
+from meetandread.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult  # noqa: E402
+from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
+from meetandread.transcription.post_processor import PostProcessingQueue  # noqa: E402
+from meetandread.config.manager import ConfigManager  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -1298,7 +1302,6 @@ class RecordingController:
         """
         store = transcript_store or self._transcript_store
         assert store is not None
-        from meetandread.speaker.models import DiarizationResult
 
         words = store.get_all_words()
         if not words:
@@ -1695,7 +1698,7 @@ class RecordingController:
                     for seg in result.segments:
                         raw_labels.add(seg.speaker)
                 matches = getattr(result, "matches", {})
-                matched_labels = {l for l in raw_labels if l in matches}
+                matched_labels = {lbl for lbl in raw_labels if lbl in matches}
                 diag["diarization"] = {
                     "succeeded": result.succeeded,
                     "num_speakers": result.num_speakers,

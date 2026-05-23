@@ -42,3 +42,7 @@ coverage/
 .cache/
 tmp/
 GSD-LOCAL-FIXES.md
+
+# Test/build artifacts
+.coverage*
+MagicMock/

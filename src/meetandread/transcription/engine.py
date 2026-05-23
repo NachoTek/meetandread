@@ -13,7 +13,6 @@ import logging
 import tempfile
 import wave
 import os
-import urllib.request
 
 # Import whisper.cpp bindings
 try:
@@ -152,7 +151,7 @@ class WhisperTranscriptionEngine:
             raise ValueError(f"Unknown model size: {self.model_size}")
         
         logger.info(f"Downloading model {self.model_size} from {url}")
-        logger.info(f"This may take a few minutes depending on your connection...")
+        logger.info("This may take a few minutes depending on your connection...")
         
         try:
             # Download with progress reporting
@@ -164,7 +163,7 @@ class WhisperTranscriptionEngine:
                 if block_num % 100 == 0:  # Log every 100 blocks to avoid spam
                     logger.info(f"Downloaded {percent}%")
             
-            urllib.request.urlretrieve(url, model_path, reporthook=download_progress)
+            urllib.request.urlretrieve(url, model_path, reporthook=download_progress)  # nosec B310
             logger.info(f"Model downloaded to {model_path}")
             
         except Exception as e:

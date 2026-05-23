@@ -5,10 +5,10 @@ and smart defaults. Only user-modified settings are persisted.
 
 Quick Start:
     >>> from meetandread.config import get_config, set_config, save_config
-    >>> 
+    >>>
     >>> # Get model size
     >>> model_size = get_config('model.realtime_model_size')
-    >>> 
+    >>>
     >>> # Change setting
     >>> set_config('model.realtime_model_size', 'base')
     >>> save_config()

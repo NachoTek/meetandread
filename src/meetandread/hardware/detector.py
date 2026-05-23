@@ -130,7 +130,7 @@ class HardwareDetector:
         return self.detect()
     
     def has_minimum_requirements(
-        self, 
+        self,
         specs: Optional[SystemSpecs] = None,
         dual_mode: bool = False
     ) -> bool:
@@ -160,7 +160,7 @@ class HardwareDetector:
         return has_ram and has_cores
     
     def get_warning_message(
-        self, 
+        self,
         specs: Optional[SystemSpecs] = None,
         dual_mode: bool = False
     ) -> Optional[str]:

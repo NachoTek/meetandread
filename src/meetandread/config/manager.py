@@ -5,18 +5,12 @@ setting, and saving application settings with smart defaults tracking.
 """
 
 import logging
-import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from meetandread.config.models import (
     AppSettings,
-    HardwareSettings,
-    ModelSettings,
-    SpeakerSettings,
     StoragePaths,
-    TranscriptionSettings,
-    UISettings
 )
 from meetandread.config.persistence import SettingsPersistence
 

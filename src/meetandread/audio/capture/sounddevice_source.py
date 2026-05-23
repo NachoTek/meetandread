@@ -11,7 +11,7 @@ import threading
 from typing import Optional, Callable, Dict, Any
 import platform
 
-from .devices import get_wasapi_hostapi_index, list_mic_inputs, list_loopback_outputs
+from .devices import get_wasapi_hostapi_index, list_mic_inputs
 
 _log = logging.getLogger(__name__)
 

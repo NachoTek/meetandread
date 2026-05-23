@@ -19,16 +19,17 @@ import time as _time
 
 
 def _ts(): return _time.strftime("%H:%M:%S")
-import threading
-import numpy as np
-import logging
-from pathlib import Path
-from typing import Optional, Callable, List, Dict, Any
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from queue import Queue, Empty
 
-from meetandread.transcription.vad import VoiceActivityDetector, VADStats
+
+import threading  # noqa: E402
+import numpy as np  # noqa: E402
+import logging  # noqa: E402
+from typing import Optional, Callable, List  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from datetime import datetime  # noqa: E402
+from queue import Queue, Empty  # noqa: E402
+
+from meetandread.transcription.vad import VoiceActivityDetector, VADStats  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -314,7 +315,7 @@ class AccumulatingTranscriptionProcessor:
                     silence_debug_counter += 1
                     if silence_debug_counter >= 10:
                         silence_debug_counter = 0
-                        silence_detected = time_since_audio >= self.silence_timeout
+                        time_since_audio >= self.silence_timeout  # noqa: F841
                         print(f"[{_ts()}] DEBUG: Silence check - {time_since_audio:.1f}s since audio, {buffer_duration:.1f}s buffer")
                     
                     # Transcribe if:
@@ -541,7 +542,6 @@ if __name__ == "__main__":
     
     try:
         # Simulate feeding audio (in real app, this comes from AudioSession)
-
 
         _time.sleep(30)  # Run for 30 seconds
     except KeyboardInterrupt:

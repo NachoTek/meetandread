@@ -583,3 +583,150 @@ class TestScrubStartupFailure:
         assert panel._scrub_btn.isEnabled()
         assert panel._scrub_btn.text() == "🔄 Scrub"
         mock_warn.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Speaker identification during scrub (R025)
+# ---------------------------------------------------------------------------
+
+class TestScrubSpeakerIdentification:
+    """Tests for the _run_speaker_identification method in ScrubRunner."""
+
+    def _make_store_with_words(self, num_words=10, duration=5.0) -> TranscriptStore:
+        """Create a TranscriptStore with evenly-spaced words."""
+        store = TranscriptStore()
+        store.start_recording()
+        words = []
+        step = duration / num_words
+        for i in range(num_words):
+            words.append(Word(
+                text=f"word{i}",
+                start_time=i * step,
+                end_time=(i + 1) * step,
+                confidence=90,
+                speaker_id=None,
+            ))
+        store.add_words(words)
+        return store
+
+    def test_speaker_id_graceful_when_diarizer_not_installed(self, settings):
+        """If sherpa-onnx is not installed, the method returns store unchanged."""
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words()
+
+        with patch.dict("sys.modules", {"meetandread.speaker.diarizer": None}):
+            result_store = runner._run_speaker_identification(
+                Path("/fake/audio.wav"), store,
+            )
+
+        words = result_store.get_all_words()
+        assert all(w.speaker_id is None for w in words)
+
+    def test_speaker_id_skipped_when_disabled(self, settings):
+        """When speaker diarization is disabled, return store unchanged."""
+        settings.speaker.enabled = False
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words()
+
+        result_store = runner._run_speaker_identification(
+            Path("/fake/audio.wav"), store,
+        )
+        words = result_store.get_all_words()
+        assert all(w.speaker_id is None for w in words)
+
+    def test_speaker_id_tags_words_from_diarization(self, settings):
+        """Words within diarization segments get speaker labels."""
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words(num_words=4, duration=4.0)
+
+        mock_segment_1 = MagicMock()
+        mock_segment_1.start = 0.0
+        mock_segment_1.end = 2.0
+        mock_segment_1.speaker = "spk0"
+
+        mock_segment_2 = MagicMock()
+        mock_segment_2.start = 2.0
+        mock_segment_2.end = 4.0
+        mock_segment_2.speaker = "spk1"
+
+        mock_result = MagicMock()
+        mock_result.succeeded = True
+        mock_result.segments = [mock_segment_1, mock_segment_2]
+        mock_result.num_speakers = 2
+        mock_result.signatures = {}
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize.return_value = mock_result
+
+        with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
+            with patch("meetandread.speaker.signatures.VoiceSignatureStore"):
+                with patch("meetandread.audio.storage.paths.get_recordings_dir", return_value=Path("/tmp")):
+                    result_store = runner._run_speaker_identification(
+                        Path("/fake/audio.wav"), store,
+                    )
+
+        words = result_store.get_all_words()
+        assert words[0].speaker_id == "spk0"
+        assert words[1].speaker_id == "spk0"
+        assert words[2].speaker_id == "spk1"
+        assert words[3].speaker_id == "spk1"
+
+    def test_speaker_id_uses_matched_names(self, settings):
+        """Known speakers from VoiceSignatureStore replace raw labels."""
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words(num_words=2, duration=2.0)
+
+        mock_segment = MagicMock()
+        mock_segment.start = 0.0
+        mock_segment.end = 2.0
+        mock_segment.speaker = "spk0"
+
+        mock_sig = MagicMock()
+        mock_sig.embedding = np.random.rand(256).astype(np.float32)
+        mock_sig.num_segments = 1
+
+        mock_result = MagicMock()
+        mock_result.succeeded = True
+        mock_result.segments = [mock_segment]
+        mock_result.num_speakers = 1
+        mock_result.signatures = {"spk0": mock_sig}
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize.return_value = mock_result
+
+        mock_sig_store = MagicMock()
+        mock_sig_store.__enter__ = MagicMock(return_value=mock_sig_store)
+        mock_sig_store.__exit__ = MagicMock(return_value=False)
+        mock_sig_store.find_match.return_value = "Alice"
+
+        with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
+            with patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_sig_store):
+                with patch("meetandread.audio.storage.paths.get_recordings_dir", return_value=Path("/tmp")):
+                    result_store = runner._run_speaker_identification(
+                        Path("/fake/audio.wav"), store,
+                    )
+
+        words = result_store.get_all_words()
+        assert words[0].speaker_id == "Alice"
+        assert words[1].speaker_id == "Alice"
+
+    def test_speaker_id_diarization_failure_returns_unchanged(self, settings):
+        """If diarization fails, return store with no speaker labels."""
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words()
+
+        mock_result = MagicMock()
+        mock_result.succeeded = False
+        mock_result.segments = []
+        mock_result.num_speakers = 0
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize.return_value = mock_result
+
+        with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
+            result_store = runner._run_speaker_identification(
+                Path("/fake/audio.wav"), store,
+            )
+
+        words = result_store.get_all_words()
+        assert all(w.speaker_id is None for w in words)

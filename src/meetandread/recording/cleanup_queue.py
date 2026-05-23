@@ -333,7 +333,7 @@ class CleanupQueue:
             return f"Deleted {del_result.success_count} files for stem {op.target}"
         elif del_result.success_count == 0:
             op.last_error = (
-                f"Failed to delete any files: "
+                "Failed to delete any files: "
                 + "; ".join(f"{p}: {r}" for p, r in del_result.failed[:3])
             )
             return f"Failed to delete any files for stem {op.target}"

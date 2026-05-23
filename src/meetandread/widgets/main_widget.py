@@ -14,28 +14,24 @@ to avoid clipping issues and enable proper text editing.
 """
 
 from enum import Enum, auto
-from pathlib import Path
-from typing import Optional
 import logging
 import math as _math
 import re
 import time as _time
+from typing import Optional
 
 import numpy as np
 from PyQt6.QtWidgets import (
-    QGraphicsView, QGraphicsScene, QGraphicsItem,
-    QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsTextItem,
-    QGraphicsWidget, QApplication, QGraphicsItemGroup, QWidget, QMenu
+    QGraphicsView, QGraphicsScene,
+    QGraphicsEllipseItem, QGraphicsRectItem,
+    QApplication, QMenu
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal, QObject
-from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient, QPainterPath
+from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
 
-from meetandread.recording import RecordingController, ControllerState, ControllerError
-from meetandread.transcription.confidence import get_confidence_color, get_distortion_intensity
-from meetandread.transcription.transcript_store import Word
+from meetandread.recording import RecordingController, ControllerState
 from meetandread.transcription.accumulating_processor import SegmentResult
-from meetandread.config import get_config, set_config, save_config, AppSettings
-from meetandread.hardware.recommender import ModelRecommender, get_model_info
+from meetandread.config import get_config, set_config, save_config
 from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ensure_on_screen
 from meetandread.widgets.theme import context_menu_css, current_palette
 
@@ -54,7 +50,6 @@ class _ControllerBridge(QObject):
     post_process_complete = pyqtSignal(str, object)   # job_id, transcript_path
     phrase_result = pyqtSignal(object)       # SegmentResult
     frames_dropped = pyqtSignal(int)         # aggregate drop count
-
 
 
 class _WidgetVisualStateMachine:
@@ -210,8 +205,8 @@ to avoid clipping issues and enable proper text rendering.
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         
         # Graphics view setup
-        self.setRenderHints(QPainter.RenderHint.Antialiasing | 
-                           QPainter.RenderHint.SmoothPixmapTransform)
+        self.setRenderHints(QPainter.RenderHint.Antialiasing |
+                            QPainter.RenderHint.SmoothPixmapTransform)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -703,7 +698,6 @@ to avoid clipping issues and enable proper text rendering.
         else:
             super().mouseReleaseEvent(event)
     
-
     def _clamp_to_desktop(self, pos: QPoint) -> QPoint:
         """Clamp *pos* so widget stays fully within the visible desktop."""
         screens = QApplication.screens()
@@ -969,8 +963,8 @@ to avoid clipping issues and enable proper text rendering.
         speaker_id = getattr(result, 'speaker_id', None)
 
         logging.debug("Segment: '%s' [conf: %d%%, final: %s, phrase_start: %s, speaker_id: %s]",
-                       result.text[:40], result.confidence, result.is_final, phrase_start,
-                       speaker_id if speaker_id else "None")
+                      result.text[:40], result.confidence, result.is_final, phrase_start,
+                      speaker_id if speaker_id else "None")
 
         if self._cc_overlay:
             # Emit signal (thread-safe, automatically queues to main thread)
@@ -1491,9 +1485,9 @@ class RecordButtonItem(QGraphicsEllipseItem):
             return QColor(base_color)
 
         t = self._ease_out(self._health_t)
-        r = base_color.red()   + (self._WARNING_COLOR.red()   - base_color.red())   * t
+        r = base_color.red() + (self._WARNING_COLOR.red() - base_color.red()) * t
         g = base_color.green() + (self._WARNING_COLOR.green() - base_color.green()) * t
-        b = base_color.blue()  + (self._WARNING_COLOR.blue()  - base_color.blue())  * t
+        b = base_color.blue() + (self._WARNING_COLOR.blue() - base_color.blue()) * t
         a = base_color.alpha() + (self._WARNING_COLOR.alpha() - base_color.alpha()) * t
         return QColor(int(r), int(g), int(b), int(a))
 
@@ -1564,9 +1558,9 @@ class RecordButtonItem(QGraphicsEllipseItem):
 
             # Interpolate white→red based on radial position
             seg_color = QColor(
-                int(white_color.red()   + (red_color.red()   - white_color.red())   * t),
+                int(white_color.red() + (red_color.red() - white_color.red()) * t),
                 int(white_color.green() + (red_color.green() - white_color.green()) * t),
-                int(white_color.blue()  + (red_color.blue()  - white_color.blue())  * t),
+                int(white_color.blue() + (red_color.blue() - white_color.blue()) * t),
                 int(white_color.alpha() + (red_color.alpha() - white_color.alpha()) * t),
             )
 
@@ -1681,15 +1675,15 @@ class RecordButtonItem(QGraphicsEllipseItem):
             size = 20
             painter.setBrush(QBrush(QColor(255, 255, 255, 255)))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(int(center.x() - size/2), int(center.y() - size/2), 
-                           size, size)
+            painter.drawRect(int(center.x() - size/2), int(center.y() - size/2),
+                             size, size)
         else:
             # Record icon (circle)
             size = 24
             painter.setBrush(QBrush(QColor(255, 50, 50, 255)))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(int(center.x() - size/2), int(center.y() - size/2), 
-                              size, size)
+            painter.drawEllipse(int(center.x() - size/2), int(center.y() - size/2),
+                                size, size)
     
     def mousePressEvent(self, event):
         """Accept press to get release event — action fires on release."""
@@ -1800,10 +1794,10 @@ class ToggleLobeItem(QGraphicsEllipseItem):
             
             if self.lobe_type == "microphone":
                 # Simple mic icon
-                painter.drawLine(int(center.x()), int(center.y() - 8), 
-                               int(center.x()), int(center.y() + 4))
-                painter.drawArc(int(center.x() - 6), int(center.y() - 4), 12, 12, 
-                              0, 180 * 16)
+                painter.drawLine(int(center.x()), int(center.y() - 8),
+                                 int(center.x()), int(center.y() + 4))
+                painter.drawArc(int(center.x() - 6), int(center.y() - 4), 12, 12,
+                                0, 180 * 16)
             else:
                 # Simple speaker icon
                 painter.drawPolygon([

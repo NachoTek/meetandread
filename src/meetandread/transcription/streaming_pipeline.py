@@ -21,16 +21,14 @@ import time
 import queue
 import logging
 logger = logging.getLogger(__name__)
-from dataclasses import dataclass
-from typing import Optional, List, Callable, Any, Dict
-from pathlib import Path
-import numpy as np
+from dataclasses import dataclass  # noqa: E402
+from typing import Optional, List, Callable, Any, Dict  # noqa: E402
+import numpy as np  # noqa: E402
 
-from meetandread.config.models import AppSettings, TranscriptionSettings
-from meetandread.transcription.audio_buffer import AudioRingBuffer
-from meetandread.transcription.vad_processor import VADChunkingProcessor
-from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment
-from meetandread.transcription.confidence import ConfidenceLevel
+from meetandread.config.models import AppSettings, TranscriptionSettings  # noqa: E402, F401
+from meetandread.transcription.audio_buffer import AudioRingBuffer  # noqa: E402
+from meetandread.transcription.vad_processor import VADChunkingProcessor  # noqa: E402
+from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment  # noqa: E402
 
 
 @dataclass
@@ -133,7 +131,7 @@ class RealTimeTranscriptionProcessor:
         # Word-level confidence callback for enhanced granularity
         self._on_word_confidence: Optional[Callable[[str, int, Dict], None]] = None
     
-    def set_model_config(self, model_size: str, device: str = "cpu", 
+    def set_model_config(self, model_size: str, device: str = "cpu",
                          compute_type: str = "int8") -> None:
         """Configure model parameters before loading.
         
@@ -309,11 +307,11 @@ class RealTimeTranscriptionProcessor:
                 # Wait a bit longer if no audio to process
                 time.sleep(0.05)
     
-    def _process_segments(self, segments: List[TranscriptionSegment], 
-                         audio_chunk: np.ndarray) -> None:
+    def _process_segments(self, segments: List[TranscriptionSegment],
+                          audio_chunk: np.ndarray) -> None:
         """Process transcription segments and update results.
-        
-        HYBRID TRANSCRIPTION: 
+
+        HYBRID TRANSCRIPTION:
         - Commits immediately (no agreement buffer blocking)
         - Preserves confidence scores for UI color styling
         - Stores results in queue for UI consumption
@@ -332,7 +330,7 @@ class RealTimeTranscriptionProcessor:
         print(f"DEBUG: Full text: '{full_text}'")
         
         if not full_text:
-            print(f"DEBUG: Empty full_text, returning")
+            print("DEBUG: Empty full_text, returning")
             return
         
         # IMMEDIATE COMMIT - no agreement buffer blocking for real-time display

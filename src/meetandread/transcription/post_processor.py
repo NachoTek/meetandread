@@ -54,13 +54,12 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Optional, List, Callable, Dict, Any
 import numpy as np
-import wave
 
 logger = logging.getLogger(__name__)
 
-from meetandread.config.models import TranscriptionSettings, AppSettings
-from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment
-from meetandread.transcription.transcript_store import TranscriptStore, Word
+from meetandread.config.models import AppSettings  # noqa: E402
+from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment  # noqa: E402
+from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
 
 
 class PostProcessStatus(Enum):
@@ -624,7 +623,7 @@ class PostProcessingQueue:
             return audio
     
     def _create_post_processed_transcript(
-        self, 
+        self,
         segments: List[TranscriptionSegment],
         audio_duration: float = 0.0,
     ) -> TranscriptStore:
