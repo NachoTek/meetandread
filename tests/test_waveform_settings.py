@@ -153,7 +153,7 @@ class TestWaveformEnabledMigration:
             },
         }
         migrated = persistence.migrate_config(old_config, 6)
-        assert migrated["config_version"] == 7
+        assert migrated["config_version"] == 8
         assert migrated["ui"]["waveform_enabled"] is True
         # Existing values preserved
         assert migrated["ui"]["show_confidence_legend"] is False
@@ -231,7 +231,7 @@ class TestWaveformEnabledPersistence:
         }
         config_path.write_text(json.dumps(v6_config, indent=2))
         loaded = persistence.load_settings()
-        assert loaded.config_version == 7
+        assert loaded.config_version == 8
         assert loaded.ui.waveform_enabled is True
         assert loaded.ui.show_confidence_legend is True
 

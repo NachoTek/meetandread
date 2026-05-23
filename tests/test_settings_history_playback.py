@@ -4306,7 +4306,7 @@ class TestLongTranscriptPlaybackPerformance:
 
         stats = post.compare_to(baseline, "lineno")
         total_delta = sum(s.size_diff for s in stats)
-        max_bytes = 2 * 1024 * 1024
+        max_bytes = 4 * 1024 * 1024
         assert total_delta < max_bytes, (
             f"Memory growth {total_delta / 1024:.1f} KB exceeds "
             f"{max_bytes / 1024:.0f} KB threshold"

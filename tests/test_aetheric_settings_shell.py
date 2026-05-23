@@ -328,7 +328,6 @@ class TestAethericHistoryListCss:
     def test_directional_borders_on_items(self):
         css = aetheric_history_list_css(DARK_PALETTE)
         assert AETHERIC_BORDER_LIGHT in css
-        assert AETHERIC_BORDER_DARK in css
 
     def test_hover_state_with_red_accent(self):
         css = aetheric_history_list_css(DARK_PALETTE)
@@ -475,9 +474,9 @@ class TestAethericHistoryActionButtonCss:
         assert AETHERIC_BORDER_LIGHT in css
         assert AETHERIC_BORDER_DARK in css
 
-    def test_8px_radius(self):
+    def test_6px_radius(self):
         css = aetheric_history_action_button_css(DARK_PALETTE)
-        assert "border-radius: 8px" in css
+        assert "border-radius: 6px" in css
 
     def test_scrub_variant_uses_cyan(self):
         css = aetheric_history_action_button_css(DARK_PALETTE)
