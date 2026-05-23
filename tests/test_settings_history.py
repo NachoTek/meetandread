@@ -2214,12 +2214,24 @@ class TestSettingsResilientDeleteWorkflow:
                 return partial_result
             return retry_result
 
+        # Mock the constructed QMessageBox dialog to auto-click Retry
+        retry_btn = MagicMock()
         with patch("meetandread.widgets.floating_panels.QMessageBox.question",
                     return_value=QMessageBox.StandardButton.Yes), \
+             patch("meetandread.widgets.floating_panels.QMessageBox") as mock_mb, \
              patch("meetandread.recording.management.enumerate_recording_files",
                     return_value=[md_path]), \
              patch("meetandread.recording.management.delete_recording_structured",
                     side_effect=_fake_delete):
+            mock_msg = MagicMock()
+            mock_msg.exec.return_value = 0
+            mock_msg.clickedButton.return_value = retry_btn
+            mock_msg.addButton.side_effect = [retry_btn, MagicMock(), MagicMock()]
+            mock_mb.return_value = mock_msg
+            mock_mb.Icon.Warning = QMessageBox.Icon.Warning
+            mock_mb.ButtonRole.AcceptRole = QMessageBox.ButtonRole.AcceptRole
+            mock_mb.ButtonRole.RejectRole = QMessageBox.ButtonRole.RejectRole
+            mock_mb.ButtonRole.DestructiveRole = QMessageBox.ButtonRole.DestructiveRole
             settings_panel_on_history._delete_recording(item)
             qapp.processEvents()
 
@@ -2245,6 +2257,7 @@ class TestSettingsResilientDeleteWorkflow:
                 md_path.unlink()
             return partial_result
 
+        cleanup_btn = MagicMock()
         with patch("meetandread.widgets.floating_panels.QMessageBox.question",
                     return_value=QMessageBox.StandardButton.Yes), \
              patch("meetandread.recording.management.enumerate_recording_files",
@@ -2252,12 +2265,22 @@ class TestSettingsResilientDeleteWorkflow:
              patch("meetandread.recording.management.delete_recording_structured",
                     side_effect=_fake_delete), \
              patch("meetandread.recording.cleanup_queue.CleanupQueue") as mock_queue_cls, \
+             patch("meetandread.widgets.floating_panels.QMessageBox") as mock_mb, \
              patch("meetandread.widgets.floating_panels.QMessageBox.information"):
             mock_queue = MagicMock()
             mock_queue_cls.return_value = mock_queue
 
-            # We need to simulate the dialog flow — patch QMessageBox to click cleanup
-            # Instead, directly test the behavior by calling internal paths
+            # Mock the partial-failure dialog to click "Mark for Cleanup"
+            mock_msg = MagicMock()
+            mock_msg.exec.return_value = 0
+            mock_msg.clickedButton.return_value = cleanup_btn
+            mock_msg.addButton.side_effect = [MagicMock(), cleanup_btn, MagicMock()]
+            mock_mb.return_value = mock_msg
+            mock_mb.Icon.Warning = QMessageBox.Icon.Warning
+            mock_mb.ButtonRole.AcceptRole = QMessageBox.ButtonRole.AcceptRole
+            mock_mb.ButtonRole.RejectRole = QMessageBox.ButtonRole.RejectRole
+            mock_mb.ButtonRole.DestructiveRole = QMessageBox.ButtonRole.DestructiveRole
+
             settings_panel_on_history._delete_recording(item)
             qapp.processEvents()
 
