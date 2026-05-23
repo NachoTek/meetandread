@@ -3402,7 +3402,8 @@ class _HistoryRowWidget(QWidget):
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         """Forward context menu to the panel's history context-menu handler."""
-        list_pos = self._panel._history_list.mapFrom(self, event.pos())
+        global_pos = event.globalPos()
+        list_pos = self._panel._history_list.viewport().mapFromGlobal(global_pos)
         self._panel._on_history_context_menu(list_pos)
         event.accept()
 
