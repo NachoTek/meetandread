@@ -1604,8 +1604,10 @@ class FloatingTranscriptPanel(QWidget):
         menu.setStyleSheet(context_menu_css(p, accent_color=p.danger))
 
         scrub_action = menu.addAction("🔄  Scrub Recording")
+        rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
         scrub_action.triggered.connect(lambda: self._on_scrub_clicked())
+        rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
         delete_action.triggered.connect(lambda: self._delete_recording(item))
         menu.exec(self._history_list.mapToGlobal(pos))
 
@@ -1694,6 +1696,77 @@ class FloatingTranscriptPanel(QWidget):
             self._detail_header.hide()
 
         # Refresh the history list
+        self._refresh_history()
+
+    def _rename_recording_dialog(self, item: QListWidgetItem) -> None:
+        """Show a rename dialog for a recording, sanitize input, and rename files.
+
+        Sanitizes user input into a safe recording stem (alphanumerics,
+        hyphens, underscores, dots). Rejects empty and unchanged names.
+        """
+        from meetandread.recording.management import rename_recording, _validate_stem
+
+        md_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+
+        md_path = Path(md_path_str)
+        old_stem = md_path.stem
+
+        parent = self.parent() if self.parent() else self
+        new_name, ok = QInputDialog.getText(
+            parent,
+            "Rename Recording",
+            f"New name for '{old_stem}':",
+            text=old_stem,
+        )
+
+        if not ok or not new_name:
+            return
+
+        new_stem = new_name.strip().replace(" ", "-")
+
+        if not new_stem:
+            QMessageBox.warning(parent, "Rename Failed", "Name must not be empty.")
+            return
+
+        if new_stem == old_stem:
+            return
+
+        try:
+            _validate_stem(new_stem)
+        except ValueError as exc:
+            QMessageBox.warning(
+                parent, "Invalid Name",
+                f"Cannot rename to '{new_stem}'.\n\n{exc}",
+            )
+            return
+
+        try:
+            result = rename_recording(old_stem, new_stem)
+        except Exception as exc:
+            logger.error("Rename failed for %s -> %s: %s", old_stem, new_stem, exc)
+            QMessageBox.warning(
+                parent, "Rename Failed",
+                f"Could not rename recording.\n\n{exc}",
+            )
+            return
+
+        if result.failed:
+            conflict_names = [p for p, _ in result.failed[:5]]
+            detail = "\n".join(conflict_names)
+            QMessageBox.warning(
+                parent, "Rename Partially Failed",
+                f"Could not rename all files.\n\n"
+                f"{result.success_count} renamed, {result.failure_count} failed:\n{detail}",
+            )
+
+        logger.info(
+            "Renamed recording %s -> %s (%d files)",
+            old_stem, new_stem, result.success_count,
+        )
+
+        # Refresh the history list to show the new name
         self._refresh_history()
 
     # ------------------------------------------------------------------
