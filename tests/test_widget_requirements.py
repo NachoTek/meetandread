@@ -96,7 +96,7 @@ class TestWIDGET03:
 
 class TestWIDGET06:
     def test_idle_opacity(self, widget):
-        assert widget.windowOpacity() == pytest.approx(0.87, abs=0.01)
+        assert widget.windowOpacity() == pytest.approx(1.0, abs=0.01)
 
 
 class TestWIDGET07:

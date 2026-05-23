@@ -146,7 +146,9 @@ class _MockQUrl:
 # can still use Qt namespace, QUrl, etc.
 _mock_qt_multimedia.QMediaPlayer = _MockQMediaPlayer
 _mock_qt_multimedia.QAudioOutput = _MockQAudioOutput
-sys.modules.setdefault("PyQt6.QtMultimedia", _mock_qt_multimedia)
+# Use direct assignment to override the lightweight conftest.py mock
+# with this richer per-module mock that has proper return values.
+sys.modules["PyQt6.QtMultimedia"] = _mock_qt_multimedia
 
 # If real QtCore is unavailable, provide a minimal mock for QUrl.
 try:
