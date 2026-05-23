@@ -1539,11 +1539,21 @@ class FloatingTranscriptPanel(QWidget):
                 except (ValueError, TypeError):
                     pass  # keep raw string
 
+            # If the recording has been renamed, show the custom name
+            stem = meta.path.stem
+            _datetime_stem = re.match(
+                r"recording-\d{4}-\d{2}-\d{2}-\d{6}$", stem,
+            )
+            if not _datetime_stem and stem:
+                display_label = f"{stem} ({display_date})"
+            else:
+                display_label = display_date
+
             if meta.word_count == 0:
-                display_text = f"{display_date} | (Empty recording)"
+                display_text = f"{display_label} | (Empty recording)"
             else:
                 display_text = (
-                    f"{display_date} | {meta.word_count} words"
+                    f"{display_label} | {meta.word_count} words"
                     f" | {meta.speaker_count} speakers"
                 )
 
@@ -6200,11 +6210,22 @@ class FloatingSettingsPanel(QWidget):
                 except (ValueError, TypeError):
                     pass
 
+            # If the recording has been renamed (stem is not the standard
+            # datetime format), show the custom name alongside the date.
+            stem = meta.path.stem
+            _datetime_stem = re.match(
+                r"recording-\d{4}-\d{2}-\d{2}-\d{6}$", stem,
+            )
+            if not _datetime_stem and stem:
+                display_label = f"{stem} ({display_date})"
+            else:
+                display_label = display_date
+
             if meta.word_count == 0:
-                display_text = f"{display_date} | (Empty recording)"
+                display_text = f"{display_label} | (Empty recording)"
             else:
                 display_text = (
-                    f"{display_date} | {meta.word_count} words"
+                    f"{display_label} | {meta.word_count} words"
                     f" | {meta.speaker_count} speakers"
                 )
 
