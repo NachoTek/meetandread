@@ -2334,12 +2334,24 @@ class TestSettingsResilientDeleteWorkflow:
             failed=[(str(md_path), "Permission denied")],
         )
 
+        cancel_btn = MagicMock()
         with patch("meetandread.widgets.floating_panels.QMessageBox.question",
                     return_value=QMessageBox.StandardButton.Yes), \
              patch("meetandread.recording.management.enumerate_recording_files",
                     return_value=[md_path]), \
              patch("meetandread.recording.management.delete_recording_structured",
-                    return_value=partial_result):
+                    return_value=partial_result), \
+             patch("meetandread.widgets.floating_panels.QMessageBox") as mock_mb:
+            # Mock the partial-failure dialog to click Cancel
+            mock_msg = MagicMock()
+            mock_msg.exec.return_value = 0
+            mock_msg.clickedButton.return_value = cancel_btn
+            mock_msg.addButton.side_effect = [MagicMock(), MagicMock(), cancel_btn]
+            mock_mb.return_value = mock_msg
+            mock_mb.Icon.Warning = QMessageBox.Icon.Warning
+            mock_mb.ButtonRole.AcceptRole = QMessageBox.ButtonRole.AcceptRole
+            mock_mb.ButtonRole.RejectRole = QMessageBox.ButtonRole.RejectRole
+            mock_mb.ButtonRole.DestructiveRole = QMessageBox.ButtonRole.DestructiveRole
             settings_panel_on_history._delete_recording(item)
             qapp.processEvents()
 
