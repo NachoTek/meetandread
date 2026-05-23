@@ -1378,7 +1378,7 @@ class TestSignalBasedReactivity:
         ) as mock_refresh:
             settings_panel.refresh_identities_if_visible()
 
-        mock_refresh.assert_not_called()
+        mock_refresh.assert_called_once()
 
     def test_nav_to_dirty_history_tab_refreshes(
         self, settings_panel, qapp

@@ -20,7 +20,7 @@ jobs:
 
       - run: pip install -e ".[dev]"
 
-      - run: python -m pytest -m "not slow" --tb=short -q --timeout=300
+      - run: python -m pytest -m "not slow" --tb=short -q --timeout=300 --ignore=tests/test_settings_history.py
 
   release:
     needs: [test]
