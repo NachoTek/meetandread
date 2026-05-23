@@ -6159,10 +6159,19 @@ class FloatingSettingsPanel(QWidget):
         completes.  Avoids unnecessary work when the History page is not
         visible — the next navigation to it will call ``_refresh_history``
         via ``_on_nav_clicked`` (MEM242/MEM292 guard pattern).
+
+        If a transcript is currently being viewed, re-renders it so
+        speaker labels from post-processing appear immediately.
         """
         if (self._content_stack.currentIndex() == self._NAV_HISTORY
                 and self.isVisible()):
             self._refresh_history()
+            # Re-render the currently-viewed transcript (speaker labels
+            # may have been added by post-processing diarization).
+            if self._current_history_md_path:
+                current = self._history_list.currentItem()
+                if current is not None:
+                    self._on_history_item_clicked(current)
 
     def refresh_identities_if_visible(self) -> None:
         """Refresh the identities list when the Identities page is currently shown.
