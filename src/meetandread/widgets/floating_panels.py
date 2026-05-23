@@ -1599,7 +1599,7 @@ class FloatingTranscriptPanel(QWidget):
         if item is None:
             return
 
-        menu = QMenu(self._history_list)
+        menu = QMenu(self)
         p = current_palette()
         menu.setStyleSheet(context_menu_css(p, accent_color=p.danger))
 
@@ -1609,7 +1609,7 @@ class FloatingTranscriptPanel(QWidget):
         scrub_action.triggered.connect(lambda: self._on_scrub_clicked())
         rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
         delete_action.triggered.connect(lambda: self._delete_recording(item))
-        menu.exec(self._history_list.mapToGlobal(pos))
+        menu.exec(self._history_list.viewport().mapToGlobal(pos))
 
     def _on_delete_btn_clicked(self) -> None:
         """Handle Delete button click in the detail header."""
@@ -7446,7 +7446,7 @@ class FloatingSettingsPanel(QWidget):
         if item is None:
             return
 
-        menu = QMenu(self._history_list)
+        menu = QMenu(self)
         p = current_palette()
         menu.setStyleSheet(context_menu_css(p, accent_color=p.danger))
 
@@ -7456,7 +7456,7 @@ class FloatingSettingsPanel(QWidget):
         scrub_action.triggered.connect(lambda: self._on_scrub_clicked())
         rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
         delete_action.triggered.connect(lambda: self._delete_recording(item))
-        menu.exec(self._history_list.mapToGlobal(pos))
+        menu.exec(self._history_list.viewport().mapToGlobal(pos))
 
     def _on_delete_btn_clicked(self) -> None:
         """Handle Delete button click in the detail header."""
