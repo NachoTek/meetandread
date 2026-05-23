@@ -1346,10 +1346,11 @@ class TestSignalBasedReactivity:
 
         mock_refresh.assert_not_called()
 
-    def test_hidden_panel_history_not_refreshed(
+    def test_hidden_panel_history_still_refreshes(
         self, settings_panel, qapp
     ):
-        """When panel is hidden, history_data_changed does not scan."""
+        """When panel is hidden, history refresh still fires so data is
+        current when the user returns (isVisible guard removed)."""
         settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
         qapp.processEvents()
         settings_panel.hide()
@@ -1360,12 +1361,13 @@ class TestSignalBasedReactivity:
         ) as mock_refresh:
             settings_panel.refresh_history_if_visible()
 
-        mock_refresh.assert_not_called()
+        mock_refresh.assert_called_once()
 
-    def test_hidden_panel_identities_not_refreshed(
+    def test_hidden_panel_identities_still_refreshes(
         self, settings_panel, qapp
     ):
-        """When panel is hidden, identity_data_changed does not scan."""
+        """When panel is hidden, identity refresh still fires so data is
+        current when the user returns (isVisible guard removed)."""
         settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_IDENTITIES)
         qapp.processEvents()
         settings_panel.hide()
