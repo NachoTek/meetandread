@@ -9,14 +9,14 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
-    QDialog, QDialogButtonBox, QSizePolicy, QSizeGrip, QStackedWidget,
+    QDialog, QDialogButtonBox, QSizeGrip, QStackedWidget,
     QCheckBox, QLineEdit, QSlider, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import html as _html_module
 import json
@@ -62,18 +62,19 @@ def ensure_on_screen(widget: QWidget) -> None:
         widget.move(clamp_to_screen(widget, widget.pos()))
     except (TypeError, AttributeError):
         pass
-from meetandread.performance.monitor import ResourceMonitor, ResourceSnapshot
-from meetandread.performance.benchmark import BenchmarkRunner, BenchmarkResult
-from meetandread.performance.wer import calculate_wer
-from meetandread.widgets.theme import (
+
+
+from meetandread.performance.monitor import ResourceMonitor, ResourceSnapshot  # noqa: E402
+from meetandread.performance.benchmark import BenchmarkRunner, BenchmarkResult  # noqa: E402
+from meetandread.widgets.theme import (  # noqa: E402
     current_palette, DARK_PALETTE,
-    panel_base_css, glass_panel_css, title_css, header_button_css, tab_widget_css,
+    glass_panel_css, title_css, header_button_css, tab_widget_css,
     text_area_css, status_label_css, splitter_css, list_widget_css,
     detail_header_css, action_button_css, context_menu_css, dialog_css,
     badge_css, legend_overlay_css, info_label_css,
     progress_bar_css, separator_css, combo_box_css,
     aetheric_settings_shell_css, aetheric_sidebar_css, aetheric_title_bar_css, aetheric_nav_button_css,
-    aetheric_placeholder_css, aetheric_combo_box_css,
+    aetheric_combo_box_css,
     aetheric_checkbox_css,
     aetheric_history_list_css, aetheric_history_viewer_css,
     aetheric_history_splitter_css, aetheric_history_header_css,
@@ -81,18 +82,15 @@ from meetandread.widgets.theme import (
     aetheric_playback_toolbar_css,
     aetheric_cc_overlay_css,
     AETHERIC_RED,
-    AETHERIC_BORDER_DARK,
     AETHERIC_BORDER_LIGHT,
     AETHERIC_SETTINGS_BG,
     AETHERIC_RADIUS,
     ARROW_UP_SVG,
     ARROW_DOWN_SVG,
-    CHECKMARK_SVG,
 )
 
-import logging
-
-from meetandread.widgets.icons import create_play_icon, create_pause_icon, create_speaker_icon
+import logging  # noqa: E402
+from meetandread.widgets.icons import create_play_icon, create_pause_icon, create_speaker_icon  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -1631,8 +1629,9 @@ class FloatingTranscriptPanel(QWidget):
         md_path = Path(md_path_str)
         stem = md_path.stem  # filename without .md
 
-        # Build a human-readable name from the item display text
-        recording_name = item.text().split("|")[0].strip()
+        # Build a human-readable name: prefer stem (from filename) since
+        # _HistoryRowWidget sets item text to "" (custom widget rendering).
+        recording_name = stem
 
         # Enumerate files to show count in confirmation
         try:
@@ -4552,7 +4551,7 @@ class FloatingSettingsPanel(QWidget):
 
         # Resource warning — semantic orange stays but text colour adapts
         self._resource_warning.setStyleSheet(
-            f"QLabel {{ color: #FF9800; font-size: 11px; font-weight: bold; padding: 2px; }}"
+            f"QLabel {{ color: #FF9800; font-size: 11px; font-weight: bold; padding: 2px; }}"  # noqa: F541
         )
 
         # Separators
@@ -5041,8 +5040,9 @@ class FloatingSettingsPanel(QWidget):
         model_name = result.model_info.get("model_size", "unknown") if result.model_info else "unknown"
 
         # Format result
+        # Format result
         wer_pct = result.wer * 100
-        result_text = (
+        result_text = (  # noqa: F841
             f"{model_name}: WER {wer_pct:.1f}% | "
             f"Latency: {result.total_latency_s:.2f}s | "
             f"Speed: {result.throughput_ratio:.1f}x realtime"
@@ -5722,7 +5722,7 @@ class FloatingSettingsPanel(QWidget):
         new_name, ok = QInputDialog.getText(
             self,
             "Rename Identity",
-            f"New name for identity:",
+            "New name for identity:",
             text=old_name,
         )
         if not ok:
@@ -6580,7 +6580,7 @@ class FloatingSettingsPanel(QWidget):
             from meetandread.playback.bookmark import BookmarkManager
             if self._bookmark_manager is None:
                 self._bookmark_manager = BookmarkManager(md_path)
-            bm = self._bookmark_manager.add(position_ms, name=name)
+            self._bookmark_manager.add(position_ms, name=name)  # noqa: F841
             logger.info(
                 "bookmark_added_ui: stem=%s position_ms=%d",
                 md_path.stem, position_ms,
@@ -7145,7 +7145,7 @@ class FloatingSettingsPanel(QWidget):
 
         words = data.get("words", [])
         has_timed_words = any(self._validate_timed_word(w, i) is not None
-                             for i, w in enumerate(words))
+                              for i, w in enumerate(words))
 
         if not has_timed_words:
             # No timing data — nothing to highlight; return plain render
@@ -7185,9 +7185,9 @@ class FloatingSettingsPanel(QWidget):
                     )
                 elif sid is None and has_unknown:
                     html_lines.append(
-                        f'<p><a href="speaker:__unknown__" '
-                        f'style="color:#888888; font-weight:bold; text-decoration:none;">'
-                        f'[Unknown Speaker]</a></p>'
+                        '<p><a href="speaker:__unknown__" '
+                        'style="color:#888888; font-weight:bold; text-decoration:none;">'
+                        '[Unknown Speaker]</a></p>'
                     )
                 else:
                     label = sid if sid is not None else "Unknown Speaker"
@@ -7271,7 +7271,7 @@ class FloatingSettingsPanel(QWidget):
         # Check if words have timing metadata for clickable word anchors
         words = data.get("words", [])
         has_timed_words = any(self._validate_timed_word(w, i) is not None
-                             for i, w in enumerate(words))
+                              for i, w in enumerate(words))
 
         # Build HTML with clickable speaker anchors
         # The markdown body has lines like "**SPK_0**" — make them anchors
@@ -7295,9 +7295,9 @@ class FloatingSettingsPanel(QWidget):
                         )
                     elif sid is None and has_unknown:
                         html_lines.append(
-                            f'<p><a href="speaker:__unknown__" '
-                            f'style="color:#888888; font-weight:bold; text-decoration:none;">'
-                            f'[Unknown Speaker]</a></p>'
+                            '<p><a href="speaker:__unknown__" '
+                            'style="color:#888888; font-weight:bold; text-decoration:none;">'
+                            '[Unknown Speaker]</a></p>'
                         )
                     else:
                         label = sid if sid is not None else "Unknown Speaker"
@@ -7408,7 +7408,6 @@ class FloatingSettingsPanel(QWidget):
 
         md_path = Path(md_path_str)
         old_stem = md_path.stem
-        recording_name = item.text().split("|")[0].strip()
 
         parent = self.parent() if self.parent() else self
         new_name, ok = QInputDialog.getText(
@@ -8301,7 +8300,7 @@ class FloatingSettingsPanel(QWidget):
 
 
 if __name__ == "__main__":
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication  # noqa: F811
     import sys
     
     app = QApplication(sys.argv)
