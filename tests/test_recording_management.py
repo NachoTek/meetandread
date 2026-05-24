@@ -652,6 +652,107 @@ class TestCleanupQueue:
         assert result.failed == 0
         assert result.remaining == 0
 
+    # -- Startup regression: invalid top-level queue formats ----------------
+
+    def test_invalid_top_level_array_resets_queue(self, tmp_path):
+        """Queue file containing a JSON array (not a dict) resets to empty."""
+        queue_file = tmp_path / "queue.json"
+        queue_file.write_text(json.dumps([{"kind": "file_delete", "target": "x"}]))
+
+        q = CleanupQueue(queue_file)
+        assert q.pending_count == 0
+
+        # Persisted file should now be a valid empty queue
+        data = json.loads(queue_file.read_text())
+        assert data == {"operations": []}
+
+    def test_invalid_top_level_string_resets_queue(self, tmp_path):
+        """Queue file containing a JSON string (not a dict) resets to empty."""
+        queue_file = tmp_path / "queue.json"
+        queue_file.write_text(json.dumps("not a queue"))
+
+        q = CleanupQueue(queue_file)
+        assert q.pending_count == 0
+
+    def test_missing_operations_key_resets_queue(self, tmp_path):
+        """Dict without 'operations' key resets to empty queue."""
+        queue_file = tmp_path / "queue.json"
+        queue_file.write_text(json.dumps({"data": [{"kind": "file_delete"}]}))
+
+        q = CleanupQueue(queue_file)
+        assert q.pending_count == 0
+
+        data = json.loads(queue_file.read_text())
+        assert data == {"operations": []}
+
+    # -- Startup regression: persistence cycle -----------------------------
+
+    def test_persistence_cycle_enqueue_reload_process_reload(self, tmp_path, recording_dirs):
+        """Full persistence cycle: enqueue → reload → process → reload → verify empty."""
+        rec_dir, tra_dir = recording_dirs
+        stem = "cycle-stem"
+        (rec_dir / f"{stem}.wav").write_text("a")
+        (tra_dir / f"{stem}.md").write_text("t")
+        queue_file = tmp_path / "queue.json"
+
+        # Instance 1: enqueue a file deletion
+        q1 = CleanupQueue(queue_file, recordings_dir=rec_dir, transcripts_dir=tra_dir)
+        q1.enqueue_file_deletion(stem)
+        assert q1.pending_count == 1
+
+        # Instance 2: reload from disk and process
+        q2 = CleanupQueue(queue_file, recordings_dir=rec_dir, transcripts_dir=tra_dir)
+        assert q2.pending_count == 1
+        result = q2.process_pending()
+        assert result.processed == 1
+        assert result.remaining == 0
+
+        # Instance 3: reload again — no pending operations remain
+        q3 = CleanupQueue(queue_file, recordings_dir=rec_dir, transcripts_dir=tra_dir)
+        assert q3.pending_count == 0
+        # Completed operations are retained until clear_completed()
+        assert all(op.status == "completed" for op in q3.operations)
+
+    # -- Startup regression: partial failure persistence -------------------
+
+    def test_partial_failure_preserves_attempts_and_last_error_in_json(self, tmp_path, recording_dirs):
+        """Partial file_delete failure persists attempts and last_error to JSON."""
+        rec_dir, tra_dir = recording_dirs
+        stem = "persist-fail"
+        (rec_dir / f"{stem}.wav").write_text("a")
+        (tra_dir / f"{stem}.md").write_text("t")
+        queue_file = tmp_path / "queue.json"
+
+        original_unlink = Path.unlink
+
+        def fail_md_only(self, *args, **kwargs):
+            if self.name == f"{stem}.md":
+                raise OSError("file locked (test)")
+            return original_unlink(self, *args, **kwargs)
+
+        q = CleanupQueue(queue_file, recordings_dir=rec_dir, transcripts_dir=tra_dir)
+        q.enqueue_file_deletion(stem)
+
+        with patch.object(Path, "unlink", fail_md_only):
+            result = q.process_pending()
+
+        assert result.failed == 1
+        assert result.remaining == 1
+
+        # Verify persisted JSON contains attempts and last_error
+        data = json.loads(queue_file.read_text())
+        pending_ops = [op for op in data["operations"] if op["status"] == "pending"]
+        assert len(pending_ops) == 1
+        assert pending_ops[0]["attempts"] == 1
+        assert pending_ops[0]["last_error"] is not None
+        assert "locked" in pending_ops[0]["last_error"]
+
+        # Reload and verify the persisted state survives
+        q2 = CleanupQueue(queue_file, recordings_dir=rec_dir, transcripts_dir=tra_dir)
+        assert q2.pending_count == 1
+        assert q2.operations[0].attempts == 1
+        assert q2.operations[0].last_error is not None
+
 
 # ---------------------------------------------------------------------------
 # Integration: rename then enumerate
@@ -729,3 +830,30 @@ class TestStartupCleanupIntegration:
         result = q.process_pending()
         assert result.processed == 0
         assert result.failed == 0
+
+    def test_successful_startup_processing_leaves_empty_queue_on_reload(self, tmp_path):
+        """After successful startup processing, a new instance reloads with pending_count == 0."""
+        recordings_dir = tmp_path / "recordings"
+        transcripts_dir = tmp_path / "transcripts"
+        recordings_dir.mkdir(exist_ok=True)
+        transcripts_dir.mkdir(exist_ok=True)
+        stem = "startup-done"
+        (recordings_dir / f"{stem}.wav").write_text("a")
+        (transcripts_dir / f"{stem}.md").write_text("t")
+        queue_file = tmp_path / "cleanup_queue.json"
+
+        # Enqueue
+        q1 = CleanupQueue(queue_file, recordings_dir=recordings_dir, transcripts_dir=transcripts_dir)
+        q1.enqueue_file_deletion(stem)
+
+        # Startup: new instance processes
+        q2 = CleanupQueue(queue_file, recordings_dir=recordings_dir, transcripts_dir=transcripts_dir)
+        result = q2.process_pending()
+        assert result.processed == 1
+        assert result.remaining == 0
+
+        # Verify: yet another instance sees no pending operations
+        q3 = CleanupQueue(queue_file, recordings_dir=recordings_dir, transcripts_dir=transcripts_dir)
+        assert q3.pending_count == 0
+        # Completed operations are retained until clear_completed()
+        assert all(op.status == "completed" for op in q3.operations)
