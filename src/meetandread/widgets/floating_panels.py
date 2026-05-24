@@ -1653,6 +1653,18 @@ class FloatingTranscriptPanel(QWidget):
             logger.error("Failed to enumerate recording files: %s", exc)
             files = []
 
+        # R027: Release playback file handles *before* the confirmation
+        # dialog so that, on Windows, the QMediaPlayer is not holding an
+        # open handle to a file the user is about to delete.  Defensive
+        # wrap — a playback-stop exception must not prevent the dialog.
+        try:
+            self._stop_playback()
+        except Exception as stop_exc:
+            logger.warning(
+                "Pre-delete playback stop failed for '%s': %s",
+                recording_name, stop_exc,
+            )
+
         file_count = len(files)
 
         # Show confirmation dialog
@@ -7600,6 +7612,18 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.error("Failed to enumerate recording files: %s", exc)
             files = []
+
+        # R027: Release playback file handles *before* the confirmation
+        # dialog so that, on Windows, the QMediaPlayer is not holding an
+        # open handle to a file the user is about to delete.  Defensive
+        # wrap — a playback-stop exception must not prevent the dialog.
+        try:
+            self._stop_playback()
+        except Exception as stop_exc:
+            logger.warning(
+                "Pre-delete playback stop failed for '%s': %s",
+                recording_name, stop_exc,
+            )
 
         file_count = len(files)
 
