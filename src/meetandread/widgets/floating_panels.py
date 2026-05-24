@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QSlider, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -4514,6 +4514,22 @@ class FloatingSettingsPanel(QWidget):
         self._dragging = False
         self._drag_pos = None
 
+        # ------------------------------------------------------------------
+        # Edge-resize state — resize from all four edges and corners
+        # ------------------------------------------------------------------
+        self._edge_resizing: bool = False
+        self._resize_edge: Optional[str] = None  # 'left','right','top','bottom','top-left','top-right','bottom-left','bottom-right'
+        self._resize_start_pos: Optional[QPoint] = None
+        self._resize_start_geometry: Optional[QRect] = None
+        self._resize_edge_threshold: int = 8  # px from edge to activate resize
+
+        # Enable mouse tracking so hover-only moves update cursor shape
+        self.setMouseTracking(True)
+
+        # Install self as event filter to intercept edge-resize mouse events
+        # before they reach child widgets (sidebar, content stack, etc.)
+        self.installEventFilter(self)
+
         # Apply initial theme to all widgets
         self._apply_theme()
 
@@ -4597,6 +4613,154 @@ class FloatingSettingsPanel(QWidget):
         except Exception as e:
             logger.warning("Failed to save settings panel geometry: %s", e)
 
+    # ------------------------------------------------------------------
+    # Edge-resize helpers
+    # ------------------------------------------------------------------
+
+    def _get_edge_at_cursor(self, pos: QPoint) -> Optional[str]:
+        """Return the resize edge/corner string at *pos*, or None.
+
+        Corners are checked before edges.  *pos* is in widget-local
+        coordinates.  Returns one of: 'top-left', 'top-right',
+        'bottom-left', 'bottom-right', 'left', 'right', 'top', 'bottom'.
+        """
+        t = self._resize_edge_threshold
+        w, h = self.width(), self.height()
+
+        near_left = pos.x() <= t
+        near_right = pos.x() >= w - t
+        near_top = pos.y() <= t
+        near_bottom = pos.y() >= h - t
+
+        # Corners first
+        if near_top and near_left:
+            return "top-left"
+        if near_top and near_right:
+            return "top-right"
+        if near_bottom and near_left:
+            return "bottom-left"
+        if near_bottom and near_right:
+            return "bottom-right"
+        # Edges
+        if near_left:
+            return "left"
+        if near_right:
+            return "right"
+        if near_top:
+            return "top"
+        if near_bottom:
+            return "bottom"
+        return None
+
+    def _cursor_for_resize_edge(self, edge: Optional[str]) -> Qt.CursorShape:
+        """Return the cursor shape for a given resize edge/corner string."""
+        mapping = {
+            "left": Qt.CursorShape.SizeHorCursor,
+            "right": Qt.CursorShape.SizeHorCursor,
+            "top": Qt.CursorShape.SizeVerCursor,
+            "bottom": Qt.CursorShape.SizeVerCursor,
+            "top-left": Qt.CursorShape.SizeFDiagCursor,
+            "bottom-right": Qt.CursorShape.SizeFDiagCursor,
+            "top-right": Qt.CursorShape.SizeBDiagCursor,
+            "bottom-left": Qt.CursorShape.SizeBDiagCursor,
+        }
+        return mapping.get(edge, Qt.CursorShape.ArrowCursor)
+
+    def _update_cursor_for_resize_edge(self, edge: Optional[str]) -> None:
+        """Set the panel cursor to the appropriate resize cursor."""
+        self.setCursor(self._cursor_for_resize_edge(edge))
+
+    def _handle_edge_resize(self, event: QMouseEvent) -> None:
+        """Compute and apply the new geometry during an edge/corner resize.
+
+        Starts from ``_resize_start_geometry`` and adjusts only the
+        edges matching ``_resize_edge``.  Clamps to minimumWidth /
+        minimumHeight and, when available, to the current screen's
+        available geometry.
+
+        On unexpected error, logs the edge and exception, restores
+        the start geometry if available, and clears resize state.
+        """
+        if not self._edge_resizing or self._resize_start_geometry is None:
+            return
+        if self._resize_start_pos is None or self._resize_edge is None:
+            return
+        try:
+            delta = event.globalPosition().toPoint() - self._resize_start_pos
+            sg = self._resize_start_geometry  # QRect(x, y, w, h)
+            min_w = self.minimumWidth()
+            min_h = self.minimumHeight()
+
+            new_x, new_y = sg.x(), sg.y()
+            new_w, new_h = sg.width(), sg.height()
+            edge = self._resize_edge
+
+            # Adjust dimensions based on dragged edge(s)
+            if "left" in edge:
+                proposed_w = sg.width() - delta.x()
+                if proposed_w < min_w:
+                    # Clamp: don't move x more than width allows
+                    new_x = sg.x() + sg.width() - min_w
+                    new_w = min_w
+                else:
+                    new_x = sg.x() + delta.x()
+                    new_w = proposed_w
+            if "right" in edge:
+                new_w = max(min_w, sg.width() + delta.x())
+            if "top" in edge:
+                proposed_h = sg.height() - delta.y()
+                if proposed_h < min_h:
+                    new_y = sg.y() + sg.height() - min_h
+                    new_h = min_h
+                else:
+                    new_y = sg.y() + delta.y()
+                    new_h = proposed_h
+            if "bottom" in edge:
+                new_h = max(min_h, sg.height() + delta.y())
+
+            # Clamp against screen geometry when available
+            screen = self.screen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                new_w = min(new_w, avail.width())
+                new_h = min(new_h, avail.height())
+                # Keep top-left within screen bounds
+                new_x = max(avail.x(), min(new_x, avail.x() + avail.width() - min_w))
+                new_y = max(avail.y(), min(new_y, avail.y() + avail.height() - min_h))
+
+            self.setGeometry(new_x, new_y, new_w, new_h)
+        except Exception as exc:
+            logger.warning(
+                "Edge-resize error (edge=%s): %s", self._resize_edge, exc
+            )
+            if self._resize_start_geometry is not None:
+                try:
+                    self.setGeometry(self._resize_start_geometry)
+                except Exception:
+                    pass
+            self._edge_resizing = False
+            self._resize_edge = None
+            self._resize_start_pos = None
+            self._resize_start_geometry = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def _bottom_right_corner_rect(self) -> QRect:
+        """Return the QRect for the bottom-right square-corner overlay.
+
+        Size is derived from AETHERIC_RADIUS parsed to an integer.
+        The rect sits at the bottom-right of the panel.
+        """
+        try:
+            radius_val = int(AETHERIC_RADIUS.replace("px", "").strip())
+        except (ValueError, AttributeError):
+            radius_val = 12
+        return QRect(
+            self.width() - radius_val,
+            self.height() - radius_val,
+            radius_val,
+            radius_val,
+        )
+
     def resizeEvent(self, event) -> None:
         """Reposition resize grip on resize."""
         if hasattr(self, '_resize_grip'):
@@ -4607,7 +4771,7 @@ class FloatingSettingsPanel(QWidget):
         super().resizeEvent(event)
 
     def paintEvent(self, event) -> None:
-        """Draw gradient glow on the sidebar's right inner edge."""
+        """Draw gradient glow on the sidebar's right inner edge and square bottom-right corner."""
         from PyQt6.QtGui import QPainter, QLinearGradient, QColor
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -4620,6 +4784,20 @@ class FloatingSettingsPanel(QWidget):
             gradient.setColorAt(0, QColor(255, 85, 69, 50))
             gradient.setColorAt(1, QColor(255, 85, 69, 0))
             painter.fillRect(sx, sy, 5, sh, gradient)
+
+        # Square the bottom-right corner — paint a solid rectangle over the
+        # rounded corner pixels so the resize grip sits flush against a
+        # 90-degree corner.
+        corner_rect = self._bottom_right_corner_rect()
+        bg_hex = AETHERIC_SETTINGS_BG.lstrip("#")
+        if bg_hex.startswith("rgb"):
+            # Handle "rgb(R, G, B)" format
+            import re as _re
+            nums = _re.findall(r"\d+", bg_hex)
+            bg_color = QColor(int(nums[0]), int(nums[1]), int(nums[2]))
+        else:
+            bg_color = QColor(f"#{bg_hex}")
+        painter.fillRect(corner_rect, bg_color)
 
         painter.end()
         super().paintEvent(event)
@@ -4821,6 +4999,49 @@ class FloatingSettingsPanel(QWidget):
             self._title_dragging = False
             self._title_drag_pos = None
             self._title_bar.setCursor(Qt.CursorShape.ArrowCursor)
+
+    # ------------------------------------------------------------------
+    # Edge-resize — mouse event handlers (fallback for direct panel clicks
+    # when no child widget is under the cursor)
+    # ------------------------------------------------------------------
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """Start edge/corner resize on left-button press near an edge."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            edge = self._get_edge_at_cursor(event.pos())
+            if edge is not None:
+                self._edge_resizing = True
+                self._resize_edge = edge
+                self._resize_start_pos = event.globalPosition().toPoint()
+                self._resize_start_geometry = self.geometry()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """Handle edge resize or update cursor on hover."""
+        if self._edge_resizing:
+            self._handle_edge_resize(event)
+            return
+        # Hover-only cursor update
+        edge = self._get_edge_at_cursor(event.pos())
+        self._update_cursor_for_resize_edge(edge)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Clear edge-resize state on button release."""
+        if event.button() == Qt.MouseButton.LeftButton and self._edge_resizing:
+            self._edge_resizing = False
+            self._resize_edge = None
+            self._resize_start_pos = None
+            self._resize_start_geometry = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """Reset cursor when mouse leaves the widget."""
+        if not self._edge_resizing:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().leaveEvent(event)
 
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""
@@ -6623,18 +6844,55 @@ class FloatingSettingsPanel(QWidget):
             logger.info("speed_changed: rate=%.2f", rate)
 
     def eventFilter(self, obj, event) -> bool:
-        """Route volume popup close tracking and history viewport hover events."""
-        from PyQt6.QtCore import QEvent
+        """Route edge-resize, volume popup close, and history viewport hover events.
 
-        # Volume popup close tracking
-        if obj is self._volume_popup and event.type() == QEvent.Type.Hide:
+        Edge-resize handling intercepts mouse events before child widgets
+        when the cursor is near a panel edge/corner. Volume popup and
+        history viewport tracking are preserved from prior implementations.
+        """
+        from PyQt6.QtCore import QEvent
+        etype = event.type()
+
+        # --- Edge-resize intercept (highest priority) ---
+        if etype == QEvent.Type.MouseButtonPress:
+            if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton:
+                local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                edge = self._get_edge_at_cursor(local_pos)
+                if edge is not None:
+                    self._edge_resizing = True
+                    self._resize_edge = edge
+                    self._resize_start_pos = event.globalPosition().toPoint()
+                    self._resize_start_geometry = self.geometry()
+                    return True  # consumed
+        elif etype == QEvent.Type.MouseMove:
+            if self._edge_resizing:
+                self._handle_edge_resize(event)
+                return True  # consumed
+            # Hover cursor update
+            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+            edge = self._get_edge_at_cursor(local_pos)
+            self._update_cursor_for_resize_edge(edge)
+        elif etype == QEvent.Type.MouseButtonRelease:
+            if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton and self._edge_resizing:
+                self._edge_resizing = False
+                self._resize_edge = None
+                self._resize_start_pos = None
+                self._resize_start_geometry = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                return True  # consumed
+        elif etype == QEvent.Type.Leave:
+            if not self._edge_resizing:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+
+        # --- Volume popup close tracking ---
+        if obj is self._volume_popup and etype == QEvent.Type.Hide:
             import time
             self._volume_popup_closed_at = time.monotonic()
             return False
 
-        # History viewport hover tracking for inline action buttons
+        # --- History viewport hover tracking for inline action buttons ---
         if obj is self._history_list.viewport():
-            if event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter):
+            if etype in (QEvent.Type.MouseMove, QEvent.Type.Enter):
                 pos = event.position().toPoint() if hasattr(event, 'position') else event.pos()
                 item = self._history_list.itemAt(pos)
                 if item is not None:
@@ -6642,7 +6900,7 @@ class FloatingSettingsPanel(QWidget):
                 else:
                     self._hovered_history_row = -1
                 self._update_history_row_visibility()
-            elif event.type() == QEvent.Type.Leave:
+            elif etype == QEvent.Type.Leave:
                 self._hovered_history_row = -1
                 self._update_history_row_visibility()
             return False
