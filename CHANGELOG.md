@@ -25,6 +25,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **History tab auto-refresh** — refreshes immediately when new recordings complete or speaker identities change, regardless of window visibility state
 - **Config version bumped** to 8 (adds configurable storage paths)
 
+## [0.13.0] — 2026-05-21
+
+### Added
+- **History Audio Playback** — play recordings directly from the History tab with toolbar transport controls
+- **Circular Playback Control** — interactive control widget with play/pause (center), skip ±5s, speed cycle, and volume regions
+- **Word Click Seeks Playback** — clicking any word in the transcript seeks to that timestamp; preserves play/pause state
+- **Gap-Hold Highlighting** — active word highlight preserves during natural speech pauses instead of disappearing
+- **Auto-Scroll to Active Word** — highlighted word is centered in the viewport during playback
+- **Playback Speed Control** — non-linear speed increments (Pocket Casts style): 0.5x, 0.7x, 1x, 1.25x, 1.5x, 1.7x, 1.8x, 2x
+- **Volume Popup** — volume slider overlay with mute toggle; timestamp guard prevents Qt Popup auto-close flicker
+- **QPainter-Painted Icons** — play, pause, speaker icons rendered programmatically for reliable colorization on Windows
+- **Bookmark Support** — add/navigate/remove timestamps within transcripts; bookmarks stored in transcript metadata footer
+- **Post-Processing Queue** — speaker diarization and identification run in background after recording stops, with idle-only scheduling and cancellation when a new recording begins
+
+### Fixed
+- **Scrub re-transcription completely broken** — Qt threading bug prevented progress updates and completion; replaced `QMetaObject.invokeMethod` with `QTimer.singleShot` signal pattern
+- **UI freeze after long recordings** — diarization blocked the controller for 30+ seconds during stop; moved to background queue so controller returns to IDLE immediately
+- **Stale identity and history views** — lists only populated once and never refreshed; added automatic refresh after mutations (links, deletes, new recordings, speaker assignments)
+- **Double-delete error crash** — graceful handling of already-deleted recordings with context-aware error dialogs
+
+### Changed
+- Word anchor format uses `word:{index}:{start_ms}` with zero-based indexing for stable IDs across renders
+- Binary search O(log n) for active word mapping during playback highlighting
+- Drag-aware seek slider: live drag is no-op, seek on release only
+
+## [0.11.1] — 2026-05-11
+
+### Fixed
+- **Logs directory not created on fresh installs** — `mkdir(exist_ok=True)` failed when parent path didn't exist; added `parents=True`
+- **Settings panel too small on first launch** — increased default size to 900×600, removed restrictive max size cap
+
 ## [0.11.0] — 2026-05-10
 
 ### Added
