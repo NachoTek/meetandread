@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QLabel, QFrame, QHBoxLayout, QPushButton,
     QInputDialog, QApplication, QTabWidget, QListWidget, QListWidgetItem,
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
-    QDialog, QDialogButtonBox, QSizeGrip, QStackedWidget,
+    QDialog, QDialogButtonBox, QSizeGrip, QStackedWidget, QScrollArea,
     QCheckBox, QLineEdit, QSlider, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView,
 )
@@ -3625,10 +3625,6 @@ class FloatingSettingsPanel(QWidget):
         self._content_stack.setObjectName("AethericContentStack")
         body_layout.addWidget(self._content_stack, 1)
         outer_layout.addLayout(body_layout)
-
-        # ------------------------------------------------------------------
-        # Page 0: Settings — model selection + hardware info
-        # ------------------------------------------------------------------
         settings_page = QWidget()
         settings_layout = QVBoxLayout(settings_page)
         settings_layout.setContentsMargins(12, 16, 12, 12)
@@ -3969,7 +3965,7 @@ class FloatingSettingsPanel(QWidget):
         self._restore_storage_paths()
 
         settings_layout.addStretch()
-        self._content_stack.addWidget(settings_page)
+        self._content_stack.addWidget(self._wrap_settings_page_for_scroll(settings_page, "settings"))
 
         # ------------------------------------------------------------------
         # Page 1: Performance — live resource monitoring + benchmarks
@@ -4093,7 +4089,7 @@ class FloatingSettingsPanel(QWidget):
         perf_layout.addWidget(self._benchmark_history_label)
 
         perf_layout.addStretch()
-        self._content_stack.addWidget(perf_page)
+        self._content_stack.addWidget(self._wrap_settings_page_for_scroll(perf_page, "performance"))
 
         # ------------------------------------------------------------------
         # Page 2: History — recording list, transcript viewer, scrub/delete
@@ -4313,7 +4309,7 @@ class FloatingSettingsPanel(QWidget):
         self._history_splitter.setSizes([160, 240])
 
         history_layout.addWidget(self._history_splitter)
-        self._content_stack.addWidget(history_page)
+        self._content_stack.addWidget(self._wrap_settings_page_for_scroll(history_page, "history"))
 
         # -- History state attributes --
         self._current_history_md_path: Optional[Path] = None
@@ -4485,7 +4481,7 @@ class FloatingSettingsPanel(QWidget):
         self._identities_splitter.setSizes([160, 240])
 
         identities_layout.addWidget(self._identities_splitter)
-        self._content_stack.addWidget(identities_page)
+        self._content_stack.addWidget(self._wrap_settings_page_for_scroll(identities_page, "identities"))
 
         # -- Identities state attributes --
         self._identity_usage: Dict[str, Any] = {}  # name -> IdentityUsage
@@ -4534,6 +4530,46 @@ class FloatingSettingsPanel(QWidget):
         self._restore_geometry()
 
         logger.debug("FloatingSettingsPanel created")
+
+
+    def _wrap_settings_page_for_scroll(self, page: QWidget, page_name: str) -> QScrollArea:
+        """Wrap a settings tab *page* in a scroll area for overflow safety.
+
+        Args:
+            page: The original QWidget for a tab page.
+            page_name: Human-readable name for diagnostic logging.
+
+        Returns:
+            A QScrollArea containing *page*, or *page* itself if scroll-area
+            construction fails (with a warning logged).
+        """
+        try:
+            scroll = QScrollArea()
+            scroll.setObjectName("AethericSettingsScrollArea")
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            scroll.setContentsMargins(0, 0, 0, 0)
+            scroll.setViewportMargins(0, 0, 0, 0)
+            scroll.setWidget(page)
+            # Match the Aetheric settings background so the scroll area
+            # viewport is visually seamless.
+            scroll.setStyleSheet(
+                f"QScrollArea#AethericSettingsScrollArea {{"
+                f"  background-color: {AETHERIC_SETTINGS_BG};"
+                f"  border: none;"
+                f"}}"
+            )
+            return scroll
+        except Exception:
+            logger.warning(
+                "Failed to create scroll wrapper for settings page %r — "
+                "falling back to unwrapped page",
+                page_name,
+                exc_info=True,
+            )
+            return page  # type: ignore[return-value]
 
     def _restore_geometry(self) -> None:
         """Restore settings panel position and size from config."""
