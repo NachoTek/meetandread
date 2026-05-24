@@ -1043,3 +1043,576 @@ class _FakeScreenGeometry:
     def width(self): return self._w
     def height(self): return self._h
     def contains(self, point): return 0 <= point.x() < self._w and 0 <= point.y() < self._h
+
+
+# ===========================================================================
+# 16. Edge/corner resize helpers
+# ===========================================================================
+
+class TestEdgeDetection:
+    """CCOverlayPanel._get_edge_at_cursor detects edges and corners."""
+
+    def test_top_left_corner(self, cc_panel):
+        pos = QPoint(2, 2)
+        assert cc_panel._get_edge_at_cursor(pos) == "top-left"
+
+    def test_top_right_corner(self, cc_panel):
+        pos = QPoint(cc_panel.width() - 2, 2)
+        assert cc_panel._get_edge_at_cursor(pos) == "top-right"
+
+    def test_bottom_left_corner(self, cc_panel):
+        pos = QPoint(2, cc_panel.height() - 2)
+        assert cc_panel._get_edge_at_cursor(pos) == "bottom-left"
+
+    def test_bottom_right_corner(self, cc_panel):
+        pos = QPoint(cc_panel.width() - 2, cc_panel.height() - 2)
+        assert cc_panel._get_edge_at_cursor(pos) == "bottom-right"
+
+    def test_left_edge(self, cc_panel):
+        pos = QPoint(3, cc_panel.height() // 2)
+        assert cc_panel._get_edge_at_cursor(pos) == "left"
+
+    def test_right_edge(self, cc_panel):
+        pos = QPoint(cc_panel.width() - 3, cc_panel.height() // 2)
+        assert cc_panel._get_edge_at_cursor(pos) == "right"
+
+    def test_top_edge(self, cc_panel):
+        pos = QPoint(cc_panel.width() // 2, 3)
+        assert cc_panel._get_edge_at_cursor(pos) == "top"
+
+    def test_bottom_edge(self, cc_panel):
+        pos = QPoint(cc_panel.width() // 2, cc_panel.height() - 3)
+        assert cc_panel._get_edge_at_cursor(pos) == "bottom"
+
+    def test_center_returns_none(self, cc_panel):
+        pos = QPoint(cc_panel.width() // 2, cc_panel.height() // 2)
+        assert cc_panel._get_edge_at_cursor(pos) is None
+
+    def test_boundary_at_threshold(self, cc_panel):
+        """Position at exactly threshold px from edge triggers detection."""
+        t = cc_panel._resize_edge_threshold
+        pos = QPoint(t, cc_panel.height() // 2)
+        assert cc_panel._get_edge_at_cursor(pos) == "left"
+
+    def test_just_past_threshold(self, cc_panel):
+        """Position one pixel past threshold does NOT trigger detection."""
+        t = cc_panel._resize_edge_threshold
+        pos = QPoint(t + 1, cc_panel.height() // 2)
+        assert cc_panel._get_edge_at_cursor(pos) is None
+
+    def test_corners_priority_over_edges(self, cc_panel):
+        """Corner detection should win over edge detection."""
+        t = cc_panel._resize_edge_threshold
+        # Position in the top-left corner area
+        pos = QPoint(1, 1)
+        result = cc_panel._get_edge_at_cursor(pos)
+        assert result == "top-left", f"Expected 'top-left' corner, got '{result}'"
+
+
+class TestCursorMapping:
+    """CCOverlayPanel._cursor_for_resize_edge returns correct cursor shapes."""
+
+    @pytest.mark.parametrize("edge,expected", [
+        ("left", Qt.CursorShape.SizeHorCursor),
+        ("right", Qt.CursorShape.SizeHorCursor),
+        ("top", Qt.CursorShape.SizeVerCursor),
+        ("bottom", Qt.CursorShape.SizeVerCursor),
+        ("top-left", Qt.CursorShape.SizeFDiagCursor),
+        ("bottom-right", Qt.CursorShape.SizeFDiagCursor),
+        ("top-right", Qt.CursorShape.SizeBDiagCursor),
+        ("bottom-left", Qt.CursorShape.SizeBDiagCursor),
+    ])
+    def test_cursor_for_edge(self, cc_panel, edge, expected):
+        assert cc_panel._cursor_for_resize_edge(edge) == expected
+
+    def test_none_returns_arrow(self, cc_panel):
+        assert cc_panel._cursor_for_resize_edge(None) == Qt.CursorShape.ArrowCursor
+
+    def test_unknown_returns_arrow(self, cc_panel):
+        assert cc_panel._cursor_for_resize_edge("invalid") == Qt.CursorShape.ArrowCursor
+
+
+class TestEdgeResizeState:
+    """Edge-resize state fields exist and initialize correctly."""
+
+    def test_initial_no_edge_resizing(self, cc_panel):
+        assert cc_panel._edge_resizing is False
+
+    def test_initial_no_resize_edge(self, cc_panel):
+        assert cc_panel._resize_edge is None
+
+    def test_initial_no_start_pos(self, cc_panel):
+        assert cc_panel._resize_start_pos is None
+
+    def test_initial_no_start_geometry(self, cc_panel):
+        assert cc_panel._resize_start_geometry is None
+
+    def test_threshold_is_8(self, cc_panel):
+        assert cc_panel._resize_edge_threshold == 8
+
+    def test_mouse_tracking_enabled(self, cc_panel):
+        assert cc_panel.hasMouseTracking() is True
+
+    def test_grip_mouse_tracking_enabled(self, cc_panel):
+        grip = cc_panel.findChild(QSizeGrip)
+        assert grip is not None
+        assert grip.hasMouseTracking() is True
+
+
+# ===========================================================================
+# 17. Edge-resize priority over drag
+# ===========================================================================
+
+class TestEdgeResizePriorityOverDrag:
+    """Clicking on an edge/corner starts resize, not drag."""
+
+    def test_left_edge_press_starts_resize(self, cc_panel, qapp):
+        """Left-edge press starts edge-resize, not drag."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+
+        # Click on left edge
+        local = QPointF(3, cc_panel.height() / 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        assert cc_panel._edge_resizing is True
+        assert cc_panel._resize_edge == "left"
+        assert cc_panel._dragging is False
+
+    def test_bottom_right_corner_press_starts_resize(self, cc_panel, qapp):
+        """Bottom-right corner press starts edge-resize."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+
+        local = QPointF(cc_panel.width() - 2, cc_panel.height() - 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        assert cc_panel._edge_resizing is True
+        assert cc_panel._resize_edge == "bottom-right"
+        assert cc_panel._dragging is False
+
+    def test_center_press_starts_drag(self, cc_panel, qapp):
+        """Center press starts drag, not resize."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+
+        local = QPointF(cc_panel.width() / 2, cc_panel.height() / 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        assert cc_panel._dragging is True
+        assert cc_panel._edge_resizing is False
+
+    def test_release_clears_resize_state(self, cc_panel, qapp):
+        """Mouse release clears all resize state."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+
+        local = QPointF(3, cc_panel.height() / 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+        assert cc_panel._edge_resizing is True
+
+        # Release
+        release = QMouseEvent(
+            QMouseEvent.Type.MouseButtonRelease,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseReleaseEvent(release)
+
+        assert cc_panel._edge_resizing is False
+        assert cc_panel._resize_edge is None
+        assert cc_panel._resize_start_pos is None
+        assert cc_panel._resize_start_geometry is None
+
+
+# ===========================================================================
+# 18. Edge-resize geometry changes
+# ===========================================================================
+
+class TestEdgeResizeGeometry:
+    """Edge-resize correctly adjusts geometry."""
+
+    def test_resize_right_grows_width(self, cc_panel, qapp):
+        """Dragging right edge rightward increases width."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        cc_panel.resize(400, 200)
+        qapp.processEvents()
+        initial_w = cc_panel.width()
+
+        # Press on right edge
+        local = QPointF(cc_panel.width() - 2, cc_panel.height() / 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        # Move right by 50px
+        global_move = QPointF(global_press.x() + 50, global_press.y())
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local.x() + 50, local.y()),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        qapp.processEvents()
+
+        assert cc_panel.width() > initial_w, f"Width should increase: was {initial_w}, now {cc_panel.width()}"
+
+    def test_resize_bottom_grows_height(self, cc_panel, qapp):
+        """Dragging bottom edge downward increases height."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        cc_panel.resize(400, 200)
+        qapp.processEvents()
+        initial_h = cc_panel.height()
+
+        local = QPointF(cc_panel.width() / 2, cc_panel.height() - 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        global_move = QPointF(global_press.x(), global_press.y() + 50)
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local.x(), local.y() + 50),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        qapp.processEvents()
+
+        assert cc_panel.height() > initial_h, f"Height should increase: was {initial_h}, now {cc_panel.height()}"
+
+    def test_resize_left_clamps_to_min_width(self, cc_panel, qapp):
+        """Dragging left edge leftward beyond min-width clamps to minimumWidth."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(200, 100)
+        cc_panel.resize(400, 200)
+        qapp.processEvents()
+        min_w = cc_panel.minimumWidth()
+
+        # Press on left edge
+        local = QPointF(3, cc_panel.height() / 2)
+        global_press = QPointF(200 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        # Drag left by a huge amount (over-drag past min-width)
+        global_move = QPointF(global_press.x() - 800, global_press.y())
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local.x() - 800, local.y()),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        qapp.processEvents()
+
+        assert cc_panel.width() >= min_w, f"Width must be >= min-width {min_w}, got {cc_panel.width()}"
+
+    def test_resize_top_clamps_to_min_height(self, cc_panel, qapp):
+        """Dragging top edge upward beyond min-height clamps to minimumHeight."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 200)
+        cc_panel.resize(400, 200)
+        qapp.processEvents()
+        min_h = cc_panel.minimumHeight()
+
+        local = QPointF(cc_panel.width() / 2, 3)
+        global_press = QPointF(100 + local.x(), 200 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        # Drag up by a huge amount (over-drag past min-height)
+        global_move = QPointF(global_press.x(), global_press.y() - 500)
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local.x(), local.y() - 500),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        qapp.processEvents()
+
+        assert cc_panel.height() >= min_h, f"Height must be >= min-height {min_h}, got {cc_panel.height()}"
+
+    def test_resize_top_left_moves_position(self, cc_panel, qapp):
+        """Dragging top-left corner changes both position and size."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(200, 200)
+        cc_panel.resize(500, 300)
+        qapp.processEvents()
+        initial_x = cc_panel.x()
+        initial_y = cc_panel.y()
+        initial_w = cc_panel.width()
+        initial_h = cc_panel.height()
+
+        # Press on top-left corner
+        local = QPointF(2, 2)
+        global_press = QPointF(200 + local.x(), 200 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        # Drag up-left by 30px
+        global_move = QPointF(global_press.x() - 30, global_press.y() - 30)
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local.x() - 30, local.y() - 30),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        qapp.processEvents()
+
+        # Width should increase (left moved left)
+        assert cc_panel.width() > initial_w
+        # Height should increase (top moved up)
+        assert cc_panel.height() > initial_h
+        # Position should have shifted
+        assert cc_panel.x() < initial_x or cc_panel.y() < initial_y
+
+
+# ===========================================================================
+# 19. Center drag still works (regression guard)
+# ===========================================================================
+
+class TestDragStillWorks:
+    """Center drag moves the panel without triggering edge-resize."""
+
+    def test_center_drag_moves_panel(self, cc_panel, qapp):
+        """Clicking in the center and dragging still repositions the panel."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+        initial_pos = cc_panel.pos()
+
+        # Press at center
+        local = QPointF(cc_panel.width() / 2, cc_panel.height() / 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+        assert cc_panel._dragging is True
+        assert cc_panel._edge_resizing is False
+
+        # Move
+        global_move = QPointF(global_press.x() + 60, global_press.y() + 40)
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local.x() + 60, local.y() + 40),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+
+        # Release
+        release = QMouseEvent(
+            QMouseEvent.Type.MouseButtonRelease,
+            QPointF(local.x() + 60, local.y() + 40),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseReleaseEvent(release)
+        qapp.processEvents()
+
+        new_pos = cc_panel.pos()
+        assert new_pos != initial_pos, f"Panel should have moved: was {initial_pos}, now {new_pos}"
+
+    def test_drag_does_not_change_size(self, cc_panel, qapp):
+        """Dragging from the center does not resize the panel."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+        initial_size = cc_panel.size()
+
+        local = QPointF(cc_panel.width() / 2, cc_panel.height() / 2)
+        global_press = QPointF(100 + local.x(), 100 + local.y())
+        press = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            local, global_press,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mousePressEvent(press)
+
+        global_move = QPointF(global_press.x() + 50, global_press.y() + 30)
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(local.x() + 50, local.y() + 30),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+
+        release = QMouseEvent(
+            QMouseEvent.Type.MouseButtonRelease,
+            QPointF(local.x() + 50, local.y() + 30),
+            global_move,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseReleaseEvent(release)
+        qapp.processEvents()
+
+        assert cc_panel.size() == initial_size, "Drag should not change panel size"
+
+
+# ===========================================================================
+# 20. Hover cursor updates
+# ===========================================================================
+
+class TestHoverCursorUpdates:
+    """Hovering near edges shows the correct resize cursor."""
+
+    def test_hover_right_edge_shows_hor_cursor(self, cc_panel, qapp):
+        """Moving the mouse near the right edge shows SizeHorCursor."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+
+        local = QPointF(cc_panel.width() - 3, cc_panel.height() / 2)
+        global_pos = QPointF(100 + local.x(), 100 + local.y())
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            local, global_pos,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        assert cc_panel.cursor().shape() == Qt.CursorShape.SizeHorCursor
+
+    def test_hover_center_shows_arrow_cursor(self, cc_panel, qapp):
+        """Moving the mouse in the center shows ArrowCursor (no resize)."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+
+        local = QPointF(cc_panel.width() / 2, cc_panel.height() / 2)
+        global_pos = QPointF(100 + local.x(), 100 + local.y())
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            local, global_pos,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        assert cc_panel.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+    def test_leave_event_resets_cursor(self, cc_panel, qapp):
+        """Leaving the panel resets cursor to ArrowCursor."""
+        from PyQt6.QtCore import QPointF
+        cc_panel.move(100, 100)
+        qapp.processEvents()
+
+        # First set cursor to resize
+        local = QPointF(cc_panel.width() - 3, cc_panel.height() / 2)
+        global_pos = QPointF(100 + local.x(), 100 + local.y())
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            local, global_pos,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        cc_panel.mouseMoveEvent(move)
+        assert cc_panel.cursor().shape() == Qt.CursorShape.SizeHorCursor
+
+        # Leave event
+        from PyQt6.QtCore import QEvent
+        leave_event = QEvent(QEvent.Type.Leave)
+        cc_panel.leaveEvent(leave_event)
+        assert cc_panel.cursor().shape() == Qt.CursorShape.ArrowCursor

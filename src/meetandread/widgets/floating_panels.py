@@ -2863,6 +2863,21 @@ class CCOverlayPanel(QWidget):
         self._dragging: bool = False
         self._drag_pos: Optional[QPoint] = None
 
+        # --- Edge/corner resize state (matching FloatingSettingsPanel pattern) ---
+        self._edge_resizing: bool = False
+        self._resize_edge: Optional[str] = None  # 'left','right','top','bottom','top-left',...
+        self._resize_start_pos: Optional[QPoint] = None
+        self._resize_start_geometry: Optional[QRect] = None
+        self._resize_edge_threshold: int = 8  # px from edge to activate resize
+
+        # Enable mouse tracking so hover-only moves update cursor shape
+        self.setMouseTracking(True)
+
+        # Install event filter on resize grip so edge/corner clicks near the
+        # grip win before the child grip consumes them (bottom-right corner).
+        self._resize_grip.setMouseTracking(True)
+        self._resize_grip.installEventFilter(self)
+
         # Apply initial theme
         self._apply_theme()
 
@@ -2909,6 +2924,181 @@ class CCOverlayPanel(QWidget):
         painter.end()
 
     # ------------------------------------------------------------------
+    # Edge/corner resize helpers (matching FloatingSettingsPanel pattern)
+    # ------------------------------------------------------------------
+
+    def _get_edge_at_cursor(self, pos: QPoint) -> Optional[str]:
+        """Return the resize edge/corner string at *pos*, or None.
+
+        Corners are checked before edges.  *pos* is in widget-local
+        coordinates.  Returns one of: 'top-left', 'top-right',
+        'bottom-left', 'bottom-right', 'left', 'right', 'top', 'bottom'.
+        """
+        t = self._resize_edge_threshold
+        w, h = self.width(), self.height()
+
+        near_left = pos.x() <= t
+        near_right = pos.x() >= w - t
+        near_top = pos.y() <= t
+        near_bottom = pos.y() >= h - t
+
+        # Corners first
+        if near_top and near_left:
+            return "top-left"
+        if near_top and near_right:
+            return "top-right"
+        if near_bottom and near_left:
+            return "bottom-left"
+        if near_bottom and near_right:
+            return "bottom-right"
+        # Edges
+        if near_left:
+            return "left"
+        if near_right:
+            return "right"
+        if near_top:
+            return "top"
+        if near_bottom:
+            return "bottom"
+        return None
+
+    def _cursor_for_resize_edge(self, edge: Optional[str]) -> Qt.CursorShape:
+        """Return the cursor shape for a given resize edge/corner string."""
+        mapping = {
+            "left": Qt.CursorShape.SizeHorCursor,
+            "right": Qt.CursorShape.SizeHorCursor,
+            "top": Qt.CursorShape.SizeVerCursor,
+            "bottom": Qt.CursorShape.SizeVerCursor,
+            "top-left": Qt.CursorShape.SizeFDiagCursor,
+            "bottom-right": Qt.CursorShape.SizeFDiagCursor,
+            "top-right": Qt.CursorShape.SizeBDiagCursor,
+            "bottom-left": Qt.CursorShape.SizeBDiagCursor,
+        }
+        return mapping.get(edge, Qt.CursorShape.ArrowCursor)
+
+    def _update_cursor_for_resize_edge(self, edge: Optional[str]) -> None:
+        """Set the panel cursor to the appropriate resize cursor."""
+        self.setCursor(self._cursor_for_resize_edge(edge))
+
+    def _handle_edge_resize(self, event: QMouseEvent) -> None:
+        """Compute and apply the new geometry during an edge/corner resize.
+
+        Starts from ``_resize_start_geometry`` and adjusts only the
+        edges matching ``_resize_edge``.  Clamps to minimumWidth /
+        minimumHeight and, when available, to the current screen's
+        available geometry.
+
+        On unexpected error, logs a warning without transcript/audio
+        content, restores the start geometry if available, and clears
+        resize state.
+        """
+        if not self._edge_resizing or self._resize_start_geometry is None:
+            return
+        if self._resize_start_pos is None or self._resize_edge is None:
+            return
+        try:
+            delta = event.globalPosition().toPoint() - self._resize_start_pos
+            sg = self._resize_start_geometry  # QRect(x, y, w, h)
+            min_w = self.minimumWidth()
+            min_h = self.minimumHeight()
+
+            new_x, new_y = sg.x(), sg.y()
+            new_w, new_h = sg.width(), sg.height()
+            edge = self._resize_edge
+
+            # Adjust dimensions based on dragged edge(s)
+            if "left" in edge:
+                proposed_w = sg.width() - delta.x()
+                if proposed_w < min_w:
+                    new_x = sg.x() + sg.width() - min_w
+                    new_w = min_w
+                else:
+                    new_x = sg.x() + delta.x()
+                    new_w = proposed_w
+            if "right" in edge:
+                new_w = max(min_w, sg.width() + delta.x())
+            if "top" in edge:
+                proposed_h = sg.height() - delta.y()
+                if proposed_h < min_h:
+                    new_y = sg.y() + sg.height() - min_h
+                    new_h = min_h
+                else:
+                    new_y = sg.y() + delta.y()
+                    new_h = proposed_h
+            if "bottom" in edge:
+                new_h = max(min_h, sg.height() + delta.y())
+
+            # Clamp against screen geometry when available
+            screen = self.screen()
+            if screen is not None:
+                avail = screen.availableGeometry()
+                new_w = min(new_w, avail.width())
+                new_h = min(new_h, avail.height())
+                # Keep top-left within screen bounds
+                new_x = max(avail.x(), min(new_x, avail.x() + avail.width() - min_w))
+                new_y = max(avail.y(), min(new_y, avail.y() + avail.height() - min_h))
+
+            self.setGeometry(new_x, new_y, new_w, new_h)
+        except Exception as exc:
+            logger.warning(
+                "CC edge-resize error (edge=%s): %s", self._resize_edge, exc
+            )
+            if self._resize_start_geometry is not None:
+                try:
+                    self.setGeometry(self._resize_start_geometry)
+                except Exception:
+                    pass
+            self._edge_resizing = False
+            self._resize_edge = None
+            self._resize_start_pos = None
+            self._resize_start_geometry = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    # ------------------------------------------------------------------
+    # Event filter — intercept grip events for edge/corner resize
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event) -> bool:
+        """Route edge-resize events from the resize grip.
+
+        When the cursor is near a panel edge/corner, intercepts mouse
+        events on the resize grip so that edge/corner resize takes
+        priority over the default QSizeGrip behavior.
+        """
+        from PyQt6.QtCore import QEvent
+        etype = event.type()
+
+        if obj is self._resize_grip:
+            if etype == QEvent.Type.MouseButtonPress:
+                if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton:
+                    local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                    edge = self._get_edge_at_cursor(local_pos)
+                    if edge is not None:
+                        self._edge_resizing = True
+                        self._resize_edge = edge
+                        self._resize_start_pos = event.globalPosition().toPoint()
+                        self._resize_start_geometry = self.geometry()
+                        return True  # consumed — edge resize wins
+            elif etype == QEvent.Type.MouseMove:
+                if self._edge_resizing:
+                    self._handle_edge_resize(event)
+                    return True
+                # Hover cursor update
+                local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                edge = self._get_edge_at_cursor(local_pos)
+                self._update_cursor_for_resize_edge(edge)
+            elif etype == QEvent.Type.MouseButtonRelease:
+                if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton and self._edge_resizing:
+                    self._edge_resizing = False
+                    self._resize_edge = None
+                    self._resize_start_pos = None
+                    self._resize_start_geometry = None
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
+                    return True  # consumed
+
+        return False
+
+    # ------------------------------------------------------------------
     # Resize — reposition grip (MEM083 pattern)
     # ------------------------------------------------------------------
 
@@ -2927,8 +3117,22 @@ class CCOverlayPanel(QWidget):
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Start drag on left-button press (anywhere except interactive children)."""
+        """Start edge/corner resize or drag on left-button press.
+
+        Edge/corner resize takes priority over drag when the cursor is
+        within the edge threshold.  Center clicks preserve drag behavior.
+        """
         if event.button() == Qt.MouseButton.LeftButton:
+            # Edge/corner resize takes priority
+            edge = self._get_edge_at_cursor(event.pos())
+            if edge is not None:
+                self._edge_resizing = True
+                self._resize_edge = edge
+                self._resize_start_pos = event.globalPosition().toPoint()
+                self._resize_start_geometry = self.geometry()
+                event.accept()
+                return
+
             # Don't start drag if click landed on an interactive child widget
             child = self.childAt(event.position().toPoint())
             if child is not None:
@@ -2947,23 +3151,47 @@ class CCOverlayPanel(QWidget):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Move panel with mouse during drag, clamped to screen boundaries."""
-        if self._dragging and self._drag_pos is not None:
+        """Handle edge resize, drag, or hover cursor update.
+
+        Active resize calls _handle_edge_resize.
+        Active drag moves the panel (clamped to screen).
+        Hover-only movement updates the cursor shape.
+        """
+        if self._edge_resizing:
+            self._handle_edge_resize(event)
+            event.accept()
+        elif self._dragging and self._drag_pos is not None:
             raw_pos = event.globalPosition().toPoint() - self._drag_pos
             self.move(clamp_to_screen(self, raw_pos))
             event.accept()
         else:
+            # Hover-only cursor update
+            edge = self._get_edge_at_cursor(event.pos())
+            self._update_cursor_for_resize_edge(edge)
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """End drag on left-button release."""
+        """End edge-resize or drag on left-button release."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            self._drag_pos = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+            if self._edge_resizing:
+                self._edge_resizing = False
+                self._resize_edge = None
+                self._resize_start_pos = None
+                self._resize_start_geometry = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+            else:
+                self._dragging = False
+                self._drag_pos = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """Reset cursor when mouse leaves the panel (unless actively resizing)."""
+        if not self._edge_resizing:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().leaveEvent(event)
 
     # ------------------------------------------------------------------
     # Shell methods
