@@ -2913,14 +2913,36 @@ class CCOverlayPanel(QWidget):
     # on Windows frameless translucent windows)
     # ------------------------------------------------------------------
 
+    def _bottom_right_corner_rect(self) -> QRect:
+        """Return the QRect covering the bottom-right corner that should be square.
+
+        The rect spans from (width - radius, height - radius) to (width, height)
+        so that when filled with the panel background color, it visually squares
+        the bottom-right corner while all other corners remain rounded.
+        """
+        r = 12  # corner radius, matching drawRoundedRect
+        w, h = self.width(), self.height()
+        # Guard: if the widget is smaller than the radius, return empty
+        if w <= r or h <= r:
+            return QRect(w, h, 0, 0)
+        return QRect(w - r, h - r, r, r)
+
     def paintEvent(self, event) -> None:
         from PyQt6.QtGui import QPainter, QColor, QPen
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         # Semi-transparent dark background
-        painter.setBrush(QColor(30, 29, 30, 179))  # 70% opacity
+        bg = QColor(30, 29, 30, 179)  # 70% opacity
+        painter.setBrush(bg)
         painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 12, 12)
+        # Square the bottom-right corner by filling the corner region
+        # with the same background color (no rounded clip there).
+        corner = self._bottom_right_corner_rect()
+        if corner.isValid():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(bg)
+            painter.drawRect(corner)
         painter.end()
 
     # ------------------------------------------------------------------

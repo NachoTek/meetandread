@@ -1616,3 +1616,102 @@ class TestHoverCursorUpdates:
         leave_event = QEvent(QEvent.Type.Leave)
         cc_panel.leaveEvent(leave_event)
         assert cc_panel.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+
+# ===========================================================================
+# 21. Bottom-right square corner — helper and paint contract
+# ===========================================================================
+
+class TestBottomRightCornerRect:
+    """_bottom_right_corner_rect() anchors to the bottom-right corner."""
+
+    def test_corner_rect_size_matches_radius(self, cc_panel):
+        """Corner rect width and height equal the 12px corner radius."""
+        r = cc_panel._bottom_right_corner_rect()
+        assert r.width() == 12
+        assert r.height() == 12
+
+    def test_corner_rect_anchored_bottom_right(self, cc_panel):
+        """Corner rect bottom-right matches panel pixel boundary (inclusive)."""
+        r = cc_panel._bottom_right_corner_rect()
+        # QRect right() is inclusive: x + width - 1 == widget_width - 1
+        assert r.right() + 1 == cc_panel.width()
+        assert r.bottom() + 1 == cc_panel.height()
+
+    def test_corner_rect_after_resize_larger(self, cc_panel, qapp):
+        """Corner rect stays anchored after resize to a larger size."""
+        cc_panel.resize(700, 300)
+        qapp.processEvents()
+        r = cc_panel._bottom_right_corner_rect()
+        assert r.right() + 1 == cc_panel.width()
+        assert r.bottom() + 1 == cc_panel.height()
+        assert r.width() == 12
+        assert r.height() == 12
+
+    def test_corner_rect_at_minimum_size(self, cc_panel, qapp):
+        """Corner rect is valid at minimum panel size."""
+        cc_panel.resize(cc_panel.minimumWidth(), cc_panel.minimumHeight())
+        qapp.processEvents()
+        r = cc_panel._bottom_right_corner_rect()
+        assert r.isValid()
+        assert r.width() == 12
+        assert r.height() == 12
+
+    def test_corner_rect_invalid_on_tiny_widget(self, cc_panel, qapp):
+        """Corner rect is invalid if panel is smaller than radius (guarded)."""
+        # Force a very small size; minimum size constraints may prevent it
+        # so we test the guard path directly by calling with mocked dimensions
+        from unittest.mock import patch
+        with patch.object(type(cc_panel), 'width', return_value=5), \
+             patch.object(type(cc_panel), 'height', return_value=5):
+            r = cc_panel._bottom_right_corner_rect()
+            assert not r.isValid()
+
+
+class TestPaintEventSquareCorner:
+    """paintEvent squares the bottom-right corner without affecting grip."""
+
+    def test_paint_does_not_move_grip(self, cc_panel, qapp):
+        """After repaint, grip stays anchored at bottom-right."""
+        cc_panel.resize(500, 250)
+        qapp.processEvents()
+        grip = cc_panel.findChild(QSizeGrip)
+        assert grip is not None
+        expected_x = cc_panel.width() - grip.width()
+        expected_y = cc_panel.height() - grip.height()
+        assert grip.x() == expected_x
+        assert grip.y() == expected_y
+
+        # Force a repaint
+        cc_panel.repaint()
+        qapp.processEvents()
+
+        assert grip.x() == cc_panel.width() - grip.width()
+        assert grip.y() == cc_panel.height() - grip.height()
+
+    def test_paint_does_not_change_panel_size(self, cc_panel, qapp):
+        """Repaint does not alter panel dimensions."""
+        cc_panel.resize(450, 200)
+        qapp.processEvents()
+        w_before, h_before = cc_panel.width(), cc_panel.height()
+        cc_panel.repaint()
+        qapp.processEvents()
+        assert cc_panel.width() == w_before
+        assert cc_panel.height() == h_before
+
+    def test_paint_survives_resize_cycle(self, cc_panel, qapp):
+        """Multiple resize + repaint cycles keep grip anchored."""
+        grip = cc_panel.findChild(QSizeGrip)
+        assert grip is not None
+
+        for w, h in [(400, 140), (600, 300), (500, 200), (800, 400)]:
+            cc_panel.resize(w, h)
+            qapp.processEvents()
+            cc_panel.repaint()
+            qapp.processEvents()
+            assert grip.x() == cc_panel.width() - grip.width(), f"Grip x wrong at {w}x{h}"
+            assert grip.y() == cc_panel.height() - grip.height(), f"Grip y wrong at {w}x{h}"
+            corner = cc_panel._bottom_right_corner_rect()
+            assert corner.right() + 1 == cc_panel.width()
+            assert corner.bottom() + 1 == cc_panel.height()
+
