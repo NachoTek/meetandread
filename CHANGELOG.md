@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] — 2026-05-23
+
+### Added
+- **Startup Cleanup Queue** — orphaned file deletions from prior sessions are now processed automatically on app launch
+- **Rename Recording in Transcript Panel** — right-click context menu on the CC/transcript panel now includes "Rename Recording" (was only in Settings panel)
+- **Post-Processing Speaker Display Refresh** — transcript viewer automatically re-renders when speaker labels are added by background post-processing (diarization/speaker ID)
+- **Rename Display Improvement** — renamed recordings show the custom name with date in parentheses, instead of the raw stem
+
+### Fixed
+- **History list not updating after recording** — removed `isVisible()` guard that was blocking history refreshes when the floating settings panel was obscured or during fade animations
+- **Context menu crash on History tab** — fixed `QWidget::mapFrom()` parent-hierarchy error when right-clicking history items in the floating frameless window
+- **Settings panel minimum height** — reduced from 425px to 300px for better aspect ratio relative to the sidebar navigation items
+- **Scrub speaker preservation** — scrub (re-transcription) now runs speaker identification and diarization after producing the new transcript, preserving speaker labels
+- **Lint zero** — eliminated all flake8 errors (was 178) and bandit security warnings across the entire `src/` tree
+
+### Changed
+- **Identities tab auto-refresh** — refreshes immediately when identities are modified from any panel, regardless of window visibility state
+- **History tab auto-refresh** — refreshes immediately when new recordings complete or speaker identities change, regardless of window visibility state
+- **Config version bumped** to 8 (adds configurable storage paths)
+
 ## [0.11.0] — 2026-05-10
 
 ### Added
