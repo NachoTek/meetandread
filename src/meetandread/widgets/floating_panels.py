@@ -1529,36 +1529,16 @@ class FloatingTranscriptPanel(QWidget):
         """
         self._history_list.clear()
         for meta in recordings:
-            # Format display date from ISO timestamp
-            display_date = meta.recording_time
-            if display_date:
-                try:
-                    from datetime import datetime
-                    dt = datetime.fromisoformat(display_date)
-                    display_date = dt.strftime("%Y-%m-%d %H:%M")
-                except (ValueError, TypeError):
-                    pass  # keep raw string
-
-            # If the recording has been renamed, show the custom name
-            stem = meta.path.stem
-            _datetime_stem = re.match(
-                r"recording-\d{4}-\d{2}-\d{2}-\d{6}$", stem,
+            display_text, is_italic = FloatingSettingsPanel._build_history_display_text(
+                meta, return_italic=True,
             )
-            if not _datetime_stem and stem:
-                display_label = f"{stem} ({display_date})"
-            else:
-                display_label = display_date
-
-            if meta.word_count == 0:
-                display_text = f"{display_label} | (Empty recording)"
-            else:
-                display_text = (
-                    f"{display_label} | {meta.word_count} words"
-                    f" | {meta.speaker_count} speakers"
-                )
 
             item = QListWidgetItem(display_text)
             item.setData(Qt.ItemDataRole.UserRole, str(meta.path))
+            if is_italic:
+                font = item.font()
+                font.setItalic(True)
+                item.setFont(font)
             self._history_list.addItem(item)
 
     def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
@@ -3586,6 +3566,7 @@ class _HistoryRowWidget(QWidget):
         panel: "FloatingSettingsPanel",
         item: QListWidgetItem,
         parent: QWidget,
+        italic: bool = False,
     ) -> None:
         super().__init__(parent)
         self._item = item
@@ -3605,6 +3586,11 @@ class _HistoryRowWidget(QWidget):
         self._label = QLabel(display_text)
         self._label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._label.setCursor(Qt.CursorShape.ArrowCursor)
+        if italic:
+            font = self._label.font()
+            font.setItalic(True)
+            self._label.setFont(font)
+            self._label.setStyleSheet("color: rgba(255, 255, 255, 140);")
         layout.addWidget(self._label, stretch=1)
 
         p = current_palette()
@@ -6767,6 +6753,64 @@ class FloatingSettingsPanel(QWidget):
             return
         self._populate_history_list(scan_recordings())
 
+    @staticmethod
+    def _build_history_display_text(
+        meta,  # RecordingMeta — avoids circular import at class level
+        return_italic: bool = False,
+    ):
+        """Build the display text for a history list item.
+
+        When speaker_count == 0 and word_count > 0, appends an italic
+        '(processing speakers...)' indicator to signal pending
+        post-processing. Empty recordings show '(Empty recording)'.
+
+        Args:
+            meta: RecordingMeta for the item.
+            return_italic: If True, return (text, is_italic) tuple
+                instead of just the text string.
+
+        Returns:
+            str or (str, bool) — display text, or text + italic flag.
+        """
+        import re as _re
+        display_date = meta.recording_time
+        if display_date:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(display_date)
+                display_date = dt.strftime("%Y-%m-%d %H:%M")
+            except (ValueError, TypeError):
+                pass
+
+        stem = meta.path.stem
+        _datetime_stem = _re.match(
+            r"recording-\d{4}-\d{2}-\d{2}-\d{6}$", stem,
+        )
+        if not _datetime_stem and stem:
+            display_label = f"{stem} ({display_date})"
+        else:
+            display_label = display_date
+
+        italic = False
+        if meta.word_count == 0:
+            display_text = f"{display_label} | (Empty recording)"
+        elif meta.speaker_count == 0:
+            display_text = (
+                f"{display_label} | {meta.word_count} words"
+                f" | (processing speakers...)"
+            )
+            italic = True
+        else:
+            spk = "speaker" if meta.speaker_count == 1 else "speakers"
+            display_text = (
+                f"{display_label} | {meta.word_count} words"
+                f" | {meta.speaker_count} {spk}"
+            )
+
+        if return_italic:
+            return display_text, italic
+        return display_text
+
     def _populate_history_list(self, recordings: list) -> None:
         """Populate the history QListWidget from a list of RecordingMeta.
 
@@ -6782,33 +6826,9 @@ class FloatingSettingsPanel(QWidget):
         self._hovered_history_row = -1
 
         for meta in recordings:
-            display_date = meta.recording_time
-            if display_date:
-                try:
-                    from datetime import datetime
-                    dt = datetime.fromisoformat(display_date)
-                    display_date = dt.strftime("%Y-%m-%d %H:%M")
-                except (ValueError, TypeError):
-                    pass
-
-            # If the recording has been renamed (stem is not the standard
-            # datetime format), show the custom name alongside the date.
-            stem = meta.path.stem
-            _datetime_stem = re.match(
-                r"recording-\d{4}-\d{2}-\d{2}-\d{6}$", stem,
+            display_text, is_italic = self._build_history_display_text(
+                meta, return_italic=True,
             )
-            if not _datetime_stem and stem:
-                display_label = f"{stem} ({display_date})"
-            else:
-                display_label = display_date
-
-            if meta.word_count == 0:
-                display_text = f"{display_label} | (Empty recording)"
-            else:
-                display_text = (
-                    f"{display_label} | {meta.word_count} words"
-                    f" | {meta.speaker_count} speakers"
-                )
 
             path_str = str(meta.path)
             item = QListWidgetItem("")  # Text rendered by _HistoryRowWidget; empty here to avoid double-render shadow
@@ -6822,6 +6842,7 @@ class FloatingSettingsPanel(QWidget):
                 panel=self,
                 item=item,
                 parent=self._history_list.viewport(),
+                italic=is_italic,
             )
             self._history_list.setItemWidget(item, row_widget)
             row_index = self._history_list.row(item)
