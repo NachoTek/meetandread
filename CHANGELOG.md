@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] — 2026-05-26
+
+### Added
+- **Resizable Settings Panel** — drag any edge or corner to resize; proper cursor changes (horizontal, vertical, diagonal) detected via QApplication-level eventFilter
+- **Resizable CC Overlay** — same edge-resize behavior ported to the closed-captioning panel
+- **Scrollable Settings Tabs** — each tab page wrapped in QScrollArea for overflow safety; content scrolls instead of being clipped
+- **Panel Corner Styling** — bottom-right corner is square (flush with QSizeGrip), all other corners rounded
+
+### Fixed
+- **File deletion during active playback** — Windows file handles held by QMediaPlayer blocked deletion; added `release_source()` to clear the media source before file removal
+- **Duplicate mouse event handlers** — edge-resize and panel-drag handlers were defined in separate locations, with drag shadowing resize; merged into unified handlers that prioritize edge-resize then fall back to drag
+- **Edge-resize cursor flickering** — replaced per-widget enterEvent cursor detection with QApplication eventFilter for reliable cursor updates on Windows
+- **Corner overhang on both panels** — resize grip protruded past the panel border; fixed corner geometry calculation
+
 ## [0.14.0] — 2026-05-23
 
 ### Added
@@ -161,6 +175,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD** — GitHub Actions test workflow (Windows, Python 3.10) and release workflow (PyInstaller build + GitHub Release)
 - **PyInstaller Build** — onedir build with runtime hook, explicit DLL collection for 5 native dependency groups, startup DLL guard
 
+[0.16.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.16.0
+[0.14.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.14.0
 [0.9.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.9.0
 [0.8.1]: https://github.com/NachoTek/meetandread/releases/tag/v0.8.1
 [0.8.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.8.0

@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%2011-blue?logo=windows11" alt="Platform">
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License">
-  <img src="https://img.shields.io/badge/status-v0.6.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/status-v0.16.0-orange" alt="Version">
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@ MeetAndRead is a compact, always-on-top desktop widget that records and transcri
 The widget sits on your desktop like a record button — click to start, click to stop. A live closed-captioning overlay shows what's being said as it happens. When you stop recording, a stronger model runs post-processing for higher accuracy, and the final transcript is saved to disk.
 
 <p align="center">
-  <img src="docs/assets/screenshot-widget.png" alt="MeetAndRead Widget" width="400">
+  <img src="docs/assets/screenshot.png" alt="MeetAndRead Widget" width="400">
 </p>
 
 ---
@@ -60,14 +60,17 @@ The widget sits on your desktop like a record button — click to start, click t
 ### 🎛️ Polished Desktop Widget
 - **Aetheric Glass design** — translucent, always-on-top floating widget
 - **Drag & dock** — move anywhere on screen, snaps to desktop edges
+- **Resizable panels** — edge-drag resize for Settings and CC panels with proper cursors on all edges
+- **Scrollable settings** — each settings tab scrolls independently for overflow safety
 - **System tray** — minimize to tray, runs quietly in the background
 - **Audio source lobes** — toggle mic and system audio with overlapping buttons
 
 ### ⚙️ Settings & Management
 - **Model selection** — choose real-time and post-process models independently
 - **Benchmark history** — see WER and speed for each model on your hardware
-- **Recording management** — browse, review, and delete past recordings
+- **Recording management** — browse, review, rename, and delete past recordings
 - **Transcript scrub** — re-transcribe with a stronger model and compare results
+- **Startup cleanup** — orphaned files from prior sessions cleaned automatically on launch
 
 ### 🏗️ Production Ready
 - **Portable build** — PyInstaller onedir, no Python needed to run
@@ -82,7 +85,7 @@ The widget sits on your desktop like a record button — click to start, click t
 
 Download the latest zip from [GitHub Releases](https://github.com/NachoTek/meetandread/releases):
 
-1. Download `meetandread-v0.6.0.zip`
+1. Download `meetandread-v0.16.0.zip`
 2. Extract anywhere
 3. Run `meetandread.exe`
 
