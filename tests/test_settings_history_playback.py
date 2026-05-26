@@ -624,14 +624,14 @@ class TestPlaybackNegativeCases:
         panel.hide_panel()
         qapp.processEvents()
 
-        panel._playback_helper.stop.assert_called()
+        panel._playback_helper.release_source.assert_called()
 
     def test_stop_on_nav_away_from_history(self, settings_panel_on_history, qapp):
         panel = settings_panel_on_history
         panel._on_nav_clicked(FloatingSettingsPanel._NAV_SETTINGS)
         qapp.processEvents()
 
-        panel._playback_helper.stop.assert_called()
+        panel._playback_helper.release_source.assert_called()
 
     def test_stop_on_delete_recording(self, settings_panel_on_history, qapp, tmp_path):
         panel = settings_panel_on_history
@@ -645,7 +645,7 @@ class TestPlaybackNegativeCases:
         panel._stop_playback()
         panel._sync_playback_controls()
 
-        panel._playback_helper.stop.assert_called()
+        panel._playback_helper.release_source.assert_called()
 
 
 # ---------------------------------------------------------------------------

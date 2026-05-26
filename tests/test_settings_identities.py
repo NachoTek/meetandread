@@ -825,10 +825,11 @@ class TestIdentitiesStructure:
     """Verify Identities page widgets exist with correct object names."""
 
     def test_identities_page_object_name(self, settings_panel):
-        page = settings_panel._content_stack.widget(
+        scroll_area = settings_panel._content_stack.widget(
             FloatingSettingsPanel._NAV_IDENTITIES
         )
-        assert page is not None
+        assert scroll_area is not None
+        page = scroll_area.widget() if hasattr(scroll_area, 'widget') else scroll_area
         assert page.objectName() == "AethericIdentitiesPage"
 
     def test_identities_splitter_object_name(self, settings_panel):
@@ -859,8 +860,9 @@ class TestIdentitiesStructure:
         assert settings_panel._identity_delete_btn.property("action") == "delete"
 
     def test_identities_page_is_stack_index_3(self, settings_panel):
-        page = settings_panel._content_stack.widget(3)
-        assert page is not None
+        scroll_area = settings_panel._content_stack.widget(3)
+        assert scroll_area is not None
+        page = scroll_area.widget() if hasattr(scroll_area, 'widget') else scroll_area
         assert page.objectName() == "AethericIdentitiesPage"
 
     def test_splitter_is_vertical(self, settings_panel):
@@ -1222,8 +1224,9 @@ class TestHistoryUnchangedByIdentities:
 
     def test_history_page_is_still_index_2(self, settings_panel):
         assert FloatingSettingsPanel._NAV_HISTORY == 2
-        page = settings_panel._content_stack.widget(2)
-        assert page is not None
+        scroll_area = settings_panel._content_stack.widget(2)
+        assert scroll_area is not None
+        page = scroll_area.widget() if hasattr(scroll_area, 'widget') else scroll_area
         assert page.objectName() == "AethericHistoryPage"
 
     def test_history_list_object_name_unchanged(self, settings_panel):
