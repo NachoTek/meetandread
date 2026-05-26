@@ -131,8 +131,10 @@ class TestSettingsHistoryStructure:
     """Verify History page widgets exist with correct object names."""
 
     def test_history_page_object_name(self, settings_panel):
-        page = settings_panel._content_stack.widget(FloatingSettingsPanel._NAV_HISTORY)
-        assert page is not None
+        from PyQt6.QtWidgets import QScrollArea
+        stack_page = settings_panel._content_stack.widget(FloatingSettingsPanel._NAV_HISTORY)
+        assert stack_page is not None
+        page = stack_page.widget() if isinstance(stack_page, QScrollArea) else stack_page
         assert page.objectName() == "AethericHistoryPage"
 
     def test_history_splitter_object_name(self, settings_panel):
@@ -174,9 +176,11 @@ class TestSettingsHistoryStructure:
         assert row._delete_btn.property("action") == "delete"
 
     def test_history_page_is_stack_index_2(self, settings_panel):
+        from PyQt6.QtWidgets import QScrollArea
         assert settings_panel._NAV_HISTORY == 2
-        page = settings_panel._content_stack.widget(2)
-        assert page is not None
+        stack_page = settings_panel._content_stack.widget(2)
+        assert stack_page is not None
+        page = stack_page.widget() if isinstance(stack_page, QScrollArea) else stack_page
         assert page.objectName() == "AethericHistoryPage"
 
     def test_splitter_is_vertical(self, settings_panel):
@@ -1103,8 +1107,10 @@ class TestStalePlaceholderAbsence:
 
     def test_history_page_is_real_widget(self, settings_panel):
         """History page is a real QWidget, not a placeholder."""
-        page = settings_panel._content_stack.widget(FloatingSettingsPanel._NAV_HISTORY)
-        assert page is not None
+        from PyQt6.QtWidgets import QScrollArea
+        stack_page = settings_panel._content_stack.widget(FloatingSettingsPanel._NAV_HISTORY)
+        assert stack_page is not None
+        page = stack_page.widget() if isinstance(stack_page, QScrollArea) else stack_page
         assert page.objectName() == "AethericHistoryPage"
         # It must have child widgets (splitter, list, viewer)
         assert settings_panel._history_list is not None

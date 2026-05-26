@@ -1632,19 +1632,20 @@ class TestBottomRightCornerRect:
         assert r.height() == 12
 
     def test_corner_rect_anchored_bottom_right(self, cc_panel):
-        """Corner rect bottom-right matches panel pixel boundary (inclusive)."""
+        """Corner rect aligns with the drawRoundedRect inset boundary."""
         r = cc_panel._bottom_right_corner_rect()
-        # QRect right() is inclusive: x + width - 1 == widget_width - 1
-        assert r.right() + 1 == cc_panel.width()
-        assert r.bottom() + 1 == cc_panel.height()
+        # QRect right() is inclusive.  The corner rect is inset by 1px to
+        # match drawRoundedRect(self.rect().adjusted(1,1,-1,-1)).
+        assert r.right() + 1 == cc_panel.width() - 1
+        assert r.bottom() + 1 == cc_panel.height() - 1
 
     def test_corner_rect_after_resize_larger(self, cc_panel, qapp):
         """Corner rect stays anchored after resize to a larger size."""
         cc_panel.resize(700, 300)
         qapp.processEvents()
         r = cc_panel._bottom_right_corner_rect()
-        assert r.right() + 1 == cc_panel.width()
-        assert r.bottom() + 1 == cc_panel.height()
+        assert r.right() + 1 == cc_panel.width() - 1
+        assert r.bottom() + 1 == cc_panel.height() - 1
         assert r.width() == 12
         assert r.height() == 12
 
@@ -1712,6 +1713,6 @@ class TestPaintEventSquareCorner:
             assert grip.x() == cc_panel.width() - grip.width(), f"Grip x wrong at {w}x{h}"
             assert grip.y() == cc_panel.height() - grip.height(), f"Grip y wrong at {w}x{h}"
             corner = cc_panel._bottom_right_corner_rect()
-            assert corner.right() + 1 == cc_panel.width()
-            assert corner.bottom() + 1 == cc_panel.height()
+            assert corner.right() + 1 == cc_panel.width() - 1
+            assert corner.bottom() + 1 == cc_panel.height() - 1
 

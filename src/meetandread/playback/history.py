@@ -218,6 +218,18 @@ class HistoryPlaybackController:
         logger.info("stop: stem=%s", self._stem_or_none())
         self._player.stop()
 
+    def release_source(self) -> None:
+        """Stop playback and clear the media source to release file handles.
+
+        On Windows, ``QMediaPlayer.stop()`` does not release the file handle.
+        This method clears the source URL so the OS closes the handle, which
+        is required before file deletion can succeed.
+        """
+        logger.info("release_source: stem=%s", self._stem_or_none())
+        self._player.stop()
+        self._player.setSource(QUrl())
+        self._reset_state()
+
     def set_rate(self, rate: float) -> None:
         """Set the playback rate, clamped to [0.25, 2.0].
 

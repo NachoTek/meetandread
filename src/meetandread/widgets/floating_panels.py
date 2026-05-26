@@ -2916,31 +2916,36 @@ class CCOverlayPanel(QWidget):
     def _bottom_right_corner_rect(self) -> QRect:
         """Return the QRect covering the bottom-right corner that should be square.
 
-        The rect spans from (width - radius, height - radius) to (width, height)
-        so that when filled with the panel background color, it visually squares
-        the bottom-right corner while all other corners remain rounded.
+        The rect is inset by 1px to match the drawRoundedRect bounds
+        (self.rect().adjusted(1, 1, -1, -1)), so the corner fill aligns
+        with the border stroke instead of overhanging it.
         """
         r = 12  # corner radius, matching drawRoundedRect
         w, h = self.width(), self.height()
-        # Guard: if the widget is smaller than the radius, return empty
-        if w <= r or h <= r:
+        # Match the 1px inset from drawRoundedRect
+        inset = 1
+        if w <= r + inset or h <= r + inset:
             return QRect(w, h, 0, 0)
-        return QRect(w - r, h - r, r, r)
+        return QRect(w - r - inset, h - r - inset, r, r)
 
     def paintEvent(self, event) -> None:
         from PyQt6.QtGui import QPainter, QColor, QPen
+        from meetandread.widgets.theme import AETHERIC_CC_BG
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # Semi-transparent dark background
-        bg = QColor(30, 29, 30, 179)  # 70% opacity
+        # Semi-transparent dark background — use theme constant
+        bg = QColor(AETHERIC_CC_BG)
+        border_pen = QPen(QColor(255, 255, 255, 30), 1)
+        rounded_rect = self.rect().adjusted(1, 1, -1, -1)
         painter.setBrush(bg)
-        painter.setPen(QPen(QColor(255, 255, 255, 30), 1))
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 12, 12)
+        painter.setPen(border_pen)
+        painter.drawRoundedRect(rounded_rect, 12, 12)
         # Square the bottom-right corner by filling the corner region
-        # with the same background color (no rounded clip there).
+        # with the same background color.  Use the border pen so the
+        # corner edge is consistent with the rounded rect stroke.
         corner = self._bottom_right_corner_rect()
         if corner.isValid():
-            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setPen(border_pen)
             painter.setBrush(bg)
             painter.drawRect(corner)
         painter.end()
@@ -2955,6 +2960,11 @@ class CCOverlayPanel(QWidget):
         Corners are checked before edges.  *pos* is in widget-local
         coordinates.  Returns one of: 'top-left', 'top-right',
         'bottom-left', 'bottom-right', 'left', 'right', 'top', 'bottom'.
+
+        The bottom-right corner uses an expanded zone matching the
+        QSizeGrip (16×16) so that clicks anywhere on the grip always
+        register as a diagonal corner resize rather than a single-axis
+        edge resize.
         """
         t = self._resize_edge_threshold
         w, h = self.width(), self.height()
@@ -2964,14 +2974,20 @@ class CCOverlayPanel(QWidget):
         near_top = pos.y() <= t
         near_bottom = pos.y() >= h - t
 
-        # Corners first
+        # Bottom-right corner: expanded zone to cover the QSizeGrip.
+        # The grip is 16×16, positioned at (w - 16, h - 16).  Any
+        # click within this area is always a diagonal resize.
+        grip_size = 16
+        in_grip = (pos.x() >= w - grip_size and pos.y() >= h - grip_size)
+
+        # Corners first (grip zone takes priority for bottom-right)
         if near_top and near_left:
             return "top-left"
         if near_top and near_right:
             return "top-right"
         if near_bottom and near_left:
             return "bottom-left"
-        if near_bottom and near_right:
+        if (near_bottom and near_right) or in_grip:
             return "bottom-right"
         # Edges
         if near_left:
@@ -4776,9 +4792,14 @@ class FloatingSettingsPanel(QWidget):
         # Enable mouse tracking so hover-only moves update cursor shape
         self.setMouseTracking(True)
 
-        # Install self as event filter to intercept edge-resize mouse events
-        # before they reach child widgets (sidebar, content stack, etc.)
-        self.installEventFilter(self)
+        # Install self as event filter on QApplication to intercept edge-resize
+        # mouse events even when child widgets (sidebar, content stack) consume
+        # them.  Using qApp-level filter with descendant check ensures cursor
+        # updates work when hovering over any child widget near the panel edges.
+        from PyQt6.QtWidgets import QApplication
+        _app = QApplication.instance()
+        if _app is not None:
+            _app.installEventFilter(self)
 
         # Apply initial theme to all widgets
         self._apply_theme()
@@ -4796,7 +4817,6 @@ class FloatingSettingsPanel(QWidget):
         self._restore_geometry()
 
         logger.debug("FloatingSettingsPanel created")
-
 
     def _wrap_settings_page_for_scroll(self, page: QWidget, page_name: str) -> QScrollArea:
         """Wrap a settings tab *page* in a scroll area for overflow safety.
@@ -4873,6 +4893,11 @@ class FloatingSettingsPanel(QWidget):
         Corners are checked before edges.  *pos* is in widget-local
         coordinates.  Returns one of: 'top-left', 'top-right',
         'bottom-left', 'bottom-right', 'left', 'right', 'top', 'bottom'.
+
+        The bottom-right corner uses an expanded zone matching the
+        QSizeGrip (16×16) so that clicks anywhere on the grip always
+        register as a diagonal corner resize rather than a single-axis
+        edge resize.
         """
         t = self._resize_edge_threshold
         w, h = self.width(), self.height()
@@ -4882,14 +4907,20 @@ class FloatingSettingsPanel(QWidget):
         near_top = pos.y() <= t
         near_bottom = pos.y() >= h - t
 
-        # Corners first
+        # Bottom-right corner: expanded zone to cover the QSizeGrip.
+        # The grip is 16×16, positioned at (w - 16, h - 16).  Any
+        # click within this area is always a diagonal resize.
+        grip_size = 16
+        in_grip = (pos.x() >= w - grip_size and pos.y() >= h - grip_size)
+
+        # Corners first (grip zone takes priority for bottom-right)
         if near_top and near_left:
             return "top-left"
         if near_top and near_right:
             return "top-right"
         if near_bottom and near_left:
             return "bottom-left"
-        if near_bottom and near_right:
+        if (near_bottom and near_right) or in_grip:
             return "bottom-right"
         # Edges
         if near_left:
@@ -5256,8 +5287,9 @@ class FloatingSettingsPanel(QWidget):
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Start edge/corner resize on left-button press near an edge."""
+        """Start edge/corner resize or panel drag on left-button press."""
         if event.button() == Qt.MouseButton.LeftButton:
+            # Priority 1: edge/corner resize
             edge = self._get_edge_at_cursor(event.pos())
             if edge is not None:
                 self._edge_resizing = True
@@ -5265,26 +5297,52 @@ class FloatingSettingsPanel(QWidget):
                 self._resize_start_pos = event.globalPosition().toPoint()
                 self._resize_start_geometry = self.geometry()
                 return
+            # Priority 2: panel drag (skip if over interactive child)
+            child = self.childAt(event.position().toPoint())
+            if child is not None:
+                w = child
+                while w is not None and w is not self:
+                    if isinstance(w, (QPushButton, QSlider, QComboBox)):
+                        super().mousePressEvent(event)
+                        return
+                    w = w.parent() if hasattr(w, 'parent') else None
+            self._dragging = True
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Handle edge resize or update cursor on hover."""
+        """Handle edge resize, panel drag, or cursor hover update."""
         if self._edge_resizing:
             self._handle_edge_resize(event)
+            return
+        if self._dragging and self._drag_pos is not None:
+            raw_pos = event.globalPosition().toPoint() - self._drag_pos
+            self.move(clamp_to_screen(self, raw_pos))
+            event.accept()
             return
         # Hover-only cursor update
         edge = self._get_edge_at_cursor(event.pos())
         self._update_cursor_for_resize_edge(edge)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """Clear edge-resize state on button release."""
-        if event.button() == Qt.MouseButton.LeftButton and self._edge_resizing:
-            self._edge_resizing = False
-            self._resize_edge = None
-            self._resize_start_pos = None
-            self._resize_start_geometry = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            return
+        """End edge-resize or panel drag on button release."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._edge_resizing:
+                self._edge_resizing = False
+                self._resize_edge = None
+                self._resize_start_pos = None
+                self._resize_start_geometry = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                return
+            if self._dragging:
+                self._dragging = False
+                self._drag_pos = None
+                self.setCursor(Qt.CursorShape.ArrowCursor)
+                event.accept()
+                return
         super().mouseReleaseEvent(event)
 
     def leaveEvent(self, event) -> None:
@@ -7099,40 +7157,55 @@ class FloatingSettingsPanel(QWidget):
         Edge-resize handling intercepts mouse events before child widgets
         when the cursor is near a panel edge/corner. Volume popup and
         history viewport tracking are preserved from prior implementations.
+
+        Because this filter is installed on QApplication (not just self),
+        the edge-resize section guards on ``obj`` being self or a descendant
+        of self so that mouse events in unrelated widgets are ignored.
         """
         from PyQt6.QtCore import QEvent
         etype = event.type()
 
         # --- Edge-resize intercept (highest priority) ---
-        if etype == QEvent.Type.MouseButtonPress:
-            if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton:
+        # Only process if obj is this panel or a descendant
+        is_descendant = False
+        if obj is self:
+            is_descendant = True
+        elif hasattr(obj, 'parent'):
+            w = obj
+            while w is not None and w is not self:
+                w = w.parent() if hasattr(w, 'parent') and callable(w.parent) else None
+            is_descendant = w is self
+
+        if is_descendant:
+            if etype == QEvent.Type.MouseButtonPress:
+                if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton:
+                    local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                    edge = self._get_edge_at_cursor(local_pos)
+                    if edge is not None:
+                        self._edge_resizing = True
+                        self._resize_edge = edge
+                        self._resize_start_pos = event.globalPosition().toPoint()
+                        self._resize_start_geometry = self.geometry()
+                        return True  # consumed
+            elif etype == QEvent.Type.MouseMove:
+                if self._edge_resizing:
+                    self._handle_edge_resize(event)
+                    return True  # consumed
+                # Hover cursor update
                 local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
                 edge = self._get_edge_at_cursor(local_pos)
-                if edge is not None:
-                    self._edge_resizing = True
-                    self._resize_edge = edge
-                    self._resize_start_pos = event.globalPosition().toPoint()
-                    self._resize_start_geometry = self.geometry()
+                self._update_cursor_for_resize_edge(edge)
+            elif etype == QEvent.Type.MouseButtonRelease:
+                if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton and self._edge_resizing:
+                    self._edge_resizing = False
+                    self._resize_edge = None
+                    self._resize_start_pos = None
+                    self._resize_start_geometry = None
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
                     return True  # consumed
-        elif etype == QEvent.Type.MouseMove:
-            if self._edge_resizing:
-                self._handle_edge_resize(event)
-                return True  # consumed
-            # Hover cursor update
-            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
-            edge = self._get_edge_at_cursor(local_pos)
-            self._update_cursor_for_resize_edge(edge)
-        elif etype == QEvent.Type.MouseButtonRelease:
-            if hasattr(event, 'button') and event.button() == Qt.MouseButton.LeftButton and self._edge_resizing:
-                self._edge_resizing = False
-                self._resize_edge = None
-                self._resize_start_pos = None
-                self._resize_start_geometry = None
-                self.setCursor(Qt.CursorShape.ArrowCursor)
-                return True  # consumed
-        elif etype == QEvent.Type.Leave:
-            if not self._edge_resizing:
-                self.setCursor(Qt.CursorShape.ArrowCursor)
+            elif etype == QEvent.Type.Leave:
+                if not self._edge_resizing:
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
 
         # --- Volume popup close tracking ---
         if obj is self._volume_popup and etype == QEvent.Type.Hide:
@@ -7399,9 +7472,14 @@ class FloatingSettingsPanel(QWidget):
         pass
 
     def _stop_playback(self) -> None:
-        """Stop playback and reset helper. Called on panel hide/close."""
+        """Stop playback, clear media source, and reset highlight state.
+
+        Uses release_source() instead of plain stop() so that the
+        QMediaPlayer releases the Windows file handle, allowing
+        subsequent file deletion to succeed (R027).
+        """
         if self._playback_helper is not None:
-            self._playback_helper.stop()
+            self._playback_helper.release_source()
         self._reset_highlight_state()
 
     # -- Keyboard shortcuts for History playback -----------------------------
@@ -8908,62 +8986,14 @@ class FloatingSettingsPanel(QWidget):
             )
 
     def closeEvent(self, event):
-        """Handle close event."""
+        """Handle close event — clean up qApp event filter."""
+        from PyQt6.QtWidgets import QApplication
+        _app = QApplication.instance()
+        if _app is not None:
+            _app.removeEventFilter(self)
         self.save_geometry()
         self.closed.emit()
         event.accept()
-
-    # ------------------------------------------------------------------
-    # Drag handlers — entire panel is draggable except interactive children
-    # ------------------------------------------------------------------
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        """Start drag on left-button press (anywhere except interactive children)."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            child = self.childAt(event.position().toPoint())
-            pt = event.position().toPoint()
-            logger.debug(
-                "[MOUSE-PRESS] panel mousePressEvent pos=(%d,%d) child=%s",
-                pt.x(), pt.y(),
-                type(child).__name__ if child else None,
-            )
-            if child is not None:
-                w = child
-                while w is not None and w is not self:
-                    if isinstance(w, (QPushButton, QSlider, QComboBox)):
-                        logger.debug(
-                            "[MOUSE-PRESS] -> interactive child %s, passing to super",
-                            type(w).__name__,
-                        )
-                        super().mousePressEvent(event)
-                        return
-                    w = w.parent() if hasattr(w, 'parent') else None
-            logger.debug("[MOUSE-PRESS] -> starting panel drag")
-            self._dragging = True
-            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        """Move panel with mouse during drag, clamped to screen boundaries."""
-        if self._dragging and self._drag_pos is not None:
-            raw_pos = event.globalPosition().toPoint() - self._drag_pos
-            self.move(clamp_to_screen(self, raw_pos))
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        """End drag on left-button release."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._dragging = False
-            self._drag_pos = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-            event.accept()
-        else:
-            super().mouseReleaseEvent(event)
 
 
 if __name__ == "__main__":
