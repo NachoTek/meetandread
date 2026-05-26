@@ -34,7 +34,7 @@ MeetAndRead is a compact, always-on-top desktop widget that records and transcri
 The widget sits on your desktop like a record button — click to start, click to stop. A live closed-captioning overlay shows what's being said as it happens. When you stop recording, a stronger model runs post-processing for higher accuracy, and the final transcript is saved to disk.
 
 <p align="center">
-  <img src="docs/assets/screenshot.png" alt="MeetAndRead Widget" width="400">
+  <img src="docs/assets/screenshot-widget.png" alt="MeetAndRead Widget" width="400">
 </p>
 
 ---
