@@ -59,6 +59,13 @@ binaries += _collect(
     'PyQt6/Qt6/plugins/platforms',
 )
 
+# 6. _soundfile_data — libsndfile DLL needed by soundfile for WAV I/O
+#    (used by Diarizer._read_wav and wav_finalize)
+binaries += _collect(
+    os.path.join('_soundfile_data', '*.dll'),
+    '_soundfile_data',
+)
+
 # --- Hidden imports ---------------------------------------------------------
 #
 # Packages that PyInstaller cannot discover through static import analysis
@@ -75,12 +82,28 @@ hiddenimports = [
     'meetandread.hardware',
     'meetandread.hardware.detector',
     'meetandread.hardware.recommender',
+    # Speaker identification pipeline
+    'meetandread.speaker',
+    'meetandread.speaker.diarizer',
+    'meetandread.speaker.model_downloader',
+    'meetandread.speaker.signatures',
+    'meetandread.speaker.models',
+    'meetandread.speaker.identity_management',
+    # Transcription pipeline
+    'meetandread.transcription',
+    'meetandread.transcription.post_processor',
+    'meetandread.transcription.transcript_store',
+    'meetandread.transcription.transcript_scanner',
+    'meetandread.transcription.scrub',
     # Native packages
     'pywhispercpp',
     'pywhispercpp.model',
     'sherpa_onnx',
+    'sherpa_onnx.lib',
     'sounddevice',
     'pyaudiowpatch',
+    'soundfile',
+    'soxr',
     # Qt
     'PyQt6.QtCore',
     'PyQt6.QtWidgets',
