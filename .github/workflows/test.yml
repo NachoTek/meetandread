@@ -19,4 +19,12 @@ jobs:
 
       - run: pip install -e ".[dev]"
 
-      - run: python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt --ignore=tests/test_settings_history.py
+      - name: Run tests
+        run: |
+          $output = python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt --ignore=tests/test_settings_history.py 2>&1
+          $output | Out-Host
+          if ($output -match "(\d+) failed") {
+            Write-Error "Test failures detected"
+            exit 1
+          }
+          Write-Host "All tests passed"
