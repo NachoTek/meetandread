@@ -426,7 +426,9 @@ class PostProcessingQueue:
             self._update_progress(job, 10)
             
             # Load or get engine
+            logger.info("Job %s: loading engine for model %s", job.job_id, job.model_size)
             engine = self._get_or_create_engine(job.model_size)
+            logger.info("Job %s: engine loaded", job.job_id)
             self._update_progress(job, 15)
             
             # ---- Checkpoint: not cancelled ----
@@ -555,7 +557,18 @@ class PostProcessingQueue:
         except Exception as e:
             job.status = PostProcessStatus.FAILED
             job.error = str(e)
-            logger.error("Job %s failed: %s", job.job_id, e)
+            logger.error(
+                "Job %s failed: %s", job.job_id, e, exc_info=True,
+            )
+            # Notify completion even on failure so UI can update
+            if self._on_complete:
+                try:
+                    self._on_complete(job.job_id, {
+                        "error": str(e),
+                        "status": "failed",
+                    })
+                except Exception:
+                    pass
     
     def _get_or_create_engine(self, model_size: str) -> WhisperTranscriptionEngine:
         """Get cached engine or create new one.

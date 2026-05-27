@@ -590,7 +590,7 @@ class RecordingController:
             # in its own worker thread — the controller goes to IDLE immediately.
             if self._post_processor and self._last_wav_path and self._transcript_store:
                 from meetandread.audio.storage.paths import get_transcripts_dir
-                print("DEBUG: Scheduling post-processing job...")
+                logger.info("Scheduling post-processing job for %s", self._last_wav_path.name)
                 job = self._post_processor.schedule_post_process(
                     audio_file=self._last_wav_path,
                     realtime_transcript=self._transcript_store,
@@ -600,6 +600,13 @@ class RecordingController:
                 logger.info(
                     "Post-processing job %s scheduled, controller moving to IDLE",
                     job.job_id,
+                )
+            else:
+                logger.warning(
+                    "Post-processing NOT scheduled: processor=%s, wav=%s, store=%s",
+                    "exists" if self._post_processor else "None",
+                    self._last_wav_path,
+                    "exists" if self._transcript_store else "None",
                 )
             
             # Move to IDLE immediately — post-processing continues in background
@@ -766,16 +773,27 @@ class RecordingController:
         print(f"[{_ts()}] DEBUG: Post-processing job {job_id}: {progress}%")
     
     def _on_post_process_complete_callback(self, job_id: str, result: dict) -> None:
-        """Handle post-processing completion.
+        """Handle post-processing completion (success or failure).
         
         Args:
             job_id: The job identifier
             result: Result dictionary with transcript_path, etc.
+                On failure, contains 'error' and 'status' keys.
         """
-        print(f"[{_ts()}] DEBUG: Post-processing job {job_id} completed!")
-        print(f"[{_ts()}] DEBUG: Post-processed transcript: {result.get('transcript_path')}")
-        print(f"[{_ts()}] DEBUG: Real-time words: {result.get('realtime_word_count')}")
-        print(f"[{_ts()}] DEBUG: Post-processed words: {result.get('word_count')}")
+        is_failure = result.get("status") == "failed"
+        
+        if is_failure:
+            logger.error(
+                "Post-processing job %s FAILED: %s",
+                job_id, result.get("error", "unknown"),
+            )
+        else:
+            logger.info(
+                "Post-processing job %s completed: %s words (realtime: %s)",
+                job_id,
+                result.get("word_count", "?"),
+                result.get("realtime_word_count", "?"),
+            )
         
         # --- Store diarization result from background processing ---
         diarization_result = result.get("diarization_result")
@@ -787,8 +805,9 @@ class RecordingController:
                 getattr(diarization_result, "num_speakers", 0),
             )
 
-        # --- Auto-WER calculation ---
-        self._compute_and_store_wer(result)
+        # --- Auto-WER calculation (skip on failure) ---
+        if not is_failure:
+            self._compute_and_store_wer(result)
 
         if self.on_post_process_complete:
             transcript_path_str = result.get('transcript_path')
@@ -797,7 +816,13 @@ class RecordingController:
                 try:
                     self.on_post_process_complete(job_id, transcript_path)
                 except Exception as e:
-                    print(f"[{_ts()}] ERROR: Post-process complete callback failed: {e}")
+                    logger.error("Post-process complete callback failed: %s", e)
+            elif is_failure:
+                # Still notify UI so it can clear the "(processing speakers...)" indicator
+                try:
+                    self.on_post_process_complete(job_id, None)
+                except Exception as e:
+                    logger.error("Post-process failure callback failed: %s", e)
 
     def _compute_and_store_wer(self, result: dict) -> None:
         """Compute WER between realtime and post-processed transcripts and append to file.

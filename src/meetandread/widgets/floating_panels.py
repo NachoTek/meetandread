@@ -6722,11 +6722,14 @@ class FloatingSettingsPanel(QWidget):
         page is active (even if the panel is hidden behind another window)
         so the data is current when the user returns.
 
+        Also refreshes if the History tab is NOT currently shown, so that
+        the data is ready when the user switches to it later.
+
         If a transcript is currently being viewed, re-renders it so
         speaker labels from post-processing appear immediately.
         """
+        self._refresh_history()
         if self._content_stack.currentIndex() == self._NAV_HISTORY:
-            self._refresh_history()
             # Re-render the currently-viewed transcript (speaker labels
             # may have been added by post-processing diarization).
             if self._current_history_md_path:

@@ -989,12 +989,19 @@ to avoid clipping issues and enable proper text rendering.
         self.history_data_changed.emit()
 
     def _on_post_process_complete(self, job_id, transcript_path):
-        """Handle post-processing completion.
+        """Handle post-processing completion (success or failure).
 
         Updates WER display in settings panel.  CC overlay lifecycle
         is handled by STOPPING/IDLE delayed hide.
+
+        Args:
+            job_id: Post-processing job identifier.
+            transcript_path: Path to the enhanced transcript, or None on failure.
         """
-        logging.info("Post-processing complete! Job: %s, transcript: %s", job_id, transcript_path)
+        if transcript_path:
+            logging.info("Post-processing complete! Job: %s, transcript: %s", job_id, transcript_path)
+        else:
+            logging.warning("Post-processing job %s completed with failure (no transcript)", job_id)
 
         # Update Performance tab WER display (Settings panel)
         if self._floating_settings_panel:
@@ -1002,6 +1009,7 @@ to avoid clipping issues and enable proper text rendering.
             self._floating_settings_panel.update_wer_display(wer)
 
         # Notify that history data changed — post-processing may change word/speaker counts
+        # Always emit, even on failure, so the "(processing speakers...)" indicator clears
         self.history_data_changed.emit()
 
     def _on_frames_dropped(self, count: int) -> None:
