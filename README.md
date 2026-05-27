@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%2011-blue?logo=windows11" alt="Platform">
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License">
-  <img src="https://img.shields.io/badge/status-v0.16.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/status-v0.16.1-orange" alt="Version">
 </p>
 
 <p align="center">
@@ -85,7 +85,7 @@ The widget sits on your desktop like a record button — click to start, click t
 
 Download the latest zip from [GitHub Releases](https://github.com/NachoTek/meetandread/releases):
 
-1. Download `meetandread-v0.16.0.zip`
+1. Download `meetandread-v0.16.1.zip`
 2. Extract anywhere
 3. Run `meetandread.exe`
 

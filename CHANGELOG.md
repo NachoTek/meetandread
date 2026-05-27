@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.1] — 2026-05-27
+
+### Fixed
+- **Speaker identification in release builds** — sherpa-onnx native DLLs (onnxruntime.dll, sherpa-onnx-c-api.dll) could not be found at runtime in PyInstaller bundles because the DLL search path only included `_internal/` root, not `_internal/sherpa_onnx/lib/`. This caused diarization to fail silently with all speaker tags showing as `null` in the transcript output.
+
 ## [0.16.0] — 2026-05-26
 
 ### Added
