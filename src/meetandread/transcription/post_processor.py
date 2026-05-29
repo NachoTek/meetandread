@@ -49,6 +49,8 @@ Usage:
 import logging
 import threading
 import queue
+import json
+import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -91,7 +93,7 @@ class PostProcessJob:
     """
     job_id: str
     audio_file: Path
-    realtime_transcript: TranscriptStore
+    realtime_transcript: Optional[TranscriptStore]
     output_dir: Path
     model_size: str
     status: PostProcessStatus = PostProcessStatus.PENDING
@@ -182,6 +184,11 @@ class PostProcessingQueue:
         # Currently running job (for cancel_current_job)
         self._current_job: Optional[PostProcessJob] = None
         self._current_job_lock = threading.Lock()
+        
+        # Queue persistence
+        from meetandread.audio.storage.paths import get_data_dir
+        self._queue_file = get_data_dir() / "post_processing_queue.json"
+        self._queue_file_lock = threading.Lock()  # serialises read-modify-write
     
     def start(self) -> None:
         """Start the background worker thread."""
@@ -197,6 +204,9 @@ class PostProcessingQueue:
         )
         self._worker_thread.start()
         logger.info("PostProcessingQueue worker started")
+        
+        # Recover any persisted pending jobs
+        self._recover_pending_jobs()
     
     def stop(self) -> None:
         """Stop the background worker thread."""
@@ -251,6 +261,7 @@ class PostProcessingQueue:
             self._jobs[job.job_id] = job
         
         self._job_queue.put(job)
+        self._persist_job(job)
         logger.info(
             "Scheduled post-processing job %s with model %s", job.job_id, model_size
         )
@@ -405,6 +416,13 @@ class PostProcessingQueue:
                 with self._current_job_lock:
                     if self._current_job is job:
                         self._current_job = None
+                # Remove from persistent queue regardless of outcome
+                if job.status in (
+                    PostProcessStatus.COMPLETED,
+                    PostProcessStatus.FAILED,
+                    PostProcessStatus.CANCELLED,
+                ):
+                    self._unpersist_job(job.job_id)
     
     def _process_job(self, job: PostProcessJob) -> None:
         """Process a single post-processing job.
@@ -541,7 +559,10 @@ class PostProcessingQueue:
             job.result = {
                 "transcript_path": str(transcript_path),
                 "word_count": enhanced_store.get_word_count(),
-                "realtime_word_count": job.realtime_transcript.get_word_count(),
+                "realtime_word_count": (
+                    job.realtime_transcript.get_word_count()
+                    if job.realtime_transcript else 0
+                ),
                 "model_used": job.model_size,
                 "diarization_result": diarization_result,
             }
@@ -797,6 +818,10 @@ class PostProcessingQueue:
         Derives the original transcript path from the audio file stem:
         ``{audio_file.stem}.md`` in the same output directory.
 
+        Preserves the original ``recording_start_time`` from the existing
+        transcript so the history list shows the real recording date instead
+        of the post-processing completion time.
+
         Args:
             job: The job being processed
             store: The transcript store to save
@@ -809,10 +834,12 @@ class PostProcessingQueue:
         base_name = job.audio_file.stem
         transcript_path = job.output_dir / f"{base_name}.md"
 
+        # Preserve original recording_start_time from the existing transcript
         if transcript_path.exists():
             logger.debug(
                 "Overwriting existing transcript in-place: %s", transcript_path
             )
+            self._preserve_recording_time(transcript_path, store)
         else:
             logger.debug(
                 "Creating new transcript (no prior .md found): %s", transcript_path
@@ -824,6 +851,36 @@ class PostProcessingQueue:
             "Saved post-processed transcript to %s", transcript_path
         )
         return transcript_path
+
+    @staticmethod
+    def _preserve_recording_time(
+        original_path: Path, store: TranscriptStore
+    ) -> None:
+        """Read recording_start_time from an existing transcript and set it
+        on the new store so the original recording date survives overwrites.
+        """
+        from datetime import datetime as dt
+
+        try:
+            content = original_path.read_text(encoding="utf-8")
+            marker = "\n---\n\n<!-- METADATA: "
+            idx = content.find(marker)
+            if idx < 0:
+                return
+            metadata_text = content[idx + len(marker):]
+            if not metadata_text.strip().endswith(" -->"):
+                return
+            metadata_text = metadata_text.strip()[: -len(" -->")]
+
+            import json
+            data = json.loads(metadata_text)
+            original_time = data.get("recording_start_time")
+            if original_time:
+                store.set_recording_start_time(
+                    dt.fromisoformat(original_time)
+                )
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
     
     def _update_progress(self, job: PostProcessJob, progress: int) -> None:
         """Update job progress and notify.
@@ -849,3 +906,123 @@ class PostProcessingQueue:
             ]
             for job_id in to_remove:
                 del self._jobs[job_id]
+    
+    # ------------------------------------------------------------------
+    # Queue persistence
+    # ------------------------------------------------------------------
+    
+    def _persist_job(self, job: PostProcessJob) -> None:
+        """Append a job to the persistent queue file.
+        
+        Serialised by _queue_file_lock so concurrent persist/unpersist
+        cannot lose entries via read-modify-write races.
+        """
+        try:
+            with self._queue_file_lock:
+                entries = self._read_queue_file()
+                
+                # Append new entry (avoid duplicates)
+                if not any(e.get("job_id") == job.job_id for e in entries):
+                    entries.append({
+                        "job_id": job.job_id,
+                        "audio_file": str(job.audio_file),
+                        "output_dir": str(job.output_dir),
+                        "model_size": job.model_size,
+                        "scheduled_at": time.time(),
+                    })
+                
+                self._write_queue_file(entries)
+        except Exception as exc:
+            logger.warning("Failed to persist job %s: %s", job.job_id, exc)
+    
+    def _unpersist_job(self, job_id: str) -> None:
+        """Remove a completed/failed/cancelled job from the queue file.
+        
+        Serialised by _queue_file_lock so concurrent persist/unpersist
+        cannot lose entries via read-modify-write races.
+        """
+        try:
+            with self._queue_file_lock:
+                entries = self._read_queue_file()
+                filtered = [e for e in entries if e.get("job_id") != job_id]
+                self._write_queue_file(filtered)
+        except Exception as exc:
+            logger.warning("Failed to unpersist job %s: %s", job_id, exc)
+    
+    def _read_queue_file(self) -> List[dict]:
+        """Read the queue file, returning a list of job entries."""
+        if not self._queue_file.exists():
+            return []
+        try:
+            data = json.loads(self._queue_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except (json.JSONDecodeError, OSError):
+            pass
+        return []
+    
+    def _write_queue_file(self, entries: List[dict]) -> None:
+        """Write entries to the queue file atomically."""
+        self._queue_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._queue_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+        tmp.replace(self._queue_file)
+    
+    def _recover_pending_jobs(self) -> None:
+        """Re-queue any jobs found in the persistent queue file.
+        
+        Called on startup. Jobs whose audio files no longer exist are
+        silently dropped.  The realtime transcript is not recoverable
+        (it was in-memory), so post-processing creates a fresh one from
+        the stronger-model transcription alone.
+        """
+        entries = self._read_queue_file()
+        if not entries:
+            return
+        
+        recovered = 0
+        dropped = 0
+        for entry in entries:
+            audio_path = Path(entry.get("audio_file", ""))
+            if not audio_path.exists():
+                logger.info(
+                    "Recovery: dropping job %s (audio gone: %s)",
+                    entry.get("job_id"), audio_path,
+                )
+                dropped += 1
+                continue
+            
+            output_dir = Path(entry.get("output_dir", audio_path.parent))
+            model_size = entry.get("model_size", "base")
+            
+            # Create a minimal job without realtime_transcript (will be None)
+            job = PostProcessJob(
+                job_id=entry.get("job_id", ""),
+                audio_file=audio_path,
+                realtime_transcript=None,
+                output_dir=output_dir,
+                model_size=model_size,
+            )
+            
+            with self._jobs_lock:
+                self._jobs[job.job_id] = job
+            self._job_queue.put(job)
+            recovered += 1
+            logger.info(
+                "Recovery: re-queued job %s for %s (model=%s)",
+                job.job_id, audio_path.name, model_size,
+            )
+        
+        if recovered or dropped:
+            # Re-write the file with only the recovered entries so that
+            # if the app crashes before they complete, they're still on disk.
+            # _unpersist_job will remove each entry as it finishes.
+            with self._queue_file_lock:
+                persisted = [
+                    e for e in entries
+                    if Path(e.get("audio_file", "")).exists()
+                ]
+                self._write_queue_file(persisted)
+            logger.info(
+                "Recovery complete: %d re-queued, %d dropped", recovered, dropped,
+            )

@@ -24,6 +24,191 @@ from meetandread.speaker.models import (
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Subprocess diarization — avoids GIL hold by sherpa-onnx
+# ---------------------------------------------------------------------------
+
+_SUBPROCESS_SCRIPT = r'''
+"""Subprocess runner for diarization — avoids GIL hold by sherpa-onnx.
+
+Loads models, runs diarization on a WAV file, writes JSON result to stdout.
+"""
+import json
+import sys
+import os
+import time
+import struct
+import numpy as np
+
+
+def _serialize_result(segments, signatures, duration_seconds, num_speakers):
+    """Convert diarization output to JSON-serializable dict."""
+    sigs_out = {}
+    for label, sig in signatures.items():
+        sigs_out[label] = {
+            "embedding": sig.embedding.tolist() if isinstance(sig.embedding, np.ndarray) else list(sig.embedding),
+            "speaker_label": sig.speaker_label,
+            "num_segments": sig.num_segments,
+        }
+    return {
+        "segments": [{"start": s.start, "end": s.end, "speaker": s.speaker} for s in segments],
+        "signatures": sigs_out,
+        "duration_seconds": duration_seconds,
+        "num_speakers": num_speakers,
+    }
+
+
+def main():
+    wav_path = sys.argv[1]
+    clustering_threshold = float(sys.argv[2])
+    min_duration_on = float(sys.argv[3])
+    min_duration_off = float(sys.argv[4])
+
+    try:
+        import sherpa_onnx
+        from meetandread.speaker.model_downloader import ensure_all_models
+        from meetandread.speaker.diarizer import (
+            Diarizer, SpeakerSegment, VoiceSignature, cleanup_diarization_segments,
+        )
+    except ImportError as e:
+        _write_error(f"Import error: {e}")
+        return
+
+    try:
+        models = ensure_all_models()
+        seg_dir = models["segmentation_dir"]
+        emb_path = models["embedding_model"]
+        segmentation_onnx = seg_dir / "model.onnx"
+
+        config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
+            segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+                pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
+                    model=str(segmentation_onnx),
+                ),
+            ),
+            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                model=str(emb_path),
+            ),
+            clustering=sherpa_onnx.FastClusteringConfig(
+                num_clusters=-1,
+                threshold=clustering_threshold,
+            ),
+            min_duration_on=min_duration_on,
+            min_duration_off=min_duration_off,
+        )
+
+        if not config.validate():
+            _write_error("Diarization config validation failed")
+            return
+
+        sd = sherpa_onnx.OfflineSpeakerDiarization(config)
+        extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+            sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(emb_path))
+        )
+
+        # Read WAV
+        import soundfile as sf
+        audio, sr = sf.read(wav_path, dtype="float32")
+        if audio.ndim > 1:
+            audio = audio[:, 0]
+
+        # Resample if needed
+        if sr != sd.sample_rate:
+            import soxr
+            audio = soxr.resample(audio, sr, sd.sample_rate)
+            sr = sd.sample_rate
+
+        duration = len(audio) / sr
+
+        # Run diarization
+        raw_result = sd.process(audio)
+        sorted_segments = raw_result.sort_by_start_time()
+
+        # Build segments
+        segments = [
+            SpeakerSegment(start=seg.start, end=seg.end, speaker=seg.speaker)
+            for seg in sorted_segments
+        ]
+
+        # Cleanup
+        segments = cleanup_diarization_segments(segments)
+
+        # Extract per-speaker embeddings
+        signatures = _extract_embeddings(extractor, audio, sr, segments)
+
+        result = _serialize_result(segments, signatures, duration, raw_result.num_speakers)
+        _write_result(result)
+
+    except Exception as exc:
+        _write_error(f"Diarization failed: {exc}")
+
+
+def _extract_embeddings(extractor, audio, sample_rate, segments):
+    """Extract per-speaker embeddings (mirrors Diarizer._extract_speaker_embeddings)."""
+    speaker_segments = {}
+    for seg in segments:
+        speaker_segments.setdefault(seg.speaker, []).append(seg)
+
+    from meetandread.speaker.diarizer import VoiceSignature
+    signatures = {}
+
+    for speaker_label, segs in speaker_segments.items():
+        try:
+            chunks = []
+            for seg in segs:
+                start_sample = max(0, min(int(seg.start * sample_rate), len(audio)))
+                end_sample = max(0, min(int(seg.end * sample_rate), len(audio)))
+                if end_sample > start_sample:
+                    chunks.append(audio[start_sample:end_sample])
+            if not chunks:
+                continue
+            combined = np.concatenate(chunks).astype(np.float32)
+            if len(combined) / sample_rate < 1.0:
+                continue
+
+            stream = extractor.create_stream()
+            stream.accept_waveform(sample_rate, combined)
+            stream.input_finished()
+
+            if not extractor.is_ready(stream):
+                padded = np.concatenate([combined, np.zeros(sample_rate, dtype=np.float32)])
+                stream = extractor.create_stream()
+                stream.accept_waveform(sample_rate, padded)
+                stream.input_finished()
+                if not extractor.is_ready(stream):
+                    continue
+
+            embedding = extractor.compute(stream)
+            signatures[speaker_label] = VoiceSignature(
+                embedding=embedding,
+                speaker_label=speaker_label,
+                num_segments=len(segs),
+            )
+        except Exception:
+            pass
+
+    return signatures
+
+
+def _write_result(result):
+    """Write result as length-prefixed JSON to stdout."""
+    data = json.dumps(result).encode("utf-8")
+    sys.stdout.buffer.write(struct.pack("<I", len(data)))
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+
+
+def _write_error(message):
+    """Write error result to stdout."""
+    result = {"error": message, "segments": [], "signatures": {},
+              "duration_seconds": 0.0, "num_speakers": 0}
+    _write_result(result)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+# ---------------------------------------------------------------------------
 # Segment cleanup (post-diarization noise reduction)
 # ---------------------------------------------------------------------------
 
@@ -192,6 +377,121 @@ class Diarizer:
     def warm_up(self) -> None:
         """Pre-load models without running diarization."""
         self._ensure_initialized()
+
+    def diarize_subprocess(self, wav_path: Path | str) -> DiarizationResult:
+        """Run diarization in a subprocess to avoid GIL hold.
+
+        sherpa-onnx's ``OfflineSpeakerDiarization.process()`` holds the
+        Python GIL for the entire computation, which freezes the Qt UI
+        for the full duration (10-30+ seconds for typical meetings).
+        Running in a subprocess gives it a separate GIL so the UI stays
+        responsive.
+
+        Args:
+            wav_path: Path to a 16-bit PCM WAV file.
+
+        Returns:
+            A ``DiarizationResult`` — same as ``diarize()``.
+        """
+        wav_path = Path(wav_path)
+        t0 = time.monotonic()
+
+        try:
+            import subprocess
+            import json
+            import struct
+            import sys
+
+            # Ensure models are downloaded before spawning subprocess
+            self._ensure_initialized()
+
+            # Build the subprocess command
+            script = _SUBPROCESS_SCRIPT
+            args = [
+                sys.executable, "-c", script,
+                str(wav_path),
+                str(self._clustering_threshold),
+                str(self._min_duration_on),
+                str(self._min_duration_off),
+            ]
+
+            logger.info(
+                "Running diarization in subprocess for %s (threshold=%.2f)",
+                wav_path.name, self._clustering_threshold,
+            )
+
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                timeout=300,  # 5 minute max
+            )
+
+            if proc.returncode != 0:
+                stderr_text = proc.stderr.decode("utf-8", errors="replace")[:500]
+                logger.error(
+                    "Diarization subprocess failed (exit %d): %s",
+                    proc.returncode, stderr_text,
+                )
+                return DiarizationResult(error=f"Subprocess exit {proc.returncode}: {stderr_text}")
+
+            # Parse length-prefixed JSON from stdout
+            stdout = proc.stdout
+            if len(stdout) < 4:
+                return DiarizationResult(error="Subprocess returned no data")
+
+            length = struct.unpack("<I", stdout[:4])[0]
+            if len(stdout) < 4 + length:
+                return DiarizationResult(error="Subprocess returned truncated data")
+
+            data = json.loads(stdout[4:4 + length].decode("utf-8"))
+
+            if data.get("error"):
+                elapsed = time.monotonic() - t0
+                logger.error(
+                    "Diarization subprocess error after %.1fs: %s",
+                    elapsed, data["error"],
+                )
+                return DiarizationResult(error=data["error"])
+
+            # Reconstruct result objects
+            segments = [
+                SpeakerSegment(start=s["start"], end=s["end"], speaker=s["speaker"])
+                for s in data.get("segments", [])
+            ]
+
+            signatures = {}
+            for label, sig_data in data.get("signatures", {}).items():
+                signatures[label] = VoiceSignature(
+                    embedding=np.array(sig_data["embedding"], dtype=np.float32),
+                    speaker_label=sig_data["speaker_label"],
+                    num_segments=sig_data.get("num_segments", 1),
+                )
+
+            elapsed = time.monotonic() - t0
+            logger.info(
+                "Subprocess diarization complete: %d segments, %d speakers, "
+                "%.1fs audio in %.1fs wall time",
+                len(segments), data.get("num_speakers", 0),
+                data.get("duration_seconds", 0), elapsed,
+            )
+
+            return DiarizationResult(
+                segments=segments,
+                signatures=signatures,
+                duration_seconds=data.get("duration_seconds", 0),
+                num_speakers=data.get("num_speakers", 0),
+            )
+
+        except subprocess.TimeoutExpired:
+            elapsed = time.monotonic() - t0
+            return DiarizationResult(error=f"Diarization subprocess timed out after {elapsed:.0f}s")
+        except Exception as exc:
+            elapsed = time.monotonic() - t0
+            logger.error(
+                "Subprocess diarization failed after %.1fs: %s",
+                elapsed, exc, exc_info=True,
+            )
+            return DiarizationResult(error=str(exc))
 
     def diarize(self, wav_path: Path | str) -> DiarizationResult:
         """Run speaker diarization on a WAV file.

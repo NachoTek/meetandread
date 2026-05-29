@@ -210,19 +210,24 @@ class TestStopWorkerImmediateIdle:
         ctrl._state = ControllerState.RECORDING
 
         ctrl._stop_worker()
+        # Wait for finalizer thread to complete
+        if ctrl._finalizer_thread:
+            ctrl._finalizer_thread.join(timeout=10.0)
 
         assert len(fake_queue.scheduled_jobs) == 1
         job = fake_queue.scheduled_jobs[0]
         assert ctrl._post_process_job_id == job.job_id
 
     def test_stop_worker_saves_transcript_before_idle(self, tmp_path: Path):
-        """Transcript is saved before going to IDLE."""
+        """Transcript is saved during finalization."""
         ctrl = _make_controller(tmp_path)
         _setup_transcription(ctrl)
         ctrl._state = ControllerState.RECORDING
 
         with patch.object(ctrl, "_save_transcript", return_value=tmp_path / "test.md") as mock_save:
             ctrl._stop_worker()
+            if ctrl._finalizer_thread:
+                ctrl._finalizer_thread.join(timeout=10.0)
             mock_save.assert_called_once()
 
         assert ctrl._last_transcript_path == tmp_path / "test.md"
@@ -239,12 +244,14 @@ class TestStopWorkerImmediateIdle:
         )
 
         ctrl._stop_worker()
+        if ctrl._finalizer_thread:
+            ctrl._finalizer_thread.join(timeout=10.0)
 
         assert "wav" in received
         assert received["wav"] is not None
 
-    def test_stop_worker_error_goes_to_error_state(self, tmp_path: Path):
-        """If session.stop() raises, controller goes to ERROR state."""
+    def test_stop_worker_error_stays_idle_with_recoverable_error(self, tmp_path: Path):
+        """If session.stop() raises after early IDLE, controller stays IDLE with recoverable error."""
         ctrl = _make_controller(tmp_path)
         ctrl._state = ControllerState.RECORDING
 
@@ -252,10 +259,14 @@ class TestStopWorkerImmediateIdle:
         ctrl._session.stop = MagicMock(side_effect=RuntimeError("audio device error"))
 
         ctrl._stop_worker()
+        if ctrl._finalizer_thread:
+            ctrl._finalizer_thread.join(timeout=10.0)
 
-        assert ctrl._state == ControllerState.ERROR
+        # IDLE is set early; error is recoverable (user can still record)
+        assert ctrl._state == ControllerState.IDLE
         assert ctrl._error is not None
         assert "audio device error" in ctrl._error.message
+        assert ctrl._error.is_recoverable is True
 
     def test_stop_worker_no_transcript_still_idle(self, tmp_path: Path):
         """When no transcript store, worker still reaches IDLE."""
@@ -340,8 +351,13 @@ class TestCancelPostProcessing:
 class TestStartCancelsPostProcessing:
     """start() cancels in-flight post-processing before beginning."""
 
-    def test_start_cancels_postprocess(self, tmp_path: Path):
-        """start() should call cancel_post_processing before recording."""
+    def test_start_does_not_cancel_postprocess(self, tmp_path: Path):
+        """start() should NOT cancel in-flight post-processing.
+
+        The idle-wait gate in PostProcessingQueue already defers new
+        jobs until recording stops.  Cancelling would discard completed
+        diarization and leave the previous recording stuck.
+        """
         ctrl = _make_controller(tmp_path)
         ctrl._post_process_job_id = "old-job"
         ctrl._state = ControllerState.IDLE
@@ -352,27 +368,36 @@ class TestStartCancelsPostProcessing:
                 ctrl.start({"mic"})
             except Exception:
                 pass
-            mock_cancel.assert_called_once()
+            # cancel_post_processing should NOT be called
+            mock_cancel.assert_not_called()
 
-    def test_start_after_stop_cancels_old_job(self, tmp_path: Path):
-        """Recording again after stop cancels the previous post-process job."""
+    def test_start_after_stop_preserves_old_job(self, tmp_path: Path):
+        """Recording again after stop preserves the previous post-process job.
+
+        The idle-wait gate in PostProcessingQueue defers new jobs until
+        recording stops.  The old job should remain queued so its
+        diarization result is not discarded.
+        """
         ctrl = _make_controller(tmp_path)
         fake_queue = ctrl._post_processor
         _setup_transcription(ctrl)
         ctrl._state = ControllerState.RECORDING
 
-        # Stop — schedules a job
+        # Stop — schedules a job (async finalizer)
         ctrl._stop_worker()
         assert ctrl._state == ControllerState.IDLE
+        if ctrl._finalizer_thread:
+            ctrl._finalizer_thread.join(timeout=10.0)
         assert len(fake_queue.scheduled_jobs) == 1
 
-        # Start a new recording — should cancel the old job
+        # Start a new recording — should NOT cancel the old job
         with patch.object(ctrl, "_init_transcription", return_value=None):
             with patch.object(ctrl, "_build_source_configs", return_value=[]):
                 ctrl.start({"mic"})
 
-        # The old job should have been cancelled
-        assert len(fake_queue.cancelled_job_ids) > 0
+        # The old job should still be queued (not cancelled)
+        assert len(fake_queue.cancelled_job_ids) == 0
+        assert len(fake_queue.scheduled_jobs) == 1
 
 
 class TestPostProcessCompleteCallback:
@@ -495,9 +520,12 @@ class TestStopWorkerNoStuckOnFailure:
         )
 
         ctrl._stop_worker()
+        if ctrl._finalizer_thread:
+            ctrl._finalizer_thread.join(timeout=10.0)
 
-        # Should have gone to ERROR, not stuck at STOPPING
-        assert ctrl._state == ControllerState.ERROR
+        # Should stay IDLE (set early) with stored error, not stuck at STOPPING
+        assert ctrl._state == ControllerState.IDLE
+        assert ctrl._error is not None
         assert "queue broken" in ctrl._error.message
 
 
@@ -586,28 +614,29 @@ class TestStopRerecordFlow:
     in-flight post-processing, and leaves the controller ready to record.
     """
 
-    def test_stop_then_start_cancels_old_job(self, tmp_path: Path):
-        """After _stop_worker schedules post-processing, start() cancels it."""
+    def test_stop_then_start_preserves_old_job(self, tmp_path: Path):
+        """After _stop_worker schedules post-processing, start() preserves it."""
         ctrl = _make_controller(tmp_path)
         fake_queue = ctrl._post_processor
         _setup_transcription(ctrl)
         ctrl._state = ControllerState.RECORDING
 
-        # Stop — schedules a post-processing job
+        # Stop - schedules a post-processing job (async finalizer)
         ctrl._stop_worker()
         assert ctrl._state == ControllerState.IDLE
+        if ctrl._finalizer_thread:
+            ctrl._finalizer_thread.join(timeout=10.0)
         assert len(fake_queue.scheduled_jobs) == 1
         old_job_id = fake_queue.scheduled_jobs[0].job_id
         ctrl._post_process_job_id = old_job_id
 
-        # Start new recording — should cancel the old job
+        # Start new recording - should NOT cancel the old job
         with patch.object(ctrl, "_init_transcription", return_value=None), \
              patch.object(ctrl, "_build_source_configs", return_value=[]):
             ctrl.start({"mic"})
 
-        # Old job was cancelled
-        assert old_job_id in fake_queue.cancelled_job_ids
-        assert fake_queue.cancel_current_called >= 1
+        # Old job should still be queued (not cancelled)
+        assert old_job_id not in fake_queue.cancelled_job_ids
 
     def test_stop_then_start_controller_not_stuck_in_stopping(self, tmp_path: Path):
         """After stop→start, controller is NOT stuck in STOPPING."""
@@ -630,7 +659,7 @@ class TestStopRerecordFlow:
         assert ctrl._state != ControllerState.STOPPING
 
     def test_rapid_stop_start_cycle(self, tmp_path: Path):
-        """Multiple rapid stop→start cycles don't accumulate stale jobs."""
+        """Multiple rapid stop→start cycles accumulate queued jobs (not cancelled)."""
         ctrl = _make_controller(tmp_path)
         fake_queue = ctrl._post_processor
         _setup_transcription(ctrl)
@@ -639,17 +668,20 @@ class TestStopRerecordFlow:
             ctrl._state = ControllerState.RECORDING
             ctrl._stop_worker()
             assert ctrl._state == ControllerState.IDLE
+            if ctrl._finalizer_thread:
+                ctrl._finalizer_thread.join(timeout=10.0)
 
             # Each stop schedules a job
             assert len(fake_queue.scheduled_jobs) == i + 1
 
-            # Start should cancel the latest job
+            # Start does NOT cancel — jobs remain for the queue to process
             with patch.object(ctrl, "_init_transcription", return_value=None), \
                  patch.object(ctrl, "_build_source_configs", return_value=[]):
                 ctrl.start({"mic"})
 
-        # All jobs should have been cancelled
-        assert len(fake_queue.cancelled_job_ids) >= 3
+        # All 3 jobs should still be queued (not cancelled)
+        assert len(fake_queue.cancelled_job_ids) == 0
+        assert len(fake_queue.scheduled_jobs) == 3
 
     def test_stop_no_postprocessor_then_start(self, tmp_path: Path):
         """Stop with no post-processor followed by start works cleanly."""
@@ -730,9 +762,9 @@ class TestWidgetStartCancellationIntegration:
     that design decision and guard against regressions.
     """
 
-    def test_start_recording_cancels_postprocess_via_controller(self, tmp_path: Path):
-        """Widget start_recording triggers controller.start() which cancels
-        post-processing. This is the user-facing record button flow."""
+    def test_start_recording_preserves_postprocess_via_controller(self, tmp_path: Path):
+        """Widget start_recording triggers controller.start() which preserves
+        in-flight post-processing. The idle-wait gate handles deferral."""
         ctrl = _make_controller(tmp_path)
         fake_queue = ctrl._post_processor
         _setup_transcription(ctrl)
@@ -741,6 +773,8 @@ class TestWidgetStartCancellationIntegration:
         # Stop to schedule a post-process job
         ctrl._stop_worker()
         assert ctrl._state == ControllerState.IDLE
+        if ctrl._finalizer_thread:
+            ctrl._finalizer_thread.join(timeout=10.0)
         assert len(fake_queue.scheduled_jobs) == 1
 
         # Simulate what the widget does: controller.start()
@@ -748,9 +782,8 @@ class TestWidgetStartCancellationIntegration:
              patch.object(ctrl, "_build_source_configs", return_value=[]):
             ctrl.start({"mic"})
 
-        # The controller cancelled the old job
-        assert len(fake_queue.cancelled_job_ids) >= 1
-        assert fake_queue.cancel_current_called >= 1
+        # The controller should NOT cancel the old job
+        assert len(fake_queue.cancelled_job_ids) == 0
 
     def test_no_postprocess_no_job_cancellation(self, tmp_path: Path):
         """When no post-processor exists, start() proceeds without error."""

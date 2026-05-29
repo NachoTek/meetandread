@@ -635,28 +635,22 @@ class TestScrubSpeakerIdentification:
         assert all(w.speaker_id is None for w in words)
 
     def test_speaker_id_tags_words_from_diarization(self, settings):
-        """Words within diarization segments get speaker labels."""
+        """Words within diarization segments get SPK_N speaker labels."""
+        from meetandread.speaker.models import DiarizationResult, SpeakerSegment
+
         runner = ScrubRunner(settings)
         store = self._make_store_with_words(num_words=4, duration=4.0)
 
-        mock_segment_1 = MagicMock()
-        mock_segment_1.start = 0.0
-        mock_segment_1.end = 2.0
-        mock_segment_1.speaker = "spk0"
-
-        mock_segment_2 = MagicMock()
-        mock_segment_2.start = 2.0
-        mock_segment_2.end = 4.0
-        mock_segment_2.speaker = "spk1"
-
-        mock_result = MagicMock()
-        mock_result.succeeded = True
-        mock_result.segments = [mock_segment_1, mock_segment_2]
-        mock_result.num_speakers = 2
-        mock_result.signatures = {}
+        result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+                SpeakerSegment(start=2.0, end=4.0, speaker="spk1"),
+            ],
+            num_speakers=2,
+        )
 
         mock_diarizer = MagicMock()
-        mock_diarizer.diarize.return_value = mock_result
+        mock_diarizer.diarize.return_value = result
 
         with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
             with patch("meetandread.speaker.signatures.VoiceSignatureStore"):
@@ -666,38 +660,41 @@ class TestScrubSpeakerIdentification:
                     )
 
         words = result_store.get_all_words()
-        assert words[0].speaker_id == "spk0"
-        assert words[1].speaker_id == "spk0"
-        assert words[2].speaker_id == "spk1"
-        assert words[3].speaker_id == "spk1"
+        assert words[0].speaker_id == "SPK_0"
+        assert words[1].speaker_id == "SPK_0"
+        assert words[2].speaker_id == "SPK_1"
+        assert words[3].speaker_id == "SPK_1"
 
     def test_speaker_id_uses_matched_names(self, settings):
         """Known speakers from VoiceSignatureStore replace raw labels."""
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, SpeakerMatch, VoiceSignature,
+        )
+
         runner = ScrubRunner(settings)
         store = self._make_store_with_words(num_words=2, duration=2.0)
 
-        mock_segment = MagicMock()
-        mock_segment.start = 0.0
-        mock_segment.end = 2.0
-        mock_segment.speaker = "spk0"
-
-        mock_sig = MagicMock()
-        mock_sig.embedding = np.random.rand(256).astype(np.float32)
-        mock_sig.num_segments = 1
-
-        mock_result = MagicMock()
-        mock_result.succeeded = True
-        mock_result.segments = [mock_segment]
-        mock_result.num_speakers = 1
-        mock_result.signatures = {"spk0": mock_sig}
+        result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+            ],
+            signatures={
+                "spk0": VoiceSignature(
+                    embedding=np.random.rand(256).astype(np.float32),
+                    speaker_label="spk0",
+                    num_segments=1,
+                ),
+            },
+            num_speakers=1,
+        )
 
         mock_diarizer = MagicMock()
-        mock_diarizer.diarize.return_value = mock_result
+        mock_diarizer.diarize.return_value = result
 
         mock_sig_store = MagicMock()
         mock_sig_store.__enter__ = MagicMock(return_value=mock_sig_store)
         mock_sig_store.__exit__ = MagicMock(return_value=False)
-        mock_sig_store.find_match.return_value = "Alice"
+        mock_sig_store.find_match.return_value = SpeakerMatch(name="Alice", score=0.9, confidence="high")
 
         with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
             with patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_sig_store):
@@ -709,19 +706,21 @@ class TestScrubSpeakerIdentification:
         words = result_store.get_all_words()
         assert words[0].speaker_id == "Alice"
         assert words[1].speaker_id == "Alice"
+        # Verify speaker_matches metadata was stored
+        assert hasattr(result_store, "_speaker_matches")
+        assert result_store._speaker_matches["spk0"]["identity_name"] == "Alice"
 
     def test_speaker_id_diarization_failure_returns_unchanged(self, settings):
         """If diarization fails, return store with no speaker labels."""
+        from meetandread.speaker.models import DiarizationResult
+
         runner = ScrubRunner(settings)
         store = self._make_store_with_words()
 
-        mock_result = MagicMock()
-        mock_result.succeeded = False
-        mock_result.segments = []
-        mock_result.num_speakers = 0
+        result = DiarizationResult(error="diarization failed")
 
         mock_diarizer = MagicMock()
-        mock_diarizer.diarize.return_value = mock_result
+        mock_diarizer.diarize.return_value = result
 
         with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
             result_store = runner._run_speaker_identification(
@@ -730,3 +729,158 @@ class TestScrubSpeakerIdentification:
 
         words = result_store.get_all_words()
         assert all(w.speaker_id is None for w in words)
+
+    def test_speaker_id_no_match_keeps_spk_label(self, settings):
+        """Without a known signature, words keep the SPK_N default label."""
+        from meetandread.speaker.models import DiarizationResult, SpeakerSegment, VoiceSignature
+
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words(num_words=2, duration=2.0)
+
+        result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+            ],
+            signatures={
+                "spk0": VoiceSignature(
+                    embedding=np.random.rand(256).astype(np.float32),
+                    speaker_label="spk0",
+                    num_segments=1,
+                ),
+            },
+            num_speakers=1,
+        )
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize.return_value = result
+
+        mock_sig_store = MagicMock()
+        mock_sig_store.__enter__ = MagicMock(return_value=mock_sig_store)
+        mock_sig_store.__exit__ = MagicMock(return_value=False)
+        # No match found
+        mock_sig_store.find_match.return_value = None
+
+        with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
+            with patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_sig_store):
+                with patch("meetandread.audio.storage.paths.get_recordings_dir", return_value=Path("/tmp")):
+                    result_store = runner._run_speaker_identification(
+                        Path("/fake/audio.wav"), store,
+                    )
+
+        words = result_store.get_all_words()
+        assert words[0].speaker_id == "SPK_0"
+        assert words[1].speaker_id == "SPK_0"
+        # Verify raw profile was saved to signature store (same as controller)
+        mock_sig_store.save_signature.assert_called_once()
+        call_args = mock_sig_store.save_signature.call_args
+        assert call_args[0][0] == "SPK_0"  # display label
+
+    def test_speaker_id_carries_forward_original_identity(self, settings, tmp_path):
+        """Scrub carries forward speaker identity from original transcript."""
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature,
+        )
+
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words(num_words=2, duration=2.0)
+
+        result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker="spk0"),
+            ],
+            signatures={
+                "spk0": VoiceSignature(
+                    embedding=np.random.rand(256).astype(np.float32),
+                    speaker_label="spk0",
+                    num_segments=1,
+                ),
+            },
+            num_speakers=1,
+        )
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize.return_value = result
+
+        mock_sig_store = MagicMock()
+        mock_sig_store.__enter__ = MagicMock(return_value=mock_sig_store)
+        mock_sig_store.__exit__ = MagicMock(return_value=False)
+        # No voice match — but identity should carry from original
+        mock_sig_store.find_match.return_value = None
+
+        # Create a fake original transcript with speaker_matches
+        original_md = tmp_path / "original.md"
+        original_md.write_text(
+            "# Transcript\n\n**SPK_0**\n\nHello world.\n"
+            "\n---\n\n<!-- METADATA: "
+            '{"speaker_matches": {"SPK_0": {"identity_name": "Commercial Guy", '
+            '"score": 1.0, "confidence": "manual"}}} -->',
+            encoding="utf-8",
+        )
+
+        with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
+            with patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_sig_store):
+                with patch("meetandread.audio.storage.paths.get_recordings_dir", return_value=Path("/tmp")):
+                    result_store = runner._run_speaker_identification(
+                        Path("/fake/audio.wav"), store,
+                        original_transcript_path=original_md,
+                    )
+
+        words = result_store.get_all_words()
+        assert words[0].speaker_id == "Commercial Guy"
+        assert words[1].speaker_id == "Commercial Guy"
+        assert result_store._speaker_matches["spk0"]["identity_name"] == "Commercial Guy"
+        assert result_store._speaker_matches["spk0"]["confidence"] == "carried"
+
+    def test_speaker_id_carries_forward_with_integer_labels(self, settings, tmp_path):
+        """Carry-forward works when diarizer returns integer speaker labels."""
+        from meetandread.speaker.models import (
+            DiarizationResult, SpeakerSegment, VoiceSignature,
+        )
+
+        runner = ScrubRunner(settings)
+        store = self._make_store_with_words(num_words=2, duration=2.0)
+
+        # sherpa-onnx returns integer speaker labels
+        result = DiarizationResult(
+            segments=[
+                SpeakerSegment(start=0.0, end=2.0, speaker=0),
+            ],
+            signatures={
+                0: VoiceSignature(
+                    embedding=np.random.rand(256).astype(np.float32),
+                    speaker_label=0,
+                    num_segments=1,
+                ),
+            },
+            num_speakers=1,
+        )
+
+        mock_diarizer = MagicMock()
+        mock_diarizer.diarize.return_value = result
+
+        mock_sig_store = MagicMock()
+        mock_sig_store.__enter__ = MagicMock(return_value=mock_sig_store)
+        mock_sig_store.__exit__ = MagicMock(return_value=False)
+        mock_sig_store.find_match.return_value = None
+
+        # Original transcript has SPK_0 mapped to identity
+        original_md = tmp_path / "original.md"
+        original_md.write_text(
+            "# Transcript\n\n**SPK_0**\n\nHello world.\n"
+            "\n---\n\n<!-- METADATA: "
+            '{"speaker_matches": {"SPK_0": {"identity_name": "Commercial Guy", '
+            '"score": 1.0, "confidence": "manual"}}} -->',
+            encoding="utf-8",
+        )
+
+        with patch("meetandread.speaker.diarizer.Diarizer", return_value=mock_diarizer):
+            with patch("meetandread.speaker.signatures.VoiceSignatureStore", return_value=mock_sig_store):
+                with patch("meetandread.audio.storage.paths.get_recordings_dir", return_value=Path("/tmp")):
+                    result_store = runner._run_speaker_identification(
+                        Path("/fake/audio.wav"), store,
+                        original_transcript_path=original_md,
+                    )
+
+        words = result_store.get_all_words()
+        assert words[0].speaker_id == "Commercial Guy"
+        assert words[1].speaker_id == "Commercial Guy"

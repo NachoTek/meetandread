@@ -424,3 +424,103 @@ class TestOpenIdentityLinkDialogIntegration:
         # Ensure speaker:// is not used (QUrl normalizes host to lowercase)
         bad_url = QUrl("speaker://SPK_0")
         assert bad_url.toString() != "speaker://SPK_0"  # would be speaker://spk_0
+
+
+class TestSpeakerMatchesCaseMismatch:
+    """Tests for case-insensitive speaker_matches key resolution.
+
+    The diarization pipeline stores lowercase raw labels (e.g. ``"spk0"``)
+    as keys in ``speaker_matches``, while words/segments use the display
+    form (e.g. ``"SPK_0"``).  The identity-link functions must resolve
+    the correct key regardless of casing so stale placeholder entries
+    don't linger in transcripts.
+    """
+
+    def test_link_resolves_lowercase_key(self, tmp_path):
+        """_link_speaker_identity_in_file updates the lowercase spk0 key."""
+        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
+        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
+        sm = {"spk0": {"identity_name": "SPK_0", "score": 0.95, "confidence": "high"}}
+        md = _make_md(tmp_path, w, s, speaker_matches=sm)
+        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        d = _parse_metadata(md)
+
+        # The lowercase key should be updated (not a new SPK_0 key added)
+        sm_keys = list(d["speaker_matches"].keys())
+        assert len(sm_keys) == 1, f"Expected 1 key, got {sm_keys}"
+        assert d["speaker_matches"]["spk0"]["identity_name"] == "Alice"
+        assert d["speaker_matches"]["spk0"]["score"] == 0.95
+
+    def test_link_removes_duplicate_case_key(self, tmp_path):
+        """If both spk0 and SPK_0 keys exist, the duplicate is removed."""
+        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
+        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
+        sm = {
+            "spk0": {"identity_name": "SPK_0", "score": 0.9, "confidence": "high"},
+            "SPK_0": {"identity_name": "SPK_0", "score": 1.0, "confidence": "manual"},
+        }
+        md = _make_md(tmp_path, w, s, speaker_matches=sm)
+        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        d = _parse_metadata(md)
+
+        sm_keys = list(d["speaker_matches"].keys())
+        assert len(sm_keys) == 1, f"Expected 1 key after dedup, got {sm_keys}: {d['speaker_matches']}"
+        # Whichever key survived should have the new identity_name
+        only_key = sm_keys[0]
+        assert d["speaker_matches"][only_key]["identity_name"] == "Alice"
+
+    def test_link_resolves_null_lowercase_key(self, tmp_path):
+        """Updating a lowercase key with a None value (no prior match)."""
+        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
+        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
+        sm = {"spk0": None}
+        md = _make_md(tmp_path, w, s, speaker_matches=sm)
+        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        d = _parse_metadata(md)
+
+        assert d["speaker_matches"]["spk0"]["identity_name"] == "Alice"
+
+    def test_try_link_propagation_resolves_lowercase_key(self, tmp_path):
+        """_try_link_identity_in_file (propagation) updates lowercase key."""
+        from meetandread.widgets.floating_panels import _try_link_identity_in_file
+        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
+        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
+        sm = {"spk0": {"identity_name": "SPK_0", "score": 0.88, "confidence": "medium"}}
+        md = _make_md(tmp_path, w, s, speaker_matches=sm)
+        result = _try_link_identity_in_file(md, "SPK_0", "Alice")
+        assert result is True
+
+        d = _parse_metadata(md)
+        assert d["words"][0]["speaker_id"] == "Alice"
+        assert d["speaker_matches"]["spk0"]["identity_name"] == "Alice"
+        assert d["speaker_matches"]["spk0"]["score"] == 0.88
+
+    def test_try_link_propagation_removes_duplicate_key(self, tmp_path):
+        """_try_link_identity_in_file deduplicates case-variant keys."""
+        from meetandread.widgets.floating_panels import _try_link_identity_in_file
+        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
+        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
+        sm = {
+            "spk0": {"identity_name": "SPK_0", "score": 0.9, "confidence": "high"},
+            "SPK_0": {"identity_name": "SPK_0", "score": 1.0, "confidence": "manual"},
+        }
+        md = _make_md(tmp_path, w, s, speaker_matches=sm)
+        _try_link_identity_in_file(md, "SPK_0", "Alice")
+
+        d = _parse_metadata(md)
+        sm_keys = list(d["speaker_matches"].keys())
+        assert len(sm_keys) == 1, f"Expected 1 key, got {sm_keys}"
+        assert d["speaker_matches"][sm_keys[0]]["identity_name"] == "Alice"
+
+    def test_try_link_no_match_returns_false(self, tmp_path):
+        """_try_link_identity_in_file returns False when label not in file."""
+        from meetandread.widgets.floating_panels import _try_link_identity_in_file
+        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_1"}]
+        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_1"}]
+        sm = {"spk1": None}
+        md = _make_md(tmp_path, w, s, speaker_matches=sm)
+        result = _try_link_identity_in_file(md, "SPK_0", "Alice")
+        assert result is False

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,9 @@ LIGHT_PALETTE = ThemePalette(
 # Theme detection helpers
 # ---------------------------------------------------------------------------
 
+_theme_cache: Optional[ThemePalette] = None
+
+
 def current_palette() -> ThemePalette:
     """Return the active palette based on the desktop colour scheme.
 
@@ -135,33 +138,46 @@ def current_palette() -> ThemePalette:
     scheme is ``Unknown`` or when Qt is unavailable (e.g. during tests
     without a QApplication).
 
+    The result is cached after the first call so the detection log
+    message is not repeated on every stylesheet rebuild.
+
     Returns:
         ThemePalette — either LIGHT_PALETTE or DARK_PALETTE.
     """
+    global _theme_cache
+    if _theme_cache is not None:
+        return _theme_cache
+
     try:
         from PyQt6.QtGui import QGuiApplication
         hints = QGuiApplication.styleHints()
         if hints is None:
-            logger.info("Theme detection: no styleHints, falling back to dark")
-            return DARK_PALETTE
+            logger.debug("Theme detection: no styleHints, falling back to dark")
+            _theme_cache = DARK_PALETTE
+            return _theme_cache
         scheme = hints.colorScheme()
         if scheme is None:
-            logger.info("Theme detection: scheme is None, falling back to dark")
-            return DARK_PALETTE
+            logger.debug("Theme detection: scheme is None, falling back to dark")
+            _theme_cache = DARK_PALETTE
+            return _theme_cache
         # Import the enum for comparison
         from PyQt6.QtGui import QtColorScheme
         if scheme == QtColorScheme.Dark:
             logger.debug("Theme detected: Dark")
-            return DARK_PALETTE
+            _theme_cache = DARK_PALETTE
+            return _theme_cache
         elif scheme == QtColorScheme.Light:
             logger.info("Theme detected: Light")
-            return LIGHT_PALETTE
+            _theme_cache = LIGHT_PALETTE
+            return _theme_cache
         else:
-            logger.info("Theme detected: Unknown, falling back to dark")
-            return DARK_PALETTE
+            logger.debug("Theme detected: Unknown, falling back to dark")
+            _theme_cache = DARK_PALETTE
+            return _theme_cache
     except (ImportError, RuntimeError) as exc:
         logger.info("Theme detection unavailable (%s), falling back to dark", exc)
-        return DARK_PALETTE
+        _theme_cache = DARK_PALETTE
+        return _theme_cache
 
 
 def is_dark_mode() -> bool:

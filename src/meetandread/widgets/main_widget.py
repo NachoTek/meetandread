@@ -852,6 +852,11 @@ to avoid clipping issues and enable proper text rendering.
         - RECORDING: clear, cancel any pending hide, show
         - STOPPING/IDLE/ERROR: start delayed hide (keeps final words)
         """
+        import time as _time
+        import threading as _threading_mod
+        _t0 = _time.monotonic()
+        logging.info("[UI-TIMER] state_change(%s) on thread: %s",
+                     state.name, _threading_mod.current_thread().name)
         if state == ControllerState.RECORDING:
             self.is_recording = True
             self.is_processing = False
@@ -945,6 +950,9 @@ to avoid clipping issues and enable proper text rendering.
         # Forward state to tray icon manager
         if self._tray_manager is not None:
             self._tray_manager.update_recording_state(state)
+        
+        logging.info("[UI-TIMER] state_change(%s) done: %.1fms",
+                     state.name, (_time.monotonic() - _t0) * 1000)
     
     def _on_controller_error(self, error):
         """Handle controller errors."""
@@ -979,6 +987,11 @@ to avoid clipping issues and enable proper text rendering.
     
     def _on_recording_complete(self, wav_path, transcript_path):
         """Handle recording completion."""
+        import time as _t
+        import threading as _threading_mod
+        _t0 = _t.monotonic()
+        logging.info("[UI-TIMER] recording_complete on thread: %s",
+                     _threading_mod.current_thread().name)
         self.is_processing = False
         self.record_button.set_processing_state(False)
         logging.info("Recording saved to: %s", wav_path)
@@ -987,6 +1000,8 @@ to avoid clipping issues and enable proper text rendering.
 
         # Notify that history data changed — connected panels refresh if visible
         self.history_data_changed.emit()
+        logging.info("[UI-TIMER] recording_complete done: %.1fms",
+                     (_t.monotonic() - _t0) * 1000)
 
     def _on_post_process_complete(self, job_id, transcript_path):
         """Handle post-processing completion (success or failure).

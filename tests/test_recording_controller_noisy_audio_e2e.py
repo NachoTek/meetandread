@@ -199,6 +199,10 @@ class TestRecordingControllerNoisyAudioE2E:
         # Wait for stop worker to finish
         if controller._worker_thread:
             controller._worker_thread.join(timeout=5.0)
+        if controller._finalizer_thread:
+            controller._finalizer_thread.join(timeout=10.0)
+        if controller._finalizer_thread:
+            controller._finalizer_thread.join(timeout=10.0)
 
         # Controller should be IDLE after stop
         assert controller.get_state() == ControllerState.IDLE
@@ -224,6 +228,8 @@ class TestRecordingControllerNoisyAudioE2E:
         controller.stop()
         if controller._worker_thread:
             controller._worker_thread.join(timeout=5.0)
+        if controller._finalizer_thread:
+            controller._finalizer_thread.join(timeout=10.0)
 
         diag = controller.get_diagnostics()
         session = diag.get("session", {})
@@ -251,6 +257,8 @@ class TestRecordingControllerNoisyAudioE2E:
         controller.stop()
         if controller._worker_thread:
             controller._worker_thread.join(timeout=5.0)
+        if controller._finalizer_thread:
+            controller._finalizer_thread.join(timeout=10.0)
 
         diag = controller.get_diagnostics()
         denoising = diag.get("session", {}).get("denoising", {})
@@ -270,6 +278,8 @@ class TestRecordingControllerNoisyAudioE2E:
         controller.stop()
         if controller._worker_thread:
             controller._worker_thread.join(timeout=5.0)
+        if controller._finalizer_thread:
+            controller._finalizer_thread.join(timeout=10.0)
 
         assert controller.get_state() == ControllerState.IDLE
 
@@ -425,6 +435,8 @@ class TestRecordingControllerNegativePaths:
         controller.stop()
         if controller._worker_thread:
             controller._worker_thread.join(timeout=5.0)
+        if controller._finalizer_thread:
+            controller._finalizer_thread.join(timeout=10.0)
 
         diag = controller.get_diagnostics()
         denoising = diag.get("session", {}).get("denoising", {})
@@ -501,6 +513,8 @@ class TestRecordingControllerDiagnostics:
         controller.stop()
         if controller._worker_thread:
             controller._worker_thread.join(timeout=5.0)
+        if controller._finalizer_thread:
+            controller._finalizer_thread.join(timeout=10.0)
 
         diag = controller.get_diagnostics()
         diag_str = str(diag)
@@ -703,6 +717,8 @@ class TestRecordingControllerDenoisingDiarizationIntegration:
 
             if controller._worker_thread:
                 controller._worker_thread.join(timeout=5.0)
+            if controller._finalizer_thread:
+                controller._finalizer_thread.join(timeout=10.0)
                 assert not controller._worker_thread.is_alive(), (
                     "Worker thread did not finish within 5s timeout"
                 )

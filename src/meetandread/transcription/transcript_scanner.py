@@ -190,6 +190,10 @@ def scan_recordings(recordings_dir: Optional[Path] = None) -> List[RecordingMeta
         # Skip legacy _enhanced.md files
         if md_path.name.endswith("_enhanced.md"):
             continue
+        # Skip scrub sidecar files — these are temporary scrub results
+        # waiting for Accept/Reject, not standalone recordings.
+        if "_scrub_" in md_path.stem:
+            continue
 
         meta = parse_metadata(md_path)
         if meta is not None:

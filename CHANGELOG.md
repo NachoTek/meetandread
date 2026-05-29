@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-05-29
+
+### Added
+- **Subprocess diarization** — speaker diarization now runs in a subprocess instead of the main thread, avoiding GIL holds by sherpa-onnx that froze the UI for 10–30 seconds during post-recording speaker identification
+- **Post-processing queue persistence** — pending post-processing jobs (second-pass transcription, diarization) are persisted to `post_processing_queue.json` and recovered on next startup, so jobs survive app crashes or force-quits
+- **Cross-transcript identity propagation** — assigning an identity to a speaker label (e.g. SPK_0 → "Alice") now propagates to ALL transcripts that reference the same speaker, not just the active one
+- **Scrub preserves recording timestamp** — scrubbed transcripts now carry the original recording start time instead of the scrub timestamp, keeping chronological ordering intact
+- **Scrub speaker identity propagation** — scrub runs speaker matching against the voice signature store after re-transcription and propagates any known identities to the new transcript
+
+### Fixed
+- **Orphaned SPK_0 identities in Identities list** — after assigning real identities to all speaker placeholders, the old SPK_N entries lingered with 0 recordings. Root cause: `speaker_matches` keys used lowercase raw labels (`spk0`) while the linking flow used display labels (`SPK_0`), leaving stale entries. Fixed with label-normalized key resolution and deduplication in both link and propagation paths
+- **Identities list filters orphans** — identities matching `SPK_N` pattern with zero recordings and no signature store entry are now automatically excluded from the Identities list as a safety net for pre-existing stale data
+- **Non-blocking recording stop** — finalization (thread joins, WAV encoding, transcript save) now runs on a dedicated finalizer thread so the controller returns to IDLE within ~1 second, preventing UI freezes on long recordings
+
+### Changed
+- **Diarizer refactored** — new `diarize_subprocess()` method with embedded subprocess script that serializes results via binary protocol to stdout; falls back gracefully on timeout, crash, or truncation
+- **Post-processing job persistence** — `_persist_job()` / `_unpersist_job()` / `_recover_pending_jobs()` cycle with thread-safe file locking
+- **6 new tests** for speaker_matches case-mismatch fix (lowercase raw label resolution, duplicate key dedup, null match handling)
+
 ## [0.16.1] — 2026-05-27
 
 ### Fixed
@@ -180,6 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD** — GitHub Actions test workflow (Windows, Python 3.10) and release workflow (PyInstaller build + GitHub Release)
 - **PyInstaller Build** — onedir build with runtime hook, explicit DLL collection for 5 native dependency groups, startup DLL guard
 
+[0.17.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.17.0
 [0.16.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.16.0
 [0.14.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.14.0
 [0.9.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.9.0

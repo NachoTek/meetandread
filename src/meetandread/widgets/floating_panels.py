@@ -557,21 +557,62 @@ def _link_speaker_identity_in_file(
         data["speaker_matches"] = {}
 
     match_key = "__unknown__" if raw_label == "__unknown__" else raw_label
-    existing = data["speaker_matches"].get(match_key)
+
+    # The speaker_matches key may be the lowercase raw label (e.g. "spk0")
+    # while raw_label is the display form (e.g. "SPK_0").  Resolve the
+    # actual key so we update the correct entry and don't leave a stale
+    # orphan behind.
+    sm = data["speaker_matches"]
+    actual_key = match_key
+    if actual_key not in sm:
+        # Try case-insensitive match: "SPK_0" <-> "spk0"
+        # Also normalise the raw format (spk0 -> spk_0) so different
+        # structural forms are still matched.
+        def _norm_label(s: str) -> str:
+            """Normalise a speaker label for comparison."""
+            s = s.lower()
+            # "spk0" -> "spk_0"
+            m = re.match(r"^(spk)(\d+)$", s)
+            if m:
+                return f"{m.group(1)}_{m.group(2)}"
+            return s
+
+        norm_target = _norm_label(actual_key)
+        for existing_key in list(sm.keys()):
+            if _norm_label(existing_key) == norm_target:
+                actual_key = existing_key
+                break
+
+    existing = sm.get(actual_key)
     if isinstance(existing, dict) and "score" in existing and "confidence" in existing:
         # Preserve prior score/confidence, update identity_name
-        data["speaker_matches"][match_key] = {
+        sm[actual_key] = {
             "identity_name": identity_name,
             "score": existing["score"],
             "confidence": existing["confidence"],
         }
     else:
         # No prior match or null — use manual-link sentinel
-        data["speaker_matches"][match_key] = {
+        sm[actual_key] = {
             "identity_name": identity_name,
             "score": 1.0,
             "confidence": "manual",
         }
+
+    # Remove any stale duplicate key that differs only by casing
+    # or raw-label format (e.g. both "spk0" and "SPK_0" present).
+    def _norm_label(s: str) -> str:
+        """Normalise a speaker label for comparison."""
+        s = s.lower()
+        m = re.match(r"^(spk)(\d+)$", s)
+        if m:
+            return f"{m.group(1)}_{m.group(2)}"
+        return s
+
+    norm_actual = _norm_label(actual_key)
+    for dup_key in list(sm.keys()):
+        if dup_key != actual_key and _norm_label(dup_key) == norm_actual:
+            del sm[dup_key]
 
     # Rebuild file
     updated_json = json.dumps(data, indent=2)
@@ -795,6 +836,188 @@ def _open_identity_link_dialog(
         logger.error("Failed to link identity in %s: %s", md_path, exc)
         return False
 
+    # Propagate the identity link to all other transcripts that reference
+    # the same raw label (e.g. SPK_0 → "Alice" in every transcript).
+    try:
+        _propagate_identity_to_all_transcripts(
+            source_md_path=md_path,
+            raw_label=raw_label,
+            identity_name=identity_name,
+        )
+    except Exception as exc:
+        # Non-fatal — the source transcript was already updated.
+        logger.warning("Cross-transcript identity propagation failed: %s", exc)
+
+    return True
+
+
+def _propagate_identity_to_all_transcripts(
+    source_md_path: Path,
+    raw_label: str,
+    identity_name: str,
+) -> int:
+    """Update all OTHER transcripts that reference the same raw speaker label.
+
+    Scans the transcripts directory for .md files whose metadata contains the
+    same raw_label in speaker_matches or word-level speaker_id fields, and
+    replaces them with identity_name.  Skips the source file (already updated).
+
+    Returns the number of additional transcripts updated.
+    """
+    from meetandread.audio.storage.paths import get_transcripts_dir
+
+    transcripts_dir = get_transcripts_dir()
+    if not transcripts_dir.exists():
+        return 0
+
+    updated_count = 0
+    for md_path in transcripts_dir.glob("*.md"):
+        # Skip sidecar and enhanced files
+        if "_scrub_" in md_path.stem or md_path.name.endswith("_enhanced.md"):
+            continue
+        # Skip the source file (already updated)
+        if md_path.resolve() == source_md_path.resolve():
+            continue
+
+        try:
+            if _try_link_identity_in_file(md_path, raw_label, identity_name):
+                updated_count += 1
+        except Exception as exc:
+            logger.warning(
+                "Failed to propagate identity to %s: %s", md_path.name, exc
+            )
+
+    if updated_count:
+        logger.info(
+            "Propagated identity link for '%s' to %d other transcripts",
+            raw_label, updated_count,
+        )
+
+    return updated_count
+
+
+def _try_link_identity_in_file(
+    md_path: Path, raw_label: str, identity_name: str
+) -> bool:
+    """Check if a transcript references raw_label and update it if so.
+
+    Returns True if the file was modified, False if raw_label was not found.
+    """
+    content = md_path.read_text(encoding="utf-8")
+    footer_marker = "\n---\n\n<!-- METADATA: "
+    marker_idx = content.find(footer_marker)
+    if marker_idx < 0:
+        return False
+
+    md_body = content[:marker_idx]
+    metadata_text = content[marker_idx + len(footer_marker):]
+    if not metadata_text.strip().endswith(" -->"):
+        return False
+    metadata_text = metadata_text.strip()[: -len(" -->")]
+
+    try:
+        data = json.loads(metadata_text)
+    except json.JSONDecodeError:
+        return False
+
+    # Check if raw_label appears anywhere in this transcript
+    words = data.get("words", [])
+    segments = data.get("segments", [])
+    speaker_matches = data.get("speaker_matches", {})
+
+    matching_label = raw_label
+    if raw_label == "__unknown__":
+        # __unknown__ in speaker_matches maps to Unknown Speaker in body
+        matching_label = "__unknown__"
+
+    # Resolve the actual speaker_matches key — it may be the lowercase
+    # raw label (e.g. "spk0") while matching_label is the display form
+    # (e.g. "SPK_0").
+    def _norm_label(s: str) -> str:
+        """Normalise a speaker label for comparison."""
+        s = s.lower()
+        m = re.match(r"^(spk)(\d+)$", s)
+        if m:
+            return f"{m.group(1)}_{m.group(2)}"
+        return s
+
+    sm_key = matching_label
+    if sm_key not in speaker_matches:
+        norm_target = _norm_label(sm_key)
+        for existing_key in speaker_matches:
+            if _norm_label(existing_key) == norm_target:
+                sm_key = existing_key
+                break
+
+    # Check if the raw label exists in words, segments, or speaker_matches
+    has_label = (
+        sm_key in speaker_matches
+        or any(w.get("speaker_id") == matching_label for w in words)
+        or any(s.get("speaker") == matching_label or s.get("speaker_id") == matching_label for s in segments)
+    )
+
+    if not has_label:
+        return False
+
+    # Update words
+    words_updated = 0
+    for w in words:
+        if w.get("speaker_id") == matching_label:
+            w["speaker_id"] = identity_name
+            words_updated += 1
+
+    # Update segments
+    segments_updated = 0
+    for seg in segments:
+        if seg.get("speaker_id") == matching_label:
+            seg["speaker_id"] = identity_name
+            segments_updated += 1
+        if seg.get("speaker") == matching_label:
+            seg["speaker"] = identity_name
+            if seg.get("speaker_id") != matching_label:
+                segments_updated += 1
+
+    # Update markdown body
+    display_label = "Unknown Speaker" if raw_label == "__unknown__" else raw_label
+    updated_body = re.sub(
+        re.escape(f"**{display_label}**"),
+        f"**{identity_name}**",
+        md_body,
+    )
+
+    # Update speaker_matches — use the resolved key
+    if sm_key in speaker_matches:
+        existing = speaker_matches[sm_key]
+        if isinstance(existing, dict) and "score" in existing and "confidence" in existing:
+            speaker_matches[sm_key] = {
+                "identity_name": identity_name,
+                "score": existing["score"],
+                "confidence": existing["confidence"],
+            }
+        else:
+            speaker_matches[sm_key] = {
+                "identity_name": identity_name,
+                "score": 1.0,
+                "confidence": "manual",
+            }
+
+    # Remove any stale duplicate key that differs by casing or raw format
+    norm_sm = _norm_label(sm_key)
+    for dup_key in list(speaker_matches.keys()):
+        if dup_key != sm_key and _norm_label(dup_key) == norm_sm:
+            del speaker_matches[dup_key]
+
+    # Rebuild and write
+    updated_json = json.dumps(data, indent=2)
+    new_content = (
+        updated_body + footer_marker + updated_json + " -->\n"
+    )
+    md_path.write_text(new_content, encoding="utf-8")
+
+    logger.info(
+        "Propagated identity to %s (%d words, %d segments)",
+        md_path.name, words_updated, segments_updated,
+    )
     return True
 
 
@@ -6138,12 +6361,16 @@ class FloatingSettingsPanel(QWidget):
         1. VoiceSignatureStore (profiles with embeddings)
         2. Transcript speaker_matches metadata (identities linked without embeddings)
 
+        Automatically excludes orphaned placeholder identities (e.g. ``SPK_0``)
+        that have zero recordings and are not in the signature store.
+
         Failure Modes:
         - VoiceSignatureStore.load_signatures() error: show transcript-discovered names only.
         - scan_identity_usage() error: show profiles with zero usage, keep tab usable.
         """
         self._identity_usage = {}
         profile_names: List[str] = []
+        store_names: set[str] = set()
 
         try:
             from meetandread.audio.storage.paths import get_recordings_dir
@@ -6158,6 +6385,7 @@ class FloatingSettingsPanel(QWidget):
                     [p.name for p in profiles],
                     key=lambda n: n.lower(),
                 )
+                store_names = {p.name for p in profiles}
             finally:
                 store.close()
         except Exception as exc:
@@ -6208,6 +6436,29 @@ class FloatingSettingsPanel(QWidget):
             usage = scan_identity_usage(transcripts_dir, profile_names)
         except Exception as exc:
             logger.info("Identity tab: usage scan failed: %s", exc)
+
+        # Filter out orphaned placeholder identities (e.g. SPK_0, SPK_1) that
+        # have zero recordings and no entry in the signature store.  These are
+        # stale entries left behind when a user assigned a real identity to a
+        # raw label but the old speaker_matches key wasn't cleaned up.
+        if store_names:
+            import re as _re
+            _spk_pattern = _re.compile(r"^SPK_\d+$")
+            filtered = [
+                name for name in profile_names
+                if (
+                    name in store_names
+                    or (usage.get(name) is not None and usage[name].recording_count > 0)
+                    or not _spk_pattern.match(name)
+                )
+            ]
+            if len(filtered) < len(profile_names):
+                removed = set(profile_names) - set(filtered)
+                logger.info(
+                    "Identity tab: filtered %d orphaned placeholder(s)",
+                    len(removed),
+                )
+                profile_names = filtered
 
         self._identity_usage = usage
         self._populate_identity_list(profile_names, usage)
@@ -6728,7 +6979,12 @@ class FloatingSettingsPanel(QWidget):
         If a transcript is currently being viewed, re-renders it so
         speaker labels from post-processing appear immediately.
         """
+        import time as _t
+        _t0 = _t.monotonic()
+        logger.info("[UI-TIMER] refresh_history_if_visible start")
         self._refresh_history()
+        logger.info("[UI-TIMER] refresh_history_if_visible _refresh_history: %.1fms",
+                    (_t.monotonic() - _t0) * 1000)
         if self._content_stack.currentIndex() == self._NAV_HISTORY:
             # Re-render the currently-viewed transcript (speaker labels
             # may have been added by post-processing diarization).

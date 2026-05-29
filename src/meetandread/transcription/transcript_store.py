@@ -117,6 +117,16 @@ class TranscriptStore:
         with self._lock:
             self._recording_start_time = datetime.now()
             self._last_segment_time = 0.0
+
+    def set_recording_start_time(self, dt: Optional[datetime]) -> None:
+        """Override the recording start timestamp.
+
+        Used by post-processing and scrub to preserve the original
+        recording time from the source transcript instead of stamping
+        ``datetime.now()`` (which would reflect processing time).
+        """
+        with self._lock:
+            self._recording_start_time = dt
     
     def add_words(self, words: List[Word]) -> None:
         """Add new words to the transcript.
