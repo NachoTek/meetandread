@@ -836,17 +836,12 @@ def _open_identity_link_dialog(
         logger.error("Failed to link identity in %s: %s", md_path, exc)
         return False
 
-    # Propagate the identity link to all other transcripts that reference
-    # the same raw label (e.g. SPK_0 → "Alice" in every transcript).
-    try:
-        _propagate_identity_to_all_transcripts(
-            source_md_path=md_path,
-            raw_label=raw_label,
-            identity_name=identity_name,
-        )
-    except Exception as exc:
-        # Non-fatal — the source transcript was already updated.
-        logger.warning("Cross-transcript identity propagation failed: %s", exc)
+    # NOTE: Cross-transcript propagation by raw label is disabled because
+    # SPK_0 in recording A is NOT the same person as SPK_0 in recording B.
+    # Reliable cross-transcript matching requires voice signature similarity,
+    # not raw label matching.  The post-processing pipeline already handles
+    # re-identification via VoiceSignatureStore when embeddings are available.
+    # _propagate_identity_to_all_transcripts(source_md_path=md_path, raw_label=raw_label, identity_name=identity_name)
 
     return True
 
