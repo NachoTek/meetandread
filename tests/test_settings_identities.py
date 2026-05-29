@@ -2637,15 +2637,17 @@ class TestNavRefreshPreservation:
     """
 
     def test_history_refresh_guard_still_works(self, settings_panel, qapp):
-        """refresh_history_if_visible only fires when History is active."""
-        # On Settings page — should not refresh
+        """refresh_history_if_visible always refreshes (even when History tab
+        is not active) so the data is current when the user navigates to it.
+        """
+        # On Settings page — should still refresh (prevents stale data)
         with patch.object(
             settings_panel, "_refresh_history"
         ) as mock_refresh:
             settings_panel.refresh_history_if_visible()
-        mock_refresh.assert_not_called()
+        mock_refresh.assert_called_once()
 
-        # Navigate to History — should refresh
+        # Navigate to History — should also refresh
         settings_panel._on_nav_clicked(FloatingSettingsPanel._NAV_HISTORY)
         qapp.processEvents()
         with patch.object(

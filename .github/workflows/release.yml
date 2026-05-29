@@ -23,23 +23,31 @@ jobs:
       - name: Run tests
         id: pytest
         continue-on-error: true
-        run: python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt --ignore=tests/test_settings_history.py 2>&1 | Out-File test_output.txt -Encoding utf8
+        run: |
+          python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt `
+            --ignore=tests/test_settings_history.py `
+            2>&1 | Out-File test_output.txt -Encoding utf8
 
       - name: Verify tests passed
         if: always()
         run: |
           $content = Get-Content test_output.txt -Raw
           Write-Host $content
+
           if ($content -match '(\d+) failed') {
-            Write-Error "Test failures detected"
+            $failed = $Matches[1]
+            Write-Error "$failed test(s) failed"
             exit 1
           }
+
           if ($content -match '(\d+) passed') {
-            Write-Host "All tests passed (PyQt6 teardown exit code ignored)"
-          } else {
-            Write-Error "No test results found"
-            exit 1
+            $passed = $Matches[1]
+            Write-Host "All $passed tests passed (PyQt6 teardown exit code ignored)"
+            exit 0
           }
+
+          Write-Error "No test results found in output"
+          exit 1
 
   release:
     needs: [test]
@@ -55,11 +63,14 @@ jobs:
 
       - run: pip install pyinstaller
 
-      - run: pyinstaller meetandread.spec --noconfirm
+      - name: Build
+        run: pyinstaller meetandread.spec --noconfirm
 
-      - run: Compress-Archive -Path dist/meetandread -DestinationPath meetandread-${{ github.ref_name }}.zip
+      - name: Package
+        run: Compress-Archive -Path dist/meetandread -DestinationPath meetandread-${{ github.ref_name }}.zip
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
           generate_notes: true
           files: meetandread-${{ github.ref_name }}.zip

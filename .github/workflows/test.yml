@@ -1,6 +1,8 @@
 name: Tests
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "0 3 * * *" # nightly at 03:00 UTC
   workflow_dispatch:
@@ -20,20 +22,33 @@ jobs:
       - name: Run tests
         id: pytest
         continue-on-error: true
-        run: python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt --ignore=tests/test_settings_history.py 2>&1 | Out-File test_output.txt -Encoding utf8
+        # --timeout=300 per-test, -p no:qt avoids pytest-qt event loop issues
+        # Output captured to file so PyQt6 teardown crash doesn't lose results
+        run: |
+          python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt `
+            --ignore=tests/test_settings_history.py `
+            2>&1 | Out-File test_output.txt -Encoding utf8
 
       - name: Verify tests passed
         if: always()
         run: |
           $content = Get-Content test_output.txt -Raw
           Write-Host $content
+
+          # Check for test failures — the only hard failure condition
           if ($content -match '(\d+) failed') {
-            Write-Error "Test failures detected"
+            $failed = $Matches[1]
+            Write-Error "$failed test(s) failed"
             exit 1
           }
+
+          # Verify pytest actually ran and produced results
           if ($content -match '(\d+) passed') {
-            Write-Host "All tests passed (PyQt6 teardown exit code ignored)"
-          } else {
-            Write-Error "No test results found"
-            exit 1
+            $passed = $Matches[1]
+            Write-Host "All $passed tests passed (PyQt6 teardown exit code ignored)"
+            exit 0
           }
+
+          # No results at all — pytest didn't run or crashed before reporting
+          Write-Error "No test results found in output"
+          exit 1
