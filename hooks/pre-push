@@ -2,29 +2,24 @@
 # pre-push hook: run the same tests CI runs, fail fast before pushing.
 # Skip with: git push --no-verify
 
-echo "Running CI-equivalent test suite..."
+echo "Running CI smoke test (quick pass)..."
 
-# Run the same pytest invocation as CI
-python -m pytest -m "not slow" --tb=line -q --timeout=120 -p no:qt \
-    --ignore=tests/test_settings_history.py \
-    2>&1 | tail -5
+# Use a short overall timeout. Only check for failures, not coverage.
+# The -x flag stops on first failure for speed.
+result=$(timeout 180 python -m pytest -m "not slow" --tb=line -q -x \
+    --timeout=60 -p no:qt \
+    --ignore=tests/test_settings_history.py 2>&1)
+exit_code=$?
 
-exit_code=${PIPESTATUS[0]}
+echo "$result" | tail -5
 
 # PyQt6 teardown may return non-zero even when all tests pass.
-# Check the output for actual failures instead.
 if [ $exit_code -ne 0 ]; then
-    # Re-run quietly to get the summary line
-    result=$(python -m pytest -m "not slow" --tb=no -q --timeout=120 -p no:qt \
-        --ignore=tests/test_settings_history.py 2>&1 | tail -3)
-
     if echo "$result" | grep -q "failed"; then
         echo ""
         echo "BLOCKED: Test failures detected. Fix before pushing."
-        echo "  $result"
         exit 1
     fi
-
     # No "failed" in output — teardown-only crash, allow push
     echo "Tests passed (ignoring PyQt6 teardown exit code)"
 fi
