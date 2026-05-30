@@ -16,6 +16,8 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+from meetandread.utils.file_utils import atomic_write
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -169,9 +171,9 @@ def _read_transcript(path: Path) -> tuple[str, Dict[str, Any]]:
 
 
 def _write_transcript(path: Path, md_body: str, metadata: Dict[str, Any]) -> None:
-    """Rebuild and write a transcript file."""
+    """Rebuild and write a transcript file atomically."""
     new_content = _rebuild_transcript(md_body, metadata)
-    path.write_text(new_content, encoding="utf-8")
+    atomic_write(path, new_content)
 
 
 # ---------------------------------------------------------------------------

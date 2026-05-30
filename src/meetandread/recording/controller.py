@@ -950,7 +950,8 @@ class RecordingController:
             md_body = content[:marker_idx]
             updated_json = json.dumps(data, indent=2)
             new_content = md_body + footer_marker + updated_json + " -->\n"
-            transcript_path.write_text(new_content, encoding="utf-8")
+            from meetandread.utils.file_utils import atomic_write
+            atomic_write(transcript_path, new_content)
 
             # Store WER value for UI access
             self._last_wer = wer_value

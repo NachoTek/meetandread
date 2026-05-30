@@ -11,6 +11,8 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
 
+from meetandread.utils.file_utils import atomic_write
+
 
 @dataclass
 class Word:
@@ -311,13 +313,15 @@ class TranscriptStore:
         markdown = self.to_markdown(include_confidence=False)
         data = self.to_dict(speaker_matches=speaker_matches)
 
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(markdown)
-            f.write("\n\n---\n\n")
-            f.write("<!-- METADATA: ")
-            import json
-            f.write(json.dumps(data, indent=2))
-            f.write(" -->\n")
+        import json
+        content = (
+            markdown
+            + "\n\n---\n\n"
+            + "<!-- METADATA: "
+            + json.dumps(data, indent=2)
+            + " -->\n"
+        )
+        atomic_write(path, content)
     
     def _create_segment(self, words: List[Word]) -> Segment:
         """Create a Segment from a list of words.

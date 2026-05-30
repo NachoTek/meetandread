@@ -91,6 +91,7 @@ from meetandread.widgets.theme import (  # noqa: E402
 
 import logging  # noqa: E402
 from meetandread.widgets.icons import create_play_icon, create_pause_icon, create_speaker_icon  # noqa: E402
+from meetandread.utils.file_utils import atomic_write  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -619,7 +620,7 @@ def _link_speaker_identity_in_file(
     new_content = (
         updated_body + footer_marker + space_before_json + updated_json + " -->\n"
     )
-    md_path.write_text(new_content, encoding="utf-8")
+    atomic_write(md_path, new_content)
 
     logger.info(
         "Linked identity for raw label in %s (%d words, %d segments)",
@@ -1007,7 +1008,7 @@ def _try_link_identity_in_file(
     new_content = (
         updated_body + footer_marker + updated_json + " -->\n"
     )
-    md_path.write_text(new_content, encoding="utf-8")
+    atomic_write(md_path, new_content)
 
     logger.info(
         "Propagated identity to %s (%d words, %d segments)",
@@ -2665,7 +2666,7 @@ class FloatingTranscriptPanel(QWidget):
             updated_body + footer_marker + space_before_json + updated_json + " -->\n"
         )
 
-        md_path.write_text(new_content, encoding="utf-8")
+        atomic_write(md_path, new_content)
 
         logger.info(
             "Renamed speaker '%s' -> '%s' in %s (%d words, %d segments updated)",
@@ -8827,7 +8828,7 @@ class FloatingSettingsPanel(QWidget):
 
         # Write back
         new_content = md_body + footer_marker + json.dumps(data, indent=2) + " -->\n"
-        md_path.write_text(new_content, encoding="utf-8")
+        atomic_write(md_path, new_content)
         logger.info("Renamed speaker '%s' -> '%s' in %s", old_name, new_name, md_path)
 
     def _propagate_rename_to_signatures(

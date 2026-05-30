@@ -20,6 +20,8 @@ from typing import Any, Collection, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from meetandread.utils.file_utils import atomic_write
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -329,7 +331,7 @@ def replace_speaker_label_in_file(
     )
 
     new_content = _rebuild_transcript(updated_body, data)
-    md_path.write_text(new_content, encoding="utf-8")
+    atomic_write(md_path, new_content)
     return words_replaced
 
 
