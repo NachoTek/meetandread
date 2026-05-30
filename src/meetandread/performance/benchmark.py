@@ -107,6 +107,7 @@ class BenchmarkRunner:
 
         self._last_result: Optional[BenchmarkResult] = None
         self._is_running = False
+        self._cancel_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._history: List[BenchmarkResult] = []
 
@@ -119,6 +120,11 @@ class BenchmarkRunner:
     def is_running(self) -> bool:
         """Whether a benchmark is currently executing."""
         return self._is_running
+
+    @property
+    def cancel_requested(self) -> bool:
+        """Whether cancellation has been requested for the current run."""
+        return self._cancel_event.is_set()
 
     @property
     def history(self) -> List[BenchmarkResult]:
@@ -222,6 +228,12 @@ class BenchmarkRunner:
             overall_start = time.monotonic()
 
             for i in range(num_chunks):
+                # Check cancellation before scheduling this chunk
+                if self._cancel_event.is_set():
+                    logger.info("Benchmark cancelled before chunk %d/%d", i + 1, num_chunks)
+                    result.error = "Benchmark cancelled"
+                    return result
+
                 start_sample = i * chunk_samples
                 end_sample = min(start_sample + chunk_samples, total_samples)
                 chunk_audio = audio[start_sample:end_sample]
@@ -230,6 +242,19 @@ class BenchmarkRunner:
                 chunk_start = time.monotonic()
                 segments = self._engine.transcribe_chunk(chunk_audio)
                 chunk_latency = time.monotonic() - chunk_start
+
+                # Check cancellation immediately after blocking transcribe
+                if self._cancel_event.is_set():
+                    logger.info(
+                        "Benchmark cancelled after chunk %d/%d completed",
+                        i + 1, num_chunks,
+                    )
+                    # Include partial results from completed chunks
+                    overall_latency = time.monotonic() - overall_start
+                    result.chunk_latencies = chunk_latencies
+                    result.total_latency_s = overall_latency
+                    result.error = "Benchmark cancelled"
+                    return result
 
                 chunk_text = " ".join(seg.text for seg in segments).strip()
                 if chunk_text:
@@ -291,6 +316,7 @@ class BenchmarkRunner:
         if self._is_running:
             return BenchmarkResult(error="Benchmark already running")
 
+        self._cancel_event.clear()
         self._is_running = True
         try:
             result = self._run_benchmark()
@@ -313,6 +339,7 @@ class BenchmarkRunner:
             return
 
         def _thread_target():
+            self._cancel_event.clear()
             self._is_running = True
             try:
                 result = self._run_benchmark()
@@ -330,8 +357,8 @@ class BenchmarkRunner:
     def cancel(self) -> None:
         """Cancel a running benchmark.
 
-        Note: does not interrupt the transcription engine mid-chunk, but
-        prevents subsequent chunks from running.
+        Sets the cancel event so the chunk loop stops before the next chunk.
+        Does not interrupt the transcription engine mid-chunk.
         """
-        self._is_running = False
+        self._cancel_event.set()
         logger.info("Benchmark cancellation requested")
