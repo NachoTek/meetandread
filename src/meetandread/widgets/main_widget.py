@@ -1187,7 +1187,11 @@ to avoid clipping issues and enable proper text rendering.
         menu.exec(self.mapToGlobal(position))
     
     def _exit_application(self):
-        """Exit the application cleanly (full quit, even with tray)."""
+        """Exit the application cleanly (full quit, even with tray).
+
+        Calls controller.shutdown() to wait for WAV/transcript finalization
+        before quitting. Safe to call multiple times — shutdown is idempotent.
+        """
         self._save_position()
         # Save floating panel geometry before hiding
         if self._floating_settings_panel:
@@ -1196,6 +1200,13 @@ to avoid clipping issues and enable proper text rendering.
         if self._cc_overlay:
             self._cc_overlay.save_geometry()
             self._cc_overlay.hide()
+        # Graceful controller shutdown — waits for finalizer with bounded timeout
+        try:
+            self._controller.shutdown(timeout=10.0)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Controller shutdown error (proceeding with exit)"
+            )
         if self._tray_manager is not None:
             self._tray_manager.hide()
         QApplication.quit()
@@ -1231,7 +1242,7 @@ to avoid clipping issues and enable proper text rendering.
         When a TrayIconManager is wired in, closing the window hides it to
         the system tray instead of quitting the app. This lets users keep
         recording in the background. Without a tray manager, the app quits
-        normally (ALT+F4, etc.).
+        normally (ALT+F4, etc.) with a graceful controller shutdown.
         """
         self._save_position()
         # Save floating panel geometry on app exit
@@ -1248,6 +1259,13 @@ to avoid clipping issues and enable proper text rendering.
             self.hide()
             event.ignore()
         else:
+            # No tray manager — full exit with graceful shutdown
+            try:
+                self._controller.shutdown(timeout=10.0)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Controller shutdown error in closeEvent (proceeding)"
+                )
             event.accept()
             QApplication.quit()
 

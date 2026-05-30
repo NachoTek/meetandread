@@ -255,20 +255,44 @@ def check_hardware_requirements():
         logging.warning(f"Hardware requirements check failed: {e}")
 
 
-def setup_signal_handlers(app):
+def setup_signal_handlers(app, widget_ref=None):
     """Setup signal handlers for graceful shutdown.
-    
+
+    When a widget reference is available, signal handlers invoke the
+    widget's graceful exit path (controller shutdown).  Without a widget
+    (e.g. signal arrives before widget is created), falls back to
+    app.quit().
+
     Args:
-        app: QApplication instance to quit on signal
+        app: QApplication instance to quit on signal.
+        widget_ref: Optional callable that returns the MeetAndReadWidget,
+            or None.  Using a callable avoids referencing a widget that
+            may not exist yet at signal-registration time.
     """
+    def _graceful_exit():
+        """Attempt graceful controller shutdown, then quit."""
+        widget = None
+        if widget_ref is not None:
+            try:
+                widget = widget_ref()
+            except Exception:
+                pass
+        if widget is not None:
+            try:
+                widget._exit_application()
+            except Exception:
+                app.quit()
+        else:
+            app.quit()
+
     def sigint_handler(signum, frame):
         """Handle SIGINT (Ctrl+C) gracefully."""
         print("\nReceived SIGINT, shutting down gracefully...")
-        app.quit()
-    
+        _graceful_exit()
+
     # Register SIGINT handler
     signal.signal(signal.SIGINT, sigint_handler)
-    
+
     # On Windows, also set up console control handler for Ctrl+C
     if sys.platform == 'win32':
         try:
@@ -277,7 +301,7 @@ def setup_signal_handlers(app):
             def win_handler(dwCtrlType):
                 if dwCtrlType == 0:  # CTRL_C_EVENT
                     print("\nReceived CTRL+C event, shutting down gracefully...")
-                    app.quit()
+                    _graceful_exit()
                     return True
                 return False
             win32api.SetConsoleCtrlHandler(win_handler, True)
@@ -300,9 +324,14 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("meetandread")
     app.setApplicationDisplayName("meetandread")
-    
+
+    # Widget placeholder — updated after widget creation.
+    # Signal handlers read this via a lambda so they always get the
+    # current widget (or None if the signal arrives too early).
+    _widget_holder = [None]
+
     # Setup signal handlers for graceful Ctrl+C shutdown
-    setup_signal_handlers(app)
+    setup_signal_handlers(app, widget_ref=lambda: _widget_holder[0])
     
     # Check critical native DLLs are loadable (frozen exe only)
     check_critical_dlls()
@@ -352,6 +381,7 @@ def main():
     
     # Create and show the main widget
     widget = MeetAndReadWidget()
+    _widget_holder[0] = widget  # Enable signal handlers to reach the widget
     
     # Create and wire system tray icon manager
     from meetandread.widgets.tray_icon import TrayIconManager

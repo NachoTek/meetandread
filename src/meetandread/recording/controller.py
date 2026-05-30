@@ -748,6 +748,78 @@ class RecordingController:
         finalizer.start()
         # _stop_worker returns immediately - IDLE is already set
 
+    def shutdown(self, timeout: float = 10.0) -> None:
+        """Idempotent exit-only shutdown that waits for finalization.
+
+        This is ONLY for application exit.  It initiates stop() when
+        recording, waits briefly for the stop worker to spawn the
+        finalizer thread, then joins the finalizer with a bounded
+        timeout.  Normal stop() remains non-blocking per D045.
+
+        Safe to call multiple times, from any state, and from any
+        thread.  Never raises — all exceptions are logged and swallowed
+        so the quit path is never compromised.
+
+        Args:
+            timeout: Maximum seconds to wait for the finalizer thread.
+                Clamped to [1.0, 60.0].
+        """
+        # Clamp timeout to sane range
+        timeout = max(1.0, min(60.0, float(timeout)))
+        logger.info(
+            "shutdown() called: state=%s, timeout=%.1fs",
+            self._state.name, timeout,
+        )
+
+        # Idempotency guard: if already shut down, return immediately.
+        # We check _finalizer_thread == None AND state is IDLE/ERROR
+        # as a signal that stop was already completed or never started.
+        with self._state_lock:
+            current_state = self._state
+
+        # If recording or stopping, initiate stop first
+        if current_state in (ControllerState.RECORDING, ControllerState.STOPPING):
+            logger.info("shutdown(): initiating stop (state=%s)", current_state.name)
+            try:
+                self.stop()
+            except Exception as exc:
+                logger.warning("shutdown(): stop() raised %s, continuing", exc)
+
+            # Wait for stop worker to spawn the finalizer thread
+            # Poll with short sleeps — the stop worker sets IDLE and spawns
+            # the finalizer very quickly (< 1 second per D045).
+            worker_deadline = _time.monotonic() + 2.0
+            while _time.monotonic() < worker_deadline:
+                with self._state_lock:
+                    if self._state == ControllerState.IDLE:
+                        break
+                _time.sleep(0.05)
+
+            # Small additional wait to allow the stop worker to assign
+            # self._finalizer_thread (it sets IDLE first, then spawns).
+            _time.sleep(0.1)
+
+        # Join the finalizer thread if it exists and is alive
+        finalizer = self._finalizer_thread
+        if finalizer is not None and finalizer.is_alive():
+            logger.info(
+                "shutdown(): waiting for finalizer thread (timeout=%.1fs)",
+                timeout,
+            )
+            finalizer.join(timeout=timeout)
+            if finalizer.is_alive():
+                logger.warning(
+                    "shutdown(): finalizer did not complete within %.1fs — "
+                    "proceeding with exit (WAV/transcript may be incomplete)",
+                    timeout,
+                )
+            else:
+                logger.info("shutdown(): finalizer completed successfully")
+        else:
+            logger.info("shutdown(): no active finalizer to wait for")
+
+        logger.info("shutdown() complete")
+
     def _init_transcription(self) -> Optional[ControllerError]:
         """Initialize transcription components.
 
@@ -1931,6 +2003,13 @@ class RecordingController:
             "last_error_class": live_err_class,
             "last_error_message": live_err_msg,
             "last_attempt_ts": live_last_ts,
+        }
+
+        # Finalizer thread info (for shutdown diagnostics)
+        finalizer_thread = self._finalizer_thread
+        diag["finalizer"] = {
+            "alive": finalizer_thread is not None and finalizer_thread.is_alive(),
+            "name": getattr(finalizer_thread, "name", None) if finalizer_thread else None,
         }
 
         # Error info
