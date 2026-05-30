@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import List, Optional
 
@@ -60,9 +61,12 @@ CREATE TABLE IF NOT EXISTS speaker_signatures (
 class VoiceSignatureStore:
     """SQLite-backed store for named speaker voice embeddings.
 
-    Thread-safe for concurrent reads via WAL mode. For concurrent writes
-    from multiple threads, callers should use a single store instance or
-    external serialization.
+    Thread-safe for concurrent reads via WAL mode. Write operations
+    (save, update, delete) are internally serialized with a lock so
+    that multiple callers (diarization finalizers, identity UI, live
+    speaker matching) can safely share a single instance. Reads
+    (load_signatures, find_match) are not serialized beyond the
+    SQLite WAL read concurrency.
 
     Args:
         db_path: Path to the SQLite database file. Use ":memory:" for
@@ -72,6 +76,7 @@ class VoiceSignatureStore:
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self._db_path = str(db_path)
         self._conn: Optional[sqlite3.Connection] = None
+        self._write_lock = threading.Lock()
         self._connect()
 
     # ------------------------------------------------------------------
@@ -80,8 +85,10 @@ class VoiceSignatureStore:
 
     def _connect(self) -> None:
         """Open (or reopen) the database connection and ensure schema."""
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        timeout = 10.0  # seconds to wait for SQLite locks
+        conn = sqlite3.connect(self._db_path, check_same_thread=False, timeout=timeout)
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA)
@@ -104,11 +111,16 @@ class VoiceSignatureStore:
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        """Close the database connection."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
-            logger.debug("Voice signature store closed")
+        """Close the database connection.
+
+        Acquires the write lock to prevent closing while a write
+        transaction is in progress.
+        """
+        with self._write_lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+                logger.debug("Voice signature store closed")
 
     def save_signature(
         self,
@@ -125,18 +137,19 @@ class VoiceSignatureStore:
                 contributed to this embedding.
         """
         blob = _embedding_to_blob(embedding)
-        self.conn.execute(
-            """
-            INSERT INTO speaker_signatures (name, embedding, num_samples)
-            VALUES (?, ?, ?)
-            ON CONFLICT(name) DO UPDATE SET
-                embedding   = excluded.embedding,
-                num_samples = excluded.num_samples,
-                updated_at  = datetime('now')
-            """,
-            (name, blob, averaged_from_segments),
-        )
-        self.conn.commit()
+        with self._write_lock:
+            self.conn.execute(
+                """
+                INSERT INTO speaker_signatures (name, embedding, num_samples)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    embedding   = excluded.embedding,
+                    num_samples = excluded.num_samples,
+                    updated_at  = datetime('now')
+                """,
+                (name, blob, averaged_from_segments),
+            )
+            self.conn.commit()
         logger.debug(
             "Saved signature for '%s' (segments=%d, dim=%d)",
             name,
@@ -218,11 +231,12 @@ class VoiceSignatureStore:
         Returns:
             True if a row was deleted, False if the name was not found.
         """
-        cursor = self.conn.execute(
-            "DELETE FROM speaker_signatures WHERE name = ?", (name,)
-        )
-        self.conn.commit()
-        deleted = cursor.rowcount > 0
+        with self._write_lock:
+            cursor = self.conn.execute(
+                "DELETE FROM speaker_signatures WHERE name = ?", (name,)
+            )
+            self.conn.commit()
+            deleted = cursor.rowcount > 0
         if deleted:
             logger.debug("Deleted signature for '%s'", name)
         else:
@@ -244,32 +258,33 @@ class VoiceSignatureStore:
             True if an existing profile was updated, False if the name
             was not found (callers should use ``save_signature`` first).
         """
-        row = self.conn.execute(
-            "SELECT embedding, num_samples FROM speaker_signatures WHERE name = ?",
-            (name,),
-        ).fetchone()
+        with self._write_lock:
+            row = self.conn.execute(
+                "SELECT embedding, num_samples FROM speaker_signatures WHERE name = ?",
+                (name,),
+            ).fetchone()
 
-        if row is None:
-            logger.debug("No existing signature for '%s' to update", name)
-            return False
+            if row is None:
+                logger.debug("No existing signature for '%s' to update", name)
+                return False
 
-        old_embedding = _blob_to_embedding(row["embedding"])
-        old_count = row["num_samples"]
-        new_count = old_count + 1
+            old_embedding = _blob_to_embedding(row["embedding"])
+            old_count = row["num_samples"]
+            new_count = old_count + 1
 
-        # Weighted incremental average
-        averaged = (old_embedding * old_count + embedding) / new_count
+            # Weighted incremental average
+            averaged = (old_embedding * old_count + embedding) / new_count
 
-        blob = _embedding_to_blob(averaged)
-        self.conn.execute(
-            """
-            UPDATE speaker_signatures
-            SET embedding = ?, num_samples = ?, updated_at = datetime('now')
-            WHERE name = ?
-            """,
-            (blob, new_count, name),
-        )
-        self.conn.commit()
+            blob = _embedding_to_blob(averaged)
+            self.conn.execute(
+                """
+                UPDATE speaker_signatures
+                SET embedding = ?, num_samples = ?, updated_at = datetime('now')
+                WHERE name = ?
+                """,
+                (blob, new_count, name),
+            )
+            self.conn.commit()
         logger.debug(
             "Updated signature for '%s' (samples %d -> %d)",
             name,
