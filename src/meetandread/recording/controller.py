@@ -172,6 +172,30 @@ class RecordingController:
             except Exception:
                 logger.exception("on_frames_dropped callback error (recording continues)")
 
+    def _on_session_error(self, exc: Exception) -> None:
+        """Internal handler for session consumer thread crashes.
+
+        Called from the audio consumer thread via SessionConfig.on_error
+        when the consumer loop crashes. Logs the error and transitions
+        controller state to ERROR. Never raises — exceptions are logged
+        and swallowed so the consumer thread cleanup is not compromised.
+        """
+        try:
+            error_class = type(exc).__name__
+            # Sanitized message — no raw audio content
+            error_msg = str(exc)[:200] if exc else ""
+            logger.error(
+                "Audio session consumer crash: error_class=%s, state=%s",
+                error_class,
+                self._state.name,
+            )
+            self._set_error(
+                f"Audio consumer error: {error_class}",
+                is_recoverable=True,
+            )
+        except Exception:
+            logger.exception("Error in _on_session_error handler")
+
     def _set_state(self, state: ControllerState) -> None:
         """Update state and notify listeners."""
         self._state = state
@@ -348,6 +372,7 @@ class RecordingController:
                 denoising_provider_name=denoise_provider if denoise_enabled else None,
                 denoising_latency_budget_ms=denoise_budget_ms,
                 on_frames_dropped=self._on_session_frames_dropped,
+                on_error=self._on_session_error,
             )
             logger.info(
                 "Denoising config: enabled=%s provider=%s budget=%.0fms",
@@ -1737,6 +1762,7 @@ class RecordingController:
                 "frames_dropped": stats.frames_dropped,
                 "duration_seconds": stats.duration_seconds,
                 "source_stats": stats.source_stats,
+                "session_error": str(self._session.get_error()) if self._session.get_error() else None,
                 "denoising": {
                     "provider": stats.denoising.provider,
                     "enabled": stats.denoising.enabled,

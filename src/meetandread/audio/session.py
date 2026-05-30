@@ -136,6 +136,7 @@ class SessionConfig:
     denoising_provider_name: Optional[str] = None
     denoising_latency_budget_ms: float = 200.0
     denoising_provider_factory: Optional[Callable[[], DenoisingProvider]] = None
+    on_error: Optional[Callable[[Exception], None]] = None
 
 
 @dataclass
@@ -431,7 +432,7 @@ class AudioSession:
         Raises:
             SessionError: If session is not recording
         """
-        if self._state != SessionState.RECORDING:
+        if self._state not in (SessionState.RECORDING, SessionState.ERROR):
             raise SessionError(f"Cannot stop from state {self._state.name}")
         
         self._state = SessionState.STOPPING
@@ -442,6 +443,7 @@ class AudioSession:
             wrapper.stop()
 
         # Wait for consumer thread to finish (drains existing frames)
+        # If consumer crashed, thread is already dead — join returns quickly
         if self._consumer_thread:
             self._consumer_thread.join(timeout=5.0)
 
@@ -474,6 +476,15 @@ class AudioSession:
     def get_stats(self) -> SessionStats:
         """Get current recording statistics."""
         return self._stats
+
+    def get_error(self) -> Optional[Exception]:
+        """Get the stored consumer thread error, if any.
+
+        Returns the Exception that crashed the consumer loop, or None
+        if no crash occurred.  This is the sanitized accessor for
+        controller/UI diagnostics — never includes raw audio content.
+        """
+        return self._error
     
     def _create_sources(self, config: SessionConfig) -> List[AudioSourceWrapper]:
         """Create source wrappers from configuration."""
@@ -634,6 +645,27 @@ class AudioSession:
     
     def _consumer_loop(self) -> None:
         """Background thread that reads from sources and writes to disk."""
+        try:
+            self._consumer_loop_inner()
+        except Exception as exc:
+            # Guard: consumer thread crash must not die invisibly.
+            # Log, store error, transition state, and invoke callback.
+            _log.exception("Audio consumer thread crashed: %s", type(exc).__name__)
+            self._error = exc
+            # Transition to ERROR unless stop/finalize already in progress
+            if self._state not in (SessionState.STOPPING, SessionState.FINALIZED):
+                self._state = SessionState.ERROR
+            # Signal stop to prevent further work
+            self._stop_event.set()
+            # Invoke on_error callback safely
+            if self._config and self._config.on_error:
+                try:
+                    self._config.on_error(exc)
+                except Exception:
+                    _log.exception("on_error callback raised during consumer crash")
+
+    def _consumer_loop_inner(self) -> None:
+        """Inner consumer loop — separated for crash-guard wrapping."""
         discard_mode = False
         max_frames = self._config.max_frames if self._config else None
 
