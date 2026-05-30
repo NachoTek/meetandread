@@ -405,10 +405,27 @@ class AccumulatingTranscriptionProcessor:
             # Transcribe with thread safety
             start_time = _time.time()
             with self._model_lock:
-                segments = self._engine.transcribe_chunk(audio_np)
+                result = self._engine.transcribe_chunk(audio_np)
             transcribe_time = _time.time() - start_time
 
+            # Always increment transcription count, even on error
             self._transcription_count += 1
+
+            # Import typed result classes for isinstance checks
+            from meetandread.transcription.engine import TranscriptionSuccess, TranscriptionError
+
+            if isinstance(result, TranscriptionError):
+                # Log sanitized error — never log audio content or transcript text
+                logger.error(
+                    "Transcription failed [%s]: %s",
+                    result.error_type, result.message,
+                )
+                print(f"[{_ts()}] DEBUG: Transcription error [{result.error_type}]: {result.message}")
+                # Do NOT emit any SegmentResult on error
+                return
+
+            # TranscriptionSuccess — extract segments
+            segments = result.segments
             
             if segments:
                 # Emit ALL segments from this re-transcription.
@@ -440,7 +457,7 @@ class AccumulatingTranscriptionProcessor:
                     segment_start = elapsed - window_duration + seg.start
                     segment_end = elapsed - window_duration + seg.end
 
-                    result = SegmentResult(
+                    result_obj = SegmentResult(
                         text=seg_text,
                         confidence=int(seg.confidence),
                         start_time=segment_start,
@@ -451,12 +468,12 @@ class AccumulatingTranscriptionProcessor:
                     )
 
                     # Queue for UI
-                    self._result_queue.put(result)
+                    self._result_queue.put(result_obj)
 
                     # Callback
                     if self.on_result:
                         try:
-                            self.on_result(result)
+                            self.on_result(result_obj)
                         except Exception as e:
                             print(f"[{_ts()}] ERROR: on_result callback failed: {e}")
 

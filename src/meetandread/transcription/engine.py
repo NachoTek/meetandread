@@ -5,8 +5,8 @@ timestamps. Uses whisper.cpp (via pywhispercpp) for CPU-only operation
 without PyTorch DLL dependencies.
 """
 
-from dataclasses import dataclass
-from typing import List, Optional, Dict, Any, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any, Tuple, Union
 from pathlib import Path
 import numpy as np
 import logging
@@ -43,6 +43,35 @@ class TranscriptionSegment:
     start: float  # timestamp in seconds
     end: float
     words: List[WordInfo]
+
+
+@dataclass
+class TranscriptionSuccess:
+    """Successful transcription result.
+
+    Contains a (possibly empty) list of segments. Empty segments are
+    legitimate (e.g., silence or no speech detected) and distinct from
+    a transcription error.
+    """
+    segments: List[TranscriptionSegment]
+
+
+@dataclass
+class TranscriptionError:
+    """Typed transcription error.
+
+    Categorizes model failures so callers can distinguish errors from
+    genuine silence.  ``error_type`` is a short machine-readable token:
+    ``'oom'``, ``'temp_file_error'``, or ``'model_error'``.
+    ``message`` is sanitized (no filesystem paths, model internals, or
+    audio content).
+    """
+    error_type: str
+    message: str
+
+
+# Union type for transcription results
+TranscriptionResult = Union[TranscriptionSuccess, TranscriptionError]
 
 
 class WhisperTranscriptionEngine:
@@ -357,7 +386,7 @@ class WhisperTranscriptionEngine:
         # Cap at 95% (never claim 100% without real probabilities)
         return min(95, base_confidence)
     
-    def transcribe_chunk(self, audio_np: np.ndarray) -> List[TranscriptionSegment]:
+    def transcribe_chunk(self, audio_np: np.ndarray) -> TranscriptionResult:
         """Transcribe an audio chunk.
 
         Uses whisper.cpp with extract_probability=True for real confidence
@@ -367,7 +396,8 @@ class WhisperTranscriptionEngine:
             audio_np: Audio samples as float32 numpy array (mono, 16kHz)
 
         Returns:
-            List of transcription segments with per-segment confidence scores
+            TranscriptionSuccess with segments (possibly empty for silence),
+            or TranscriptionError if the model/temp file fails.
 
         Raises:
             RuntimeError: If model is not loaded
@@ -376,7 +406,7 @@ class WhisperTranscriptionEngine:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
         if len(audio_np) == 0:
-            return []
+            return TranscriptionSuccess(segments=[])
 
         # Save audio to temp file (whisper.cpp requires file path)
         temp_path = None
@@ -394,7 +424,7 @@ class WhisperTranscriptionEngine:
             )
 
             if not result:
-                return []
+                return TranscriptionSuccess(segments=[])
 
             # Convert pywhispercpp Segments to our TranscriptionSegments
             segments = []
@@ -433,11 +463,12 @@ class WhisperTranscriptionEngine:
                     words=[word],
                 ))
 
-            return segments
+            return TranscriptionSuccess(segments=segments)
 
         except Exception as e:
-            logger.error(f"Transcription error: {e}")
-            return []
+            error_type, message = self._categorize_error(e)
+            logger.error("Transcription error [%s]: %s", error_type, message)
+            return TranscriptionError(error_type=error_type, message=message)
 
         finally:
             # Clean up temp file
@@ -446,6 +477,34 @@ class WhisperTranscriptionEngine:
                     os.unlink(temp_path)
                 except Exception:
                     pass  # Ignore cleanup errors
+
+    @staticmethod
+    def _categorize_error(exc: Exception) -> Tuple[str, str]:
+        """Categorize a transcription exception into a typed error.
+
+        Returns (error_type, sanitized_message) where error_type is one of
+        'oom', 'temp_file_error', or 'model_error'. The message is truncated
+        and stripped of filesystem paths or model internals.
+        """
+        msg = str(exc).strip()
+        lower = msg.lower()
+
+        # Detect OOM conditions
+        if any(tok in lower for tok in ('out of memory', 'oom', 'cuda_error_out_of_memory',
+                                         'cannot allocate', 'memory allocation')):
+            return 'oom', 'Out of memory during transcription'
+
+        # Detect temp-file / WAV write failures
+        if isinstance(exc, (OSError, wave.Error)) or any(
+            tok in lower for tok in ('wav', 'temp', 'temporary file', 'no such file')
+        ):
+            # Sanitize: remove any file paths from the message
+            sanitized = msg if len(msg) <= 120 else msg[:117] + '...'
+            return 'temp_file_error', sanitized
+
+        # Generic model error — sanitize message
+        sanitized = msg if len(msg) <= 120 else msg[:117] + '...'
+        return 'model_error', sanitized
     
     def _normalize_confidence(self, avg_log_prob: float) -> int:
         """Convert Whisper's avg_log_prob to 0-100 scale.
