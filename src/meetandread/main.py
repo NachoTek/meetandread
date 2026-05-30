@@ -4,13 +4,21 @@ Main application entry point.
 """
 
 import sys
+import queue
 import threading
 import logging
 import signal
 from datetime import datetime
 from pathlib import Path
+from typing import List, NamedTuple, Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt
+
+
+class _RecoveryResult(NamedTuple):
+    """Immutable envelope for recovery worker outcome."""
+    recovered_paths: List[Path]
+    error: Optional[str]
 
 from meetandread.widgets.main_widget import MeetAndReadWidget
 from meetandread.audio import has_partial_recordings, recover_part_files, get_recordings_dir
@@ -145,28 +153,37 @@ def check_and_offer_recovery(parent=None):
     # Process events to show the dialog
     QApplication.processEvents()
     
-    # Do recovery in a thread to avoid blocking
-    recovered_files = []
-    recovery_error = None
+    # Thread-safe result handoff via queue — no shared mutable state
+    result_queue: queue.Queue[_RecoveryResult] = queue.Queue(maxsize=1)
     
     def do_recovery():
-        nonlocal recovered_files, recovery_error
         try:
-            recovered_files = recover_part_files(
+            recovered = recover_part_files(
                 recordings_dir=recordings_dir,
                 delete_original=False,  # Safer default - backup originals
             )
+            result_queue.put(_RecoveryResult(recovered_paths=recovered, error=None))
         except Exception as e:
-            recovery_error = str(e)
+            result_queue.put(_RecoveryResult(recovered_paths=[], error=str(e)))
     
-    # Run recovery (in thread for UI responsiveness, but wait for completion)
-    recovery_thread = threading.Thread(target=do_recovery)
+    # Run recovery in a thread to keep UI responsive
+    recovery_thread = threading.Thread(target=do_recovery, daemon=True)
     recovery_thread.start()
-    recovery_thread.join(timeout=30.0)  # Wait up to 30 seconds
+    
+    # Wait up to 30 seconds for the result envelope
+    try:
+        result = result_queue.get(timeout=30.0)
+        recovered_files = result.recovered_paths
+        recovery_error = result.error
+        timed_out = False
+    except queue.Empty:
+        recovered_files = []
+        recovery_error = None
+        timed_out = True
     
     progress_msg.close()
     
-    # Show result
+    # Show result — three explicit outcomes: error, timeout, success/empty
     if recovery_error:
         error_msg = QMessageBox(parent)
         error_msg.setWindowTitle("Recovery Error")
@@ -174,6 +191,17 @@ def check_and_offer_recovery(parent=None):
         error_msg.setInformativeText(f"Error: {recovery_error}")
         error_msg.setIcon(QMessageBox.Icon.Warning)
         error_msg.exec()
+    elif timed_out:
+        timeout_msg = QMessageBox(parent)
+        timeout_msg.setWindowTitle("Recovery Timed Out")
+        timeout_msg.setText("Recording recovery is still in progress")
+        timeout_msg.setInformativeText(
+            "Recovery did not complete within 30 seconds. "
+            "Partial recordings have been preserved and can be "
+            "recovered on the next startup."
+        )
+        timeout_msg.setIcon(QMessageBox.Icon.Warning)
+        timeout_msg.exec()
     elif recovered_files:
         success_msg = QMessageBox(parent)
         success_msg.setWindowTitle("Recovery Complete")
