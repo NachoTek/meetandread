@@ -408,14 +408,13 @@ class AudioSession:
             
             # Start consumer thread
             self._stop_event.clear()
+            self._start_time = time.time()
+            self._state = SessionState.RECORDING
             self._consumer_thread = threading.Thread(
                 target=self._consumer_loop,
                 daemon=True,
             )
             self._consumer_thread.start()
-            
-            self._start_time = time.time()
-            self._state = SessionState.RECORDING
             
         except Exception as e:
             self._state = SessionState.ERROR

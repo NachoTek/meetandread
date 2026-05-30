@@ -264,14 +264,33 @@ class TestQueueHandoffThreadSafety:
         from meetandread.main import _RecoveryResult
 
         put_count = 0
-        original_put = queue.Queue.put
 
-        def _counting_put(self, item, *args, **kwargs):
-            nonlocal put_count
-            put_count += 1
-            original_put(self, item, *args, **kwargs)
+        # Wrap check_and_offer_recovery's local queue creation by
+        # intercepting the __init__ that creates result_queue.
+        original_check = main_mod.check_and_offer_recovery
 
-        monkeypatch.setattr(queue.Queue, "put", _counting_put)
+        # Instead of monkeypatching Queue.put globally (which catches ALL
+        # queues in the process), wrap the function and count puts on the
+        # actual result_queue instance.
+        captured_queue = [None]
+
+        _original_queue_init = queue.Queue.__init__
+
+        def _init_and_count(self_q, maxsize=0):
+            _original_queue_init(self_q, maxsize=maxsize)
+            if maxsize == 1:
+                # This is the result_queue (maxsize=1)
+                captured_queue[0] = self_q
+                _original_put = self_q.put
+
+                def _counting_put(item, *args, **kwargs):
+                    nonlocal put_count
+                    put_count += 1
+                    _original_put(item, *args, **kwargs)
+
+                self_q.put = _counting_put
+
+        monkeypatch.setattr(queue.Queue, "__init__", _init_and_count)
 
         def _recover(*a, **kw):
             return [Path("/x.wav")]
@@ -288,14 +307,22 @@ class TestQueueHandoffThreadSafety:
 
         import meetandread.main as main_mod
         put_count = 0
-        original_put = queue.Queue.put
 
-        def _counting_put(self, item, *args, **kwargs):
-            nonlocal put_count
-            put_count += 1
-            original_put(self, item, *args, **kwargs)
+        _original_queue_init = queue.Queue.__init__
 
-        monkeypatch.setattr(queue.Queue, "put", _counting_put)
+        def _init_and_count(self_q, maxsize=0):
+            _original_queue_init(self_q, maxsize=maxsize)
+            if maxsize == 1:
+                _original_put = self_q.put
+
+                def _counting_put(item, *args, **kwargs):
+                    nonlocal put_count
+                    put_count += 1
+                    _original_put(item, *args, **kwargs)
+
+                self_q.put = _counting_put
+
+        monkeypatch.setattr(queue.Queue, "__init__", _init_and_count)
         result, _ = _run_recovery(monkeypatch, _recover)
         assert put_count == 1
         assert result == (0, False)
