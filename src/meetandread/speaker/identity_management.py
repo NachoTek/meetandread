@@ -455,8 +455,8 @@ def rename_identity(
         # Attempt rollback: remove the new entry we just created
         try:
             store.delete_signature(new_name)
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            logger.debug("Rollback delete failed for %s: %s", new_name, rollback_exc)
         raise RenameError(f"Failed to delete old profile: {exc}") from exc
 
     # Rewrite transcripts
