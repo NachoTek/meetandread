@@ -14,16 +14,17 @@ from typing import List, NamedTuple, Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt
 
+from meetandread.widgets.main_widget import MeetAndReadWidget
+from meetandread.audio import has_partial_recordings, recover_part_files, get_recordings_dir
+from meetandread.config import get_config
+from meetandread.hardware.recommender import ModelRecommender
+
 
 class _RecoveryResult(NamedTuple):
     """Immutable envelope for recovery worker outcome."""
     recovered_paths: List[Path]
     error: Optional[str]
 
-from meetandread.widgets.main_widget import MeetAndReadWidget
-from meetandread.audio import has_partial_recordings, recover_part_files, get_recordings_dir
-from meetandread.config import get_config
-from meetandread.hardware.recommender import ModelRecommender
 
 logger = logging.getLogger(__name__)
 

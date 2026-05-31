@@ -197,7 +197,7 @@ class AccumulatingTranscriptionProcessor:
         self._processing_thread.start()
         logger.info("Accumulating transcription processor started")
         logger.info("Window size: %.1fs, Update frequency: %.1fs, Silence timeout: %.1fs",
-                     self.window_size, self.update_frequency, self.silence_timeout)
+                    self.window_size, self.update_frequency, self.silence_timeout)
     
     def stop(self) -> None:
         """Stop the transcription processor."""
@@ -216,7 +216,7 @@ class AccumulatingTranscriptionProcessor:
         # The processing loop will handle any remaining audio or we accept that the last phrase is lost
         
         logger.info("Processor stopped. Total transcriptions: %d, Total audio chunks: %d",
-                     self._transcription_count, self._audio_chunks_fed)
+                    self._transcription_count, self._audio_chunks_fed)
     
     def feed_audio(self, audio_chunk: np.ndarray) -> None:
         """
@@ -410,7 +410,7 @@ class AccumulatingTranscriptionProcessor:
             self._transcription_count += 1
 
             # Import typed result classes for isinstance checks
-            from meetandread.transcription.engine import TranscriptionSuccess, TranscriptionError
+            from meetandread.transcription.engine import TranscriptionError
 
             if isinstance(result, TranscriptionError):
                 # Log sanitized error — never log audio content or transcript text

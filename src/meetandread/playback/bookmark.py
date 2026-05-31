@@ -12,13 +12,18 @@ raw bookmark names or transcript text.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from meetandread.utils.file_utils import atomic_write
 from typing import Any, Dict, List, Optional
+
+from meetandread.speaker.identity_management import (
+    parse_metadata_footer as _parse_metadata_footer,
+    split_metadata_footer as _split_metadata_footer,
+    _rebuild_transcript,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,14 +71,6 @@ def _format_position(position_ms: int) -> str:
     minutes = total_seconds // 60
     seconds = total_seconds % 60
     return f"{minutes:02d}:{seconds:02d}"
-
-
-from meetandread.speaker.identity_management import (
-    parse_metadata_footer as _parse_metadata_footer,
-    split_metadata_footer as _split_metadata_footer,
-    _rebuild_transcript,
-    _FOOTER_MARKER,
-)
 
 
 def _parse_bookmark_entry(entry: Any) -> Optional[Bookmark]:

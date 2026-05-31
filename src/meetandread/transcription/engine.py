@@ -5,7 +5,7 @@ timestamps. Uses whisper.cpp (via pywhispercpp) for CPU-only operation
 without PyTorch DLL dependencies.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Tuple, Union
 from pathlib import Path
 import numpy as np
@@ -491,7 +491,7 @@ class WhisperTranscriptionEngine:
 
         # Detect OOM conditions
         if any(tok in lower for tok in ('out of memory', 'oom', 'cuda_error_out_of_memory',
-                                         'cannot allocate', 'memory allocation')):
+                                        'cannot allocate', 'memory allocation')):
             return 'oom', 'Out of memory during transcription'
 
         # Detect temp-file / WAV write failures

@@ -188,8 +188,6 @@ class RecordingController:
         """
         try:
             error_class = type(exc).__name__
-            # Sanitized message — no raw audio content
-            error_msg = str(exc)[:_SANITIZED_ERROR_MAX_LENGTH] if exc else ""
             logger.error(
                 "Audio session consumer crash: error_class=%s, state=%s",
                 error_class,

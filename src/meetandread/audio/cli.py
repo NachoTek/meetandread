@@ -152,7 +152,7 @@ def cmd_record(args) -> int:
             sources_config.append("system audio")
         
         logger.info("Recording from %s for %.1f seconds...",
-                     ' + '.join(sources_config), args.seconds)
+                    ' + '.join(sources_config), args.seconds)
         
     elif args.fake:
         fake_path = Path(args.fake)
@@ -161,7 +161,7 @@ def cmd_record(args) -> int:
             return 1
         sources.append(SourceConfig(type='fake', fake_path=str(fake_path), loop=False))
         logger.info("Recording from fake source (%s) for %.1f seconds...",
-                     fake_path, args.seconds)
+                    fake_path, args.seconds)
     
     # Create session config
     output_dir = Path(args.output_dir) if args.output_dir else None

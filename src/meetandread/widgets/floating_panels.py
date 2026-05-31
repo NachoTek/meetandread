@@ -5878,9 +5878,6 @@ class FloatingSettingsPanel(QWidget):
         # Extract model name from result
         model_name = result.model_info.get("model_size", "unknown") if result.model_info else "unknown"
 
-        # Format result
-        wer_pct = result.wer * 100
-
         # Store in local history (keep last 5)
         self._benchmark_history.append({
             "wer": result.wer,

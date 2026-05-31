@@ -9,10 +9,10 @@ import shutil
 from pathlib import Path
 from typing import List, Optional, Callable
 
-logger = logging.getLogger(__name__)
-
 from meetandread.audio.storage.pcm_part import load_metadata
 from meetandread.audio.storage.wav_finalize import finalize_part_to_wav
+
+logger = logging.getLogger(__name__)
 
 
 def find_part_files(recordings_dir: Path) -> List[Path]:

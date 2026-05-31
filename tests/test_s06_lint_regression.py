@@ -46,9 +46,9 @@ NOQA_ALLOWLIST: Dict[str, Dict[int, str]] = {
         5323: "F541 — CSS template with only escaped braces, kept for clarity",
         # Method call incorrectly flagged by stale noqa; kept as documentation
         # until a future cleanup removes the comment itself.
-        7554: "F841 — stale suppression on method call (harmless comment)",
+        7551: "F841 — stale suppression on method call (harmless comment)",
         # Intentional redefinition in ``if __name__ == "__main__":`` block.
-        9214: "F811 — intentional redefinition in standalone test block",
+        9211: "F811 — intentional redefinition in standalone test block",
     },
 }
 
