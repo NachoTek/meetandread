@@ -125,26 +125,66 @@ class PruneSummary:
 def parse_metadata_footer(content: str) -> Optional[Dict[str, Any]]:
     """Extract the JSON metadata dict from a transcript file's content.
 
-    Returns None if the footer is missing or contains malformed JSON.
+    Uses the **last** footer marker (rfind) so that body text or an
+    earlier malformed marker cannot shadow the real footer written by
+    TranscriptStore.save_to_file.
+
+    Returns None if the footer is missing, has no closing marker, or
+    contains malformed JSON.
     """
-    marker_idx = content.find(_FOOTER_MARKER)
+    # Use rfind to locate the LAST footer marker -- the real one written
+    # by save_to_file.  Body text may legitimately contain an earlier
+    # marker string (e.g. a transcript discussing the format).
+    marker_idx = content.rfind(_FOOTER_MARKER)
     if marker_idx == -1:
         return None
 
     after_marker = content[marker_idx + len(_FOOTER_MARKER) :]
-    metadata_text = after_marker
-    if metadata_text.strip().endswith(" -->"):
-        metadata_text = metadata_text.strip()[: -len(" -->")]
-    else:
-        # Try to find the closing --> even without trailing newline
-        end_idx = metadata_text.find(" -->")
-        if end_idx != -1:
-            metadata_text = metadata_text[:end_idx]
+
+    # Find the closing --> using rfind as well so inner " -->" in JSON
+    # string values do not truncate the parse prematurely.
+    end_idx = after_marker.rfind(" -->")
+    if end_idx == -1:
+        return None
+
+    metadata_text = after_marker[:end_idx]
 
     try:
         return json.loads(metadata_text)  # type: ignore[no-any-return]
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def split_metadata_footer(content: str) -> Optional[tuple[str, Dict[str, Any]]]:
+    """Split a transcript into (markdown_body, metadata_dict).
+
+    Uses the same rfind-based logic as :func:`parse_metadata_footer` to
+    locate the **last** footer marker.  Returns None if the footer is
+    missing, has no closing marker, or contains malformed JSON.
+
+    Callers that need both the body (for rewriting) and the metadata
+    should prefer this over calling :func:`parse_metadata_footer` and
+    then re-scanning the content.
+    """
+    marker_idx = content.rfind(_FOOTER_MARKER)
+    if marker_idx == -1:
+        return None
+
+    md_body = content[:marker_idx]
+    after_marker = content[marker_idx + len(_FOOTER_MARKER) :]
+
+    end_idx = after_marker.rfind(" -->")
+    if end_idx == -1:
+        return None
+
+    metadata_text = after_marker[:end_idx]
+
+    try:
+        data = json.loads(metadata_text)  # type: ignore[no-any-return]
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    return md_body, data
 
 
 def _rebuild_transcript(

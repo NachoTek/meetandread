@@ -22,11 +22,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Metadata footer markers (must match TranscriptStore.save_to_file)
-# ---------------------------------------------------------------------------
-_FOOTER_MARKER = "\n---\n\n<!-- METADATA: "
-_FOOTER_END = " -->\n"
+# Metadata footer parsing delegated to identity_management
 
 
 # ---------------------------------------------------------------------------
@@ -72,35 +68,12 @@ def _format_position(position_ms: int) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
-def _parse_metadata_footer(content: str) -> Optional[Dict[str, Any]]:
-    """Extract the JSON metadata dict from a transcript file's content.
-
-    Returns None if the footer is missing or contains malformed JSON.
-    """
-    marker_idx = content.find(_FOOTER_MARKER)
-    if marker_idx == -1:
-        return None
-
-    after_marker = content[marker_idx + len(_FOOTER_MARKER) :]
-    metadata_text = after_marker
-    if metadata_text.strip().endswith(" -->"):
-        metadata_text = metadata_text.strip()[: -len(" -->")]
-    else:
-        end_idx = metadata_text.find(" -->")
-        if end_idx != -1:
-            metadata_text = metadata_text[:end_idx]
-
-    try:
-        return json.loads(metadata_text)  # type: ignore[no-any-return]
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-def _rebuild_transcript(
-    md_body: str, metadata: Dict[str, Any]
-) -> str:
-    """Rebuild a transcript file from markdown body and metadata dict."""
-    return md_body + _FOOTER_MARKER + json.dumps(metadata, indent=2) + " -->\n"
+from meetandread.speaker.identity_management import (
+    parse_metadata_footer as _parse_metadata_footer,
+    split_metadata_footer as _split_metadata_footer,
+    _rebuild_transcript,
+    _FOOTER_MARKER,
+)
 
 
 def _parse_bookmark_entry(entry: Any) -> Optional[Bookmark]:
@@ -146,28 +119,11 @@ def _read_transcript(path: Path) -> tuple[str, Dict[str, Any]]:
             f"Cannot read transcript {path.name}: {exc}"
         ) from exc
 
-    marker_idx = content.find(_FOOTER_MARKER)
-    if marker_idx == -1:
+    result = _split_metadata_footer(content)
+    if result is None:
         raise BookmarkError(f"No metadata footer in {path.name}")
 
-    md_body = content[:marker_idx]
-    after_marker = content[marker_idx + len(_FOOTER_MARKER) :]
-    metadata_text = after_marker
-    if metadata_text.strip().endswith(" -->"):
-        metadata_text = metadata_text.strip()[: -len(" -->")]
-    else:
-        end_idx = metadata_text.find(" -->")
-        if end_idx != -1:
-            metadata_text = metadata_text[:end_idx]
-
-    try:
-        data = json.loads(metadata_text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise BookmarkError(
-            f"Malformed metadata JSON in {path.name}"
-        ) from exc
-
-    return md_body, data
+    return result
 
 
 def _write_transcript(path: Path, md_body: str, metadata: Dict[str, Any]) -> None:
