@@ -321,7 +321,7 @@ def replace_speaker_label_in_file(
     """
     content = md_path.read_text(encoding="utf-8")
 
-    marker_idx = content.find(_FOOTER_MARKER)
+    marker_idx = content.rfind(_FOOTER_MARKER)
     if marker_idx == -1:
         raise IdentityManagementError(
             f"No metadata footer in {md_path} — cannot rewrite"
@@ -333,7 +333,7 @@ def replace_speaker_label_in_file(
     if metadata_text.strip().endswith(" -->"):
         metadata_text = metadata_text.strip()[: -len(" -->")]
     else:
-        end_idx = metadata_text.find(" -->")
+        end_idx = metadata_text.rfind(" -->")
         if end_idx != -1:
             metadata_text = metadata_text[:end_idx]
 
