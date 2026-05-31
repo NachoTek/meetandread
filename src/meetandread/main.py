@@ -319,7 +319,7 @@ def setup_signal_handlers(app, widget_ref=None):
 def main():
     """Application entry point."""
     # Setup logging first
-    log_file = setup_logging()  # noqa: F841
+    setup_logging()
     logging.info("Starting meetandread")
     
     # Enable high DPI support

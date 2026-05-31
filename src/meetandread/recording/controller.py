@@ -1333,7 +1333,6 @@ class RecordingController:
             self._live_last_attempt_ts = None
         # Keep extractor available across recordings for efficiency
         # (don't recreate it for each recording session)
-        pass
 
     def get_live_audio_samples(
         self, duration_seconds: float = 1.5

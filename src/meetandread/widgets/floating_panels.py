@@ -5879,13 +5879,7 @@ class FloatingSettingsPanel(QWidget):
         model_name = result.model_info.get("model_size", "unknown") if result.model_info else "unknown"
 
         # Format result
-        # Format result
         wer_pct = result.wer * 100
-        result_text = (  # noqa: F841
-            f"{model_name}: WER {wer_pct:.1f}% | "
-            f"Latency: {result.total_latency_s:.2f}s | "
-            f"Speed: {result.throughput_ratio:.1f}x realtime"
-        )
 
         # Store in local history (keep last 5)
         self._benchmark_history.append({
