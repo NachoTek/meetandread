@@ -189,56 +189,56 @@ def list_loopback_outputs() -> List[Dict[str, Any]]:
 
 def print_device_summary():
     """Print a compact summary of audio devices."""
-    print("=" * 60)
-    print("Audio Device Summary")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Audio Device Summary")
+    logger.info("=" * 60)
     
     # Check WASAPI availability
     wasapi_idx = get_wasapi_hostapi_index()
     if wasapi_idx is not None:
-        print(f"\nWASAPI Host API Index: {wasapi_idx}")
+        logger.info("WASAPI Host API Index: %d", wasapi_idx)
     else:
-        print("\nWASAPI Host API: Not detected (non-Windows or no WASAPI support)")
+        logger.info("WASAPI Host API: Not detected (non-Windows or no WASAPI support)")
     
     # List all devices
     all_devices = list_devices()
-    print(f"\nTotal devices: {len(all_devices)}")
+    logger.info("Total devices: %d", len(all_devices))
     
     # List mic inputs
     mic_devices = list_mic_inputs()
-    print(f"\n--- Microphone Inputs ({len(mic_devices)} devices) ---")
+    logger.info("--- Microphone Inputs (%d devices) ---", len(mic_devices))
     for device in mic_devices:
-        print(f"  [{device['index']}] {device['name']}")
-        print(f"       Channels: {device['max_input_channels']} in")
-        print(f"       Sample rate: {device['default_samplerate']} Hz")
+        logger.info("  [%d] %s", device['index'], device['name'])
+        logger.info("       Channels: %d in", device['max_input_channels'])
+        logger.info("       Sample rate: %d Hz", int(device['default_samplerate']))
         if wasapi_idx is not None:
             is_wasapi = device.get('hostapi') == wasapi_idx
-            print(f"       WASAPI: {'Yes' if is_wasapi else 'No'}")
+            logger.info("       WASAPI: %s", 'Yes' if is_wasapi else 'No')
     
     # List loopback outputs
     loopback_devices = list_loopback_outputs()
-    print(f"\n--- Output Devices with Loopback Probing ({len(loopback_devices)} devices) ---")
+    logger.info("--- Output Devices with Loopback Probing (%d devices) ---", len(loopback_devices))
     
     loopback_ok_count = sum(1 for d in loopback_devices if d.get('loopback_ok'))
     
     if loopback_ok_count > 0:
-        print(f"\n[OK] Loopback-capable devices: {loopback_ok_count}")
+        logger.info("Loopback-capable devices: %d", loopback_ok_count)
         for device in loopback_devices:
             if device.get('loopback_ok'):
-                print(f"  [{device['index']}] {device['name']}")
-                print(f"       Channels: {device['max_output_channels']} out")
-                print(f"       Sample rate: {device['default_samplerate']} Hz")
-                print("       WASAPI: Yes")
+                logger.info("  [%d] %s", device['index'], device['name'])
+                logger.info("       Channels: %d out", device['max_output_channels'])
+                logger.info("       Sample rate: %d Hz", int(device['default_samplerate']))
+                logger.info("       WASAPI: Yes")
     else:
-        print("\n[FAIL] No loopback-capable devices found")
-        print("\nPer-device failure table:")
-        print("-" * 60)
+        logger.warning("No loopback-capable devices found")
+        logger.info("Per-device failure table:")
+        logger.info("-" * 60)
         for device in loopback_devices:
-            print(f"  [{device['index']}] {device['name']}")
+            logger.info("  [%d] %s", device['index'], device['name'])
             error = device.get('loopback_error', 'Unknown error')
-            print(f"       Error: {error[:80]}..." if len(error) > 80 else f"       Error: {error}")
+            logger.info("       Error: %s", error[:80] + "..." if len(error) > 80 else error)
     
-    print("\n" + "=" * 60)
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":

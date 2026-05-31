@@ -4,9 +4,12 @@ Detects leftover .pcm.part files and converts them to playable WAV files.
 Preserves originals by default for safety.
 """
 
+import logging
 import shutil
 from pathlib import Path
 from typing import List, Optional, Callable
+
+logger = logging.getLogger(__name__)
 
 from meetandread.audio.storage.pcm_part import load_metadata
 from meetandread.audio.storage.wav_finalize import finalize_part_to_wav
@@ -143,7 +146,7 @@ def recover_part_files(
                 recovered.append(wav_path)
         except Exception as e:
             # Log error but continue with other files
-            print(f"Failed to recover {part_path}: {e}")
+            logger.error("Failed to recover %s: %s", part_path, e)
 
     return recovered
 

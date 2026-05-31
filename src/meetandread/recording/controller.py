@@ -18,9 +18,6 @@ import numpy as np  # noqa: E402
 from meetandread.speaker.models import DiarizationResult  # noqa: E402
 
 
-def _ts(): return _time.strftime("%H:%M:%S")
-
-
 from meetandread.audio import (  # noqa: E402
     AudioSession,
     SessionConfig,
@@ -867,7 +864,7 @@ class RecordingController:
             # Load model (tiny takes 1-2 seconds)
             logger.info("Loading %s model for real-time transcription...", realtime_model)
             self._transcription_processor.load_model(
-                progress_callback=lambda p: print(f"Loading {realtime_model} model: {p}%")
+                progress_callback=lambda p: logger.info("Loading %s model: %d%%", realtime_model, p)
             )
             logger.info("%s model loaded successfully", realtime_model)
 

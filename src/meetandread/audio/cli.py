@@ -18,6 +18,7 @@ Examples:
 """
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -25,6 +26,8 @@ from pathlib import Path
 # Add src to path for imports
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+
+logger = logging.getLogger(__name__)
 
 from meetandread.audio import (  # noqa: E402
     AudioSession,
@@ -120,24 +123,24 @@ def cmd_record(args) -> int:
     
     if args.mic:
         if not check_mic_available():
-            print("Error: No microphone devices available", file=sys.stderr)
+            logger.error("No microphone devices available")
             return 1
         sources.append(SourceConfig(type='mic'))
-        print(f"Recording from microphone for {args.seconds} seconds...")
+        logger.info("Recording from microphone for %.1f seconds...", args.seconds)
         
     elif args.system:
         if not check_system_available():
-            print("Error: No system audio loopback devices available", file=sys.stderr)
+            logger.error("No system audio loopback devices available")
             return 1
         sources.append(SourceConfig(type='system'))
-        print(f"Recording from system audio for {args.seconds} seconds...")
+        logger.info("Recording from system audio for %.1f seconds...", args.seconds)
         
     elif args.both:
         mic_ok = check_mic_available()
         system_ok = check_system_available()
         
         if not mic_ok and not system_ok:
-            print("Error: No audio devices available (mic or system)", file=sys.stderr)
+            logger.error("No audio devices available (mic or system)")
             return 1
         
         sources_config = []
@@ -148,15 +151,17 @@ def cmd_record(args) -> int:
             sources.append(SourceConfig(type='system', gain=0.8))
             sources_config.append("system audio")
         
-        print(f"Recording from { ' + '.join(sources_config) } for {args.seconds} seconds...")
+        logger.info("Recording from %s for %.1f seconds...",
+                     ' + '.join(sources_config), args.seconds)
         
     elif args.fake:
         fake_path = Path(args.fake)
         if not fake_path.exists():
-            print(f"Error: Fake audio file not found: {fake_path}", file=sys.stderr)
+            logger.error("Fake audio file not found: %s", fake_path)
             return 1
         sources.append(SourceConfig(type='fake', fake_path=str(fake_path), loop=False))
-        print(f"Recording from fake source ({fake_path}) for {args.seconds} seconds...")
+        logger.info("Recording from fake source (%s) for %.1f seconds...",
+                     fake_path, args.seconds)
     
     # Create session config
     output_dir = Path(args.output_dir) if args.output_dir else None
@@ -176,31 +181,29 @@ def cmd_record(args) -> int:
     try:
         session.start(config)
     except AudioSourceError as e:
-        print(f"Error starting audio source: {e}", file=sys.stderr)
+        logger.error("Error starting audio source: %s", e)
         return 1
     except Exception as e:
-        print(f"Error starting recording: {e}", file=sys.stderr)
+        logger.error("Error starting recording: %s", e)
         return 1
     
     # Wait for recording duration
     try:
         time.sleep(args.seconds)
     except KeyboardInterrupt:
-        print("\nInterrupted by user, stopping...")
+        logger.info("Interrupted by user, stopping...")
     
     # Stop and finalize
     try:
         wav_path = session.stop()
     except Exception as e:
-        print(f"Error stopping recording: {e}", file=sys.stderr)
+        logger.error("Error stopping recording: %s", e)
         return 1
     
     # Report success
     stats = session.get_stats()
-    print("\nRecording complete!")
-    print(f"  WAV file: {wav_path}")
-    print(f"  Duration: {stats.duration_seconds:.2f}s")
-    print(f"  Frames recorded: {stats.frames_recorded}")
+    logger.info("Recording complete! WAV file: %s, Duration: %.2fs, Frames: %d",
+                wav_path, stats.duration_seconds, stats.frames_recorded)
     
     return 0
 

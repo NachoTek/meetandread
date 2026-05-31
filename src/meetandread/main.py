@@ -25,6 +25,8 @@ from meetandread.audio import has_partial_recordings, recover_part_files, get_re
 from meetandread.config import get_config
 from meetandread.hardware.recommender import ModelRecommender
 
+logger = logging.getLogger(__name__)
+
 
 def check_critical_dlls():
     """Check that critical native DLLs can be loaded in frozen exe mode.
@@ -103,8 +105,8 @@ def setup_logging():
     # Redirect stdout to both console and file
     sys.stdout = TeeOutput(logging.getLogger())
     
-    print(f"Logging to: {log_file}")
-    print(f"Logs directory: {logs_dir}")
+    logger.info("Logging to: %s", log_file)
+    logger.info("Logs directory: %s", logs_dir)
     return log_file
 
 
@@ -287,7 +289,7 @@ def setup_signal_handlers(app, widget_ref=None):
 
     def sigint_handler(signum, frame):
         """Handle SIGINT (Ctrl+C) gracefully."""
-        print("\nReceived SIGINT, shutting down gracefully...")
+        logger.info("Received SIGINT, shutting down gracefully...")
         _graceful_exit()
 
     # Register SIGINT handler
@@ -300,7 +302,7 @@ def setup_signal_handlers(app, widget_ref=None):
 
             def win_handler(dwCtrlType):
                 if dwCtrlType == 0:  # CTRL_C_EVENT
-                    print("\nReceived CTRL+C event, shutting down gracefully...")
+                    logger.info("Received CTRL+C event, shutting down gracefully...")
                     _graceful_exit()
                     return True
                 return False
@@ -340,23 +342,21 @@ def main():
     try:
         settings = get_config()
         if settings.hardware.auto_detect_on_startup and not settings.hardware.recommended_model:
-            print("Running hardware detection...")
+            logger.info("Running hardware detection...")
             recommender = ModelRecommender()
             recommended = recommender.detect_and_recommend()
             specs = recommender.get_detected_specs()
-            print(f"  RAM: {specs.total_ram_gb:.1f} GB")
-            print(f"  CPU: {specs.cpu_count_logical} cores")
-            print(f"  Recommended model: {recommended}")
-            print()
+            logger.info("RAM: %.1f GB, CPU: %d cores, Recommended model: %s",
+                        specs.total_ram_gb, specs.cpu_count_logical, recommended)
     except Exception as e:
         # Log error but don't block startup
-        print(f"Hardware detection failed: {e}")
+        logger.warning("Hardware detection failed: %s", e)
     
     # Check hardware requirements and warn if below minimum
     try:
         check_hardware_requirements()
     except Exception as e:
-        print(f"Hardware requirements check failed: {e}")
+        logger.warning("Hardware requirements check failed: %s", e)
     
     # Check for partial recordings and offer recovery before showing widget
     # This runs synchronously before the main event loop
@@ -364,7 +364,7 @@ def main():
         check_and_offer_recovery(parent=None)
     except Exception as e:
         # Log error but don't block startup
-        print(f"Recovery check failed: {e}")
+        logger.warning("Recovery check failed: %s", e)
 
     # Process pending cleanup queue (orphaned files from prior sessions)
     try:
