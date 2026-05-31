@@ -17,7 +17,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from meetandread.speaker.signatures import VoiceSignatureStore, _cosine_similarity
+from meetandread.speaker.signatures import VoiceSignatureStore
+from meetandread.speaker.utils import cosine_similarity
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -161,7 +162,7 @@ class TestNoisyMatch:
         store.save_signature("NoisySpeaker", emb)
 
         query = _noisy_copy(emb, noise_std=0.10, seed=100)
-        sim = _cosine_similarity(emb, query)
+        sim = cosine_similarity(emb, query)
         # At noise_std=0.10 in 256-dim, similarity typically drops to ~0.4-0.6
         # This is expected — the test documents the boundary behavior.
         assert 0.3 < sim < 0.8, f"Expected sim in (0.3, 0.8) at std=0.10, got {sim}"
@@ -172,7 +173,7 @@ class TestNoisyMatch:
         store.save_signature("Speaker", emb)
 
         query = _noisy_copy(emb, noise_std=0.05, seed=200)
-        sim = _cosine_similarity(emb, query)
+        sim = cosine_similarity(emb, query)
         # In 256-dim, std=0.05 noise typically yields sim in [0.7, 0.9]
         assert sim > 0.6, f"Noisy copy similarity should be >0.6, got {sim}"
 
@@ -193,8 +194,8 @@ class TestNoMatch:
         query = _orthogonal_embedding([emb_a, emb_b], seed=500)
         match = store.find_match(query, threshold=DEFAULT_THRESHOLD)
         # Orthogonal embeddings should have low cosine similarity
-        sim_a = _cosine_similarity(query, emb_a)
-        sim_b = _cosine_similarity(query, emb_b)
+        sim_a = cosine_similarity(query, emb_a)
+        sim_b = cosine_similarity(query, emb_b)
         max_sim = max(sim_a, sim_b)
         if max_sim < DEFAULT_THRESHOLD:
             assert match is None, (
@@ -229,7 +230,7 @@ class TestThresholdSweep:
         query = _embedding_at_similarity(emb, similarity, seed=777)
 
         # Verify the constructed similarity is close to requested
-        actual_sim = _cosine_similarity(emb, query)
+        actual_sim = cosine_similarity(emb, query)
         assert abs(actual_sim - similarity) < 0.02, (
             f"Requested sim={similarity}, got {actual_sim:.4f}"
         )
@@ -338,7 +339,7 @@ class TestAccuracyTrials:
             refs = [_random_embedding(seed=s) for s in seeds]
             query_orth = _orthogonal_embedding(refs, seed=trial + 9000)
             match = store.find_match(query_orth, threshold=DEFAULT_THRESHOLD)
-            sims = [_cosine_similarity(query_orth, r) for r in refs]
+            sims = [cosine_similarity(query_orth, r) for r in refs]
             max_sim = max(sims)
             expected_none = max_sim < DEFAULT_THRESHOLD
             results.append({

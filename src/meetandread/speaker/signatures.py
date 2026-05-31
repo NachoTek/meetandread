@@ -16,25 +16,13 @@ from typing import List, Optional
 import numpy as np
 
 from meetandread.speaker.models import SpeakerMatch, SpeakerProfile
+from meetandread.speaker.utils import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
 # Default database location relative to the app data directory.
 _DEFAULT_DB_DIR = Path("data")
 _DEFAULT_DB_NAME = "speaker_signatures.db"
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Compute cosine similarity between two 1-D vectors.
-
-    Returns 0.0 when either vector has zero magnitude.
-    """
-    dot = float(np.dot(a, b))
-    norm_a = float(np.linalg.norm(a))
-    norm_b = float(np.linalg.norm(b))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (norm_a * norm_b)
 
 
 def _embedding_to_blob(embedding: np.ndarray) -> bytes:
@@ -201,7 +189,7 @@ class VoiceSignatureStore:
         best_score: float = 0.0
 
         for profile in profiles:
-            score = _cosine_similarity(embedding, profile.embedding)
+            score = cosine_similarity(embedding, profile.embedding)
             if score > best_score:
                 best_score = score
                 best_name = profile.name
