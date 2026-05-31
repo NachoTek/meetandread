@@ -279,6 +279,11 @@ class AudioSourceWrapper:
                 frames = self._resampler.resample_chunk(frames)
             except Exception:
                 # soxr can crash on malformed input — log and drop
+                _log.warning(
+                    "soxr resample_chunk failed (malformed input?), "
+                    "dropping frame: error_class=%s",
+                    type(frames).__name__ if frames is not None else "NoneType",
+                )
                 return None
         
         return frames
@@ -791,10 +796,13 @@ class AudioSession:
             try:
                 wrapper.stop()
             except Exception:
-                pass
+                _log.debug(
+                    "Cleanup: wrapper.stop() failed: error_class=%s",
+                    type(wrapper).__name__,
+                )
         
         if self._writer:
             try:
                 self._writer.close()
             except Exception:
-                pass
+                _log.debug("Cleanup: writer.close() failed")

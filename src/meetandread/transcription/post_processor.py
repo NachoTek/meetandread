@@ -548,8 +548,11 @@ class PostProcessingQueue:
                     original_path = job.output_dir / f"{base_name}.md"
                     speaker_matches = self._read_speaker_matches(original_path)
                 except Exception:
-                    pass
-
+                    logger.debug(
+                        "Failed to read speaker_matches from %s "
+                        "(transcript will save without them)",
+                        original_path,
+                    )
             transcript_path = self._save_post_processed_transcript(
                 job, enhanced_store, speaker_matches=speaker_matches,
             )
@@ -590,8 +593,12 @@ class PostProcessingQueue:
                         "status": "failed",
                     })
                 except Exception:
-                    pass
-    
+                    logger.debug(
+                        "on_complete callback error (failure notification): "
+                        "job_id=%s",
+                        job.job_id,
+                    )
+
     def _get_or_create_engine(self, model_size: str) -> WhisperTranscriptionEngine:
         """Get cached engine or create new one.
         
@@ -777,9 +784,9 @@ class PostProcessingQueue:
                 return None
             data = _json.loads(content[idx + len(marker) :].rstrip(" -->\n"))
             return data.get("speaker_matches")
-        except Exception:
+        except (json.JSONDecodeError, OSError, ValueError):
             return None
-    
+
     def _save_post_processed_transcript(
         self, job: PostProcessJob, store: TranscriptStore,
         speaker_matches: Optional[dict] = None,

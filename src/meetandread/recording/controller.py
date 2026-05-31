@@ -909,8 +909,13 @@ class RecordingController:
             name = self._try_live_speaker_match()
             if name is not None:
                 result.speaker_id = name
-        except Exception:
-            pass  # Never block phrase result delivery
+        except Exception as _lsm_exc:
+            # Never block phrase result delivery — log and continue
+            logger.debug(
+                "Live speaker match error (phrase delivery continues): "
+                "error_class=%s",
+                type(_lsm_exc).__name__,
+            )
 
         # Convert SegmentResult to Word objects for storage
         if self._transcript_store:
@@ -1133,8 +1138,13 @@ class RecordingController:
                         if len(self._live_audio_buffer) > self._live_max_buffer_bytes:
                             excess = len(self._live_audio_buffer) - self._live_max_buffer_bytes
                             del self._live_audio_buffer[:excess]
-            except Exception:
-                pass  # Non-critical; matching simply won't have audio
+            except Exception as _pcm_exc:
+                # Non-critical; matching simply won't have audio
+                logger.debug(
+                    "PCM buffer write for live matching failed "
+                    "(matching degraded): error_class=%s",
+                    type(_pcm_exc).__name__,
+                )
 
     # ------------------------------------------------------------------
     # Live speaker matching (conservative, for CC overlay)
@@ -1216,8 +1226,12 @@ class RecordingController:
             if not settings.speaker.enabled:
                 self._live_last_status = "disabled"
                 return None
-        except Exception:
-            pass  # Default to trying
+        except Exception as _cfg_exc:
+            logger.debug(
+                "Config read failed during speaker matching, "
+                "defaulting to enabled: error_class=%s",
+                type(_cfg_exc).__name__,
+            )
 
         # Lazy-init extractor (non-blocking check)
         if not self._ensure_live_extractor():
@@ -1928,7 +1942,7 @@ class RecordingController:
                 },
             }
         except Exception:
-            pass
+            logger.debug("Diagnostics: session stats unavailable")
 
         # Transcription / VAD stats
         if self._transcription_processor:
@@ -1944,7 +1958,7 @@ class RecordingController:
                     vs = vad()
                     diag["vad"] = vs
             except Exception:
-                pass
+                logger.debug("Diagnostics: transcription stats unavailable")
 
         # Transcript store stats
         if self._transcript_store:
@@ -1955,7 +1969,7 @@ class RecordingController:
                     "words_with_speaker": sum(1 for w in words if w.speaker_id is not None),
                 }
             except Exception:
-                pass
+                logger.debug("Diagnostics: transcript store stats unavailable")
 
         # Diarization result metadata
         with self._state_lock:
@@ -1979,7 +1993,7 @@ class RecordingController:
                     "labels": sorted(raw_labels),
                 }
             except Exception:
-                pass
+                logger.debug("Diagnostics: diarization stats unavailable")
 
         # Live speaker matching diagnostics (sanitized - no names/embeddings)
         with self._buffer_lock:

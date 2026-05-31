@@ -114,7 +114,7 @@ def _probe_loopback_windows(device: Dict[str, Any]) -> Tuple[bool, Optional[str]
             return True, None
         else:
             return False, "Not a WASAPI output device"
-    except Exception as e:
+    except (OSError, KeyError, TypeError) as e:
         return False, str(e)
 
 

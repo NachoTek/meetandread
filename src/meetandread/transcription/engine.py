@@ -476,7 +476,7 @@ class WhisperTranscriptionEngine:
                 try:
                     os.unlink(temp_path)
                 except Exception:
-                    pass  # Ignore cleanup errors
+                    logger.debug("Temp file cleanup failed: %s", temp_path)
 
     @staticmethod
     def _categorize_error(exc: Exception) -> Tuple[str, str]:

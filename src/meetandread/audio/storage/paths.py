@@ -46,7 +46,7 @@ def _resolve_custom_path(field: str) -> Optional[Path]:
         # Quick existence + write check
         resolved.mkdir(parents=True, exist_ok=True)
         return resolved
-    except Exception:
+    except (OSError, ValueError, AttributeError, ImportError, TypeError):
         return None
 
 

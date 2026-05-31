@@ -278,11 +278,15 @@ def setup_signal_handlers(app, widget_ref=None):
             try:
                 widget = widget_ref()
             except Exception:
-                pass
+                logger.debug("widget_ref() failed during shutdown", exc_info=True)
         if widget is not None:
             try:
                 widget._exit_application()
             except Exception:
+                logger.debug(
+                    "_exit_application failed in signal handler, "
+                    "falling back to app.quit()"
+                )
                 app.quit()
         else:
             app.quit()
