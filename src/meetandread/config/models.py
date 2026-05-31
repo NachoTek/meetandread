@@ -12,26 +12,19 @@ from typing import Optional, Tuple, Any, Dict, List
 class ModelSettings:
     """Configuration for Whisper model selection.
     
-    Attributes:
-        realtime_model_size: Model size for real-time transcription.
-            Options: "tiny", "base", "small", "auto"
-            Default: "auto" (triggers hardware detection on first run)
+    Note: ``realtime_model_size`` lives on ``TranscriptionSettings`` —
+    this dataclass is retained for config-version compatibility but
+    currently declares no active fields.
     """
-    realtime_model_size: str = field(
-        default="auto",
-        metadata={"description": "Model size for real-time transcription: tiny, base, small, or auto"}
-    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return asdict(self)
+        return {}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelSettings":
         """Create from dictionary, using defaults for missing fields."""
-        return cls(
-            realtime_model_size=data.get("realtime_model_size", cls.realtime_model_size)
-        )
+        return cls()
 
 
 @dataclass

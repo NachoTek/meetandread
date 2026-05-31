@@ -64,6 +64,19 @@ def ensure_on_screen(widget: QWidget) -> None:
         pass
 
 
+def _norm_label(s: str) -> str:
+    """Normalise a speaker label for comparison.
+
+    Lowercases the label and converts compact forms like ``spk0`` to
+    ``spk_0`` so that casing/format variants match.
+    """
+    s = s.lower()
+    m = re.match(r"^(spk)(\d+)$", s)
+    if m:
+        return f"{m.group(1)}_{m.group(2)}"
+    return s
+
+
 from meetandread.performance.monitor import ResourceMonitor, ResourceSnapshot  # noqa: E402
 from meetandread.performance.benchmark import BenchmarkRunner, BenchmarkResult  # noqa: E402
 from meetandread.widgets.theme import (  # noqa: E402
@@ -569,15 +582,6 @@ def _link_speaker_identity_in_file(
         # Try case-insensitive match: "SPK_0" <-> "spk0"
         # Also normalise the raw format (spk0 -> spk_0) so different
         # structural forms are still matched.
-        def _norm_label(s: str) -> str:
-            """Normalise a speaker label for comparison."""
-            s = s.lower()
-            # "spk0" -> "spk_0"
-            m = re.match(r"^(spk)(\d+)$", s)
-            if m:
-                return f"{m.group(1)}_{m.group(2)}"
-            return s
-
         norm_target = _norm_label(actual_key)
         for existing_key in list(sm.keys()):
             if _norm_label(existing_key) == norm_target:
@@ -602,14 +606,6 @@ def _link_speaker_identity_in_file(
 
     # Remove any stale duplicate key that differs only by casing
     # or raw-label format (e.g. both "spk0" and "SPK_0" present).
-    def _norm_label(s: str) -> str:
-        """Normalise a speaker label for comparison."""
-        s = s.lower()
-        m = re.match(r"^(spk)(\d+)$", s)
-        if m:
-            return f"{m.group(1)}_{m.group(2)}"
-        return s
-
     norm_actual = _norm_label(actual_key)
     for dup_key in list(sm.keys()):
         if dup_key != actual_key and _norm_label(dup_key) == norm_actual:
@@ -925,14 +921,6 @@ def _try_link_identity_in_file(
     # Resolve the actual speaker_matches key — it may be the lowercase
     # raw label (e.g. "spk0") while matching_label is the display form
     # (e.g. "SPK_0").
-    def _norm_label(s: str) -> str:
-        """Normalise a speaker label for comparison."""
-        s = s.lower()
-        m = re.match(r"^(spk)(\d+)$", s)
-        if m:
-            return f"{m.group(1)}_{m.group(2)}"
-        return s
-
     sm_key = matching_label
     if sm_key not in speaker_matches:
         norm_target = _norm_label(sm_key)

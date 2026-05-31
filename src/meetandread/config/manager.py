@@ -84,9 +84,9 @@ class ConfigManager:
     Example:
         >>> from meetandread.config.manager import ConfigManager
         >>> cm = ConfigManager()
-        >>> cm.get('model.realtime_model_size')
+        >>> cm.get('transcription.realtime_model_size')
         'auto'
-        >>> cm.set('model.realtime_model_size', 'small')
+        >>> cm.set('transcription.realtime_model_size', 'small')
         >>> cm.save()
     """
     
@@ -141,7 +141,7 @@ class ConfigManager:
         """Get a specific setting by dot-path notation.
         
         Args:
-            key_path: Dot-separated path to setting (e.g., "model.realtime_model_size").
+            key_path: Dot-separated path to setting (e.g., "transcription.realtime_model_size").
                 If None, returns the entire AppSettings object.
         
         Returns:
@@ -151,7 +151,7 @@ class ConfigManager:
             ValueError: If key_path is invalid or setting doesn't exist.
         
         Example:
-            >>> cm.get('model.realtime_model_size')
+            >>> cm.get('transcription.realtime_model_size')
             'auto'
             >>> cm.get('transcription.enabled')
             True
@@ -180,7 +180,7 @@ class ConfigManager:
         Performs basic type validation.
         
         Args:
-            key_path: Dot-separated path to setting (e.g., "model.realtime_model_size").
+            key_path: Dot-separated path to setting (e.g., "transcription.realtime_model_size").
             value: Value to set.
         
         Raises:
@@ -188,13 +188,13 @@ class ConfigManager:
                 or value has wrong type.
         
         Example:
-            >>> cm.set('model.realtime_model_size', 'small')
+            >>> cm.set('transcription.realtime_model_size', 'small')
             >>> cm.set('transcription.enabled', False)
         """
         parts = key_path.split('.')
         
         if len(parts) < 2:
-            raise ValueError(f"Invalid key path: '{key_path}' - must have at least 2 parts (e.g., 'model.realtime_model_size')")
+            raise ValueError(f"Invalid key path: '{key_path}' - must have at least 2 parts (e.g., 'transcription.realtime_model_size')")
         
         # Navigate to the parent object
         parent: Any = self._settings
@@ -294,8 +294,8 @@ class ConfigManager:
             Set of all possible dot-paths.
         """
         return {
-            # Model settings
-            "model.realtime_model_size",
+            # Transcription settings (realtime_model_size moved here from ModelSettings)
+            "transcription.realtime_model_size",
             # Transcription settings
             "transcription.enabled",
             "transcription.confidence_threshold",
@@ -377,7 +377,7 @@ def get_config(key_path: Optional[str] = None) -> Any:
     
     Example:
         >>> from meetandread.config import get_config
-        >>> model_size = get_config('model.realtime_model_size')
+        >>> model_size = get_config('transcription.realtime_model_size')
     """
     return get_config_manager().get(key_path)
 
@@ -391,7 +391,7 @@ def set_config(key_path: str, value: Any) -> None:
     
     Example:
         >>> from meetandread.config import set_config
-        >>> set_config('model.realtime_model_size', 'small')
+        >>> set_config('transcription.realtime_model_size', 'small')
     """
     get_config_manager().set(key_path, value)
 

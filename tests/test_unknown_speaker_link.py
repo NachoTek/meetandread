@@ -71,7 +71,7 @@ def _make_transcript_md(
         "speaker_matches": speaker_matches if speaker_matches is not None else {},
     }
 
-    content = md_body + "\n---\n\n<!-- METADATA:\n" + json.dumps(metadata) + " -->\n"
+    content = md_body + "\n\n---\n\n<!-- METADATA: " + json.dumps(metadata) + " -->\n"
     md_file = tmp_path / "transcript.md"
     md_file.write_text(content, encoding="utf-8")
     return md_file
@@ -79,27 +79,21 @@ def _make_transcript_md(
 
 def _read_metadata(md_path: Path) -> dict:
     """Parse metadata from a transcript .md file."""
+    from meetandread.speaker.identity_management import parse_metadata_footer
     content = md_path.read_text(encoding="utf-8")
-    # Try both formats: with and without newline after METADATA:
-    for marker in ["\n---\n\n<!-- METADATA:\n", "\n---\n\n<!-- METADATA:"]:
-        idx = content.find(marker)
-        if idx != -1:
-            raw = content[idx + len(marker):]
-            # Strip trailing --> and whitespace
-            end_marker = " -->"
-            if raw.strip().endswith(end_marker):
-                raw = raw.strip()[: -len(end_marker)]
-            return json.loads(raw.strip())
+    result = parse_metadata_footer(content)
+    if result is not None:
+        return result
     raise ValueError("No metadata footer found")
 
 
 def _read_body(md_path: Path) -> str:
     """Read the markdown body (before metadata footer)."""
+    from meetandread.speaker.identity_management import split_metadata_footer
     content = md_path.read_text(encoding="utf-8")
-    footer_marker = "\n---\n\n<!-- METADATA:"
-    idx = content.find(footer_marker)
-    assert idx != -1, "No metadata footer found"
-    return content[:idx]
+    split_result = split_metadata_footer(content)
+    assert split_result is not None, "No metadata footer found"
+    return split_result[0]
 
 
 # ---------------------------------------------------------------------------
