@@ -1630,3 +1630,86 @@ class TestTurnTakingDiarizationTuning:
         # Words should remain unlabeled
         words = ctrl._transcript_store.get_all_words()
         assert all(w.speaker_id is None for w in words)
+
+
+# ---------------------------------------------------------------------------
+# T02: RuntimeError replaces assert — negative tests
+# ---------------------------------------------------------------------------
+
+class TestDiarizerUninitializedErrors:
+    """Verify that using Diarizer before initialization raises RuntimeError
+    instead of AssertionError (no assert in production code)."""
+
+    def test_diarize_returns_error_uninitialized(self, tmp_path) -> None:
+        """diarize() catches RuntimeError from uninit check and returns error result."""
+        from meetandread.speaker.diarizer import Diarizer
+
+        diarizer = Diarizer.__new__(Diarizer)
+        diarizer._sd = None
+        diarizer._extractor = None
+        diarizer._cache_dir = None
+        diarizer._clustering_threshold = 0.5
+        diarizer._min_duration_on = 0.3
+        diarizer._min_duration_off = 0.5
+        diarizer._models = None
+
+        wav_path = tmp_path / "test.wav"
+        _create_synth_wav(wav_path, duration_s=1.0)
+
+        # _ensure_initialized does nothing (mocked); our RuntimeError check
+        # fires but is caught by the outer except in diarize(), producing
+        # an error result with our message.
+        from unittest import mock
+        with mock.patch.object(diarizer, "_ensure_initialized"):
+            result = diarizer.diarize(wav_path)
+
+        assert not result.succeeded
+        assert "not initialized" in result.error
+
+    def test_extract_embeddings_raises_runtime_error_uninitialized(self) -> None:
+        from meetandread.speaker.diarizer import Diarizer
+        from meetandread.speaker.models import SpeakerSegment
+
+        diarizer = Diarizer.__new__(Diarizer)
+        diarizer._extractor = None
+
+        with pytest.raises(RuntimeError, match="Diarizer not initialized"):
+            diarizer._extract_speaker_embeddings(
+                np.zeros(16000, dtype=np.float32),
+                16000,
+                [SpeakerSegment(start=0.0, end=1.0, speaker="spk0")],
+            )
+
+    def test_compute_embedding_raises_runtime_error_uninitialized(self) -> None:
+        from meetandread.speaker.diarizer import Diarizer
+        from meetandread.speaker.models import SpeakerSegment
+
+        diarizer = Diarizer.__new__(Diarizer)
+        diarizer._extractor = None
+
+        with pytest.raises(RuntimeError, match="Diarizer not initialized"):
+            diarizer._compute_embedding_for_segments(
+                np.zeros(16000, dtype=np.float32),
+                16000,
+                [SpeakerSegment(start=0.0, end=1.0, speaker="spk0")],
+            )
+
+
+class TestControllerApplyLabelsRuntimeError:
+    """Verify _apply_speaker_labels raises RuntimeError when store is None
+    instead of AssertionError."""
+
+    def test_apply_labels_raises_runtime_error_no_store(self) -> None:
+        from meetandread.recording.controller import RecordingController
+        from meetandread.speaker.models import DiarizationResult, SpeakerSegment
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._transcript_store = None
+
+        result = DiarizationResult(
+            segments=[SpeakerSegment(start=0.0, end=1.0, speaker="spk0")],
+            num_speakers=1,
+        )
+
+        with pytest.raises(RuntimeError, match="no transcript store available"):
+            ctrl._apply_speaker_labels(result)

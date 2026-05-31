@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_DB_DIR = Path("data")
 _DEFAULT_DB_NAME = "speaker_signatures.db"
 
+# Named constants for SQLite connection tuning
+SQLITE_CONNECT_TIMEOUT_SECONDS = 10.0  # seconds to wait for SQLite locks
+SQLITE_BUSY_TIMEOUT_MS = 10_000  # milliseconds for PRAGMA busy_timeout
+
 
 def _embedding_to_blob(embedding: np.ndarray) -> bytes:
     """Serialize a float32 numpy array to bytes for SQLite BLOB storage."""
@@ -73,10 +77,13 @@ class VoiceSignatureStore:
 
     def _connect(self) -> None:
         """Open (or reopen) the database connection and ensure schema."""
-        timeout = 10.0  # seconds to wait for SQLite locks
-        conn = sqlite3.connect(self._db_path, check_same_thread=False, timeout=timeout)
+        conn = sqlite3.connect(
+            self._db_path,
+            check_same_thread=False,
+            timeout=SQLITE_CONNECT_TIMEOUT_SECONDS,
+        )
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=10000")
+        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA)
@@ -91,7 +98,8 @@ class VoiceSignatureStore:
 
     @property
     def conn(self) -> sqlite3.Connection:
-        assert self._conn is not None, "Store is closed"
+        if self._conn is None:
+            raise RuntimeError("VoiceSignatureStore is closed")
         return self._conn
 
     # ------------------------------------------------------------------

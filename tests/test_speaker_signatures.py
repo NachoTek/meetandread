@@ -244,3 +244,48 @@ class TestWalMode:
         # SQLite returns the mode as a string column
         mode = list(row.values())[0] if hasattr(row, "values") else row[0]
         assert str(mode).lower() == "wal"
+
+
+# ---------------------------------------------------------------------------
+# T02: RuntimeError on closed store (replaces assert)
+# ---------------------------------------------------------------------------
+
+class TestClosedStoreErrors:
+    """Verify that accessing a closed VoiceSignatureStore raises RuntimeError
+    instead of AssertionError (no assert in production code)."""
+
+    def test_conn_property_raises_runtime_error_when_closed(self) -> None:
+        store = VoiceSignatureStore(":memory:")
+        store.close()
+        assert store._conn is None
+
+        with pytest.raises(RuntimeError, match="VoiceSignatureStore is closed"):
+            _ = store.conn
+
+    def test_save_signature_raises_runtime_error_when_closed(self) -> None:
+        store = VoiceSignatureStore(":memory:")
+        store.close()
+
+        with pytest.raises(RuntimeError, match="VoiceSignatureStore is closed"):
+            store.save_signature("Alice", _random_embedding())
+
+    def test_load_signatures_raises_runtime_error_when_closed(self) -> None:
+        store = VoiceSignatureStore(":memory:")
+        store.close()
+
+        with pytest.raises(RuntimeError, match="VoiceSignatureStore is closed"):
+            store.load_signatures()
+
+    def test_find_match_raises_runtime_error_when_closed(self) -> None:
+        store = VoiceSignatureStore(":memory:")
+        store.close()
+
+        with pytest.raises(RuntimeError, match="VoiceSignatureStore is closed"):
+            store.find_match(_random_embedding())
+
+    def test_len_raises_runtime_error_when_closed(self) -> None:
+        store = VoiceSignatureStore(":memory:")
+        store.close()
+
+        with pytest.raises(RuntimeError, match="VoiceSignatureStore is closed"):
+            len(store)

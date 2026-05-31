@@ -501,8 +501,10 @@ class Diarizer:
 
         try:
             self._ensure_initialized()
-            assert self._sd is not None
-            assert self._extractor is not None
+            if self._sd is None:
+                raise RuntimeError("Diarizer not initialized: diarization model is None")
+            if self._extractor is None:
+                raise RuntimeError("Diarizer not initialized: embedding extractor is None")
 
             # --- Read audio ---------------------------------------------------
             audio, sr = self._read_wav(wav_path)
@@ -650,7 +652,10 @@ class Diarizer:
         into one stream and compute one embedding. If a speaker has very
         short total duration (< 2s), we pad with silence or skip.
         """
-        assert self._extractor is not None
+        if self._extractor is None:
+            raise RuntimeError(
+                "Diarizer not initialized: embedding extractor is None"
+            )
 
         # Group segments by speaker
         speaker_segments: dict[str, list[SpeakerSegment]] = {}
@@ -689,7 +694,10 @@ class Diarizer:
         segments: list[SpeakerSegment],
     ) -> Optional[np.ndarray]:
         """Concatenate segment audio, feed through extractor, return embedding."""
-        assert self._extractor is not None
+        if self._extractor is None:
+            raise RuntimeError(
+                "Diarizer not initialized: embedding extractor is None"
+            )
 
         # Collect audio chunks for this speaker
         chunks = []

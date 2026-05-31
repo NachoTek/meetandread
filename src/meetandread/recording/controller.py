@@ -37,6 +37,11 @@ from meetandread.config.manager import ConfigManager  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+# Named constants for runtime thresholds and limits
+_LIVE_SPEAKER_MATCH_THRESHOLD = 0.75  # Conservative: no match below this
+_SANITIZED_ERROR_MAX_LENGTH = 200  # Truncation for sanitized error messages
+_SANITIZED_STATUS_MAX_LENGTH = 120  # Truncation for status/diagnostic messages
+
 
 class ControllerState(Enum):
     """Controller states for UI state management."""
@@ -187,7 +192,7 @@ class RecordingController:
         try:
             error_class = type(exc).__name__
             # Sanitized message — no raw audio content
-            error_msg = str(exc)[:200] if exc else ""
+            error_msg = str(exc)[:_SANITIZED_ERROR_MAX_LENGTH] if exc else ""
             logger.error(
                 "Audio session consumer crash: error_class=%s, state=%s",
                 error_class,
@@ -1178,7 +1183,7 @@ class RecordingController:
         except (ImportError, Exception) as exc:
             self._live_extractor_available = False
             self._live_last_error_class = type(exc).__name__
-            self._live_last_error_message = str(exc)[:120]
+            self._live_last_error_message = str(exc)[:_SANITIZED_STATUS_MAX_LENGTH]
             self._live_last_status = "extractor_error"
             logger.info(
                 "Live speaker matching disabled: %s", type(exc).__name__
@@ -1264,12 +1269,12 @@ class RecordingController:
                 with VoiceSignatureStore(db_path=db_path) as store:
                     match = store.find_match(
                         embedding,
-                        threshold=0.75,  # Conservative: no match below this
+                        threshold=_LIVE_SPEAKER_MATCH_THRESHOLD,
                     )
             except Exception as store_exc:
                 with self._buffer_lock:
                     self._live_last_error_class = type(store_exc).__name__
-                    self._live_last_error_message = str(store_exc)[:120]
+                    self._live_last_error_message = str(store_exc)[:_SANITIZED_STATUS_MAX_LENGTH]
                     self._live_last_status = "store_error"
                     self._live_match_fallbacks += 1
                 return None
@@ -1293,7 +1298,7 @@ class RecordingController:
         except Exception as exc:
             with self._buffer_lock:
                 self._live_last_error_class = type(exc).__name__
-                self._live_last_error_message = str(exc)[:120]
+                self._live_last_error_message = str(exc)[:_SANITIZED_STATUS_MAX_LENGTH]
                 self._live_last_status = "extractor_error"
                 self._live_match_fallbacks += 1
             logger.debug(
@@ -1545,7 +1550,10 @@ class RecordingController:
                 When None (default), uses self._transcript_store.
         """
         store = transcript_store or self._transcript_store
-        assert store is not None
+        if store is None:
+            raise RuntimeError(
+                "Cannot apply speaker labels: no transcript store available"
+            )
 
         words = store.get_all_words()
         if not words:
