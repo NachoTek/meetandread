@@ -389,7 +389,7 @@ class TranscriptStore:
         current_segment_words = []
         current_speaker = None
         
-        for word in self._words:
+        for word in list(self._words) + list(self._live_phrase_words):
             # Start new segment if speaker changes
             if word.speaker_id != current_speaker:
                 if current_segment_words:

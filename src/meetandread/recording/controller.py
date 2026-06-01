@@ -689,6 +689,8 @@ class RecordingController:
                 # (3) Save transcript if available (before post-processing)
                 transcript_path = None
                 if old_store and self._last_wav_path:
+                    # Commit any remaining live phrase words before saving
+                    old_store.commit_live_phrase()
                     logger.info(
                         "Saving transcript (%d words)...",
                         old_store.get_word_count(),
