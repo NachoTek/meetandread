@@ -899,7 +899,9 @@ class RecordingController:
         Args:
             result: SegmentResult with text, confidence, and completion status
         """
-        logger.debug("Segment: %r [conf: %d%%, final: %s, idx: %s]", result.text[:40], result.confidence, result.is_final, result.segment_index)
+        logger.debug("Segment: %r [conf: %d%%, final: %s, idx: %s]",
+                     result.text[:40], result.confidence, result.is_final,
+                     result.segment_index)
 
         # Attempt live speaker matching (conservative; attaches name only
         # for high-confidence known-speaker matches)
@@ -919,8 +921,26 @@ class RecordingController:
         if self._transcript_store:
             words = self._segment_to_words(result)
             if words:
-                self._transcript_store.add_words(words)
-                logger.debug("Added %d words to transcript store (total: %d)", len(words), self._transcript_store.get_word_count())
+                if result.phrase_start:
+                    # New phrase — mark boundary and append fresh words
+                    self._transcript_store.mark_phrase_boundary()
+                    self._transcript_store.replace_current_phrase_words(words)
+                    logger.debug("New phrase: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
+                elif result.is_final:
+                    # Phrase finalized — append as permanent words
+                    self._transcript_store.add_words(words)
+                    logger.debug("Final segment: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
+                else:
+                    # Re-transcription of current phrase — replace
+                    # (avoids duplication from sliding window overlap)
+                    self._transcript_store.replace_current_phrase_words(words)
+                    logger.debug("Updated phrase: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
 
         # Notify UI callback
         if self.on_phrase_result:
