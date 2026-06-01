@@ -110,6 +110,7 @@ class TranscriptStore:
     def __init__(self):
         """Initialize empty transcript store."""
         self._words: List[Word] = []
+        self._live_phrase_words: List[Word] = []
         self._lock = threading.Lock()
         self._recording_start_time: Optional[datetime] = None
         self._last_segment_time: float = 0.0
@@ -143,54 +144,40 @@ class TranscriptStore:
             if words:
                 self._last_segment_time = max(w.end_time for w in words)
 
-    def replace_current_phrase_words(self, words: List[Word]) -> None:
-        """Replace overlapping and append new words in the current phrase.
+    def set_live_phrase_words(self, words: List[Word]) -> None:
+        """Replace the current live phrase with the latest transcription.
 
         During live transcription, the accumulating processor re-transcribes a
-        12-second sliding window every ~2s and re-emits ALL segments.  Simply
-        calling add_words() for each emission would duplicate text; but
-        replacing ALL phrase words would lose content that fell out of the
-        window (earlier in a long phrase).
+        sliding window and re-emits ALL segments every ~2s.  Whisper may
+        re-segment differently on each pass, so word-level timing is
+        unreliable for deduplication.
 
-        This method keeps committed words (end_time before the new window's
-        earliest start) and replaces live words (within the window) with the
-        latest transcription results.
+        This method maintains a separate ``_live_phrase_words`` buffer that
+        is wholesale replaced on each re-transcription pass.  When the phrase
+        is finalized (via commit_live_phrase()), the buffer is promoted to
+        the permanent ``_words`` list.
 
         Thread-safe - can be called from transcription thread.
 
         Args:
-            words: List of Word objects from the latest re-transcription pass.
+            words: All Word objects from the latest re-transcription pass.
         """
         with self._lock:
-            boundary = getattr(self, "_current_phrase_start_index", 0)
-            committed = self._words[:boundary]
-            live = self._words[boundary:]
-
-            if not words:
-                return
-
-            # Determine the start time of the new transcription.
-            new_start = min(w.start_time for w in words)
-
-            # Keep live words that end before the new transcription's
-            # earliest word start — they are committed (fell out of the
-            # sliding window).  All other live words overlap with the new
-            # transcription and are replaced.
-            still_committed = [w for w in live if w.end_time <= new_start]
-
-            self._words = committed + still_committed + words
+            self._live_phrase_words = list(words)
             if words:
                 self._last_segment_time = max(w.end_time for w in words)
 
-    def mark_phrase_boundary(self) -> None:
-        """Mark the current word count as the start of a new phrase.
+    def commit_live_phrase(self) -> None:
+        """Promote the live phrase buffer to permanent storage.
 
-        Called when a new phrase begins (phrase_start=True in SegmentResult).
-        Everything before this index is finalized; everything after will be
-        replaced on re-transcription.
+        Called when a phrase is finalized (is_final=True) or when a new
+        phrase starts (phrase_start=True on the next batch).  Moves
+        _live_phrase_words into _words and clears the buffer.
         """
         with self._lock:
-            self._current_phrase_start_index = len(self._words)
+            if self._live_phrase_words:
+                self._words.extend(self._live_phrase_words)
+                self._live_phrase_words = []
     
     def get_segments(self, since_time: float = 0) -> List[Segment]:
         """Get segments after a specific time.
@@ -209,7 +196,7 @@ class TranscriptStore:
             current_segment_words = []
             current_speaker = None
             
-            for word in self._words:
+            for word in list(self._words) + list(self._live_phrase_words):
                 if word.start_time < since_time:
                     continue
                 
@@ -229,16 +216,16 @@ class TranscriptStore:
             return segments
     
     def get_all_words(self) -> List[Word]:
-        """Get all words in chronological order.
+        """Get all words including the live phrase buffer.
         
         Returns:
-            List of all Word objects
+            List of all Word objects (permanent + live)
         """
         with self._lock:
-            return list(self._words)
+            return list(self._words) + list(self._live_phrase_words)
     
     def get_recent_words(self, count: int) -> List[Word]:
-        """Get the last N words.
+        """Get the last N words (from permanent + live buffer).
         
         Args:
             count: Number of words to return
@@ -247,24 +234,25 @@ class TranscriptStore:
             List of the most recent Word objects
         """
         with self._lock:
-            return list(self._words[-count:]) if count > 0 else []
+            all_words = list(self._words) + list(self._live_phrase_words)
+            return all_words[-count:] if count > 0 else []
     
     def get_word_count(self) -> int:
-        """Get total number of words in transcript.
+        """Get total number of words including live phrase buffer.
         
         Returns:
-            Word count
+            Word count (permanent + live)
         """
         with self._lock:
-            return len(self._words)
+            return len(self._words) + len(self._live_phrase_words)
     
     def clear(self) -> None:
         """Reset transcript for new recording."""
         with self._lock:
             self._words = []
+            self._live_phrase_words = []
             self._recording_start_time = None
             self._last_segment_time = 0.0
-            self._current_phrase_start_index = 0
     
     def to_markdown(self, include_confidence: bool = True,
                     include_timestamps: bool = True) -> str:

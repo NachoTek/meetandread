@@ -922,26 +922,26 @@ class RecordingController:
             words = self._segment_to_words(result)
             if words:
                 if result.phrase_start:
-                    # New phrase — mark boundary and set initial words
-                    self._transcript_store.mark_phrase_boundary()
-                    self._transcript_store.replace_current_phrase_words(words)
+                    # New phrase — commit any previous live phrase,
+                    # then start fresh live buffer
+                    self._transcript_store.commit_live_phrase()
+                    self._transcript_store.set_live_phrase_words(words)
                     logger.debug("New phrase: %d words (total: %d)",
                                  len(words),
                                  self._transcript_store.get_word_count())
+                elif result.is_final:
+                    # Final transcription — commit the live phrase
+                    self._transcript_store.set_live_phrase_words(words)
+                    self._transcript_store.commit_live_phrase()
+                    logger.debug("Final phrase: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
                 else:
-                    # Re-transcription or final — replace overlapping,
-                    # keep committed words.  This handles both
-                    # intermediate updates and the final transcription
-                    # without duplication.
-                    self._transcript_store.replace_current_phrase_words(words)
-                    if result.is_final:
-                        logger.debug("Final segment: %d words (total: %d)",
-                                     len(words),
-                                     self._transcript_store.get_word_count())
-                    else:
-                        logger.debug("Updated phrase: %d words (total: %d)",
-                                     len(words),
-                                     self._transcript_store.get_word_count())
+                    # Re-transcription — replace the live phrase buffer
+                    self._transcript_store.set_live_phrase_words(words)
+                    logger.debug("Updated phrase: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
 
         # Notify UI callback
         if self.on_phrase_result:
