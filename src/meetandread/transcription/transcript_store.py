@@ -144,28 +144,41 @@ class TranscriptStore:
                 self._last_segment_time = max(w.end_time for w in words)
 
     def replace_current_phrase_words(self, words: List[Word]) -> None:
-        """Replace words in the current (live) phrase with updated transcription.
+        """Replace overlapping and append new words in the current phrase.
 
         During live transcription, the accumulating processor re-transcribes a
-        sliding window every ~2s and re-emits ALL segments.  Calling add_words()
-        for each emission would duplicate text.  This method instead replaces
-        words belonging to the current phrase — everything after the last phrase
-        boundary — with the latest transcription results.
+        12-second sliding window every ~2s and re-emits ALL segments.  Simply
+        calling add_words() for each emission would duplicate text; but
+        replacing ALL phrase words would lose content that fell out of the
+        window (earlier in a long phrase).
+
+        This method keeps committed words (end_time before the new window's
+        earliest start) and replaces live words (within the window) with the
+        latest transcription results.
 
         Thread-safe - can be called from transcription thread.
 
         Args:
-            words: List of Word objects representing the full current phrase.
-                   Replaces all words added since the last phrase boundary.
+            words: List of Word objects from the latest re-transcription pass.
         """
         with self._lock:
-            # Find the last phrase boundary marker.
-            # Phrase boundaries are identified by a gap in word start times
-            # (phrase_start creates new words with start times after silence).
-            # We track the boundary via _current_phrase_start_index.
             boundary = getattr(self, "_current_phrase_start_index", 0)
-            self._words = self._words[:boundary]
-            self._words.extend(words)
+            committed = self._words[:boundary]
+            live = self._words[boundary:]
+
+            if not words:
+                return
+
+            # Determine the start time of the new transcription.
+            new_start = min(w.start_time for w in words)
+
+            # Keep live words that end before the new transcription's
+            # earliest word start — they are committed (fell out of the
+            # sliding window).  All other live words overlap with the new
+            # transcription and are replaced.
+            still_committed = [w for w in live if w.end_time <= new_start]
+
+            self._words = committed + still_committed + words
             if words:
                 self._last_segment_time = max(w.end_time for w in words)
 

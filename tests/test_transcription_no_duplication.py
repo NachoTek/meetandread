@@ -48,12 +48,12 @@ class TestTranscriptionNoDuplication:
         assert store.get_word_count() == 2
 
     def test_replace_current_phrase_words_replaces_after_boundary(self):
-        """replace_current_phrase_words replaces only words after the boundary."""
+        """replace_current_phrase_words keeps committed words, replaces live."""
         store = TranscriptStore()
         store.add_words([self._make_word("frozen", 0.0, 0.5)])
         store.mark_phrase_boundary()
 
-        # First re-transcription pass
+        # First re-transcription pass (window covers 1.0-2.0)
         store.replace_current_phrase_words([
             self._make_word("hello", 1.0, 1.5),
             self._make_word("world", 1.5, 2.0),
@@ -63,20 +63,24 @@ class TestTranscriptionNoDuplication:
         assert words[0].text == "frozen"
         assert words[1].text == "hello"
 
-        # Second re-transcription pass (same audio, refined text)
+        # Second re-transcription pass (window slides to 2.0-3.0)
+        # "hello" (1.0-1.5) ends before 2.0, committed
+        # "world" (1.5-2.0) ends at 2.0, also committed (<=)
         store.replace_current_phrase_words([
-            self._make_word("hello", 1.0, 1.5),
-            self._make_word("world", 1.5, 2.0),
-            self._make_word("foo", 2.0, 2.5),
+            self._make_word("world", 2.0, 2.5),
+            self._make_word("foo", 2.5, 3.0),
         ])
         words = store.get_all_words()
-        assert len(words) == 4  # frozen + 3 new (not 5)
+        # frozen + hello + world (all committed) + new world + foo = 5
+        assert len(words) == 5
         assert words[0].text == "frozen"
         assert words[1].text == "hello"
-        assert words[3].text == "foo"
+        assert words[2].text == "world"
+        assert words[3].text == "world"
+        assert words[4].text == "foo"
 
     def test_replace_without_duplication(self):
-        """Multiple re-transcription passes do not grow word count."""
+        """Multiple re-transcription passes of same window do not grow words."""
         store = TranscriptStore()
         store.mark_phrase_boundary()
 
@@ -86,7 +90,51 @@ class TestTranscriptionNoDuplication:
                 for j in range(10)
             ])
 
+        # Same time range each time: should stay at 10
         assert store.get_word_count() == 10
+
+    def test_long_phrase_accumulates_beyond_window(self):
+        """Words from before the sliding window are preserved in a long phrase.
+
+        Simulates a 30-second phrase with a 12-second window sliding by 2s:
+        - Pass 1: window 0-12s, emits words for 0-12s
+        - Pass 2: window 2-14s, emits words for 2-14s
+        - Pass 5: window 10-22s, emits words for 10-22s
+        - Pass 9: window 18-30s, emits words for 18-30s
+
+        Words from 0-18s should be preserved despite falling out of the window.
+        """
+        store = TranscriptStore()
+        store.mark_phrase_boundary()
+
+        # Pass 1: window 0-12s
+        pass1_words = [self._make_word(f"w{j}", float(j), float(j + 1))
+                       for j in range(0, 12)]
+        store.replace_current_phrase_words(pass1_words)
+        assert store.get_word_count() == 12
+
+        # Pass 2: window 2-14s — words 0-2 are committed (end <= 2.0)
+        pass2_words = [self._make_word(f"w{j}", float(j), float(j + 1))
+                       for j in range(2, 14)]
+        store.replace_current_phrase_words(pass2_words)
+        assert store.get_word_count() == 14  # 0-13
+
+        # Pass 5: window 10-22s — words 0-10 are committed (end <= 10.0)
+        pass5_words = [self._make_word(f"w{j}", float(j), float(j + 1))
+                       for j in range(10, 22)]
+        store.replace_current_phrase_words(pass5_words)
+        assert store.get_word_count() == 22  # 0-21
+
+        # Pass 9: window 18-30s — words 0-18 are committed (end <= 18.0)
+        pass9_words = [self._make_word(f"w{j}", float(j), float(j + 1))
+                       for j in range(18, 30)]
+        store.replace_current_phrase_words(pass9_words)
+        assert store.get_word_count() == 30  # 0-29
+
+        # Verify all words are present and in order
+        words = store.get_all_words()
+        texts = [w.text for w in words]
+        assert texts == [f"w{j}" for j in range(30)]
 
     def test_clear_resets_boundary(self):
         """clear() resets the phrase boundary index."""
@@ -148,44 +196,44 @@ class TestTranscriptionNoDuplication:
         ctrl._try_live_speaker_match = MagicMock(return_value=None)
         ctrl.on_phrase_result = MagicMock()
 
-        # Phrase 1: new phrase
+        # Phrase 1: new phrase (window 0-2s)
         ctrl._on_phrase_result(
             self._make_result("First phrase", 0.0, 2.0, 0, phrase_start=True))
         assert ctrl._transcript_store.get_word_count() == 2
 
-        # Phrase 1: re-transcription
+        # Phrase 1: re-transcription (window 1-3s)
+        # "First" (0.0-1.0) is committed (end=1.0 <= new_start=1.0)
+        # "phrase" (1.0-2.0) is live (end=2.0 > 1.0), gets replaced
+        # New words: "First"(1.0-1.67), "phrase"(1.67-2.33), "refined"(2.33-3.0)
         ctrl._on_phrase_result(
-            self._make_result("First phrase refined", 0.0, 2.5, 0))
-        assert ctrl._transcript_store.get_word_count() == 3
+            self._make_result("First phrase refined", 1.0, 3.0, 0))
+        # committed "First" + new "First" "phrase" "refined" = 4
+        assert ctrl._transcript_store.get_word_count() == 4
 
-        # Phrase 1: finalized
+        # Phrase 1: finalized (same window 1-3s) — replaces same range
         ctrl._on_phrase_result(
-            self._make_result("First phrase finalized", 0.0, 2.5, 0,
+            self._make_result("First phrase finalized", 1.0, 3.0, 0,
                               is_final=True))
-        # is_final uses add_words, so it appends to the replaced content
-        # Total: 3 (replaced) + 3 (final append) = 6
-        assert ctrl._transcript_store.get_word_count() == 6
+        # Same timing as previous, so same committed/live split = 4
+        assert ctrl._transcript_store.get_word_count() == 4
 
-        # Phrase 2: new phrase (marks new boundary)
+        # Phrase 2: new phrase (marks new boundary, window 5-7s)
         ctrl._on_phrase_result(
-            self._make_result("Second phrase", 3.0, 5.0, 0, phrase_start=True))
-        # Replace from boundary: 3 (finalized from phrase 1) + 2 (new) = 5
-        # Wait — is_final appended, so we have 6 words. mark_phrase_boundary
-        # at 6. Then replace_current_phrase_words replaces from 6 onward with
-        # 2 new words. Total = 6 + 2 = 8
-        assert ctrl._transcript_store.get_word_count() == 8
+            self._make_result("Second phrase", 5.0, 7.0, 0, phrase_start=True))
+        # All phrase 1 words frozen at boundary (4), + 2 new = 6
+        assert ctrl._transcript_store.get_word_count() == 6
 
         # Phrase 2: re-transcription should not touch phrase 1
         ctrl._on_phrase_result(
-            self._make_result("Second phrase more", 3.0, 5.5, 0))
-        # Replaces from boundary (6): 6 + 3 = 9, not 11
-        assert ctrl._transcript_store.get_word_count() == 9
+            self._make_result("Second phrase more", 6.0, 8.0, 0))
+        # "Second"(5.0-6.0) committed, "phrase"(6.0-7.0) live, new 3 words
+        # = 4 (phrase 1) + 1 (committed "Second") + 3 (new) = 8
+        assert ctrl._transcript_store.get_word_count() == 8
 
         # Verify phrase 1 words are intact
         words = ctrl._transcript_store.get_all_words()
-        phrase1_texts = [w.text for w in words[:6]]
+        phrase1_texts = [w.text for w in words[:4]]
         assert "First" in phrase1_texts
-        assert "finalized" in phrase1_texts
 
     def test_empty_result_does_not_corrupt_store(self):
         """Empty text results don't corrupt the store."""
