@@ -36,6 +36,7 @@ from meetandread.transcription.engine import (
 )
 from meetandread.speaker.models import SpeakerMatch
 from meetandread.transcription.transcript_store import TranscriptStore, Word
+from meetandread.audio.utils import load_wav_as_float32_mono
 
 logger = logging.getLogger(__name__)
 
@@ -223,40 +224,15 @@ class ScrubRunner:
                 self._engines[model_size] = engine
             return self._engines[model_size]
 
-    # -- Audio loading (mirrors PostProcessingQueue) ---------------------
+    # -- Audio loading (delegates to shared utility) ---------------------
 
     @staticmethod
     def _load_audio_file(audio_path: Path) -> np.ndarray:
-        """Load a WAV file into a float32 numpy array (mono 16 kHz)."""
-        import struct
-        import wave
+        """Load a WAV file into a float32 numpy array (mono 16 kHz).
 
-        with wave.open(str(audio_path), "rb") as wf:
-            n_channels = wf.getnchannels()
-            sample_width = wf.getsampwidth()
-            sample_rate = wf.getframerate()
-            n_frames = wf.getnframes()
-            raw_data = wf.readframes(n_frames)
-
-            if sample_width == 2:
-                fmt = f"{n_frames * n_channels}h"
-                samples = struct.unpack(fmt, raw_data)
-                audio = np.array(samples, dtype=np.float32) / 32768.0
-            else:
-                raise ValueError(f"Unsupported sample width: {sample_width}")
-
-            if n_channels == 2:
-                audio = audio.reshape(-1, 2).mean(axis=1)
-
-            if sample_rate != 16000:
-                ratio = 16000 / sample_rate
-                new_length = int(len(audio) * ratio)
-                indices = np.linspace(0, len(audio) - 1, new_length)
-                audio = np.interp(
-                    indices, np.arange(len(audio)), audio
-                ).astype(np.float32)
-
-            return audio
+        Delegates to :func:`load_wav_as_float32_mono`.
+        """
+        return load_wav_as_float32_mono(audio_path)
 
     # -- TranscriptStore creation (mirrors PostProcessingQueue) ----------
 

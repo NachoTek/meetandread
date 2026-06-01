@@ -64,6 +64,19 @@ def ensure_on_screen(widget: QWidget) -> None:
         pass
 
 
+def _norm_label(s: str) -> str:
+    """Normalise a speaker label for comparison.
+
+    Lowercases the label and converts compact forms like ``spk0`` to
+    ``spk_0`` so that casing/format variants match.
+    """
+    s = s.lower()
+    m = re.match(r"^(spk)(\d+)$", s)
+    if m:
+        return f"{m.group(1)}_{m.group(2)}"
+    return s
+
+
 from meetandread.performance.monitor import ResourceMonitor, ResourceSnapshot  # noqa: E402
 from meetandread.performance.benchmark import BenchmarkRunner, BenchmarkResult  # noqa: E402
 from meetandread.widgets.theme import (  # noqa: E402
@@ -91,6 +104,7 @@ from meetandread.widgets.theme import (  # noqa: E402
 
 import logging  # noqa: E402
 from meetandread.widgets.icons import create_play_icon, create_pause_icon, create_speaker_icon  # noqa: E402
+from meetandread.utils.file_utils import atomic_write  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -568,15 +582,6 @@ def _link_speaker_identity_in_file(
         # Try case-insensitive match: "SPK_0" <-> "spk0"
         # Also normalise the raw format (spk0 -> spk_0) so different
         # structural forms are still matched.
-        def _norm_label(s: str) -> str:
-            """Normalise a speaker label for comparison."""
-            s = s.lower()
-            # "spk0" -> "spk_0"
-            m = re.match(r"^(spk)(\d+)$", s)
-            if m:
-                return f"{m.group(1)}_{m.group(2)}"
-            return s
-
         norm_target = _norm_label(actual_key)
         for existing_key in list(sm.keys()):
             if _norm_label(existing_key) == norm_target:
@@ -601,14 +606,6 @@ def _link_speaker_identity_in_file(
 
     # Remove any stale duplicate key that differs only by casing
     # or raw-label format (e.g. both "spk0" and "SPK_0" present).
-    def _norm_label(s: str) -> str:
-        """Normalise a speaker label for comparison."""
-        s = s.lower()
-        m = re.match(r"^(spk)(\d+)$", s)
-        if m:
-            return f"{m.group(1)}_{m.group(2)}"
-        return s
-
     norm_actual = _norm_label(actual_key)
     for dup_key in list(sm.keys()):
         if dup_key != actual_key and _norm_label(dup_key) == norm_actual:
@@ -619,7 +616,7 @@ def _link_speaker_identity_in_file(
     new_content = (
         updated_body + footer_marker + space_before_json + updated_json + " -->\n"
     )
-    md_path.write_text(new_content, encoding="utf-8")
+    atomic_write(md_path, new_content)
 
     logger.info(
         "Linked identity for raw label in %s (%d words, %d segments)",
@@ -754,20 +751,16 @@ def _open_identity_link_dialog(
         logger.warning("No transcript file selected for identity link")
         return False
 
-    # Parse speaker_matches from the transcript metadata
+        # Parse speaker_matches from the transcript metadata
     speaker_matches: dict = {}
     try:
+        from meetandread.speaker.identity_management import parse_metadata_footer
         content = md_path.read_text(encoding="utf-8")
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
-        if marker_idx != -1:
-            metadata_text = content[marker_idx + len(footer_marker):]
-            if metadata_text.strip().endswith(" -->"):
-                metadata_text = metadata_text.strip()[: -len(" -->")]
-            data = json.loads(metadata_text)
+        data = parse_metadata_footer(content)
+        if data is not None:
             speaker_matches = data.get("speaker_matches") or {}
-    except (OSError, json.JSONDecodeError):
-        pass  # empty matches is fine — dialog still usable for create-new
+    except OSError:
+        pass  # empty matches is fine - dialog still usable for create-new
 
     # Construct VoiceSignatureStore (best-effort, dialog still works without)
     store = None
@@ -928,14 +921,6 @@ def _try_link_identity_in_file(
     # Resolve the actual speaker_matches key — it may be the lowercase
     # raw label (e.g. "spk0") while matching_label is the display form
     # (e.g. "SPK_0").
-    def _norm_label(s: str) -> str:
-        """Normalise a speaker label for comparison."""
-        s = s.lower()
-        m = re.match(r"^(spk)(\d+)$", s)
-        if m:
-            return f"{m.group(1)}_{m.group(2)}"
-        return s
-
     sm_key = matching_label
     if sm_key not in speaker_matches:
         norm_target = _norm_label(sm_key)
@@ -1007,7 +992,7 @@ def _try_link_identity_in_file(
     new_content = (
         updated_body + footer_marker + updated_json + " -->\n"
     )
-    md_path.write_text(new_content, encoding="utf-8")
+    atomic_write(md_path, new_content)
 
     logger.info(
         "Propagated identity to %s (%d words, %d segments)",
@@ -1787,8 +1772,8 @@ class FloatingTranscriptPanel(QWidget):
             except OSError as exc:
                 self._history_viewer.setPlainText(f"(Error reading file: {exc})")
                 return
-            footer_marker = "\n---\n\n<!-- METADATA:"
-            marker_idx = content.find(footer_marker)
+            from meetandread.speaker.identity_management import _FOOTER_MARKER
+            marker_idx = content.rfind(_FOOTER_MARKER)
             if marker_idx != -1:
                 content = content[:marker_idx]
             self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
@@ -2421,8 +2406,8 @@ class FloatingTranscriptPanel(QWidget):
                     content = md_path.read_text(encoding="utf-8")
                 except OSError:
                     content = ""
-                footer_marker = "\n---\n\n<!-- METADATA:"
-                marker_idx = content.find(footer_marker)
+                from meetandread.speaker.identity_management import _FOOTER_MARKER
+                marker_idx = content.rfind(_FOOTER_MARKER)
                 if marker_idx != -1:
                     content = content[:marker_idx]
                 self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
@@ -2466,8 +2451,8 @@ class FloatingTranscriptPanel(QWidget):
         except OSError as exc:
             return f"(error reading file: {exc})"
 
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
+        from meetandread.speaker.identity_management import _FOOTER_MARKER
+        marker_idx = content.rfind(_FOOTER_MARKER)
         if marker_idx != -1:
             content = content[:marker_idx]
         return content.strip()
@@ -2496,23 +2481,12 @@ class FloatingTranscriptPanel(QWidget):
             return None
 
         # Split markdown body from JSON footer
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
-        if marker_idx == -1:
+        from meetandread.speaker.identity_management import split_metadata_footer
+        split_result = split_metadata_footer(content)
+        if split_result is None:
             return None
-
-        md_body = _strip_confidence_percentages(content[:marker_idx])
-
-        # Parse metadata to find speakers
-        metadata_text = content[marker_idx + len(footer_marker):]
-        if metadata_text.strip().endswith(" -->"):
-            metadata_text = metadata_text.strip()[:-len(" -->")]
-
-        try:
-            data = json.loads(metadata_text)
-        except json.JSONDecodeError as exc:
-            logger.warning("Malformed metadata in %s: %s", md_path, exc)
-            return None
+        md_body = _strip_confidence_percentages(split_result[0])
+        data = split_result[1]
 
         # Collect unique speaker IDs from words (None counts as "Unknown Speaker")
         speakers = []
@@ -2665,7 +2639,7 @@ class FloatingTranscriptPanel(QWidget):
             updated_body + footer_marker + space_before_json + updated_json + " -->\n"
         )
 
-        md_path.write_text(new_content, encoding="utf-8")
+        atomic_write(md_path, new_content)
 
         logger.info(
             "Renamed speaker '%s' -> '%s' in %s (%d words, %d segments updated)",
@@ -5904,15 +5878,6 @@ class FloatingSettingsPanel(QWidget):
         # Extract model name from result
         model_name = result.model_info.get("model_size", "unknown") if result.model_info else "unknown"
 
-        # Format result
-        # Format result
-        wer_pct = result.wer * 100
-        result_text = (  # noqa: F841
-            f"{model_name}: WER {wer_pct:.1f}% | "
-            f"Latency: {result.total_latency_s:.2f}s | "
-            f"Speed: {result.throughput_ratio:.1f}x realtime"
-        )
-
         # Store in local history (keep last 5)
         self._benchmark_history.append({
             "wer": result.wer,
@@ -7177,8 +7142,8 @@ class FloatingSettingsPanel(QWidget):
             except OSError as exc:
                 self._history_viewer.setPlainText(f"(Error reading file: {exc})")
                 return
-            footer_marker = "\n---\n\n<!-- METADATA:"
-            marker_idx = content.find(footer_marker)
+            from meetandread.speaker.identity_management import _FOOTER_MARKER
+            marker_idx = content.rfind(_FOOTER_MARKER)
             if marker_idx != -1:
                 content = content[:marker_idx]
             self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
@@ -7891,8 +7856,8 @@ class FloatingSettingsPanel(QWidget):
         except OSError as exc:
             return f"(error reading file: {exc})"
 
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
+        from meetandread.speaker.identity_management import _FOOTER_MARKER
+        marker_idx = content.rfind(_FOOTER_MARKER)
         if marker_idx != -1:
             content = content[:marker_idx]
         return content.strip()
@@ -7960,19 +7925,9 @@ class FloatingSettingsPanel(QWidget):
             self._cached_timed_words = []
             return self._cached_timed_words
 
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
-        if marker_idx == -1:
-            self._cached_timed_words = []
-            return self._cached_timed_words
-
-        metadata_text = content[marker_idx + len(footer_marker):]
-        if metadata_text.strip().endswith(" -->"):
-            metadata_text = metadata_text.strip()[:-len(" -->")]
-
-        try:
-            data = json.loads(metadata_text)
-        except json.JSONDecodeError:
+        from meetandread.speaker.identity_management import parse_metadata_footer
+        data = parse_metadata_footer(content)
+        if data is None:
             self._cached_timed_words = []
             return self._cached_timed_words
 
@@ -8137,18 +8092,9 @@ class FloatingSettingsPanel(QWidget):
             logger.error("Failed to read transcript for highlighting: %s: %s", md_path, exc)
             return None
 
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
-        if marker_idx == -1:
-            return None
-
-        metadata_text = content[marker_idx + len(footer_marker):]
-        if metadata_text.strip().endswith(" -->"):
-            metadata_text = metadata_text.strip()[:-len(" -->")]
-
-        try:
-            data = json.loads(metadata_text)
-        except json.JSONDecodeError:
+        from meetandread.speaker.identity_management import parse_metadata_footer
+        data = parse_metadata_footer(content)
+        if data is None:
             return None
 
         words = data.get("words", [])
@@ -8247,22 +8193,12 @@ class FloatingSettingsPanel(QWidget):
             logger.error("Failed to read transcript for rendering: %s: %s", md_path, exc)
             return None
 
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
-        if marker_idx == -1:
+        from meetandread.speaker.identity_management import split_metadata_footer
+        split_result = split_metadata_footer(content)
+        if split_result is None:
             return None
-
-        md_body = _strip_confidence_percentages(content[:marker_idx])
-
-        metadata_text = content[marker_idx + len(footer_marker):]
-        if metadata_text.strip().endswith(" -->"):
-            metadata_text = metadata_text.strip()[:-len(" -->")]
-
-        try:
-            data = json.loads(metadata_text)
-        except json.JSONDecodeError as exc:
-            logger.warning("Malformed metadata in %s: %s", md_path, exc)
-            return None
+        md_body = _strip_confidence_percentages(split_result[0])
+        data = split_result[1]
 
         # Collect unique speaker IDs from words (None counts as "Unknown Speaker")
         speakers = []
@@ -8827,7 +8763,7 @@ class FloatingSettingsPanel(QWidget):
 
         # Write back
         new_content = md_body + footer_marker + json.dumps(data, indent=2) + " -->\n"
-        md_path.write_text(new_content, encoding="utf-8")
+        atomic_write(md_path, new_content)
         logger.info("Renamed speaker '%s' -> '%s' in %s", old_name, new_name, md_path)
 
     def _propagate_rename_to_signatures(
@@ -9249,8 +9185,8 @@ class FloatingSettingsPanel(QWidget):
                     content = md_path.read_text(encoding="utf-8")
                 except OSError:
                     content = ""
-                footer_marker = "\n---\n\n<!-- METADATA:"
-                marker_idx = content.find(footer_marker)
+                from meetandread.speaker.identity_management import _FOOTER_MARKER
+                marker_idx = content.rfind(_FOOTER_MARKER)
                 if marker_idx != -1:
                     content = content[:marker_idx]
                 self._history_viewer.setMarkdown(_strip_confidence_percentages(content))

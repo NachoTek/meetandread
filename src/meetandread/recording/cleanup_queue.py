@@ -98,6 +98,52 @@ class CleanupQueue:
         self._operations: List[CleanupOperation] = []
         self._load()
 
+    # -- Path containment --------------------------------------------------
+
+    def _get_allowed_roots(self) -> List[Path]:
+        """Return resolved directory roots that identity_cleanup may delete within.
+
+        Uses injected test roots when provided, otherwise resolves production
+        storage directories from paths module.
+        """
+        roots: List[Path] = []
+        if self._recordings_dir is not None:
+            roots.append(self._recordings_dir.resolve())
+        else:
+            roots.append(
+                __import__(
+                    "meetandread.audio.storage.paths", fromlist=["get_recordings_dir"]
+                ).get_recordings_dir().resolve()
+            )
+        if self._transcripts_dir is not None:
+            roots.append(self._transcripts_dir.resolve())
+        else:
+            roots.append(
+                __import__(
+                    "meetandread.audio.storage.paths", fromlist=["get_transcripts_dir"]
+                ).get_transcripts_dir().resolve()
+            )
+        return roots
+
+    def _validate_path_containment(self, path_str: str) -> bool:
+        """Check that *path_str* resolves inside an allowed root.
+
+        Returns True if the resolved path is inside recordings_dir or
+        transcripts_dir; False otherwise.  Symlinks and ``..`` segments
+        are resolved before comparison.
+        """
+        try:
+            resolved = Path(path_str).resolve()
+        except (OSError, ValueError):
+            return False
+        for root in self._get_allowed_roots():
+            try:
+                resolved.relative_to(root)
+                return True
+            except ValueError:
+                continue
+        return False
+
     # -- Persistence -------------------------------------------------------
 
     def _load(self) -> None:
@@ -241,19 +287,25 @@ class CleanupQueue:
         """Process all pending operations in the queue.
 
         For file_delete operations, delegates to delete_recording_structured.
-        For identity_cleanup, attempts to delete explicit paths.
+        For identity_cleanup, attempts to delete explicit paths after
+        validating path containment.
 
-        Completed operations are removed from the queue. Failed operations
-        remain with incremented attempt counts.
+        Completed operations are pruned automatically — they are **not**
+        retained in the persisted queue.  Failed operations remain with
+        incremented attempt counts and ``last_error`` for retry.
 
         Returns:
             ProcessResult with counts and per-operation summaries.
         """
         result = ProcessResult()
         still_pending: List[CleanupOperation] = []
+        pruned_count = 0
 
         for op in self._operations:
             if op.status != "pending":
+                # Prune any pre-existing completed operations
+                if op.status == "completed":
+                    pruned_count += 1
                 continue
 
             op.attempts += 1
@@ -269,13 +321,15 @@ class CleanupQueue:
                     op.status = "completed"
                     result.processed += 1
                     result.details.append(summary)
+                    pruned_count += 1
                     continue
 
                 result.details.append(summary)
 
-                # If the operation had no failures, mark completed
+                # Completed ops are pruned (not retained); failed stay pending
                 if op.status == "completed":
                     result.processed += 1
+                    pruned_count += 1
                 else:
                     still_pending.append(op)
                     result.failed += 1
@@ -290,10 +344,12 @@ class CleanupQueue:
                     op.kind, op.target, exc,
                 )
 
-        # Keep completed ops out, retain still-pending
-        completed = [op for op in self._operations if op.status == "completed"]
-        self._operations = completed + still_pending
-        result.remaining = self.pending_count
+        # Retain only pending/failed operations — completed are pruned
+        self._operations = still_pending
+        result.remaining = len(still_pending)
+
+        if pruned_count:
+            logger.info("Pruned %d completed operations from queue", pruned_count)
 
         self._save()
         logger.info(
@@ -349,7 +405,13 @@ class CleanupQueue:
             )
 
     def _process_identity_cleanup(self, op: CleanupOperation) -> str:
-        """Process an identity_cleanup operation by deleting explicit paths."""
+        """Process an identity_cleanup operation by deleting explicit paths.
+
+        Each path is validated for containment within allowed roots
+        (recordings_dir and transcripts_dir) before unlinking.  Paths
+        that fail validation are rejected without deletion and recorded
+        as failures.
+        """
         if not op.paths:
             op.status = "completed"
             return f"No explicit paths for identity cleanup: {op.target}"
@@ -357,11 +419,21 @@ class CleanupQueue:
         deleted = 0
         failures = []
         for path_str in op.paths:
+            # Validate path containment before any filesystem operation
+            if not self._validate_path_containment(path_str):
+                failures.append(f"{path_str}: path outside allowed roots")
+                logger.warning(
+                    "Rejected identity cleanup path outside allowed roots: %s",
+                    path_str,
+                )
+                continue
+
             path = Path(path_str)
             try:
                 if path.exists():
                     path.unlink()
                     deleted += 1
+                # Missing file = already clean, not a failure
             except OSError as exc:
                 failures.append(f"{path_str}: {exc}")
 

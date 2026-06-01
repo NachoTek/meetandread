@@ -64,35 +64,34 @@ def manager(temp_config_dir):
 # ============================================================================
 
 class TestModelSettings:
-    """Tests for ModelSettings dataclass."""
-    
-    def test_default_values(self):
-        """Test default values are correct."""
+    """Tests for ModelSettings dataclass.
+
+    ModelSettings no longer carries realtime_model_size (moved to
+    TranscriptionSettings).  Verify the dataclass is still constructable
+    and round-trips through serialization.
+    """
+
+    def test_default_construction(self):
+        """Test default construction."""
         settings = ModelSettings()
-        assert settings.realtime_model_size == "auto"
-    
+        assert settings.to_dict() == {}
+
     def test_to_dict(self):
         """Test serialization to dict."""
-        settings = ModelSettings(realtime_model_size="small")
+        settings = ModelSettings()
         d = settings.to_dict()
-        assert d["realtime_model_size"] == "small"
-    
+        assert isinstance(d, dict)
+
     def test_from_dict(self):
         """Test deserialization from dict."""
-        d = {"realtime_model_size": "base"}
-        settings = ModelSettings.from_dict(d)
-        assert settings.realtime_model_size == "base"
-    
-    def test_from_dict_missing_fields(self):
-        """Test from_dict uses defaults for missing fields."""
-        d = {"realtime_model_size": "tiny"}
-        settings = ModelSettings.from_dict(d)
-        assert settings.realtime_model_size == "tiny"
-    
+        settings = ModelSettings.from_dict({"realtime_model_size": "base"})
+        # Field is silently ignored — no longer part of ModelSettings
+        assert isinstance(settings, ModelSettings)
+
     def test_from_dict_empty_dict(self):
         """Test from_dict with empty dict uses all defaults."""
         settings = ModelSettings.from_dict({})
-        assert settings.realtime_model_size == "auto"
+        assert isinstance(settings, ModelSettings)
 
 
 class TestTranscriptionSettings:
@@ -320,13 +319,13 @@ class TestAppSettings:
         d = {
             "config_version": 1,
             "model": {"realtime_model_size": "small"},
-            "transcription": {"enabled": False},
+            "transcription": {"enabled": False, "realtime_model_size": "small"},
             "hardware": {"last_detected_ram_gb": 16.0},
             "ui": {"show_confidence_legend": False}
         }
         settings = AppSettings.from_dict(d)
         assert settings.config_version == 1
-        assert settings.model.realtime_model_size == "small"
+        assert settings.transcription.realtime_model_size == "small"
         assert settings.transcription.enabled is False
         assert settings.hardware.last_detected_ram_gb == 16.0
         assert settings.ui.show_confidence_legend is False
@@ -335,7 +334,7 @@ class TestAppSettings:
         """Test from_dict handles missing sections with defaults."""
         d = {"config_version": 1}  # Missing all sections
         settings = AppSettings.from_dict(d)
-        assert settings.model.realtime_model_size == "auto"  # default
+        assert settings.transcription.realtime_model_size == "tiny"  # default
         assert settings.transcription.enabled is True  # default
     
     def test_from_dict_invalid_sections(self):
@@ -346,7 +345,8 @@ class TestAppSettings:
         }
         settings = AppSettings.from_dict(d)
         # Should use defaults for invalid sections
-        assert settings.model.realtime_model_size == "auto"
+        assert isinstance(settings.model, ModelSettings)
+        assert settings.transcription.realtime_model_size == "tiny"  # default
     
     def test_from_dict_unknown_fields(self):
         """Test from_dict ignores unknown fields gracefully."""
@@ -357,7 +357,7 @@ class TestAppSettings:
         }
         settings = AppSettings.from_dict(d)
         assert settings.config_version == 1
-        assert settings.model.realtime_model_size == "tiny"
+        assert settings.transcription.realtime_model_size == "tiny"
 
 
 # ============================================================================
@@ -376,18 +376,18 @@ class TestSettingsPersistence:
     def test_save_and_load(self, persistence):
         """Test saving and loading settings."""
         settings = AppSettings()
-        settings.model.realtime_model_size = "small"
+        settings.transcription.realtime_model_size = "small"
         
         result = persistence.save_settings(settings)
         assert result is True
         
         loaded = persistence.load_settings()
-        assert loaded.model.realtime_model_size == "small"
+        assert loaded.transcription.realtime_model_size == "small"
     
     def test_load_missing_file_returns_defaults(self, persistence):
         """Test loading when file doesn't exist returns defaults."""
         loaded = persistence.load_settings()
-        assert loaded.model.realtime_model_size == "auto"
+        assert loaded.transcription.realtime_model_size == "tiny"
         assert loaded.config_version == 8
     
     def test_load_corrupted_json_returns_defaults(self, persistence):
@@ -397,7 +397,7 @@ class TestSettingsPersistence:
         config_path.write_text("{invalid json")
         
         loaded = persistence.load_settings()
-        assert loaded.model.realtime_model_size == "auto"  # defaults
+        assert loaded.transcription.realtime_model_size == "tiny"  # defaults
     
     def test_load_empty_file_returns_defaults(self, persistence):
         """Test loading empty file returns defaults."""
@@ -405,7 +405,7 @@ class TestSettingsPersistence:
         config_path.write_text("")
         
         loaded = persistence.load_settings()
-        assert loaded.model.realtime_model_size == "auto"
+        assert loaded.transcription.realtime_model_size == "tiny"
     
     def test_atomic_write(self, persistence, temp_config_dir):
         """Test atomic write doesn't leave temp files."""
@@ -419,7 +419,7 @@ class TestSettingsPersistence:
     def test_get_default_settings(self, persistence):
         """Test getting default settings."""
         defaults = persistence.get_default_settings()
-        assert defaults.model.realtime_model_size == "auto"
+        assert defaults.transcription.realtime_model_size == "tiny"
     
     def test_delete_config(self, persistence):
         """Test deleting config file."""
@@ -595,8 +595,8 @@ class TestConfigManager:
     
     def test_get_nested_value(self, manager):
         """Test get() with dot-path."""
-        value = manager.get("model.realtime_model_size")
-        assert value == "auto"
+        value = manager.get("transcription.realtime_model_size")
+        assert value == "tiny"
     
     def test_get_deeply_nested(self, manager):
         """Test get() with deeply nested path."""
@@ -613,13 +613,13 @@ class TestConfigManager:
     
     def test_set_value(self, manager):
         """Test set() changes value."""
-        manager.set("model.realtime_model_size", "small")
-        assert manager.get("model.realtime_model_size") == "small"
+        manager.set("transcription.realtime_model_size", "small")
+        assert manager.get("transcription.realtime_model_size") == "small"
     
     def test_set_marks_dirty(self, manager):
         """Test set() marks as dirty."""
         assert not manager.is_dirty()
-        manager.set("model.realtime_model_size", "small")
+        manager.set("transcription.realtime_model_size", "small")
         assert manager.is_dirty()
     
     def test_set_type_validation(self, manager):
@@ -644,16 +644,16 @@ class TestConfigManager:
     
     def test_get_dirty_paths(self, manager):
         """Test getting list of dirty paths."""
-        manager.set("model.realtime_model_size", "small")
+        manager.set("transcription.realtime_model_size", "small")
         manager.set("transcription.enabled", False)
         
         dirty = manager.get_dirty_paths()
-        assert "model.realtime_model_size" in dirty
+        assert "transcription.realtime_model_size" in dirty
         assert "transcription.enabled" in dirty
     
     def test_save_clears_dirty(self, manager):
         """Test save() clears dirty flag."""
-        manager.set("model.realtime_model_size", "small")
+        manager.set("transcription.realtime_model_size", "small")
         assert manager.is_dirty()
         
         manager.save()
@@ -666,20 +666,20 @@ class TestConfigManager:
     
     def test_reload_clears_dirty(self, manager):
         """Test reload() clears dirty flag."""
-        manager.set("model.realtime_model_size", "small")
+        manager.set("transcription.realtime_model_size", "small")
         manager.reload()
         assert not manager.is_dirty()
         # Value should be back to default
-        assert manager.get("model.realtime_model_size") == "auto"
+        assert manager.get("transcription.realtime_model_size") == "tiny"
     
     def test_reset_to_defaults(self, manager):
         """Test reset_to_defaults()."""
-        manager.set("model.realtime_model_size", "small")
+        manager.set("transcription.realtime_model_size", "small")
         manager.set("transcription.enabled", False)
         manager.save()
         
         manager.reset_to_defaults()
-        assert manager.get("model.realtime_model_size") == "auto"
+        assert manager.get("transcription.realtime_model_size") == "tiny"
         assert manager.get("transcription.enabled") is True
         assert manager.is_dirty()  # All paths marked dirty
     
@@ -744,11 +744,11 @@ class TestConfigIntegration:
         cm = ConfigManager(persistence=persistence)
         
         # Initial state
-        assert cm.get("model.realtime_model_size") == "auto"
+        assert cm.get("transcription.realtime_model_size") == "tiny"
         assert not cm.is_dirty()
         
         # Modify
-        cm.set("model.realtime_model_size", "small")
+        cm.set("transcription.realtime_model_size", "small")
         assert cm.is_dirty()
         
         # Save
@@ -766,7 +766,7 @@ class TestConfigIntegration:
         cm2 = ConfigManager(persistence=persistence2)
         
         # Should load saved value
-        assert cm2.get("model.realtime_model_size") == "small"
+        assert cm2.get("transcription.realtime_model_size") == "small"
     
     def test_multiple_saves_no_corruption(self, temp_config_dir):
         """Test multiple saves don't corrupt file."""
@@ -774,11 +774,11 @@ class TestConfigIntegration:
         
         for i in range(10):
             settings = AppSettings()
-            settings.model.realtime_model_size = f"small_{i}"
+            settings.transcription.realtime_model_size = f"small_{i}"
             persistence.save_settings(settings)
         
         loaded = persistence.load_settings()
-        assert "small_9" in loaded.model.realtime_model_size
+        assert "small_9" in loaded.transcription.realtime_model_size
     
     def test_convenience_functions(self, temp_config_dir):
         """Test module-level convenience functions."""
@@ -799,10 +799,10 @@ class TestConfigIntegration:
         manager_module._config_manager = cm
         
         # Use convenience functions
-        assert get_config("model.realtime_model_size") == "auto"
+        assert get_config("transcription.realtime_model_size") == "tiny"
         
-        set_config("model.realtime_model_size", "base")
-        assert get_config("model.realtime_model_size") == "base"
+        set_config("transcription.realtime_model_size", "base")
+        assert get_config("transcription.realtime_model_size") == "base"
         
         result = save_config()
         assert result is True
@@ -816,16 +816,16 @@ class TestConfigConcurrency:
     
     def test_save_while_dirty(self, manager):
         """Test saving multiple times while dirty."""
-        manager.set("model.realtime_model_size", "small")
+        manager.set("transcription.realtime_model_size", "small")
         assert manager.save() is True
         
         # Change again
-        manager.set("model.realtime_model_size", "base")
+        manager.set("transcription.realtime_model_size", "base")
         assert manager.save() is True
         
         # Reload and verify
         manager.reload()
-        assert manager.get("model.realtime_model_size") == "base"
+        assert manager.get("transcription.realtime_model_size") == "base"
 
 
 # ============================================================================

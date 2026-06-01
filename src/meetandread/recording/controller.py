@@ -18,9 +18,6 @@ import numpy as np  # noqa: E402
 from meetandread.speaker.models import DiarizationResult  # noqa: E402
 
 
-def _ts(): return _time.strftime("%H:%M:%S")
-
-
 from meetandread.audio import (  # noqa: E402
     AudioSession,
     SessionConfig,
@@ -36,6 +33,11 @@ from meetandread.transcription.post_processor import PostProcessingQueue  # noqa
 from meetandread.config.manager import ConfigManager  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+# Named constants for runtime thresholds and limits
+_LIVE_SPEAKER_MATCH_THRESHOLD = 0.75  # Conservative: no match below this
+_SANITIZED_ERROR_MAX_LENGTH = 200  # Truncation for sanitized error messages
+_SANITIZED_STATUS_MAX_LENGTH = 120  # Truncation for status/diagnostic messages
 
 
 class ControllerState(Enum):
@@ -142,6 +144,10 @@ class RecordingController:
         self._live_attempt_interval = 2.0  # seconds between match attempts
         self._live_extractor_lock = threading.Lock()  # serialize extractor use
 
+        # Thread-safety locks (S02/T01)
+        self._state_lock = threading.Lock()   # protects _state, _error, _last_*_path, _last_diarization_result, _last_wer, _post_process_job_id
+        self._buffer_lock = threading.Lock()  # protects _live_audio_buffer and live matching counters
+
     def _on_session_frames_dropped(self, count: int) -> None:
         """Internal handler for session-level frame-drop events.
 
@@ -172,51 +178,97 @@ class RecordingController:
             except Exception:
                 logger.exception("on_frames_dropped callback error (recording continues)")
 
+    def _on_session_error(self, exc: Exception) -> None:
+        """Internal handler for session consumer thread crashes.
+
+        Called from the audio consumer thread via SessionConfig.on_error
+        when the consumer loop crashes. Logs the error and transitions
+        controller state to ERROR. Never raises — exceptions are logged
+        and swallowed so the consumer thread cleanup is not compromised.
+        """
+        try:
+            error_class = type(exc).__name__
+            logger.error(
+                "Audio session consumer crash: error_class=%s, state=%s",
+                error_class,
+                self._state.name,
+            )
+            self._set_error(
+                f"Audio consumer error: {error_class}",
+                is_recoverable=True,
+            )
+        except Exception:
+            logger.exception("Error in _on_session_error handler")
+
     def _set_state(self, state: ControllerState) -> None:
         """Update state and notify listeners."""
-        self._state = state
-        if self.on_state_change:
+        callback = None
+        with self._state_lock:
+            self._state = state
+            callback = self.on_state_change
+        # Invoke callback outside lock to prevent deadlock
+        if callback:
             try:
-                self.on_state_change(state)
+                callback(state)
             except Exception as e:
                 logger.error("State change callback failed: %s", e)
 
     def _set_error(self, message: str, is_recoverable: bool = True) -> ControllerError:
         """Set error state and notify listeners."""
-        self._error = ControllerError(message, is_recoverable)
-        self._set_state(ControllerState.ERROR)
-        if self.on_error:
+        error = ControllerError(message, is_recoverable)
+        state_cb = error_cb = None
+        with self._state_lock:
+            self._error = error
+            self._state = ControllerState.ERROR
+            state_cb = self.on_state_change
+            error_cb = self.on_error
+        # Invoke callbacks outside lock to prevent deadlock
+        if state_cb:
             try:
-                self.on_error(self._error)
+                state_cb(ControllerState.ERROR)
+            except Exception as e:
+                logger.error("State change callback failed: %s", e)
+        if error_cb:
+            try:
+                error_cb(error)
             except Exception as e:
                 logger.error("Error callback failed: %s", e)
-        return self._error
+        return error
 
     def clear_error(self) -> None:
         """Clear error state and return to idle."""
-        self._error = None
-        if self._state == ControllerState.ERROR:
+        with self._state_lock:
+            self._error = None
+            is_error = self._state == ControllerState.ERROR
+        if is_error:
             self._set_state(ControllerState.IDLE)
 
     def get_state(self) -> ControllerState:
-        """Get current controller state."""
+        """Get current controller state (thread-safe snapshot)."""
+        with self._state_lock:
+            current = self._state
         # Sync with underlying session state if needed
         session_state = self._session.get_state()
-        if session_state == SessionState.RECORDING and self._state != ControllerState.RECORDING:
+        if session_state == SessionState.RECORDING and current != ControllerState.RECORDING:
             self._set_state(ControllerState.RECORDING)
-        return self._state
+            with self._state_lock:
+                return self._state
+        return current
 
     def get_error(self) -> Optional[ControllerError]:
-        """Get current error if any."""
-        return self._error
+        """Get current error if any (thread-safe snapshot)."""
+        with self._state_lock:
+            return self._error
 
     def is_recording(self) -> bool:
-        """Check if currently recording."""
-        return self._state == ControllerState.RECORDING
+        """Check if currently recording (thread-safe)."""
+        with self._state_lock:
+            return self._state == ControllerState.RECORDING
 
     def is_busy(self) -> bool:
         """Check if controller is busy (starting, stopping, etc.)."""
-        return self._state in (ControllerState.STARTING, ControllerState.STOPPING)
+        with self._state_lock:
+            return self._state in (ControllerState.STARTING, ControllerState.STOPPING)
 
     def start(
         self,
@@ -244,14 +296,19 @@ class RecordingController:
         # new jobs from starting while recording is active.  Cancelling
         # here would discard a completed diarization and leave the previous
         # recording stuck at "(processing speakers...)".
-        if self._post_processor is not None:
-            self._post_process_job_id = None
+        with self._state_lock:
+            if self._post_processor is not None:
+                self._post_process_job_id = None
+
+        # Validate state (read snapshot under lock)
+        with self._state_lock:
+            current_state = self._state
 
         # Validate state
-        if self._state in (ControllerState.RECORDING, ControllerState.STARTING):
+        if current_state in (ControllerState.RECORDING, ControllerState.STARTING):
             return self._set_error("Already recording", is_recoverable=True)
 
-        if self._state == ControllerState.STOPPING:
+        if current_state == ControllerState.STOPPING:
             return self._set_error("Cannot start while stopping", is_recoverable=True)
 
         # Validate sources
@@ -348,6 +405,7 @@ class RecordingController:
                 denoising_provider_name=denoise_provider if denoise_enabled else None,
                 denoising_latency_budget_ms=denoise_budget_ms,
                 on_frames_dropped=self._on_session_frames_dropped,
+                on_error=self._on_session_error,
             )
             logger.info(
                 "Denoising config: enabled=%s provider=%s budget=%.0fms",
@@ -395,7 +453,9 @@ class RecordingController:
         Returns:
             ControllerError if stop cannot be initiated, None if stop started
         """
-        if self._state != ControllerState.RECORDING:
+        with self._state_lock:
+            current_state = self._state
+        if current_state != ControllerState.RECORDING:
             return self._set_error("Not currently recording", is_recoverable=True)
 
         logger.info("[STOP-TIMER] stop() called on thread: %s",
@@ -621,7 +681,8 @@ class RecordingController:
                 # (2) Stop audio session (join consumer + finalize WAV).
                 logger.debug("Finalizing audio session...")
                 wav_path = old_session.stop()
-                self._last_wav_path = wav_path
+                with self._state_lock:
+                    self._last_wav_path = wav_path
                 logger.info("[STOP-TIMER] session.stop() done (WAV): %.2fs, path=%s",
                             _time.monotonic() - ft0, wav_path)
 
@@ -633,7 +694,8 @@ class RecordingController:
                         old_store.get_word_count(),
                     )
                     transcript_path = self._save_transcript(store=old_store)
-                    self._last_transcript_path = transcript_path
+                    with self._state_lock:
+                        self._last_transcript_path = transcript_path
                     logger.info("[STOP-TIMER] transcript saved: %.2fs",
                                 _time.monotonic() - ft0)
 
@@ -645,7 +707,8 @@ class RecordingController:
                         realtime_transcript=old_store,
                         output_dir=get_transcripts_dir()
                     )
-                    self._post_process_job_id = job.job_id
+                    with self._state_lock:
+                        self._post_process_job_id = job.job_id
                     logger.info("[STOP-TIMER] post-process scheduled: %.2fs",
                                 _time.monotonic() - ft0)
                 else:
@@ -671,9 +734,10 @@ class RecordingController:
                 import traceback
                 traceback.print_exc()
                 logger.error("Finalizer error: %s", e)
-                self._error = ControllerError(
-                    f"Finalization warning: {e}", is_recoverable=True,
-                )
+                with self._state_lock:
+                    self._error = ControllerError(
+                        f"Finalization warning: {e}", is_recoverable=True,
+                    )
 
         finalizer = threading.Thread(
             target=_finalize,
@@ -683,6 +747,78 @@ class RecordingController:
         self._finalizer_thread = finalizer
         finalizer.start()
         # _stop_worker returns immediately - IDLE is already set
+
+    def shutdown(self, timeout: float = 10.0) -> None:
+        """Idempotent exit-only shutdown that waits for finalization.
+
+        This is ONLY for application exit.  It initiates stop() when
+        recording, waits briefly for the stop worker to spawn the
+        finalizer thread, then joins the finalizer with a bounded
+        timeout.  Normal stop() remains non-blocking per D045.
+
+        Safe to call multiple times, from any state, and from any
+        thread.  Never raises — all exceptions are logged and swallowed
+        so the quit path is never compromised.
+
+        Args:
+            timeout: Maximum seconds to wait for the finalizer thread.
+                Clamped to [1.0, 60.0].
+        """
+        # Clamp timeout to sane range
+        timeout = max(1.0, min(60.0, float(timeout)))
+        logger.info(
+            "shutdown() called: state=%s, timeout=%.1fs",
+            self._state.name, timeout,
+        )
+
+        # Idempotency guard: if already shut down, return immediately.
+        # We check _finalizer_thread == None AND state is IDLE/ERROR
+        # as a signal that stop was already completed or never started.
+        with self._state_lock:
+            current_state = self._state
+
+        # If recording or stopping, initiate stop first
+        if current_state in (ControllerState.RECORDING, ControllerState.STOPPING):
+            logger.info("shutdown(): initiating stop (state=%s)", current_state.name)
+            try:
+                self.stop()
+            except Exception as exc:
+                logger.warning("shutdown(): stop() raised %s, continuing", exc)
+
+            # Wait for stop worker to spawn the finalizer thread
+            # Poll with short sleeps — the stop worker sets IDLE and spawns
+            # the finalizer very quickly (< 1 second per D045).
+            worker_deadline = _time.monotonic() + 2.0
+            while _time.monotonic() < worker_deadline:
+                with self._state_lock:
+                    if self._state == ControllerState.IDLE:
+                        break
+                _time.sleep(0.05)
+
+            # Small additional wait to allow the stop worker to assign
+            # self._finalizer_thread (it sets IDLE first, then spawns).
+            _time.sleep(0.1)
+
+        # Join the finalizer thread if it exists and is alive
+        finalizer = self._finalizer_thread
+        if finalizer is not None and finalizer.is_alive():
+            logger.info(
+                "shutdown(): waiting for finalizer thread (timeout=%.1fs)",
+                timeout,
+            )
+            finalizer.join(timeout=timeout)
+            if finalizer.is_alive():
+                logger.warning(
+                    "shutdown(): finalizer did not complete within %.1fs — "
+                    "proceeding with exit (WAV/transcript may be incomplete)",
+                    timeout,
+                )
+            else:
+                logger.info("shutdown(): finalizer completed successfully")
+        else:
+            logger.info("shutdown(): no active finalizer to wait for")
+
+        logger.info("shutdown() complete")
 
     def _init_transcription(self) -> Optional[ControllerError]:
         """Initialize transcription components.
@@ -726,7 +862,7 @@ class RecordingController:
             # Load model (tiny takes 1-2 seconds)
             logger.info("Loading %s model for real-time transcription...", realtime_model)
             self._transcription_processor.load_model(
-                progress_callback=lambda p: print(f"Loading {realtime_model} model: {p}%")
+                progress_callback=lambda p: logger.info("Loading %s model: %d%%", realtime_model, p)
             )
             logger.info("%s model loaded successfully", realtime_model)
 
@@ -771,8 +907,13 @@ class RecordingController:
             name = self._try_live_speaker_match()
             if name is not None:
                 result.speaker_id = name
-        except Exception:
-            pass  # Never block phrase result delivery
+        except Exception as _lsm_exc:
+            # Never block phrase result delivery — log and continue
+            logger.debug(
+                "Live speaker match error (phrase delivery continues): "
+                "error_class=%s",
+                type(_lsm_exc).__name__,
+            )
 
         # Convert SegmentResult to Word objects for storage
         if self._transcript_store:
@@ -857,7 +998,8 @@ class RecordingController:
         # --- Store diarization result from background processing ---
         diarization_result = result.get("diarization_result")
         if diarization_result is not None:
-            self._last_diarization_result = diarization_result
+            with self._state_lock:
+                self._last_diarization_result = diarization_result
             logger.info(
                 "Post-processing job %s delivered diarization result (%d speakers)",
                 job_id,
@@ -950,10 +1092,12 @@ class RecordingController:
             md_body = content[:marker_idx]
             updated_json = json.dumps(data, indent=2)
             new_content = md_body + footer_marker + updated_json + " -->\n"
-            transcript_path.write_text(new_content, encoding="utf-8")
+            from meetandread.utils.file_utils import atomic_write
+            atomic_write(transcript_path, new_content)
 
             # Store WER value for UI access
-            self._last_wer = wer_value
+            with self._state_lock:
+                self._last_wer = wer_value
 
         except Exception as exc:
             logger.error("Auto-WER computation failed: %s", exc, exc_info=True)
@@ -985,13 +1129,20 @@ class RecordingController:
                     # Convert float32 to int16 PCM bytes for the live buffer
                     clamped = np.clip(chunk, -1.0, 1.0)
                     pcm_int16 = (clamped * 32767).astype(np.int16)
-                    self._live_audio_buffer.extend(pcm_int16.tobytes())
-                    # Trim to rolling window
-                    if len(self._live_audio_buffer) > self._live_max_buffer_bytes:
-                        excess = len(self._live_audio_buffer) - self._live_max_buffer_bytes
-                        del self._live_audio_buffer[:excess]
-            except Exception:
-                pass  # Non-critical; matching simply won't have audio
+                    pcm_bytes = pcm_int16.tobytes()
+                    with self._buffer_lock:
+                        self._live_audio_buffer.extend(pcm_bytes)
+                        # Trim to rolling window
+                        if len(self._live_audio_buffer) > self._live_max_buffer_bytes:
+                            excess = len(self._live_audio_buffer) - self._live_max_buffer_bytes
+                            del self._live_audio_buffer[:excess]
+            except Exception as _pcm_exc:
+                # Non-critical; matching simply won't have audio
+                logger.debug(
+                    "PCM buffer write for live matching failed "
+                    "(matching degraded): error_class=%s",
+                    type(_pcm_exc).__name__,
+                )
 
     # ------------------------------------------------------------------
     # Live speaker matching (conservative, for CC overlay)
@@ -1037,7 +1188,7 @@ class RecordingController:
         except (ImportError, Exception) as exc:
             self._live_extractor_available = False
             self._live_last_error_class = type(exc).__name__
-            self._live_last_error_message = str(exc)[:120]
+            self._live_last_error_message = str(exc)[:_SANITIZED_STATUS_MAX_LENGTH]
             self._live_last_status = "extractor_error"
             logger.info(
                 "Live speaker matching disabled: %s", type(exc).__name__
@@ -1054,13 +1205,17 @@ class RecordingController:
         now = _time.monotonic()
 
         # Rate-limit: don't attempt more than once per interval
-        if (self._live_last_attempt_ts is not None
-                and now - self._live_last_attempt_ts < self._live_attempt_interval):
+        with self._buffer_lock:
+            last_ts = self._live_last_attempt_ts
+            buffer_len = len(self._live_audio_buffer)
+            min_bytes = self._live_min_audio_bytes
+        if last_ts is not None and now - last_ts < self._live_attempt_interval:
             return None
 
         # Check audio buffer has enough data
-        if len(self._live_audio_buffer) < self._live_min_audio_bytes:
-            self._live_last_status = "insufficient_audio"
+        if buffer_len < min_bytes:
+            with self._buffer_lock:
+                self._live_last_status = "insufficient_audio"
             return None
 
         # Check speaker settings
@@ -1069,8 +1224,12 @@ class RecordingController:
             if not settings.speaker.enabled:
                 self._live_last_status = "disabled"
                 return None
-        except Exception:
-            pass  # Default to trying
+        except Exception as _cfg_exc:
+            logger.debug(
+                "Config read failed during speaker matching, "
+                "defaulting to enabled: error_class=%s",
+                type(_cfg_exc).__name__,
+            )
 
         # Lazy-init extractor (non-blocking check)
         if not self._ensure_live_extractor():
@@ -1081,12 +1240,13 @@ class RecordingController:
             return None
 
         try:
-            self._live_last_attempt_ts = now
-            self._live_match_attempts += 1
+            with self._buffer_lock:
+                self._live_last_attempt_ts = now
+                self._live_match_attempts += 1
+                raw_bytes = bytes(self._live_audio_buffer)
 
             # Convert int16 PCM buffer to mono float32 numpy array
             import numpy as np
-            raw_bytes = bytes(self._live_audio_buffer)
             pcm_int16 = np.frombuffer(raw_bytes, dtype=np.int16)
             audio_float32 = pcm_int16.astype(np.float32) / 32768.0
 
@@ -1096,15 +1256,17 @@ class RecordingController:
             stream.input_finished()
 
             if not self._live_extractor.is_ready(stream):
-                self._live_last_status = "insufficient_audio"
-                self._live_match_fallbacks += 1
+                with self._buffer_lock:
+                    self._live_last_status = "insufficient_audio"
+                    self._live_match_fallbacks += 1
                 return None
 
             embedding = self._live_extractor.compute(stream)
 
             if embedding is None or len(embedding) == 0:
-                self._live_last_status = "no_match"
-                self._live_match_fallbacks += 1
+                with self._buffer_lock:
+                    self._live_last_status = "no_match"
+                    self._live_match_fallbacks += 1
                 return None
 
             # Look up against known signatures
@@ -1116,34 +1278,38 @@ class RecordingController:
                 with VoiceSignatureStore(db_path=db_path) as store:
                     match = store.find_match(
                         embedding,
-                        threshold=0.75,  # Conservative: no match below this
+                        threshold=_LIVE_SPEAKER_MATCH_THRESHOLD,
                     )
             except Exception as store_exc:
-                self._live_last_error_class = type(store_exc).__name__
-                self._live_last_error_message = str(store_exc)[:120]
-                self._live_last_status = "store_error"
-                self._live_match_fallbacks += 1
+                with self._buffer_lock:
+                    self._live_last_error_class = type(store_exc).__name__
+                    self._live_last_error_message = str(store_exc)[:_SANITIZED_STATUS_MAX_LENGTH]
+                    self._live_last_status = "store_error"
+                    self._live_match_fallbacks += 1
                 return None
 
             if match is None or match.confidence != "high":
-                self._live_last_status = (
-                    "high_confidence_match_without_name"
-                    if match is not None and match.confidence != "high"
-                    else "no_match"
-                )
-                self._live_match_fallbacks += 1
+                with self._buffer_lock:
+                    self._live_last_status = (
+                        "high_confidence_match_without_name"
+                        if match is not None and match.confidence != "high"
+                        else "no_match"
+                    )
+                    self._live_match_fallbacks += 1
                 return None
 
             # High-confidence match found
-            self._live_match_hits += 1
-            self._live_last_status = "matched"
+            with self._buffer_lock:
+                self._live_match_hits += 1
+                self._live_last_status = "matched"
             return match.name
 
         except Exception as exc:
-            self._live_last_error_class = type(exc).__name__
-            self._live_last_error_message = str(exc)[:120]
-            self._live_last_status = "extractor_error"
-            self._live_match_fallbacks += 1
+            with self._buffer_lock:
+                self._live_last_error_class = type(exc).__name__
+                self._live_last_error_message = str(exc)[:_SANITIZED_STATUS_MAX_LENGTH]
+                self._live_last_status = "extractor_error"
+                self._live_match_fallbacks += 1
             logger.debug(
                 "Live speaker matching error: %s", type(exc).__name__
             )
@@ -1154,17 +1320,17 @@ class RecordingController:
 
     def _reset_live_speaker_state(self) -> None:
         """Reset live speaker matching state for a new recording."""
-        self._live_audio_buffer = bytearray()
-        self._live_match_attempts = 0
-        self._live_match_hits = 0
-        self._live_match_fallbacks = 0
-        self._live_last_status = "disabled"
-        self._live_last_error_class = None
-        self._live_last_error_message = None
-        self._live_last_attempt_ts = None
+        with self._buffer_lock:
+            self._live_audio_buffer = bytearray()
+            self._live_match_attempts = 0
+            self._live_match_hits = 0
+            self._live_match_fallbacks = 0
+            self._live_last_status = "disabled"
+            self._live_last_error_class = None
+            self._live_last_error_message = None
+            self._live_last_attempt_ts = None
         # Keep extractor available across recordings for efficiency
         # (don't recreate it for each recording session)
-        pass
 
     def get_live_audio_samples(
         self, duration_seconds: float = 1.5
@@ -1176,6 +1342,10 @@ class RecordingController:
         [-1.0, 1.0], and returns a **snapshot** that does not alias the
         internal buffer.  Empty or invalid states return an empty float32
         array - this method never raises.
+
+        Thread-safe: takes a consistent snapshot of the buffer under
+        _buffer_lock so concurrent writes from the audio callback thread
+        do not cause torn reads.
 
         Args:
             duration_seconds: How many seconds of recent audio to return.
@@ -1200,13 +1370,16 @@ class RecordingController:
         # Calculate requested byte count (int16 = 2 bytes per sample)
         requested_bytes = int(duration_seconds * 16000 * 2)
 
-        buf = self._live_audio_buffer
-        if not buf:
+        # Take a consistent snapshot under buffer lock
+        with self._buffer_lock:
+            buf_snapshot = bytes(self._live_audio_buffer) if self._live_audio_buffer else b""
+
+        if not buf_snapshot:
             return np.ndarray(0, dtype=np.float32)
 
         # Take only the most recent bytes, up to what's available
-        available = min(requested_bytes, len(buf))
-        raw = bytes(buf[-available:])
+        available = min(requested_bytes, len(buf_snapshot))
+        raw = buf_snapshot[-available:]
 
         # Align to whole int16 samples (2 bytes each) - drop trailing odd byte
         aligned_len = (len(raw) // 2) * 2
@@ -1385,7 +1558,10 @@ class RecordingController:
                 When None (default), uses self._transcript_store.
         """
         store = transcript_store or self._transcript_store
-        assert store is not None
+        if store is None:
+            raise RuntimeError(
+                "Cannot apply speaker labels: no transcript store available"
+            )
 
         words = store.get_all_words()
         if not words:
@@ -1602,12 +1778,14 @@ class RecordingController:
         return configs
 
     def get_last_recording_path(self) -> Optional[Path]:
-        """Get path to the most recently completed recording."""
-        return self._last_wav_path
+        """Get path to the most recently completed recording (thread-safe snapshot)."""
+        with self._state_lock:
+            return self._last_wav_path
 
     def get_last_transcript_path(self) -> Optional[Path]:
-        """Get path to the most recently completed transcript."""
-        return self._last_transcript_path
+        """Get path to the most recently completed transcript (thread-safe snapshot)."""
+        with self._state_lock:
+            return self._last_transcript_path
 
     def get_transcript_store(self) -> Optional[TranscriptStore]:
         """Get the current transcript store (for UI access during recording)."""
@@ -1704,15 +1882,19 @@ class RecordingController:
         return names
 
     def get_last_wer(self) -> Optional[float]:
-        """Return the WER value from the last auto-WER computation.
+        """Return the WER value from the last auto-WER computation (thread-safe snapshot).
 
         Returns:
             WER as float (0.0-1.0+) or None if not yet computed.
         """
-        return self._last_wer
+        with self._state_lock:
+            return self._last_wer
 
     def get_diagnostics(self) -> dict:
         """Return sanitized controller diagnostics for testing/inspection.
+
+        Thread-safe: takes consistent snapshots of state fields and buffer
+        counters under their respective locks.
 
         Exposes controller state, recording paths, session stats (including
         denoising stats), VAD/transcription stats when present, and
@@ -1722,10 +1904,17 @@ class RecordingController:
         Returns:
             Dict of sanitized diagnostic key/value pairs.
         """
+        # Take consistent snapshot of state fields
+        with self._state_lock:
+            state = self._state
+            last_wav = self._last_wav_path
+            last_transcript = self._last_transcript_path
+            error = self._error
+
         diag: dict = {
-            "state": self._state.name,
-            "last_wav_path": str(self._last_wav_path) if self._last_wav_path else None,
-            "last_transcript_path": str(self._last_transcript_path) if self._last_transcript_path else None,
+            "state": state.name,
+            "last_wav_path": str(last_wav) if last_wav else None,
+            "last_transcript_path": str(last_transcript) if last_transcript else None,
         }
 
         # Session stats
@@ -1736,6 +1925,7 @@ class RecordingController:
                 "frames_dropped": stats.frames_dropped,
                 "duration_seconds": stats.duration_seconds,
                 "source_stats": stats.source_stats,
+                "session_error": str(self._session.get_error()) if self._session.get_error() else None,
                 "denoising": {
                     "provider": stats.denoising.provider,
                     "enabled": stats.denoising.enabled,
@@ -1749,7 +1939,7 @@ class RecordingController:
                 },
             }
         except Exception:
-            pass
+            logger.debug("Diagnostics: session stats unavailable")
 
         # Transcription / VAD stats
         if self._transcription_processor:
@@ -1765,7 +1955,7 @@ class RecordingController:
                     vs = vad()
                     diag["vad"] = vs
             except Exception:
-                pass
+                logger.debug("Diagnostics: transcription stats unavailable")
 
         # Transcript store stats
         if self._transcript_store:
@@ -1776,10 +1966,12 @@ class RecordingController:
                     "words_with_speaker": sum(1 for w in words if w.speaker_id is not None),
                 }
             except Exception:
-                pass
+                logger.debug("Diagnostics: transcript store stats unavailable")
 
         # Diarization result metadata
-        if self._last_diarization_result:
+        with self._state_lock:
+            diarization_result = self._last_diarization_result
+        if diarization_result:
             try:
                 result = self._last_diarization_result
                 raw_labels: set = set()
@@ -1798,30 +1990,49 @@ class RecordingController:
                     "labels": sorted(raw_labels),
                 }
             except Exception:
-                pass
+                logger.debug("Diagnostics: diarization stats unavailable")
 
         # Live speaker matching diagnostics (sanitized - no names/embeddings)
-        diag["live_speaker_matching"] = {
-            "enabled": self._live_extractor_available is True,
-            "extractor_available": self._live_extractor_available,
-            "store_available": self._live_store_available,
-            "audio_buffer_seconds": round(
+        with self._buffer_lock:
+            live_buffer_seconds = round(
                 len(self._live_audio_buffer) / (16000 * 2), 1
-            ),
-            "attempts": self._live_match_attempts,
-            "matches": self._live_match_hits,
-            "fallbacks": self._live_match_fallbacks,
-            "last_status": self._live_last_status,
-            "last_error_class": self._live_last_error_class,
-            "last_error_message": self._live_last_error_message,
-            "last_attempt_ts": self._live_last_attempt_ts,
+            )
+            live_attempts = self._live_match_attempts
+            live_hits = self._live_match_hits
+            live_fallbacks = self._live_match_fallbacks
+            live_status = self._live_last_status
+            live_err_class = self._live_last_error_class
+            live_err_msg = self._live_last_error_message
+            live_last_ts = self._live_last_attempt_ts
+        with self._state_lock:
+            live_ext_avail = self._live_extractor_available
+            live_store_avail = self._live_store_available
+        diag["live_speaker_matching"] = {
+            "enabled": live_ext_avail is True,
+            "extractor_available": live_ext_avail,
+            "store_available": live_store_avail,
+            "audio_buffer_seconds": live_buffer_seconds,
+            "attempts": live_attempts,
+            "matches": live_hits,
+            "fallbacks": live_fallbacks,
+            "last_status": live_status,
+            "last_error_class": live_err_class,
+            "last_error_message": live_err_msg,
+            "last_attempt_ts": live_last_ts,
+        }
+
+        # Finalizer thread info (for shutdown diagnostics)
+        finalizer_thread = self._finalizer_thread
+        diag["finalizer"] = {
+            "alive": finalizer_thread is not None and finalizer_thread.is_alive(),
+            "name": getattr(finalizer_thread, "name", None) if finalizer_thread else None,
         }
 
         # Error info
-        if self._error:
+        if error:
             diag["error"] = {
-                "message": self._error.message,
-                "is_recoverable": self._error.is_recoverable,
+                "message": error.message,
+                "is_recoverable": error.is_recoverable,
             }
 
         return diag

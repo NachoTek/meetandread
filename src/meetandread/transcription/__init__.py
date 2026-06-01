@@ -22,6 +22,9 @@ from meetandread.transcription.local_agreement import LocalAgreementBuffer
 from meetandread.transcription.engine import (
     WhisperTranscriptionEngine,
     TranscriptionSegment,
+    TranscriptionSuccess,
+    TranscriptionError,
+    TranscriptionResult,
     WordInfo,
 )
 from meetandread.transcription.confidence import (
@@ -56,6 +59,9 @@ __all__ = [
     "LocalAgreementBuffer",
     "WhisperTranscriptionEngine",
     "TranscriptionSegment",
+    "TranscriptionSuccess",
+    "TranscriptionError",
+    "TranscriptionResult",
     "WordInfo",
     # Hybrid transcription
     "PostProcessingQueue",

@@ -62,6 +62,7 @@ logger = logging.getLogger(__name__)
 from meetandread.config.models import AppSettings  # noqa: E402
 from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
+from meetandread.audio.utils import load_wav_as_float32_mono  # noqa: E402
 
 
 class PostProcessStatus(Enum):
@@ -547,8 +548,11 @@ class PostProcessingQueue:
                     original_path = job.output_dir / f"{base_name}.md"
                     speaker_matches = self._read_speaker_matches(original_path)
                 except Exception:
-                    pass
-
+                    logger.debug(
+                        "Failed to read speaker_matches from %s "
+                        "(transcript will save without them)",
+                        original_path,
+                    )
             transcript_path = self._save_post_processed_transcript(
                 job, enhanced_store, speaker_matches=speaker_matches,
             )
@@ -589,8 +593,12 @@ class PostProcessingQueue:
                         "status": "failed",
                     })
                 except Exception:
-                    pass
-    
+                    logger.debug(
+                        "on_complete callback error (failure notification): "
+                        "job_id=%s",
+                        job.job_id,
+                    )
+
     def _get_or_create_engine(self, model_size: str) -> WhisperTranscriptionEngine:
         """Get cached engine or create new one.
         
@@ -615,46 +623,16 @@ class PostProcessingQueue:
     
     def _load_audio_file(self, audio_file: Path) -> np.ndarray:
         """Load audio file into numpy array.
-        
+
+        Delegates to the shared :func:`load_wav_as_float32_mono` utility.
+
         Args:
             audio_file: Path to audio file
-        
+
         Returns:
             Audio samples as float32 numpy array
         """
-        import wave
-        import struct
-        
-        with wave.open(str(audio_file), 'rb') as wf:
-            n_channels = wf.getnchannels()
-            sample_width = wf.getsampwidth()
-            sample_rate = wf.getframerate()
-            n_frames = wf.getnframes()
-            
-            # Read all frames
-            raw_data = wf.readframes(n_frames)
-            
-            # Convert to numpy
-            if sample_width == 2:  # 16-bit
-                fmt = f"{n_frames * n_channels}h"
-                samples = struct.unpack(fmt, raw_data)
-                audio = np.array(samples, dtype=np.float32) / 32768.0
-            else:
-                raise ValueError(f"Unsupported sample width: {sample_width}")
-            
-            # Convert to mono if stereo
-            if n_channels == 2:
-                audio = audio.reshape(-1, 2).mean(axis=1)
-            
-            # Resample to 16kHz if needed
-            if sample_rate != 16000:
-                # Simple resampling (for production, use proper resampling library)
-                ratio = 16000 / sample_rate
-                new_length = int(len(audio) * ratio)
-                indices = np.linspace(0, len(audio) - 1, new_length)
-                audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-            
-            return audio
+        return load_wav_as_float32_mono(audio_file)
     
     def _create_post_processed_transcript(
         self,
@@ -806,9 +784,9 @@ class PostProcessingQueue:
                 return None
             data = _json.loads(content[idx + len(marker) :].rstrip(" -->\n"))
             return data.get("speaker_matches")
-        except Exception:
+        except (json.JSONDecodeError, OSError, ValueError):
             return None
-    
+
     def _save_post_processed_transcript(
         self, job: PostProcessJob, store: TranscriptStore,
         speaker_matches: Optional[dict] = None,

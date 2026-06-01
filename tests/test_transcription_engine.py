@@ -333,10 +333,12 @@ class TestWhisperTranscriptionEngine:
         audio = np.zeros(16000 * 2, dtype=np.float32)
         
         # Should not raise an error
-        segments = engine.transcribe_chunk(audio)
+        result = engine.transcribe_chunk(audio)
         
-        # Should return a list (might be empty for silence)
-        assert isinstance(segments, list)
+        # Should return a typed result (TranscriptionSuccess for valid audio)
+        from meetandread.transcription.engine import TranscriptionSuccess
+        assert isinstance(result, TranscriptionSuccess)
+        assert isinstance(result.segments, list)
 
 
 class TestTranscriptionPipeline:

@@ -330,15 +330,6 @@ def cleanup_diarization_segments(
     return result
 
 
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Compute cosine similarity between two vectors."""
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
-
-
 class Diarizer:
     """Wraps sherpa-onnx diarization + embedding extraction.
 
@@ -510,8 +501,10 @@ class Diarizer:
 
         try:
             self._ensure_initialized()
-            assert self._sd is not None
-            assert self._extractor is not None
+            if self._sd is None:
+                raise RuntimeError("Diarizer not initialized: diarization model is None")
+            if self._extractor is None:
+                raise RuntimeError("Diarizer not initialized: embedding extractor is None")
 
             # --- Read audio ---------------------------------------------------
             audio, sr = self._read_wav(wav_path)
@@ -659,7 +652,10 @@ class Diarizer:
         into one stream and compute one embedding. If a speaker has very
         short total duration (< 2s), we pad with silence or skip.
         """
-        assert self._extractor is not None
+        if self._extractor is None:
+            raise RuntimeError(
+                "Diarizer not initialized: embedding extractor is None"
+            )
 
         # Group segments by speaker
         speaker_segments: dict[str, list[SpeakerSegment]] = {}
@@ -698,7 +694,10 @@ class Diarizer:
         segments: list[SpeakerSegment],
     ) -> Optional[np.ndarray]:
         """Concatenate segment audio, feed through extractor, return embedding."""
-        assert self._extractor is not None
+        if self._extractor is None:
+            raise RuntimeError(
+                "Diarizer not initialized: embedding extractor is None"
+            )
 
         # Collect audio chunks for this speaker
         chunks = []

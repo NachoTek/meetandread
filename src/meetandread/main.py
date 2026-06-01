@@ -4,11 +4,13 @@ Main application entry point.
 """
 
 import sys
+import queue
 import threading
 import logging
 import signal
 from datetime import datetime
 from pathlib import Path
+from typing import List, NamedTuple, Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt
 
@@ -16,6 +18,15 @@ from meetandread.widgets.main_widget import MeetAndReadWidget
 from meetandread.audio import has_partial_recordings, recover_part_files, get_recordings_dir
 from meetandread.config import get_config
 from meetandread.hardware.recommender import ModelRecommender
+
+
+class _RecoveryResult(NamedTuple):
+    """Immutable envelope for recovery worker outcome."""
+    recovered_paths: List[Path]
+    error: Optional[str]
+
+
+logger = logging.getLogger(__name__)
 
 
 def check_critical_dlls():
@@ -95,8 +106,8 @@ def setup_logging():
     # Redirect stdout to both console and file
     sys.stdout = TeeOutput(logging.getLogger())
     
-    print(f"Logging to: {log_file}")
-    print(f"Logs directory: {logs_dir}")
+    logger.info("Logging to: %s", log_file)
+    logger.info("Logs directory: %s", logs_dir)
     return log_file
 
 
@@ -145,28 +156,37 @@ def check_and_offer_recovery(parent=None):
     # Process events to show the dialog
     QApplication.processEvents()
     
-    # Do recovery in a thread to avoid blocking
-    recovered_files = []
-    recovery_error = None
+    # Thread-safe result handoff via queue — no shared mutable state
+    result_queue: queue.Queue[_RecoveryResult] = queue.Queue(maxsize=1)
     
     def do_recovery():
-        nonlocal recovered_files, recovery_error
         try:
-            recovered_files = recover_part_files(
+            recovered = recover_part_files(
                 recordings_dir=recordings_dir,
                 delete_original=False,  # Safer default - backup originals
             )
+            result_queue.put(_RecoveryResult(recovered_paths=recovered, error=None))
         except Exception as e:
-            recovery_error = str(e)
+            result_queue.put(_RecoveryResult(recovered_paths=[], error=str(e)))
     
-    # Run recovery (in thread for UI responsiveness, but wait for completion)
-    recovery_thread = threading.Thread(target=do_recovery)
+    # Run recovery in a thread to keep UI responsive
+    recovery_thread = threading.Thread(target=do_recovery, daemon=True)
     recovery_thread.start()
-    recovery_thread.join(timeout=30.0)  # Wait up to 30 seconds
+    
+    # Wait up to 30 seconds for the result envelope
+    try:
+        result = result_queue.get(timeout=30.0)
+        recovered_files = result.recovered_paths
+        recovery_error = result.error
+        timed_out = False
+    except queue.Empty:
+        recovered_files = []
+        recovery_error = None
+        timed_out = True
     
     progress_msg.close()
     
-    # Show result
+    # Show result — three explicit outcomes: error, timeout, success/empty
     if recovery_error:
         error_msg = QMessageBox(parent)
         error_msg.setWindowTitle("Recovery Error")
@@ -174,6 +194,17 @@ def check_and_offer_recovery(parent=None):
         error_msg.setInformativeText(f"Error: {recovery_error}")
         error_msg.setIcon(QMessageBox.Icon.Warning)
         error_msg.exec()
+    elif timed_out:
+        timeout_msg = QMessageBox(parent)
+        timeout_msg.setWindowTitle("Recovery Timed Out")
+        timeout_msg.setText("Recording recovery is still in progress")
+        timeout_msg.setInformativeText(
+            "Recovery did not complete within 30 seconds. "
+            "Partial recordings have been preserved and can be "
+            "recovered on the next startup."
+        )
+        timeout_msg.setIcon(QMessageBox.Icon.Warning)
+        timeout_msg.exec()
     elif recovered_files:
         success_msg = QMessageBox(parent)
         success_msg.setWindowTitle("Recovery Complete")
@@ -227,20 +258,48 @@ def check_hardware_requirements():
         logging.warning(f"Hardware requirements check failed: {e}")
 
 
-def setup_signal_handlers(app):
+def setup_signal_handlers(app, widget_ref=None):
     """Setup signal handlers for graceful shutdown.
-    
+
+    When a widget reference is available, signal handlers invoke the
+    widget's graceful exit path (controller shutdown).  Without a widget
+    (e.g. signal arrives before widget is created), falls back to
+    app.quit().
+
     Args:
-        app: QApplication instance to quit on signal
+        app: QApplication instance to quit on signal.
+        widget_ref: Optional callable that returns the MeetAndReadWidget,
+            or None.  Using a callable avoids referencing a widget that
+            may not exist yet at signal-registration time.
     """
+    def _graceful_exit():
+        """Attempt graceful controller shutdown, then quit."""
+        widget = None
+        if widget_ref is not None:
+            try:
+                widget = widget_ref()
+            except Exception:
+                logger.debug("widget_ref() failed during shutdown", exc_info=True)
+        if widget is not None:
+            try:
+                widget._exit_application()
+            except Exception:
+                logger.debug(
+                    "_exit_application failed in signal handler, "
+                    "falling back to app.quit()"
+                )
+                app.quit()
+        else:
+            app.quit()
+
     def sigint_handler(signum, frame):
         """Handle SIGINT (Ctrl+C) gracefully."""
-        print("\nReceived SIGINT, shutting down gracefully...")
-        app.quit()
-    
+        logger.info("Received SIGINT, shutting down gracefully...")
+        _graceful_exit()
+
     # Register SIGINT handler
     signal.signal(signal.SIGINT, sigint_handler)
-    
+
     # On Windows, also set up console control handler for Ctrl+C
     if sys.platform == 'win32':
         try:
@@ -248,8 +307,8 @@ def setup_signal_handlers(app):
 
             def win_handler(dwCtrlType):
                 if dwCtrlType == 0:  # CTRL_C_EVENT
-                    print("\nReceived CTRL+C event, shutting down gracefully...")
-                    app.quit()
+                    logger.info("Received CTRL+C event, shutting down gracefully...")
+                    _graceful_exit()
                     return True
                 return False
             win32api.SetConsoleCtrlHandler(win_handler, True)
@@ -261,7 +320,7 @@ def setup_signal_handlers(app):
 def main():
     """Application entry point."""
     # Setup logging first
-    log_file = setup_logging()  # noqa: F841
+    setup_logging()
     logging.info("Starting meetandread")
     
     # Enable high DPI support
@@ -272,9 +331,14 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("meetandread")
     app.setApplicationDisplayName("meetandread")
-    
+
+    # Widget placeholder — updated after widget creation.
+    # Signal handlers read this via a lambda so they always get the
+    # current widget (or None if the signal arrives too early).
+    _widget_holder = [None]
+
     # Setup signal handlers for graceful Ctrl+C shutdown
-    setup_signal_handlers(app)
+    setup_signal_handlers(app, widget_ref=lambda: _widget_holder[0])
     
     # Check critical native DLLs are loadable (frozen exe only)
     check_critical_dlls()
@@ -283,23 +347,21 @@ def main():
     try:
         settings = get_config()
         if settings.hardware.auto_detect_on_startup and not settings.hardware.recommended_model:
-            print("Running hardware detection...")
+            logger.info("Running hardware detection...")
             recommender = ModelRecommender()
             recommended = recommender.detect_and_recommend()
             specs = recommender.get_detected_specs()
-            print(f"  RAM: {specs.total_ram_gb:.1f} GB")
-            print(f"  CPU: {specs.cpu_count_logical} cores")
-            print(f"  Recommended model: {recommended}")
-            print()
+            logger.info("RAM: %.1f GB, CPU: %d cores, Recommended model: %s",
+                        specs.total_ram_gb, specs.cpu_count_logical, recommended)
     except Exception as e:
         # Log error but don't block startup
-        print(f"Hardware detection failed: {e}")
+        logger.warning("Hardware detection failed: %s", e)
     
     # Check hardware requirements and warn if below minimum
     try:
         check_hardware_requirements()
     except Exception as e:
-        print(f"Hardware requirements check failed: {e}")
+        logger.warning("Hardware requirements check failed: %s", e)
     
     # Check for partial recordings and offer recovery before showing widget
     # This runs synchronously before the main event loop
@@ -307,7 +369,7 @@ def main():
         check_and_offer_recovery(parent=None)
     except Exception as e:
         # Log error but don't block startup
-        print(f"Recovery check failed: {e}")
+        logger.warning("Recovery check failed: %s", e)
 
     # Process pending cleanup queue (orphaned files from prior sessions)
     try:
@@ -324,6 +386,7 @@ def main():
     
     # Create and show the main widget
     widget = MeetAndReadWidget()
+    _widget_holder[0] = widget  # Enable signal handlers to reach the widget
     
     # Create and wire system tray icon manager
     from meetandread.widgets.tray_icon import TrayIconManager

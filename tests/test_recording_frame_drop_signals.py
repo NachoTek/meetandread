@@ -218,7 +218,8 @@ def _make_widget(qapp):
          patch("meetandread.widgets.main_widget.QApplication.screens",
                return_value=[fake_screen]), \
          patch("meetandread.widgets.main_widget.get_config", return_value=None), \
-         patch("meetandread.widgets.main_widget.save_config"):
+         patch("meetandread.widgets.main_widget.save_config"), \
+         patch.object(MeetAndReadWidget, "_create_floating_panels"):
         w = MeetAndReadWidget()
     w._floating_settings_panel = MagicMock()
     w._floating_settings_panel.isVisible.return_value = False
