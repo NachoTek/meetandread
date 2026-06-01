@@ -92,10 +92,11 @@ class WhisperTranscriptionEngine:
         
         # Transcribe audio chunk
         audio = np.zeros(16000 * 2, dtype=np.float32)  # 2 seconds of audio
-        segments = engine.transcribe_chunk(audio)
+        result = engine.transcribe_chunk(audio)
         
-        for segment in segments:
-            print(f"{segment.text} (confidence: {segment.confidence}%)")
+        if hasattr(result, 'segments'):  # TranscriptionSuccess
+            for segment in result.segments:
+                print(f"{segment.text} (confidence: {segment.confidence}%)")
     """
     
     # Model download URLs from HuggingFace

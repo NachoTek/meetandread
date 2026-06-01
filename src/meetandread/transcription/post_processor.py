@@ -498,6 +498,16 @@ class PostProcessingQueue:
             )
             segments = engine.transcribe_chunk(audio_data)
             self._update_progress(job, 80)
+
+            # Unwrap typed result (M019 changed transcribe_chunk to return
+            # TranscriptionSuccess | TranscriptionError instead of raw segments)
+            from meetandread.transcription.engine import TranscriptionError
+            if isinstance(segments, TranscriptionError):
+                raise RuntimeError(
+                    f"Post-processing transcription failed: "
+                    f"{segments.error_type}: {segments.message}"
+                )
+            segments = segments.segments
             
             # ---- Checkpoint: not cancelled ----
             if job.cancel_requested:

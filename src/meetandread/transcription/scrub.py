@@ -355,6 +355,16 @@ class ScrubRunner:
             segments = engine.transcribe_chunk(audio)
             self._notify_progress(80)
 
+            # Unwrap typed result (M019 changed transcribe_chunk to return
+            # TranscriptionSuccess | TranscriptionError instead of raw segments)
+            from meetandread.transcription.engine import TranscriptionError
+            if isinstance(segments, TranscriptionError):
+                raise RuntimeError(
+                    f"Re-transcription failed: "
+                    f"{segments.error_type}: {segments.message}"
+                )
+            segments = segments.segments
+
             if self._cancel_event.is_set():
                 logger.info("Scrub cancelled after transcription")
                 return
