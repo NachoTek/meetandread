@@ -549,10 +549,20 @@ class PostProcessingQueue:
             self._update_progress(job, 90)
 
             # Save post-processed transcript (overwrites original .md).
-            # Carry forward speaker_matches from the realtime transcript's
-            # diarization result so identity metadata survives the overwrite.
+            # Build speaker_matches from the post-processing diarization
+            # result (which has identity matches from VoiceSignatureStore).
+            # Falls back to carrying forward the realtime transcript's
+            # matches when diarization didn't run.
             speaker_matches = None
-            if job.realtime_transcript:
+            if diarization_result is not None and diarization_result.matches:
+                speaker_matches = {}
+                for label, match in diarization_result.matches.items():
+                    speaker_matches[str(label)] = {
+                        "identity_name": match.name,
+                        "score": match.score,
+                        "confidence": match.confidence,
+                    }
+            elif job.realtime_transcript:
                 try:
                     base_name = job.audio_file.stem
                     original_path = job.output_dir / f"{base_name}.md"
