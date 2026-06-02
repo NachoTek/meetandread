@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — 2026-06-02
+
+### Fixed
+- **Live transcription text duplication (Issue #2)** — Two-buffer model in TranscriptStore (`_words` + `_live_phrase_words`) replaces wholesale on each re-transcription pass instead of appending, eliminating duplicate text from sliding window overlap. `set_live_phrase_words` / `commit_live_phrase` provide a unified replace path for both `is_final` and re-transcription segments
+- **Post-processing and scrub broken (Issue #11)** — M019 changed `transcribe_chunk()` to return `TranscriptionSuccess | TranscriptionError` but post_processor, scrub, and benchmark still iterated the raw return. All callers now unwrap the typed result
+- **Speaker identity matching not resolving (Issue #12)** — Post-processing diarization runs via subprocess; JSON round-trip produces int speaker labels in segments but string keys in matches dict. `speaker_label_for()` now tries both exact match and `str()` coercion before falling back to `SPK_N` default
+- **Post-processor speaker_matches metadata** — Now built from the diarization result's VoiceSignatureStore identity matches instead of carrying forward stale realtime transcript data
+- **Transcript save missing live buffer** — `_get_segments_internal()` and finalizer now include live phrase buffer so saved transcripts contain full text
+- **run.bat Windows Store python stub** — Switched `python` → `py` launcher to bypass Windows Store AppInstaller redirector
+
+### Changed
+- **Code Review Audit Remediation (Issue #8)** — 46 verified findings from GPT-5.5 code review triaged and fixed: `atomic_write()` utility for crash-safe file operations, `TranscriptionResult` typed return from `transcribe_chunk()`, thread safety fixes in TranscriptStore, resource lifecycle cleanup, exception handling hardening, and lint cleanup across 8 modules
+
 ## [0.17.0] — 2026-05-29
 
 ### Added
@@ -199,6 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD** — GitHub Actions test workflow (Windows, Python 3.10) and release workflow (PyInstaller build + GitHub Release)
 - **PyInstaller Build** — onedir build with runtime hook, explicit DLL collection for 5 native dependency groups, startup DLL guard
 
+[0.19.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.19.0
 [0.17.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.17.0
 [0.16.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.16.0
 [0.14.0]: https://github.com/NachoTek/meetandread/releases/tag/v0.14.0

@@ -1,13 +1,13 @@
 @echo off
 REM Launch meetandread (meetandread) application
-REM No codebase changes needed — just sets PYTHONPATH and runs.
+REM Uses py launcher to avoid Windows Store python stub.
 
 set "SCRIPT_DIR=%~dp0"
 set "PYTHONPATH=%SCRIPT_DIR%src"
 cd /d "%SCRIPT_DIR%"
 
 echo Starting meetandread...
-python -m meetandread
+py -m meetandread
 
 if errorlevel 1 (
     echo.
