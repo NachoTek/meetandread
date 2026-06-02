@@ -530,24 +530,7 @@ class PostProcessingQueue:
             # Apply diarization speaker labels if diarization ran successfully.
             if diarization_result is not None and self._apply_speaker_labels_callback is not None:
                 try:
-                    logger.info(
-                        "Job %s: applying speaker labels (diarization: %d segments, "
-                        "%d matches, %d signatures)",
-                        job.job_id,
-                        len(diarization_result.segments) if diarization_result else 0,
-                        len(diarization_result.matches) if diarization_result else 0,
-                        len(diarization_result.signatures) if diarization_result else 0,
-                    )
                     self._apply_speaker_labels_callback(enhanced_store, diarization_result)
-                    # Verify the labels were applied
-                    labeled_words = [w for w in enhanced_store.get_all_words() if w.speaker_id is not None]
-                    unique_speakers = set(w.speaker_id for w in labeled_words)
-                    logger.info(
-                        "Job %s: after apply_speaker_labels: %d/%d words labeled, "
-                        "unique speakers: %s",
-                        job.job_id, len(labeled_words),
-                        enhanced_store.get_word_count(), unique_speakers,
-                    )
                 except Exception as exc:
                     logger.warning(
                         "Job %s: apply speaker labels failed (non-fatal): %s",

@@ -1600,11 +1600,6 @@ class RecordingController:
         if not label_map:
             return
 
-        logger.info(
-            "apply_speaker_labels: label_map=%s, %d words, %d segments",
-            label_map, len(words), len(result.segments),
-        )
-
         # --- Pass 1: midpoint overlap ---
         tagged_count = 0
         for word in words:
