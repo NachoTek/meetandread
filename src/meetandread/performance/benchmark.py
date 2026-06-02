@@ -240,8 +240,18 @@ class BenchmarkRunner:
                 chunk_duration = len(chunk_audio) / sample_rate
 
                 chunk_start = time.monotonic()
-                segments = self._engine.transcribe_chunk(chunk_audio)
+                chunk_result = self._engine.transcribe_chunk(chunk_audio)
                 chunk_latency = time.monotonic() - chunk_start
+
+                # Unwrap typed result
+                from meetandread.transcription.engine import TranscriptionError, TranscriptionSuccess
+                if isinstance(chunk_result, TranscriptionError):
+                    logger.warning(
+                        "Benchmark chunk %d transcription failed: %s",
+                        i + 1, chunk_result.message,
+                    )
+                    continue
+                segments = chunk_result.segments if isinstance(chunk_result, TranscriptionSuccess) else chunk_result
 
                 # Check cancellation immediately after blocking transcribe
                 if self._cancel_event.is_set():

@@ -110,6 +110,7 @@ class TranscriptStore:
     def __init__(self):
         """Initialize empty transcript store."""
         self._words: List[Word] = []
+        self._live_phrase_words: List[Word] = []
         self._lock = threading.Lock()
         self._recording_start_time: Optional[datetime] = None
         self._last_segment_time: float = 0.0
@@ -142,6 +143,41 @@ class TranscriptStore:
             self._words.extend(words)
             if words:
                 self._last_segment_time = max(w.end_time for w in words)
+
+    def set_live_phrase_words(self, words: List[Word]) -> None:
+        """Replace the current live phrase with the latest transcription.
+
+        During live transcription, the accumulating processor re-transcribes a
+        sliding window and re-emits ALL segments every ~2s.  Whisper may
+        re-segment differently on each pass, so word-level timing is
+        unreliable for deduplication.
+
+        This method maintains a separate ``_live_phrase_words`` buffer that
+        is wholesale replaced on each re-transcription pass.  When the phrase
+        is finalized (via commit_live_phrase()), the buffer is promoted to
+        the permanent ``_words`` list.
+
+        Thread-safe - can be called from transcription thread.
+
+        Args:
+            words: All Word objects from the latest re-transcription pass.
+        """
+        with self._lock:
+            self._live_phrase_words = list(words)
+            if words:
+                self._last_segment_time = max(w.end_time for w in words)
+
+    def commit_live_phrase(self) -> None:
+        """Promote the live phrase buffer to permanent storage.
+
+        Called when a phrase is finalized (is_final=True) or when a new
+        phrase starts (phrase_start=True on the next batch).  Moves
+        _live_phrase_words into _words and clears the buffer.
+        """
+        with self._lock:
+            if self._live_phrase_words:
+                self._words.extend(self._live_phrase_words)
+                self._live_phrase_words = []
     
     def get_segments(self, since_time: float = 0) -> List[Segment]:
         """Get segments after a specific time.
@@ -160,7 +196,7 @@ class TranscriptStore:
             current_segment_words = []
             current_speaker = None
             
-            for word in self._words:
+            for word in list(self._words) + list(self._live_phrase_words):
                 if word.start_time < since_time:
                     continue
                 
@@ -180,16 +216,16 @@ class TranscriptStore:
             return segments
     
     def get_all_words(self) -> List[Word]:
-        """Get all words in chronological order.
+        """Get all words including the live phrase buffer.
         
         Returns:
-            List of all Word objects
+            List of all Word objects (permanent + live)
         """
         with self._lock:
-            return list(self._words)
+            return list(self._words) + list(self._live_phrase_words)
     
     def get_recent_words(self, count: int) -> List[Word]:
-        """Get the last N words.
+        """Get the last N words (from permanent + live buffer).
         
         Args:
             count: Number of words to return
@@ -198,21 +234,23 @@ class TranscriptStore:
             List of the most recent Word objects
         """
         with self._lock:
-            return list(self._words[-count:]) if count > 0 else []
+            all_words = list(self._words) + list(self._live_phrase_words)
+            return all_words[-count:] if count > 0 else []
     
     def get_word_count(self) -> int:
-        """Get total number of words in transcript.
+        """Get total number of words including live phrase buffer.
         
         Returns:
-            Word count
+            Word count (permanent + live)
         """
         with self._lock:
-            return len(self._words)
+            return len(self._words) + len(self._live_phrase_words)
     
     def clear(self) -> None:
         """Reset transcript for new recording."""
         with self._lock:
             self._words = []
+            self._live_phrase_words = []
             self._recording_start_time = None
             self._last_segment_time = 0.0
     
@@ -351,7 +389,7 @@ class TranscriptStore:
         current_segment_words = []
         current_speaker = None
         
-        for word in self._words:
+        for word in list(self._words) + list(self._live_phrase_words):
             # Start new segment if speaker changes
             if word.speaker_id != current_speaker:
                 if current_segment_words:

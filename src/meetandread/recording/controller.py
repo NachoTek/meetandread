@@ -689,6 +689,8 @@ class RecordingController:
                 # (3) Save transcript if available (before post-processing)
                 transcript_path = None
                 if old_store and self._last_wav_path:
+                    # Commit any remaining live phrase words before saving
+                    old_store.commit_live_phrase()
                     logger.info(
                         "Saving transcript (%d words)...",
                         old_store.get_word_count(),
@@ -899,7 +901,9 @@ class RecordingController:
         Args:
             result: SegmentResult with text, confidence, and completion status
         """
-        logger.debug("Segment: %r [conf: %d%%, final: %s, idx: %s]", result.text[:40], result.confidence, result.is_final, result.segment_index)
+        logger.debug("Segment: %r [conf: %d%%, final: %s, idx: %s]",
+                     result.text[:40], result.confidence, result.is_final,
+                     result.segment_index)
 
         # Attempt live speaker matching (conservative; attaches name only
         # for high-confidence known-speaker matches)
@@ -919,8 +923,27 @@ class RecordingController:
         if self._transcript_store:
             words = self._segment_to_words(result)
             if words:
-                self._transcript_store.add_words(words)
-                logger.debug("Added %d words to transcript store (total: %d)", len(words), self._transcript_store.get_word_count())
+                if result.phrase_start:
+                    # New phrase — commit any previous live phrase,
+                    # then start fresh live buffer
+                    self._transcript_store.commit_live_phrase()
+                    self._transcript_store.set_live_phrase_words(words)
+                    logger.debug("New phrase: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
+                elif result.is_final:
+                    # Final transcription — commit the live phrase
+                    self._transcript_store.set_live_phrase_words(words)
+                    self._transcript_store.commit_live_phrase()
+                    logger.debug("Final phrase: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
+                else:
+                    # Re-transcription — replace the live phrase buffer
+                    self._transcript_store.set_live_phrase_words(words)
+                    logger.debug("Updated phrase: %d words (total: %d)",
+                                 len(words),
+                                 self._transcript_store.get_word_count())
 
         # Notify UI callback
         if self.on_phrase_result:

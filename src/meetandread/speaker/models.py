@@ -109,14 +109,22 @@ class DiarizationResult:
         """True if diarization completed without error."""
         return self.error is None
 
-    def speaker_label_for(self, raw_label: str) -> str:
+    def speaker_label_for(self, raw_label) -> str:
         """Return the display label for a raw speaker label.
 
         If the speaker was identified via voice matching, returns the known name.
         Otherwise returns the raw label formatted as "SPK_0", "SPK_1", etc.
+
+        Note: raw_label may be an int (from sherpa-onnx) or a string (from
+        JSON deserialization after subprocess round-trip).  Both int 1 and
+        string "1" should resolve to the same match entry.
         """
+        # Normalize: try exact match first, then string coercion
         if raw_label in self.matches:
             return self.matches[raw_label].name
+        str_label = str(raw_label)
+        if str_label in self.matches:
+            return self.matches[str_label].name
         # speaker may be an int from sherpa-onnx, or a string like "spk0"
         if isinstance(raw_label, int):
             return f"SPK_{raw_label}"
