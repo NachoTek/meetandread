@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.19.0] — 2026-06-02
+## [0.19.0] -- 2026-06-02
 
 ### Fixed
 - **Live transcription text duplication (Issue #2)** — Two-buffer model in TranscriptStore (`_words` + `_live_phrase_words`) replaces wholesale on each re-transcription pass instead of appending, eliminating duplicate text from sliding window overlap. `set_live_phrase_words` / `commit_live_phrase` provide a unified replace path for both `is_final` and re-transcription segments
@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Code Review Audit Remediation (Issue #8)** — 46 verified findings from GPT-5.5 code review triaged and fixed: `atomic_write()` utility for crash-safe file operations, `TranscriptionResult` typed return from `transcribe_chunk()`, thread safety fixes in TranscriptStore, resource lifecycle cleanup, exception handling hardening, and lint cleanup across 8 modules
 
-## [0.17.0] — 2026-05-29
+## [0.17.0] -- 2026-05-29
 
 ### Added
 - **Subprocess diarization** — speaker diarization now runs in a subprocess instead of the main thread, avoiding GIL holds by sherpa-onnx that froze the UI for 10–30 seconds during post-recording speaker identification
@@ -37,12 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Post-processing job persistence** — `_persist_job()` / `_unpersist_job()` / `_recover_pending_jobs()` cycle with thread-safe file locking
 - **6 new tests** for speaker_matches case-mismatch fix (lowercase raw label resolution, duplicate key dedup, null match handling)
 
-## [0.16.1] — 2026-05-27
+## [0.16.1] -- 2026-05-27
 
 ### Fixed
 - **Speaker identification in release builds** — sherpa-onnx native DLLs (onnxruntime.dll, sherpa-onnx-c-api.dll) could not be found at runtime in PyInstaller bundles because the DLL search path only included `_internal/` root, not `_internal/sherpa_onnx/lib/`. This caused diarization to fail silently with all speaker tags showing as `null` in the transcript output.
 
-## [0.16.0] — 2026-05-26
+## [0.16.0] -- 2026-05-26
 
 ### Added
 - **Resizable Settings Panel** — drag any edge or corner to resize; proper cursor changes (horizontal, vertical, diagonal) detected via QApplication-level eventFilter
@@ -56,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Edge-resize cursor flickering** — replaced per-widget enterEvent cursor detection with QApplication eventFilter for reliable cursor updates on Windows
 - **Corner overhang on both panels** — resize grip protruded past the panel border; fixed corner geometry calculation
 
-## [0.14.0] — 2026-05-23
+## [0.14.0] -- 2026-05-23
 
 ### Added
 - **Startup Cleanup Queue** — orphaned file deletions from prior sessions are now processed automatically on app launch
@@ -76,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **History tab auto-refresh** — refreshes immediately when new recordings complete or speaker identities change, regardless of window visibility state
 - **Config version bumped** to 8 (adds configurable storage paths)
 
-## [0.13.0] — 2026-05-21
+## [0.13.0] -- 2026-05-21
 
 ### Added
 - **History Audio Playback** — play recordings directly from the History tab with toolbar transport controls
@@ -101,13 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Binary search O(log n) for active word mapping during playback highlighting
 - Drag-aware seek slider: live drag is no-op, seek on release only
 
-## [0.11.1] — 2026-05-11
+## [0.11.1] -- 2026-05-11
 
 ### Fixed
 - **Logs directory not created on fresh installs** — `mkdir(exist_ok=True)` failed when parent path didn't exist; added `parents=True`
 - **Settings panel too small on first launch** — increased default size to 900×600, removed restrictive max size cap
 
-## [0.11.0] — 2026-05-10
+## [0.11.0] -- 2026-05-10
 
 ### Added
 - **Recording Waveform Visualization** — real-time circular waveform on the recording button showing live audio amplitude during recording
@@ -122,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CPU overhead target recalibrated from 5% to 10% (bottleneck identified in audio I/O pipeline, not waveform rendering)
 - Waveform renders at 30fps with 0.1s buffer window for fast response
 
-## [0.9.0] — 2026-05-07
+## [0.9.0] -- 2026-05-07
 
 ### Added
 - **Speaker Identity Management** — full speaker identity lifecycle: create, rename, merge, and delete identities with voice signature persistence
@@ -137,7 +137,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Post-processor overwrites speaker labels with `None` during finalization
 - Missing numpy import in diarization pipeline
 
-## [0.8.1] — 2026-05-04
+## [0.8.1] -- 2026-05-04
 
 ### Fixed
 - Override broken `webrtcvad` PyInstaller hook to prevent missing DLL at runtime
@@ -147,7 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sidebar gradient glow on inner edge of settings navigation panel
 - Replaced green accent color with Aetheric red across the UI
 
-## [0.8.0] — 2026-05-04
+## [0.8.0] -- 2026-05-04
 
 ### Added
 - **CC Overlay Panel** — closed-caption-style live transcript display with fade-in/out, monospace grey text, 70% opacity, draggable and resizable
@@ -173,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unified right-click menus with Aetheric glass design
 - Settings panel uses solid background (no translucency artifacts)
 
-## [0.6.0] — 2026-05-01
+## [0.6.0] -- 2026-05-01
 
 ### Added
 - **Aetheric Glass Panel Redesign** — complete visual overhaul: theme.py module with adaptive light/dark palette, scoped QSS helpers, consistent design tokens
@@ -194,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project renamed from `metamemory` to `meetandread` across all source, tests, config, and build files
 - CI triggers on tag push only (not every push), plus nightly schedule
 
-## [0.1.0] — 2026-04-26
+## [0.1.0] -- 2026-04-26
 
 ### Added
 - **Audio Capture Foundation** — multi-source recording (WASAPI loopback + microphone) with crash-safe `.pcm.part` writer, WAV finalizer, and recovery
