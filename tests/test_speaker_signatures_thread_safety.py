@@ -308,19 +308,19 @@ class TestCloseWriteOrdering:
     """Negative tests: close during or before writes."""
 
     def test_close_then_write_raises(self, tmp_path: Path) -> None:
-        """Writing to a closed store raises an assertion (Store is closed)."""
+        """Writing to a closed store raises RuntimeError (Store is closed)."""
         db = tmp_path / "closed_store.db"
         store = VoiceSignatureStore(str(db))
         store.close()
 
-        with pytest.raises(AssertionError, match="Store is closed"):
+        with pytest.raises(RuntimeError, match="VoiceSignatureStore is closed"):
             store.save_signature("Ghost", _random_embedding(seed=0))
 
     def test_concurrent_close_and_write(self, tmp_path: Path) -> None:
         """Close and write racing from different threads.
 
         The write should either succeed (lock acquired before close) or
-        raise AssertionError (lock acquired after close). No OperationalError
+        raise RuntimeError (lock acquired after close). No OperationalError
         or segfault should occur.
         """
         db = tmp_path / "race_close.db"
@@ -338,7 +338,7 @@ class TestCloseWriteOrdering:
         def write_worker() -> None:
             try:
                 store.save_signature("Racer", _random_embedding(seed=1))
-            except (AssertionError,):
+            except (RuntimeError, AssertionError):
                 pass  # Expected if close won the race
             except Exception as exc:
                 errors.append(exc)

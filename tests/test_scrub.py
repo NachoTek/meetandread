@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from meetandread.config.models import AppSettings
+from meetandread.transcription.engine import TranscriptionSuccess
 from meetandread.transcription.scrub import ScrubRunner
 from meetandread.transcription.transcript_store import TranscriptStore, Word
 
@@ -79,7 +80,7 @@ class TestScrubCreatesSidecar:
         fake_segment.words = None
 
         mock_engine = MagicMock()
-        mock_engine.transcribe_chunk.return_value = [fake_segment]
+        mock_engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[fake_segment])
 
         progress_vals = []
         completed = threading.Event()
@@ -130,7 +131,7 @@ class TestScrubCreatesSidecar:
         fake_segment.words = None
 
         mock_engine = MagicMock()
-        mock_engine.transcribe_chunk.return_value = [fake_segment]
+        mock_engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[fake_segment])
 
         completed = threading.Event()
 
@@ -174,7 +175,7 @@ class TestScrubCancel:
         def slow_transcribe(*args, **kwargs):
             import time
             time.sleep(10)
-            return []
+            return TranscriptionSuccess(segments=[])
 
         mock_engine = MagicMock()
         mock_engine.transcribe_chunk.side_effect = slow_transcribe

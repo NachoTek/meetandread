@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from meetandread.transcription.engine import TranscriptionSuccess
 from meetandread.transcription.post_processor import (
     PostProcessJob,
     PostProcessStatus,
@@ -176,7 +177,7 @@ class TestPostProcessResultKey:
 
         # Stub engine transcription — return empty segments
         mock_eng = MagicMock()
-        mock_eng.transcribe_chunk.return_value = []
+        mock_eng.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
         mock_engine.return_value = mock_eng
 
         ppq._process_job(job)
@@ -1129,7 +1130,7 @@ class TestPostProcessingQueueCancellation:
 
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
         mock_eng = MagicMock()
-        mock_eng.transcribe_chunk.return_value = []
+        mock_eng.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
         mock_engine.return_value = mock_eng
 
         # Set cancel flag before processing — simulates cancel during run
@@ -1174,7 +1175,7 @@ class TestPostProcessingQueueDiarization:
 
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
         mock_eng = MagicMock()
-        mock_eng.transcribe_chunk.return_value = []
+        mock_eng.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
         mock_engine.return_value = mock_eng
 
         ppq._process_job(job)
@@ -1208,7 +1209,7 @@ class TestPostProcessingQueueDiarization:
 
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
         mock_eng = MagicMock()
-        mock_eng.transcribe_chunk.return_value = []
+        mock_eng.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
         mock_engine.return_value = mock_eng
 
         ppq._process_job(job)
@@ -1244,7 +1245,7 @@ class TestPostProcessingQueueDiarization:
 
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
         mock_eng = MagicMock()
-        mock_eng.transcribe_chunk.return_value = []
+        mock_eng.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
         mock_engine.return_value = mock_eng
 
         ppq._process_job(job)
@@ -1269,7 +1270,7 @@ class TestPostProcessingQueueDiarization:
 
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
         mock_eng = MagicMock()
-        mock_eng.transcribe_chunk.return_value = []
+        mock_eng.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
         mock_engine.return_value = mock_eng
 
         ppq._process_job(job)

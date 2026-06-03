@@ -539,7 +539,7 @@ class TestCleanupQueue:
         target_file = tmp_path / "speaker_data.json"
         target_file.write_text("{}")
 
-        q = CleanupQueue(queue_file)
+        q = CleanupQueue(queue_file, recordings_dir=tmp_path)
         q.enqueue_identity_cleanup(
             "Speaker1", paths=[str(target_file)]
         )
