@@ -1,6 +1,6 @@
 # Transcript
 
-**Recorded:** 2026-06-02T23:44:21.995626
+**Recorded:** 2026-06-03T07:50:54.680387
 
 **Unknown Speaker**
 
@@ -12,7 +12,7 @@ Hello world
 ---
 
 <!-- METADATA: {
-  "recording_start_time": "2026-06-02T23:44:21.995626",
+  "recording_start_time": "2026-06-03T07:50:54.680387",
   "word_count": 2,
   "words": [
     {

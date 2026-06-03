@@ -371,4 +371,5 @@ class BenchmarkRunner:
         Does not interrupt the transcription engine mid-chunk.
         """
         self._cancel_event.set()
+        self._is_running = False
         logger.info("Benchmark cancellation requested")
