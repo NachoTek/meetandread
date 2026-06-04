@@ -901,15 +901,15 @@ class TestConfigPersistence:
         """Speaker settings survive save -> load round-trip with tuned defaults."""
         settings = AppSettings()
         # Verify tuned defaults are set
-        assert settings.speaker.clustering_threshold == 0.6
-        assert settings.speaker.min_duration_off == 0.5
+        assert settings.speaker.clustering_threshold == 0.5
+        assert settings.speaker.min_duration_off == 0.8
         assert settings.speaker.min_duration_on == 0.3
 
         persistence.save_settings(settings)
         loaded = persistence.load_settings()
 
-        assert loaded.speaker.clustering_threshold == 0.6
-        assert loaded.speaker.min_duration_off == 0.5
+        assert loaded.speaker.clustering_threshold == 0.5
+        assert loaded.speaker.min_duration_off == 0.8
         assert loaded.speaker.min_duration_on == 0.3
         assert loaded.speaker.enabled is True
         assert loaded.speaker.confidence_threshold == 0.6

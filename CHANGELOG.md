@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] -- 2026-06-04
+
+### Fixed
+- **Benchmark test data missing in release builds (Issue #13)** -- PyInstaller now collects `src/meetandread/performance/test_data/*` including benchmark.wav and ground truth files, fixing "Test clip not found" errors in release builds
+- **Speaker diarization fails in release builds (Issue #14)** -- Fixed missing `soundfile` module by collecting `_soundfile_data/` package with absolute site-packages path, resolving ModuleNotFoundError during WAV file I/O
+
+### Added
+- **Speaker Diarization settings in Settings panel** -- Three tunable controls added for speaker detection behavior:
+  - Clustering Threshold (0.0-1.0, step 0.05) -- Controls speaker segmentation; higher values produce more speakers
+  - Min Speech Segment (0.1-5.0s, step 0.1s) -- Minimum duration for speech segments before discarding
+  - Min Silence Gap (0.1-5.0s, step 0.1s) -- Minimum silence duration before splitting speakers
+- All settings persist immediately to config and restore on panel open
+
+### Changed
+- **Speaker diarization defaults** -- Updated based on testing to reduce over-segmentation in noisy environments:
+  - clustering_threshold: 0.6 → 0.5 (fewer false speaker splits)
+  - min_duration_off: 0.5 → 0.8s (better for noisy rooms)
+
 ## [0.19.0] -- 2026-06-02
 
 ### Fixed
