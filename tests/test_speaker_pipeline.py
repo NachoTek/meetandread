@@ -361,9 +361,9 @@ class TestSpeakerSettings:
         s = SpeakerSettings()
         assert s.enabled is True
         assert s.confidence_threshold == 0.6
-        assert s.clustering_threshold == 0.6
+        assert s.clustering_threshold == 0.5
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.5
+        assert s.min_duration_off == 0.8
 
     def test_roundtrip(self):
         from meetandread.config.models import AppSettings
@@ -394,7 +394,7 @@ class TestSpeakerSettings:
         assert app.speaker.enabled is True
         assert app.speaker.confidence_threshold == 0.6
         assert app.speaker.min_duration_on == 0.3
-        assert app.speaker.min_duration_off == 0.5
+        assert app.speaker.min_duration_off == 0.8
 
     def test_from_dict_partial(self):
         from meetandread.config.models import SpeakerSettings
@@ -402,9 +402,9 @@ class TestSpeakerSettings:
         s = SpeakerSettings.from_dict({"enabled": False})
         assert s.enabled is False
         assert s.confidence_threshold == 0.6  # default
-        assert s.clustering_threshold == 0.6  # default
+        assert s.clustering_threshold == 0.5  # default
         assert s.min_duration_on == 0.3  # default
-        assert s.min_duration_off == 0.5  # default
+        assert s.min_duration_off == 0.8  # default
 
     def test_from_dict_invalid_min_duration_uses_defaults(self):
         """Non-numeric, negative, or excessively large values fall back to defaults."""
@@ -413,17 +413,17 @@ class TestSpeakerSettings:
         # String values → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": "bad", "min_duration_off": "nope"})
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.5
+        assert s.min_duration_off == 0.8
 
         # Negative values → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": -1.0, "min_duration_off": -0.5})
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.5
+        assert s.min_duration_off == 0.8
 
         # Excessively large values → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": 999.0, "min_duration_off": 100.0})
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.5
+        assert s.min_duration_off == 0.8
 
     def test_from_dict_valid_custom_values(self):
         """Custom valid values are preserved."""
@@ -591,9 +591,9 @@ class TestDiarizerConstructionParams:
             ctrl._run_diarization(Path("test.wav"))
 
             mock_diarizer_cls.assert_called_once_with(
-                clustering_threshold=0.6,
+                clustering_threshold=0.5,
                 min_duration_on=0.3,
-                min_duration_off=0.5,
+                min_duration_off=0.8,
             )
 
     def test_diarizer_construction_failure_logged(self, caplog):
@@ -1298,7 +1298,7 @@ class TestTurnTakingDiarizationTuning:
         # String values → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": "invalid", "min_duration_off": "bad"})
         assert s.min_duration_on == 0.3
-        assert s.min_duration_off == 0.5
+        assert s.min_duration_off == 0.8
 
         # Negative → fallback
         s = SpeakerSettings.from_dict({"min_duration_on": -1.0})
@@ -1306,7 +1306,7 @@ class TestTurnTakingDiarizationTuning:
 
         # Out of range → fallback
         s = SpeakerSettings.from_dict({"min_duration_off": 999.0})
-        assert s.min_duration_off == 0.5
+        assert s.min_duration_off == 0.8
 
     # --- A/B/A turn-taking boundary preservation tests ---
 

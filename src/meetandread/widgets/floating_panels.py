@@ -5465,7 +5465,7 @@ class FloatingSettingsPanel(QWidget):
 
         # Resource warning — semantic orange stays but text colour adapts
         self._resource_warning.setStyleSheet(
-            f"QLabel {{ color: #FF9800; font-size: 11px; font-weight: bold; padding: 2px; }}"  # noqa: F541
+            "QLabel { color: #FF9800; font-size: 11px; font-weight: bold; padding: 2px; }"
         )
 
         # Separators
