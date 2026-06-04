@@ -119,7 +119,10 @@ a = Analysis(
     [os.path.join('src', 'meetandread', '__main__.py')],
     pathex=[],
     binaries=binaries,
-    datas=[('src/meetandread/widgets/*.svg', 'meetandread/widgets')],
+    datas=[
+        ('src/meetandread/widgets/*.svg', 'meetandread/widgets'),
+        ('_soundfile_data/*', '_soundfile_data'),
+    ],
     hiddenimports=hiddenimports,
     hookspath=['hooks'],  # custom hooks override broken contrib hooks
     runtimehooks=['runtime_hook.py'],
