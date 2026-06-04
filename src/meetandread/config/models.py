@@ -302,7 +302,7 @@ class SpeakerSettings:
         metadata={"description": "Min cosine similarity for speaker identification (0.0-1.0)"}
     )
     clustering_threshold: float = field(
-        default=0.6,
+        default=0.5,
         metadata={"description": "Clustering threshold for diarization (higher = more speakers)"}
     )
     min_duration_on: float = field(
@@ -310,7 +310,7 @@ class SpeakerSettings:
         metadata={"description": "Minimum speech segment duration in seconds (shorter segments discarded)"}
     )
     min_duration_off: float = field(
-        default=0.5,
+        default=0.8,
         metadata={"description": "Minimum silence gap between speakers in seconds (reduces false splits in noisy rooms)"}
     )
 

@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QTextBrowser, QProgressBar, QComboBox, QMenu, QMessageBox,
     QDialog, QDialogButtonBox, QSizeGrip, QStackedWidget, QScrollArea,
     QCheckBox, QLineEdit, QSlider, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView,
+    QAbstractItemView, QDoubleSpinBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
@@ -4316,6 +4316,151 @@ class FloatingSettingsPanel(QWidget):
         self._waveform_checkbox.stateChanged.connect(self._on_waveform_toggled)
         settings_layout.addWidget(self._waveform_checkbox)
 
+        # Separator before Speaker Diarization
+        speaker_sep = QFrame()
+        speaker_sep.setFrameShape(QFrame.Shape.HLine)
+        speaker_sep.setObjectName("AethericSeparator")
+        settings_layout.addWidget(speaker_sep)
+
+        # Speaker Diarization section
+        speaker_header = QLabel("Speaker Diarization")
+        speaker_header.setStyleSheet("color: #E0E0E0; font-size: 13px; font-weight: bold;")
+        settings_layout.addWidget(speaker_header)
+
+        speaker_note = QLabel("Controls how speakers are detected and separated")
+        speaker_note.setStyleSheet("color: #888; font-size: 10px;")
+        speaker_note.setWordWrap(True)
+        settings_layout.addWidget(speaker_note)
+
+        # Clustering threshold
+        cluster_row = QHBoxLayout()
+        cluster_row.setSpacing(8)
+        cluster_label = QLabel("Clustering Threshold:")
+        cluster_label.setStyleSheet("color: #E0E0E0; font-size: 12px;")
+        cluster_label.setMinimumWidth(140)
+        cluster_row.addWidget(cluster_label)
+
+        self._cluster_spin = QDoubleSpinBox()
+        self._cluster_spin.setObjectName("AethericSpinBox")
+        self._cluster_spin.setRange(0.0, 1.0)
+        self._cluster_spin.setSingleStep(0.05)
+        self._cluster_spin.setDecimals(2)
+        self._cluster_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                color: #E0E0E0;
+                background-color: #1e1d1e;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 8px;
+                padding: 4px 8px;
+                font-size: 12px;
+                min-width: 100px;
+                min-height: 24px;
+            }
+            QDoubleSpinBox:hover {
+                border-color: #ff5545;
+            }
+        """)
+        self._cluster_spin.setToolTip(
+            "Higher values produce more speakers (segments more likely to be different).\n"
+            "Lower values merge segments more aggressively (fewer speakers)."
+        )
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _cluster = get_config("speaker.clustering_threshold")
+            self._cluster_spin.setValue(float(_cluster) if _cluster is not None else 0.5)
+        except Exception:
+            self._cluster_spin.setValue(0.5)
+        self._cluster_spin.valueChanged.connect(self._on_clustering_threshold_changed)
+        cluster_row.addWidget(self._cluster_spin, 1)
+        settings_layout.addLayout(cluster_row)
+
+        # Min duration on (speech segment duration)
+        min_on_row = QHBoxLayout()
+        min_on_row.setSpacing(8)
+        min_on_label = QLabel("Min Speech Segment:")
+        min_on_label.setStyleSheet("color: #E0E0E0; font-size: 12px;")
+        min_on_label.setMinimumWidth(140)
+        min_on_row.addWidget(min_on_label)
+
+        self._min_on_spin = QDoubleSpinBox()
+        self._min_on_spin.setObjectName("AethericSpinBox")
+        self._min_on_spin.setRange(0.1, 5.0)
+        self._min_on_spin.setSingleStep(0.1)
+        self._min_on_spin.setDecimals(1)
+        self._min_on_spin.setSuffix(" s")
+        self._min_on_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                color: #E0E0E0;
+                background-color: #1e1d1e;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 8px;
+                padding: 4px 8px;
+                font-size: 12px;
+                min-width: 100px;
+                min-height: 24px;
+            }
+            QDoubleSpinBox:hover {
+                border-color: #ff5545;
+            }
+        """)
+        self._min_on_spin.setToolTip(
+            "Minimum duration for a speech segment (shorter segments discarded)."
+        )
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _min_on = get_config("speaker.min_duration_on")
+            self._min_on_spin.setValue(float(_min_on) if _min_on is not None else 0.3)
+        except Exception:
+            self._min_on_spin.setValue(0.3)
+        self._min_on_spin.valueChanged.connect(self._on_min_duration_on_changed)
+        min_on_row.addWidget(self._min_on_spin, 1)
+        settings_layout.addLayout(min_on_row)
+
+        # Min duration off (silence gap)
+        min_off_row = QHBoxLayout()
+        min_off_row.setSpacing(8)
+        min_off_label = QLabel("Min Silence Gap:")
+        min_off_label.setStyleSheet("color: #E0E0E0; font-size: 12px;")
+        min_off_label.setMinimumWidth(140)
+        min_off_row.addWidget(min_off_label)
+
+        self._min_off_spin = QDoubleSpinBox()
+        self._min_off_spin.setObjectName("AethericSpinBox")
+        self._min_off_spin.setRange(0.1, 5.0)
+        self._min_off_spin.setSingleStep(0.1)
+        self._min_off_spin.setDecimals(1)
+        self._min_off_spin.setSuffix(" s")
+        self._min_off_spin.setStyleSheet("""
+            QDoubleSpinBox {
+                color: #E0E0E0;
+                background-color: #1e1d1e;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 8px;
+                padding: 4px 8px;
+                font-size: 12px;
+                min-width: 100px;
+                min-height: 24px;
+            }
+            QDoubleSpinBox:hover {
+                border-color: #ff5545;
+            }
+        """)
+        self._min_off_spin.setToolTip(
+            "Minimum silence gap before splitting speakers (reduces false splits in noisy rooms)."
+        )
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _min_off = get_config("speaker.min_duration_off")
+            self._min_off_spin.setValue(float(_min_off) if _min_off is not None else 0.8)
+        except Exception:
+            self._min_off_spin.setValue(0.8)
+        self._min_off_spin.valueChanged.connect(self._on_min_duration_off_changed)
+        min_off_row.addWidget(self._min_off_spin, 1)
+        settings_layout.addLayout(min_off_row)
+
         # Separator before storage paths
         storage_sep = QFrame()
         storage_sep.setFrameShape(QFrame.Shape.HLine)
@@ -6145,6 +6290,45 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.warning("Failed to save waveform setting: %s", exc)
         logger.info("Waveform visualization %s", "enabled" if enabled else "disabled")
+
+    def _on_clustering_threshold_changed(self, value: float) -> None:
+        """Handle clustering threshold spinbox change.
+
+        Persists the setting to config immediately.
+        """
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("speaker.clustering_threshold", float(value))
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save clustering threshold: %s", exc)
+        logger.info("Clustering threshold set to %.2f", value)
+
+    def _on_min_duration_on_changed(self, value: float) -> None:
+        """Handle min duration on spinbox change.
+
+        Persists the setting to config immediately.
+        """
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("speaker.min_duration_on", float(value))
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save min duration on: %s", exc)
+        logger.info("Min duration on set to %.1f s", value)
+
+    def _on_min_duration_off_changed(self, value: float) -> None:
+        """Handle min duration off spinbox change.
+
+        Persists the setting to config immediately.
+        """
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("speaker.min_duration_off", float(value))
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save min duration off: %s", exc)
+        logger.info("Min duration off set to %.1f s", value)
 
     # ------------------------------------------------------------------
     # Storage path management
