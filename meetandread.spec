@@ -59,13 +59,6 @@ binaries += _collect(
     'PyQt6/Qt6/plugins/platforms',
 )
 
-# 6. _soundfile_data — libsndfile DLL needed by soundfile for WAV I/O
-#    (used by Diarizer._read_wav and wav_finalize)
-binaries += _collect(
-    os.path.join('_soundfile_data', '*.dll'),
-    '_soundfile_data',
-)
-
 # --- Hidden imports ---------------------------------------------------------
 #
 # Packages that PyInstaller cannot discover through static import analysis
