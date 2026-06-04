@@ -47,8 +47,13 @@ NOQA_ALLOWLIST: Dict[str, Dict[int, str]] = {
         # Method call incorrectly flagged by stale noqa; kept as documentation
         # until a future cleanup removes the comment itself.
         7551: "F841 — stale suppression on method call (harmless comment)",
+        # Variable `name` parameter bound by add() signature; suppression
+        # incorrect but harmless - future cleanup will remove.
+        7735: "F841 — stale suppression (parameter used in signature)",
         # Intentional redefinition in ``if __name__ == "__main__":`` block.
         9211: "F811 — intentional redefinition in standalone test block",
+        # Duplicate import in conditional block for standalone execution.
+        9395: "F811 — guarded import in __main__ block",
     },
 }
 
