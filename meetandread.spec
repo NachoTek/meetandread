@@ -122,7 +122,7 @@ a = Analysis(
     datas=[
         ('src/meetandread/widgets/*.svg', 'meetandread/widgets'),
         ('src/meetandread/performance/test_data/*', 'meetandread/performance/test_data'),
-        ('_soundfile_data/*', '_soundfile_data'),
+        (os.path.join(SP, '_soundfile_data', '*'), '_soundfile_data'),
     ],
     hiddenimports=hiddenimports,
     hookspath=['hooks'],  # custom hooks override broken contrib hooks
