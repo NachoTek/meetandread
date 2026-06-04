@@ -22,6 +22,13 @@ def _collect(pattern, dest):
     return [(f, dest) for f in glob.glob(os.path.join(SP, pattern))]
 
 
+def _collect_datas(pattern, dest):
+    """Return list of (src, dest) tuples for data files matching glob pattern.
+    Returns empty list if pattern doesn't match anything (unlike _collect which expects files)."""
+    matches = glob.glob(os.path.join(SP, pattern))
+    return [(f, dest) for f in matches] if matches else []
+
+
 # --- Native DLL groups ------------------------------------------------------
 #
 # Each group collects DLLs that PyInstaller's static analysis misses because
@@ -115,8 +122,7 @@ a = Analysis(
     datas=[
         ('src/meetandread/widgets/*.svg', 'meetandread/widgets'),
         ('src/meetandread/performance/test_data/*', 'meetandread/performance/test_data'),
-        (os.path.join(SP, '_soundfile_data', '*'), '_soundfile_data'),
-    ],
+    ] + _collect_datas('_soundfile_data/*', '_soundfile_data'),
     hiddenimports=hiddenimports,
     hookspath=['hooks'],  # custom hooks override broken contrib hooks
     runtimehooks=['runtime_hook.py'],
