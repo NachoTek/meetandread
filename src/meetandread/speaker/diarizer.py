@@ -629,15 +629,26 @@ class Diarizer:
 
     def _read_wav(self, wav_path: Path) -> tuple[np.ndarray, int]:
         """Read a WAV file and return (float32_mono_audio, sample_rate)."""
-        import soundfile as sf
+        from scipy.io import wavfile
 
         if not wav_path.exists():
             raise FileNotFoundError(f"WAV file not found: {wav_path}")
 
-        audio, sr = sf.read(str(wav_path), dtype="float32")
-        # Ensure mono
+        # scipy.io.wavfile returns (sample_rate, audio_data)
+        # audio_data shape is (samples,) for mono or (samples, channels) for stereo
+        sr, audio = wavfile.read(str(wav_path))
+
+        # Convert to float32 and normalize from int16 range
+        if audio.dtype.kind in ('i', 'u'):  # integer types
+            max_val = np.iinfo(audio.dtype).max
+            audio = audio.astype(np.float32) / max_val
+        else:
+            audio = audio.astype(np.float32)
+
+        # Ensure mono (take first channel if stereo)
         if audio.ndim > 1:
             audio = audio[:, 0]
+
         return audio, sr
 
     def _extract_speaker_embeddings(

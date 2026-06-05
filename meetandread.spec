@@ -77,8 +77,8 @@ binaries += _collect(
     'PyQt6/Qt6/plugins/platforms',
 )
 
-# 6. soundfile — handled by hook-soundfile.py
-#    soundfile.py and _soundfile_data are collected via hook
+# 6. soundfile — no longer used, removed to fix bundling issues
+#    Using scipy.io.wavfile instead which is properly bundled
 
 # --- Hidden imports ---------------------------------------------------------
 #
@@ -116,7 +116,6 @@ hiddenimports = [
     'sherpa_onnx.lib',
     'sounddevice',
     'pyaudiowpatch',
-    'soundfile',
     'soxr',
     # Qt
     'PyQt6.QtCore',
@@ -125,28 +124,8 @@ hiddenimports = [
     # Transitive dependencies that may be missed
     'numpy',
     'scipy',
+    'scipy.io.wavfile',
 ]
-
-# --- Soundfile explicit collection -----------------------------------------
-#
-# soundfile is conditionally imported in Diarizer._read_wav()
-# PyInstaller's module graph never encounters it, so hooks don't run.
-# We manually collect soundfile.py and _soundfile_data/* here.
-
-# Collect soundfile.py as a binary (Python source file as binary)
-soundfile_files = glob.glob(os.path.join(SP, 'soundfile.py'))
-if soundfile_files:
-    binaries.append((soundfile_files[0], '.'))
-
-# Collect all files from _soundfile_data directory
-soundfile_data_dir = os.path.join(SP, '_soundfile_data')
-if os.path.isdir(soundfile_data_dir):
-    for root, dirs, files in os.walk(soundfile_data_dir):
-        for file in files:
-            src = os.path.join(root, file)
-            rel = os.path.relpath(src, soundfile_data_dir)
-            dest = os.path.join('_soundfile_data', rel)
-            binaries.append((src, dest))
 
 # --- Analysis ---------------------------------------------------------------
 
