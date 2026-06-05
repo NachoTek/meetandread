@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Benchmark test data missing in release builds (Issue #13)** -- PyInstaller now collects `src/meetandread/performance/test_data/*` including benchmark.wav and ground truth files, fixing "Test clip not found" errors in release builds
-- **Speaker diarization fails in release builds (Issue #14)** -- Fixed missing `soundfile` module by collecting `_soundfile_data/` package with absolute site-packages path, resolving ModuleNotFoundError during WAV file I/O
+- **Speaker diarization fails in release builds (Issue #14)** -- Removed soundfile dependency (which could not be bundled via PyInstaller after 8 attempts) and switched to scipy.io.wavfile for WAV file I/O. scipy is properly bundled by PyInstaller, fixing ModuleNotFoundError and restoring speaker identification functionality. Note: scipy.io.wavfile supports standard 16-bit PCM WAV files (most microphones) but has limited format support compared to soundfile
 
 ### Added
 - **Speaker Diarization settings in Settings panel** -- Three tunable controls added for speaker detection behavior:
