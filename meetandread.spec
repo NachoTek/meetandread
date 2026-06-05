@@ -22,12 +22,22 @@ def _collect(pattern, dest):
     return [(f, dest) for f in glob.glob(os.path.join(SP, pattern))]
 
 
-def _collect_datas(pattern, dest):
-    """Return list of (src, dest) tuples for data files matching glob pattern.
-    Returns empty list if pattern doesn't match anything (unlike _collect which expects files).
-    For directory patterns, uses recursive glob to include all files."""
-    matches = glob.glob(os.path.join(SP, pattern), recursive=True)
-    return [(f, dest) for f in matches] if matches else []
+def _collect_datas_recursive(src_dir, dest):
+    """Recursively collect all files from src_dir to dest.
+    Returns list of (src, dest) tuples."""
+    src_path = os.path.join(SP, src_dir)
+    if not os.path.exists(src_path):
+        return []
+    files = []
+    for root, dirs, filenames in os.walk(src_path):
+        for filename in filenames:
+            full_path = os.path.join(root, filename)
+            # Calculate relative path from src_dir
+            rel_path = os.path.relpath(full_path, src_path)
+            # Destination path preserves directory structure
+            dest_path = os.path.join(dest, rel_path)
+            files.append((full_path, dest_path))
+    return files
 
 
 # --- Native DLL groups ------------------------------------------------------
@@ -130,7 +140,7 @@ a = Analysis(
     datas=[
         ('src/meetandread/widgets/*.svg', 'meetandread/widgets'),
         ('src/meetandread/performance/test_data/*', 'meetandread/performance/test_data'),
-    ] + _collect_datas('_soundfile_data/**/*', '_soundfile_data'),
+    ] + _collect_datas_recursive('_soundfile_data', '_soundfile_data'),
     hiddenimports=hiddenimports,
     hookspath=['hooks'],  # custom hooks override broken contrib hooks
     runtimehooks=['runtime_hook.py'],
