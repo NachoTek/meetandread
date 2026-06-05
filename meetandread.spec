@@ -77,12 +77,8 @@ binaries += _collect(
     'PyQt6/Qt6/plugins/platforms',
 )
 
-# 6. soundfile — .py file and _soundfile_data directory
-#    soundfile.py is conditionally imported in Diarizer._read_wav()
-#    PyInstaller misses it, so we bundle it explicitly
-soundfile_py = glob.glob(os.path.join(SP, 'soundfile.py'))
-if soundfile_py:
-    binaries.append((soundfile_py[0], '.'))
+# 6. soundfile — handled by hook-soundfile.py
+#    soundfile.py and _soundfile_data are collected via hook
 
 # --- Hidden imports ---------------------------------------------------------
 #
@@ -140,7 +136,7 @@ a = Analysis(
     datas=[
         ('src/meetandread/widgets/*.svg', 'meetandread/widgets'),
         ('src/meetandread/performance/test_data/*', 'meetandread/performance/test_data'),
-    ] + _collect_datas_recursive('_soundfile_data', '_soundfile_data'),
+    ],
     hiddenimports=hiddenimports,
     hookspath=['hooks'],  # custom hooks override broken contrib hooks
     runtimehooks=['runtime_hook.py'],
