@@ -117,6 +117,7 @@ hiddenimports = [
     'sounddevice',
     'pyaudiowpatch',
     'soundfile',
+    'soundfile._version',
     'soxr',
     # Qt
     'PyQt6.QtCore',
