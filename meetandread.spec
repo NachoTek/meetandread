@@ -24,8 +24,9 @@ def _collect(pattern, dest):
 
 def _collect_datas(pattern, dest):
     """Return list of (src, dest) tuples for data files matching glob pattern.
-    Returns empty list if pattern doesn't match anything (unlike _collect which expects files)."""
-    matches = glob.glob(os.path.join(SP, pattern))
+    Returns empty list if pattern doesn't match anything (unlike _collect which expects files).
+    For directory patterns, uses recursive glob to include all files."""
+    matches = glob.glob(os.path.join(SP, pattern), recursive=True)
     return [(f, dest) for f in matches] if matches else []
 
 
@@ -129,7 +130,7 @@ a = Analysis(
     datas=[
         ('src/meetandread/widgets/*.svg', 'meetandread/widgets'),
         ('src/meetandread/performance/test_data/*', 'meetandread/performance/test_data'),
-    ] + _collect_datas('_soundfile_data/*', '_soundfile_data'),
+    ] + _collect_datas('_soundfile_data/**/*', '_soundfile_data'),
     hiddenimports=hiddenimports,
     hookspath=['hooks'],  # custom hooks override broken contrib hooks
     runtimehooks=['runtime_hook.py'],
