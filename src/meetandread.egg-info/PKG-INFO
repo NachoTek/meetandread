@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: meetandread
-Version: 0.11.1
+Version: 0.19.1
 Summary: Windows Desktop Audio Transcription Widget — zero information loss during conversations
 Author: Tergi
 License: GPL-3.0-only
@@ -19,6 +19,7 @@ License-File: LICENSE
 Requires-Dist: PyQt6>=6.4.0
 Requires-Dist: sounddevice>=0.4.6
 Requires-Dist: numpy>=1.24.0
+Requires-Dist: scipy>=1.10.0
 Requires-Dist: soxr>=0.3.0
 Requires-Dist: comtypes>=1.2.0
 Requires-Dist: pyaudiowpatch>=0.2.12
@@ -29,8 +30,11 @@ Requires-Dist: webrtcvad-wheels>=2.0.14
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
 Requires-Dist: pytest-qt>=4.0.0; extra == "dev"
+Requires-Dist: pytest-timeout>=2.1.0; extra == "dev"
 Requires-Dist: black>=22.0.0; extra == "dev"
 Requires-Dist: mypy>=1.0.0; extra == "dev"
+Requires-Dist: flake8>=7.0.0; extra == "dev"
+Requires-Dist: bandit>=1.8.0; extra == "dev"
 Dynamic: license-file
 
 <p align="center">
@@ -48,7 +52,7 @@ Dynamic: license-file
   <img src="https://img.shields.io/badge/platform-Windows%2011-blue?logo=windows11" alt="Platform">
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License">
-  <img src="https://img.shields.io/badge/status-v0.6.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/status-v0.16.1-orange" alt="Version">
 </p>
 
 <p align="center">
@@ -95,14 +99,17 @@ The widget sits on your desktop like a record button — click to start, click t
 ### 🎛️ Polished Desktop Widget
 - **Aetheric Glass design** — translucent, always-on-top floating widget
 - **Drag & dock** — move anywhere on screen, snaps to desktop edges
+- **Resizable panels** — edge-drag resize for Settings and CC panels with proper cursors on all edges
+- **Scrollable settings** — each settings tab scrolls independently for overflow safety
 - **System tray** — minimize to tray, runs quietly in the background
 - **Audio source lobes** — toggle mic and system audio with overlapping buttons
 
 ### ⚙️ Settings & Management
 - **Model selection** — choose real-time and post-process models independently
 - **Benchmark history** — see WER and speed for each model on your hardware
-- **Recording management** — browse, review, and delete past recordings
+- **Recording management** — browse, review, rename, and delete past recordings
 - **Transcript scrub** — re-transcribe with a stronger model and compare results
+- **Startup cleanup** — orphaned files from prior sessions cleaned automatically on launch
 
 ### 🏗️ Production Ready
 - **Portable build** — PyInstaller onedir, no Python needed to run
@@ -117,7 +124,7 @@ The widget sits on your desktop like a record button — click to start, click t
 
 Download the latest zip from [GitHub Releases](https://github.com/NachoTek/meetandread/releases):
 
-1. Download `meetandread-v0.6.0.zip`
+1. Download `meetandread-v0.16.1.zip`
 2. Extract anywhere
 3. Run `meetandread.exe`
 
@@ -262,3 +269,4 @@ This project is licensed under the GNU General Public License v3.0. See the [LIC
   <br>
   <sub>Built by <a href="https://github.com/NachoTek">NachoTek</a></sub>
 </p>
+# v0.19.1 rebuild

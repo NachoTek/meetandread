@@ -204,6 +204,33 @@ pip install pyinstaller
 pyinstaller meetandread.spec --noconfirm
 ```
 
+### Building Releases
+
+Before pushing a release tag, validate the build locally:
+
+```bash
+# Quick build + validation (Windows)
+build-and-validate.bat
+
+# Or manually
+pyinstaller meetandread.spec --noconfirm
+python validate_build.py
+```
+
+The validation script checks:
+- All required DLLs are bundled (pywhispercpp, sherpa-onnx, PortAudio, MSVC runtimes)
+- Python modules can import from the built exe
+- Assets (icons, test data) are included
+- Executable launches without errors
+
+If validation passes, create the release:
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+See [docs/RELEASE-CHECKLIST.md](docs/RELEASE-CHECKLIST.md) for full release process.
+
 ### Tech Stack
 
 | Component | Technology |
