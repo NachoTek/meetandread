@@ -629,25 +629,30 @@ class Diarizer:
 
     def _read_wav(self, wav_path: Path) -> tuple[np.ndarray, int]:
         """Read a WAV file and return (float32_mono_audio, sample_rate)."""
-        from scipy.io import wavfile
+        import wave
 
         if not wav_path.exists():
             raise FileNotFoundError(f"WAV file not found: {wav_path}")
 
-        # scipy.io.wavfile returns (sample_rate, audio_data)
-        # audio_data shape is (samples,) for mono or (samples, channels) for stereo
-        sr, audio = wavfile.read(str(wav_path))
-
-        # Convert to float32 and normalize from int16 range
-        if audio.dtype.kind in ('i', 'u'):  # integer types
-            max_val = np.iinfo(audio.dtype).max
-            audio = audio.astype(np.float32) / max_val
-        else:
-            audio = audio.astype(np.float32)
-
-        # Ensure mono (take first channel if stereo)
-        if audio.ndim > 1:
-            audio = audio[:, 0]
+        # Use Python's built-in wave module to read the WAV file
+        with wave.open(str(wav_path), 'rb') as wav_file:
+            sr = wav_file.getframerate()
+            n_channels = wav_file.getnchannels()
+            n_frames = wav_file.getnframes()
+            
+            # Read all audio frames (assumes 16-bit PCM)
+            audio_bytes = wav_file.readframes(n_frames)
+            
+            # Convert bytes to numpy array
+            audio = np.frombuffer(audio_bytes, dtype=np.int16)
+            
+            # Handle stereo vs mono
+            if n_channels > 1:
+                audio = audio.reshape(-1, n_channels)
+                audio = audio[:, 0]  # Take first channel
+            
+            # Convert to float32 and normalize
+            audio = audio.astype(np.float32) / 32768.0  # Normalize int16 range
 
         return audio, sr
 

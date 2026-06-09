@@ -124,6 +124,7 @@ hiddenimports = [
     # Transitive dependencies that may be missed
     'numpy',
     'scipy',
+    'scipy.io',
     'scipy.io.wavfile',
 ]
 
