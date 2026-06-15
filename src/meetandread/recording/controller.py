@@ -424,10 +424,13 @@ class RecordingController:
 
     def _source_type_for_event(self, event: DeviceEvent) -> Optional[str]:
         event_device_id = (event.device_id or "").strip() or None
+        event_friendly_name = (event.friendly_name or "").strip() or None
         with self._hotplug_lock:
             identities = list(self._active_source_identities.values()) + list(self._lost_source_identities.values())
         for identity in identities:
             if identity.device_id and event_device_id and identity.device_id == event_device_id:
+                return identity.type
+            if identity.friendly_name and event_friendly_name and identity.friendly_name == event_friendly_name:
                 return identity.type
         flow = (event.flow or "").lower()
         if flow == "render":
@@ -448,7 +451,9 @@ class RecordingController:
         """Route a sanitized hot-plug event through recording recovery decisions."""
         with self._state_lock:
             current_state = self._state
-        if current_state != ControllerState.RECORDING:
+        if current_state not in (ControllerState.RECORDING, ControllerState.ERROR):
+            return None
+        if current_state is ControllerState.ERROR and not self._is_reconnect_event(event):
             return None
 
         now = _time.time() if now is None else now
@@ -476,20 +481,21 @@ class RecordingController:
                 self._lost_source_identities[source_type] = lost_identity
                 remaining = len(self._active_source_identities)
 
-            lost = RecoveryResult(RecoveryOutcome.LOST, source_type, event_device_id, "Recording source lost")
-            self._emit_recovery_result(lost)
-            logger.warning("Recording hotplug source lost: %s", lost.as_diagnostics())
-            if remaining > 0:
-                result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Continuing with remaining recording source")
-                logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
-                self._emit_recovery_result(result)
-                return result
 
-            result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "All active capture sources lost", True)
+            with self._hotplug_lock:
+                if remaining > 0:
+                    result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Recording source lost; continuing with remaining recording source")
+                    self._emit_recovery_result(result)
+                    logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
+                    return result
+
+            
+            result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "Capture source lost: all active capture sources lost", True)
             logger.error("Recording hotplug total device loss: %s", result.as_diagnostics())
             self._emit_recovery_result(result)
-            self._set_error("All active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
+            self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
             return result
+        return result
 
         if self._is_reconnect_event(event):
             with self._hotplug_lock:
@@ -499,7 +505,12 @@ class RecordingController:
                 self._emit_recovery_result(result)
                 return result
             elapsed = now - (lost_identity.lost_at or now)
-            same_device = not lost_identity.device_id or not event_device_id or lost_identity.device_id == event_device_id
+            event_friendly_name = (event.friendly_name or "").strip() or None
+            same_device = (
+                (lost_identity.device_id and event_device_id and lost_identity.device_id == event_device_id)
+                or (lost_identity.friendly_name and event_friendly_name and lost_identity.friendly_name == event_friendly_name)
+                or (not lost_identity.device_id and not event_device_id)
+            )
             if same_device and elapsed <= _HOTPLUG_RECOVERY_WINDOW_SECONDS:
                 recovered = ActiveSourceIdentity(
                     type=lost_identity.type,
@@ -512,9 +523,18 @@ class RecordingController:
                 with self._hotplug_lock:
                     self._active_source_identities[source_type] = recovered
                     self._lost_source_identities.pop(source_type, None)
+                with self._state_lock:
+                    self._error = None
+                    self._state = ControllerState.RECORDING
                 result = RecoveryResult(RecoveryOutcome.AUTO_RECOVERED, source_type, recovered.device_id, "Recording source reappeared within recovery window")
                 logger.info("Recording hotplug auto-recovered: %s", result.as_diagnostics())
                 self._emit_recovery_result(result)
+                state_cb = self.on_state_change
+                if state_cb:
+                    try:
+                        state_cb(ControllerState.RECORDING)
+                    except Exception as exc:
+                        logger.error("State change callback failed: %s", exc)
                 return result
 
             result = RecoveryResult(RecoveryOutcome.MANUAL_RETRY_REQUIRED, source_type, event_device_id, "Recovery window expired; manual retry required")
