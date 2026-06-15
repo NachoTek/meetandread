@@ -4,6 +4,13 @@ on:
   schedule:
     - cron: "0 3 * * *" # nightly at 03:00 UTC
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'milestone/**'
+  pull_request:
+    branches:
+      - main
 
 jobs:
   test:
