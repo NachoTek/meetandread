@@ -30,6 +30,7 @@ from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal,
 from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
 
 from meetandread.recording import RecordingController, ControllerState
+from meetandread.recording.controller import RecoveryOutcome
 from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config
 from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ensure_on_screen
@@ -50,6 +51,8 @@ class _ControllerBridge(QObject):
     post_process_complete = pyqtSignal(str, object)   # job_id, transcript_path
     phrase_result = pyqtSignal(object)       # SegmentResult
     frames_dropped = pyqtSignal(int)         # aggregate drop count
+    device_changed = pyqtSignal(object)      # DeviceEvent
+    recovery_attempted = pyqtSignal(object)  # RecoveryResult
 
 
 class _WidgetVisualStateMachine:
@@ -248,6 +251,8 @@ to avoid clipping issues and enable proper text rendering.
         self._bridge.post_process_complete.connect(self._on_post_process_complete)
         self._bridge.phrase_result.connect(self._on_phrase_result)
         self._bridge.frames_dropped.connect(self._on_frames_dropped)
+        self._bridge.device_changed.connect(self._on_device_changed)
+        self._bridge.recovery_attempted.connect(self._on_recovery_attempted)
 
         # Controller callbacks emit bridge signals (thread-safe)
         self._controller.on_state_change = self._bridge.state_changed.emit
@@ -256,6 +261,8 @@ to avoid clipping issues and enable proper text rendering.
         self._controller.on_recording_complete = lambda wav, t: self._bridge.recording_complete.emit(wav, t)
         self._controller.on_post_process_complete = lambda jid, tp: self._bridge.post_process_complete.emit(jid, tp)
         self._controller.on_frames_dropped = lambda count: self._bridge.frames_dropped.emit(count)
+        self._controller.on_device_change = lambda event: self._bridge.device_changed.emit(event)
+        self._controller.on_recovery_attempt = lambda result: self._bridge.recovery_attempted.emit(result)
         self._error_indicator = None  # For showing errors
         self._warning_indicator = None  # For showing resource warnings
         self._warning_hide_timer: Optional[QTimer] = None  # Auto-hide timer for warnings
@@ -985,6 +992,65 @@ to avoid clipping issues and enable proper text rendering.
                 speaker_id
             )
     
+    def _on_device_changed(self, event) -> None:
+        """Show a non-blocking warning for active recording device changes."""
+        try:
+            message = self._format_device_change_message(event)
+            if message:
+                self._show_resource_warning(message)
+        except Exception:
+            logging.exception("Error showing hot-plug device notification")
+
+    def _on_recovery_attempted(self, result) -> None:
+        """Show a non-blocking recovery outcome notification."""
+        try:
+            message = self._format_recovery_message(result)
+            if not message:
+                return
+            recoverable = bool(getattr(result, "recoverable", True))
+            outcome = getattr(result, "outcome", None)
+            if outcome in {RecoveryOutcome.TOTAL_LOSS, RecoveryOutcome.MANUAL_RETRY_REQUIRED} or not recoverable:
+                self._show_error(message, is_recoverable=recoverable)
+            else:
+                self._show_resource_warning(message)
+        except Exception:
+            logging.exception("Error showing hot-plug recovery notification")
+
+    def _format_device_change_message(self, event) -> str:
+        """Return a sanitized user-facing message for a hot-plug event."""
+        event_type = getattr(event, "event_type", "device")
+        value = getattr(event_type, "value", str(event_type))
+        name = (getattr(event, "friendly_name", None) or "audio device").strip()
+        if value in {"removed", "state_changed"}:
+            state = (getattr(event, "state", "") or "").lower()
+            if value == "removed" or state in {"inactive", "disabled", "unplugged", "notpresent"}:
+                return f"Audio device disconnected: {name}. Checking recording..."
+        if value in {"added", "default_changed"}:
+            return f"Audio device connected: {name}. Checking recording..."
+        return f"Audio device changed: {name}. Checking recording..."
+
+    def _format_recovery_message(self, result) -> str:
+        """Return a sanitized user-facing message for a recovery result."""
+        outcome = getattr(result, "outcome", None)
+        source_type = getattr(result, "source_type", None) or "audio"
+        detail = (getattr(result, "message", "") or "").strip()
+        suffix = f" {detail}" if detail else ""
+        if outcome is RecoveryOutcome.IGNORED:
+            return ""
+        if outcome is RecoveryOutcome.LOST:
+            return f"{source_type.title()} source disconnected. Attempting to recover recording...{suffix}"
+        if outcome is RecoveryOutcome.DEGRADED:
+            return f"Recording continues with remaining sources; {source_type} is unavailable.{suffix}"
+        if outcome is RecoveryOutcome.TOTAL_LOSS:
+            return f"All recording sources were lost. Recording is paused until an audio device returns.{suffix}"
+        if outcome is RecoveryOutcome.AUTO_RECOVERED:
+            return f"Recording recovered after {source_type} device reconnect.{suffix}"
+        if outcome is RecoveryOutcome.MANUAL_RETRY_REQUIRED:
+            return f"{source_type.title()} device reconnected. Resume recording manually to continue.{suffix}"
+        if outcome is RecoveryOutcome.MANUAL_RECOVERED:
+            return f"Recording resumed after {source_type} device reconnect.{suffix}"
+        return detail or "Recording device recovery status changed."
+
     def _on_recording_complete(self, wav_path, transcript_path):
         """Handle recording completion."""
         import time as _t
