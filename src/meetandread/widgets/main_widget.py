@@ -33,7 +33,7 @@ from meetandread.recording import RecordingController, ControllerState
 from meetandread.recording.controller import RecoveryOutcome
 from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config
-from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ensure_on_screen
+from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen
 from meetandread.widgets.theme import context_menu_css, current_palette
 
 
@@ -231,6 +231,11 @@ to avoid clipping issues and enable proper text rendering.
         self.drag_start_pos = QPoint()
         self.widget_start_pos = QPoint()
         self.press_time = QTime.currentTime()
+        self._frame_drop_toast_last_count = 0
+        self._frame_drop_toast_last_ts = 0.0
+        self._frame_drop_toast_id = "frame-drops"
+        self._frame_drop_toast_reminder_seconds = 60.0
+        self.toast_manager = ToastManager(self, self)
 
         # Visual state machine (idle → recording → processing → idle)
         self._visual_state = _WidgetVisualStateMachine(WidgetVisualState.IDLE)
@@ -503,6 +508,9 @@ to avoid clipping issues and enable proper text rendering.
     def moveEvent(self, event):
         """Handle widget move — no panel repositioning (panels are independent)."""
         super().moveEvent(event)
+        manager = getattr(self, "toast_manager", None)
+        if manager is not None:
+            manager.reposition()
     
     def _position_initial(self):
         """Position widget on screen initially."""
@@ -867,6 +875,7 @@ to avoid clipping issues and enable proper text rendering.
         if state == ControllerState.RECORDING:
             self.is_recording = True
             self.is_processing = False
+            self._reset_frame_drop_toast_state()
             self._visual_state.transition_to(WidgetVisualState.RECORDING)
             self.record_button.set_recording_state(True)
             self._hide_error()
@@ -916,6 +925,7 @@ to avoid clipping issues and enable proper text rendering.
         elif state == ControllerState.STOPPING:
             self.is_recording = False
             self.is_processing = True
+            self._reset_frame_drop_toast_state()
             self._visual_state.transition_to(WidgetVisualState.PROCESSING)
             self.record_button.set_recording_state(False)
             self.record_button.set_processing_state(True)
@@ -1093,13 +1103,54 @@ to avoid clipping issues and enable proper text rendering.
         # Always emit, even on failure, so the "(processing speakers...)" indicator clears
         self.history_data_changed.emit()
 
+    def _reset_frame_drop_toast_state(self) -> None:
+        """Reset per-recording frame-drop toast throttling state."""
+        self._frame_drop_toast_last_count = 0
+        self._frame_drop_toast_last_ts = 0.0
+        manager = getattr(self, "toast_manager", None)
+        if manager is not None:
+            manager.dismiss(self._frame_drop_toast_id)
+
+    def _maybe_show_frame_drop_toast(self, safe_count: int) -> None:
+        """Show a non-spammy warning when frame drops continue."""
+        manager = getattr(self, "toast_manager", None)
+        if manager is None:
+            return
+        now = _time.monotonic()
+        first_warning = self._frame_drop_toast_last_count <= 0
+        reminder_due = (now - self._frame_drop_toast_last_ts) >= self._frame_drop_toast_reminder_seconds
+        if not first_warning and not reminder_due:
+            logging.info(
+                "Frame-drop toast throttled: count=%s previous_count=%s seconds_since_last=%.1f",
+                safe_count,
+                self._frame_drop_toast_last_count,
+                now - self._frame_drop_toast_last_ts,
+            )
+            self._frame_drop_toast_last_count = safe_count
+            return
+
+        title = "Recording quality warning"
+        message = (
+            f"Audio capture has dropped {safe_count} frame{'s' if safe_count != 1 else ''}. "
+            "If audio sounds choppy, reduce system load or switch input devices."
+        )
+        manager.show(self._frame_drop_toast_id, title, message, duration_ms=10000)
+        self._frame_drop_toast_last_count = safe_count
+        self._frame_drop_toast_last_ts = now
+        logging.info(
+            "Frame-drop toast emitted: count=%s first=%s reminder_due=%s",
+            safe_count,
+            first_warning,
+            reminder_due,
+        )
+
     def _on_frames_dropped(self, count: int) -> None:
         """Handle frame-drop events forwarded through the Qt bridge.
 
         Runs on the UI thread via signal/slot delivery. Forwards the
         sanitized aggregate count to the record button if it supports
-        frame-drop notifications (T03). Exception-safe so the animation
-        loop is never compromised.
+        frame-drop notifications (T03), then emits throttled toasts.
+        Exception-safe so the animation loop is never compromised.
 
         Args:
             count: Sanitized aggregate frames_dropped count (>= 0).
@@ -1112,12 +1163,14 @@ to avoid clipping issues and enable proper text rendering.
             if safe_count == 0:
                 return  # no-op
 
-            # Forward to record button if it supports frame-drop notifications
+            # Preserve existing record-button notification behavior.
             handler = getattr(self.record_button, "on_frames_dropped", None)
             if callable(handler):
                 handler(safe_count)
+
+            self._maybe_show_frame_drop_toast(safe_count)
         except Exception:
-            logging.exception("Error forwarding frame-drop count to record button")
+            logging.exception("Error forwarding frame-drop count to UI")
 
     def _on_speaker_name_pinned(self, raw_label: str, name: str):
         """Handle user pinning a speaker name in the transcript panel.

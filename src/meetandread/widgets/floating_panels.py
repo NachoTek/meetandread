@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QSlider, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QDoubleSpinBox,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect, QObject
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -107,6 +107,168 @@ from meetandread.widgets.icons import create_play_icon, create_pause_icon, creat
 from meetandread.utils.file_utils import atomic_write  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ToastManager — lightweight floating warnings
+# ---------------------------------------------------------------------------
+
+class _ToastWidget(QFrame):
+    """Small floating notification widget owned by ToastManager."""
+
+    def __init__(self, toast_id: str, title: str, message: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.toast_id = toast_id
+        self.setObjectName("meetandread-toast")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(4)
+
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("toast-title")
+        self.message_label = QLabel(message)
+        self.message_label.setObjectName("toast-message")
+        self.message_label.setWordWrap(True)
+        self.message_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.message_label)
+        self.setFixedWidth(340)
+        self.setStyleSheet(
+            """
+            QFrame#meetandread-toast {
+                background: rgba(22, 24, 28, 242);
+                border: 1px solid rgba(255, 197, 92, 190);
+                border-radius: 12px;
+            }
+            QLabel#toast-title {
+                color: #ffd166;
+                font-weight: 700;
+                font-size: 13px;
+            }
+            QLabel#toast-message {
+                color: #f3f4f6;
+                font-size: 12px;
+            }
+            """
+        )
+
+    def update_content(self, title: str, message: str) -> None:
+        self.title_label.setText(title)
+        self.message_label.setText(message)
+        self.adjustSize()
+
+
+class ToastManager(QObject):
+    """Manage lightweight, replaceable toast notifications.
+
+    Toasts are keyed by ID so repeated warnings update the existing visible
+    widget instead of spamming users. The manager owns auto-dismiss timers,
+    explicit dismiss/dismiss-all behavior, and screen-aware repositioning.
+    """
+
+    def __init__(self, anchor: Optional[QWidget] = None, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent or anchor)
+        self.anchor = anchor
+        self._toasts: Dict[str, _ToastWidget] = {}
+        self._timers: Dict[str, QTimer] = {}
+
+    def show(
+        self,
+        toast_id: str,
+        title: str,
+        message: str,
+        *,
+        duration_ms: int = 8000,
+    ) -> _ToastWidget:
+        """Show or replace a toast by ID and optionally auto-dismiss it."""
+        if not toast_id:
+            toast_id = "default"
+        toast = self._toasts.get(toast_id)
+        if toast is None:
+            toast = _ToastWidget(toast_id, title, message, None)
+            self._toasts[toast_id] = toast
+        else:
+            toast.update_content(title, message)
+
+        toast.adjustSize()
+        self.reposition()
+        toast.show()
+        toast.raise_()
+
+        old_timer = self._timers.pop(toast_id, None)
+        if old_timer is not None:
+            old_timer.stop()
+            old_timer.deleteLater()
+        if duration_ms and duration_ms > 0:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda tid=toast_id: self.dismiss(tid))
+            timer.start(int(duration_ms))
+            self._timers[toast_id] = timer
+
+        logger.info(
+            "Toast emitted: id=%s title=%s duration_ms=%s",
+            toast_id,
+            title,
+            int(duration_ms) if duration_ms else 0,
+        )
+        return toast
+
+    def dismiss(self, toast_id: str) -> None:
+        """Dismiss a specific toast if present."""
+        timer = self._timers.pop(toast_id, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+        toast = self._toasts.pop(toast_id, None)
+        if toast is not None:
+            toast.hide()
+            toast.deleteLater()
+
+    def dismiss_all(self) -> None:
+        """Dismiss all visible toasts."""
+        for toast_id in list(self._toasts):
+            self.dismiss(toast_id)
+
+    def reposition(self) -> None:
+        """Stack toasts near the anchor widget or active screen."""
+        if not self._toasts:
+            return
+        margin = 12
+        if self.anchor is not None and self.anchor.isVisible():
+            origin = self.anchor.mapToGlobal(QPoint(self.anchor.width() + margin, margin))
+            screen = self.anchor.screen() or QApplication.primaryScreen()
+        else:
+            screen = QApplication.primaryScreen()
+            geo = screen.availableGeometry() if screen else QRect(0, 0, 800, 600)
+            origin = QPoint(geo.right() - 360, geo.top() + margin)
+        geo = screen.availableGeometry() if screen else QRect(0, 0, 800, 600)
+        y = origin.y()
+        for toast in self._toasts.values():
+            toast.adjustSize()
+            x = origin.x()
+            if x + toast.width() > geo.right() - margin:
+                x = geo.right() - toast.width() - margin
+            if x < geo.left() + margin:
+                x = geo.left() + margin
+            if y + toast.height() > geo.bottom() - margin:
+                y = geo.bottom() - toast.height() - margin
+            toast.move(x, y)
+            y += toast.height() + margin
+
+    def active_ids(self) -> List[str]:
+        """Return active toast IDs for tests/diagnostics."""
+        return list(self._toasts.keys())
+
 
 # Lazy import — avoids QtMultimedia DLL issues at module level
 # HistoryPlaybackController is imported inside FloatingSettingsPanel methods.
