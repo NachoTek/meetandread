@@ -467,34 +467,53 @@ class RecordingController:
         event_device_id = (event.device_id or "").strip() or None
         if self._is_loss_event(event):
             with self._hotplug_lock:
-                identity = self._active_source_identities.pop(source_type, None)
-                if identity is None:
-                    identity = ActiveSourceIdentity(source_type, event_device_id, event.friendly_name, event.flow)
-                lost_identity = ActiveSourceIdentity(
-                    type=identity.type,
-                    device_id=event_device_id or identity.device_id,
-                    friendly_name=event.friendly_name or identity.friendly_name,
-                    flow=event.flow or identity.flow,
-                    is_active=False,
-                    lost_at=now,
-                )
-                self._lost_source_identities[source_type] = lost_identity
-                remaining = len(self._active_source_identities)
+                # Check if this source is already lost
+                if source_type in self._lost_source_identities:
+                    result = RecoveryResult(RecoveryOutcome.IGNORED, source_type, event_device_id, "Device already lost, ignoring duplicate loss event")
+                else:
+                    identity = self._active_source_identities.pop(source_type, None)
+                    if identity is None:
+                        identity = ActiveSourceIdentity(source_type, event_device_id, event.friendly_name, event.flow)
+                    lost_identity = ActiveSourceIdentity(
+                        type=identity.type,
+                        device_id=event_device_id or identity.device_id,
+                        friendly_name=event.friendly_name or identity.friendly_name,
+                        flow=event.flow or identity.flow,
+                        is_active=False,
+                        lost_at=now,
+                    )
+                    self._lost_source_identities[source_type] = lost_identity
+                    remaining = len(self._active_source_identities)
+                    result = None
 
+            if result is not None:
+                self._emit_recovery_result(result)
+                return result
 
-            with self._hotplug_lock:
-                if remaining > 0:
-                    result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Recording source lost; continuing with remaining recording source")
-                    self._emit_recovery_result(result)
-                    logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
-                    return result
+            # Process actual loss event
+            if remaining > 0:
+                result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Recording source lost; continuing with remaining recording source")
+                self._emit_recovery_result(result)
+                logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
+                return result
+            else:
+                result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "Capture source lost: all active capture sources lost", True)
+                self._emit_recovery_result(result)
+                logger.error("Recording hotplug total device loss: %s", result.as_diagnostics())
+                self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
+                return result
 
-            
-            result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "Capture source lost: all active capture sources lost", True)
-            logger.error("Recording hotplug total device loss: %s", result.as_diagnostics())
-            self._emit_recovery_result(result)
-            self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
-            return result
+            if remaining > 0:
+                result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Recording source lost; continuing with remaining recording source")
+                self._emit_recovery_result(result)
+                logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
+                return result
+            else:
+                result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "Capture source lost: all active capture sources lost", True)
+                self._emit_recovery_result(result)
+                logger.error("Recording hotplug total device loss: %s", result.as_diagnostics())
+                self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
+                return result
 
         if self._is_reconnect_event(event):
             with self._hotplug_lock:
@@ -589,7 +608,9 @@ class RecordingController:
             "lost_source_count": len(lost),
             "active_sources": active,
             "lost_sources": lost,
-            "last_result": last_result,
+            "last_device_event": None,  # TODO: track last device event
+            "last_recovery_result": last_result,
+            "recovery_window_seconds": _HOTPLUG_RECOVERY_WINDOW_SECONDS,
         }
 
     def start(
@@ -672,6 +693,7 @@ class RecordingController:
             denoise_enabled = False  # safe default (disabled due to spectral gate artifacts)
             denoise_provider = "spectral_gate"  # safe default
             denoise_budget_ms = 200.0  # safe default
+            denoise_auto_disable_on_frame_drops = True  # fail open under capture starvation
             try:
                 settings = self._config_manager.get_settings()
                 ts = settings.transcription
@@ -681,6 +703,13 @@ class RecordingController:
                 denoise_enabled = raw_enabled if isinstance(raw_enabled, bool) else False
 
                 # Validate provider - must be a non-empty string in the allowed set
+                raw_auto_disable = getattr(
+                    ts, "microphone_denoising_auto_disable_on_frame_drops", True
+                )
+                denoise_auto_disable_on_frame_drops = (
+                    raw_auto_disable if isinstance(raw_auto_disable, bool) else True
+                )
+
                 raw_provider = ts.microphone_denoising_provider
                 from meetandread.audio.denoising import VALID_PROVIDER_NAMES
                 if isinstance(raw_provider, str) and raw_provider in VALID_PROVIDER_NAMES:
@@ -726,6 +755,7 @@ class RecordingController:
                 enable_microphone_denoising=denoise_enabled,
                 denoising_provider_name=denoise_provider if denoise_enabled else None,
                 denoising_latency_budget_ms=denoise_budget_ms,
+                microphone_denoising_auto_disable_on_frame_drops=denoise_auto_disable_on_frame_drops,
                 on_frames_dropped=self._on_session_frames_dropped,
                 on_error=self._on_session_error,
             )

@@ -106,6 +106,30 @@ class TestDenoisingTogglePersistence:
         data = json.loads(config_path.read_text(encoding="utf-8"))
         assert data["transcription"]["microphone_denoising_enabled"] is True
 
+    def test_auto_disable_on_frame_drops_default_and_roundtrip(self, tmp_path):
+        """Frame-drop auto-disable defaults on and survives save/reload both ways."""
+        persistence = SettingsPersistence(config_dir=tmp_path)
+        cm = ConfigManager(persistence=persistence)
+        assert cm.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is True
+
+        cm.set("transcription.microphone_denoising_auto_disable_on_frame_drops", False)
+        assert cm.save() is True
+
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        persistence2 = SettingsPersistence(config_dir=tmp_path)
+        cm2 = ConfigManager(persistence=persistence2)
+        assert cm2.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is False
+
+        cm2.set("transcription.microphone_denoising_auto_disable_on_frame_drops", True)
+        assert cm2.save() is True
+
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        persistence3 = SettingsPersistence(config_dir=tmp_path)
+        cm3 = ConfigManager(persistence=persistence3)
+        assert cm3.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is True
+
 
 # ---------------------------------------------------------------------------
 # 2. Settings panel handler (_on_noise_filter_toggled)

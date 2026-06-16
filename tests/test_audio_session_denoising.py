@@ -34,7 +34,7 @@ from meetandread.audio.denoising import (
     DenoisingResult,
     SpectralGateProvider,
 )
-from meetandread.audio.session import DenoisingStats
+from meetandread.audio.session import AudioSourceWrapper, DenoisingStats
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +479,149 @@ class TestFailOpen:
         stats = session.get_stats()
         # Shape mismatch should increment fallback count
         assert stats.denoising.fallback is True
+
+
+# ---------------------------------------------------------------------------
+# Tests: Frame-drop auto-disable policy
+# ---------------------------------------------------------------------------
+
+
+class TelemetrySource:
+    """Minimal source exposing sanitized frame-drop telemetry for policy tests."""
+
+    def __init__(self, telemetry):
+        self._telemetry = telemetry
+
+    def get_metadata(self):
+        return {"sample_rate": 16000, "channels": 1, "type": "fake"}
+
+    def get_drop_telemetry(self):
+        return dict(self._telemetry)
+
+    def read_frames(self, timeout=0.1):
+        return None
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def is_running(self):
+        return True
+
+
+class TestFrameDropAutoDisablePolicy:
+    """Frame-drop telemetry can fail open denoising to raw mic audio."""
+
+    def _session_with_telemetry(self, telemetry, *, auto_disable=True):
+        provider = TrackingProvider(scale=0.1)
+        session = AudioSession()
+        session._config = SessionConfig(
+            sources=[SourceConfig(type="fake", denoise=True)],
+            enable_microphone_denoising=True,
+            denoising_provider_factory=lambda: provider,
+            microphone_denoising_auto_disable_on_frame_drops=auto_disable,
+        )
+        session._denoising_provider = provider
+        session._stats.denoising.enabled = True
+        session._stats.denoising.active = True
+        session._stats.denoising.provider = provider.name
+        session._stats.denoising.auto_disable_on_frame_drops = auto_disable
+        wrapper = AudioSourceWrapper(
+            TelemetrySource(telemetry),
+            SourceConfig(type="fake", denoise=True),
+            target_rate=16000,
+            target_channels=1,
+        )
+        session._sources = [wrapper]
+        return session, provider, wrapper
+
+    def test_burst_over_ten_auto_disables_and_continues_raw(self, caplog):
+        """A source burst above 10 consecutive drops disables denoising once."""
+        session, provider, wrapper = self._session_with_telemetry({
+            "total_callbacks": 100,
+            "frames_dropped": 11,
+            "max_consecutive_frames_dropped": 11,
+            "consecutive_frames_dropped": 11,
+        })
+        frames = np.ones((8, 1), dtype=np.float32)
+
+        with caplog.at_level(logging.WARNING, logger="meetandread.audio.session"):
+            out = session._apply_denoising(frames, wrapper)
+
+        assert np.array_equal(out, frames)
+        assert provider.process_calls == []
+        stats = session.get_stats().denoising
+        assert stats.active is False
+        assert stats.fallback is True
+        assert stats.disabled_reason == "frame_drop_burst"
+        assert stats.disabled_count == 1
+        assert stats.disabled_at > 0
+        assert any("auto-disabled" in r.message for r in caplog.records)
+
+    def test_sustained_drop_rate_over_one_percent_auto_disables(self):
+        """Drop rate above 1% for more than five seconds disables denoising."""
+        session, provider, wrapper = self._session_with_telemetry({
+            "total_callbacks": 200,
+            "frames_dropped": 3,
+            "max_consecutive_frames_dropped": 1,
+            "consecutive_frames_dropped": 0,
+        })
+        session._drop_rate_exceeded_since = time.time() - 5.2
+        frames = np.ones((8, 1), dtype=np.float32)
+
+        out = session._apply_denoising(frames, wrapper)
+
+        assert np.array_equal(out, frames)
+        assert provider.process_calls == []
+        stats = session.get_stats().denoising
+        assert stats.disabled_reason == "frame_drop_rate_sustained"
+        assert stats.disabled_count == 1
+        assert session.get_stats().drop_rate > 0.01
+
+    def test_disabled_setting_prevents_policy_disablement(self):
+        """Config toggle off means frame-drop telemetry never policy-disables."""
+        session, provider, wrapper = self._session_with_telemetry({
+            "total_callbacks": 100,
+            "frames_dropped": 50,
+            "max_consecutive_frames_dropped": 50,
+            "consecutive_frames_dropped": 50,
+        }, auto_disable=False)
+        frames = np.ones((8, 1), dtype=np.float32)
+
+        out = session._apply_denoising(frames, wrapper)
+
+        assert not np.array_equal(out, frames)
+        assert len(provider.process_calls) == 1
+        stats = session.get_stats().denoising
+        assert stats.active is True
+        assert stats.disabled_reason == ""
+        assert stats.auto_disable_on_frame_drops is False
+
+    def test_provider_error_reason_distinct_from_frame_drop_policy(self, tmp_path):
+        """Provider errors retain a provider-specific disable reason."""
+        test_wav = tmp_path / "test.wav"
+        create_sine_wave_wav(test_wav, duration=0.5)
+        provider = TrackingProvider(fail_on_process=True)
+        config = SessionConfig(
+            sources=[SourceConfig(type="fake", fake_path=str(test_wav), denoise=True)],
+            output_dir=tmp_path,
+            sample_rate=16000,
+            channels=1,
+            enable_microphone_denoising=True,
+            denoising_provider_factory=lambda: provider,
+        )
+
+        session = AudioSession()
+        session.start(config)
+        time.sleep(0.2)
+        session.stop()
+
+        stats = session.get_stats().denoising
+        assert stats.disabled_reason == "provider_process_error"
+        assert stats.disabled_count == 1
+        assert stats.last_error_class == "RuntimeError"
 
 
 # ---------------------------------------------------------------------------
@@ -960,6 +1103,9 @@ class TestControllerDenoisingWiring:
         controller._config_manager.set(
             "transcription.microphone_denoising_latency_budget_ms", 150
         )
+        controller._config_manager.set(
+            "transcription.microphone_denoising_auto_disable_on_frame_drops", False
+        )
 
         controller.start({"mic"})
 
@@ -968,6 +1114,7 @@ class TestControllerDenoisingWiring:
         assert cfg.enable_microphone_denoising is True
         assert cfg.denoising_provider_name == "spectral_gate"
         assert cfg.denoising_latency_budget_ms == 150
+        assert cfg.microphone_denoising_auto_disable_on_frame_drops is False
 
     def test_disabled_settings_reach_session_config(self):
         """When config disables denoising, SessionConfig reflects that."""
@@ -995,6 +1142,7 @@ class TestControllerDenoisingWiring:
         assert cfg.enable_microphone_denoising is False
         assert cfg.denoising_provider_name is None  # Not set when disabled
         assert cfg.denoising_latency_budget_ms == 200
+        assert cfg.microphone_denoising_auto_disable_on_frame_drops is True
 
     def test_explicit_budget_override(self):
         """Explicit budget override is passed through."""
