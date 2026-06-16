@@ -4664,6 +4664,40 @@ class FloatingSettingsPanel(QWidget):
         model_row.addWidget(self._benchmark_model_combo, 1)
         perf_layout.addLayout(model_row)
 
+        # --- Frame-drop denoising auto-disable policy ---
+        self._denoising_auto_disable_checkbox = QCheckBox(
+            "Automatically disable microphone denoising when audio frame drops are detected"
+        )
+        self._denoising_auto_disable_checkbox.setObjectName("AethericCheckBox")
+        self._denoising_auto_disable_checkbox.setCursor(Qt.CursorShape.ArrowCursor)
+        self._denoising_auto_disable_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
+        self._denoising_auto_disable_checkbox.setToolTip(
+            "When enabled, new recordings may temporarily bypass microphone denoising if "
+            "frame-drop telemetry indicates denoising is starving audio capture."
+        )
+        try:
+            from meetandread.config import get_config
+            _auto_disable = get_config(
+                "transcription.microphone_denoising_auto_disable_on_frame_drops"
+            )
+            self._denoising_auto_disable_checkbox.setChecked(
+                _auto_disable if isinstance(_auto_disable, bool) else True
+            )
+        except Exception:
+            self._denoising_auto_disable_checkbox.setChecked(True)
+        self._denoising_auto_disable_checkbox.stateChanged.connect(
+            self._on_denoising_auto_disable_toggled
+        )
+        perf_layout.addWidget(self._denoising_auto_disable_checkbox)
+
+        self._denoising_auto_disable_note = QLabel(
+            "Reliability-oriented default: leave on for smoother capture under load. "
+            "This does not turn denoising on by itself."
+        )
+        self._denoising_auto_disable_note.setObjectName("AethericHintLabel")
+        self._denoising_auto_disable_note.setWordWrap(True)
+        perf_layout.addWidget(self._denoising_auto_disable_note)
+
         # --- Benchmark Button ---
         self._benchmark_btn = QPushButton("Run Benchmark")
         self._benchmark_btn.setCursor(Qt.CursorShape.ArrowCursor)
@@ -6185,6 +6219,23 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.warning("Failed to save noise filter setting: %s", exc)
         logger.info("Background noise filter %s", "enabled" if enabled else "disabled")
+
+    def _on_denoising_auto_disable_toggled(self, state: int) -> None:
+        """Persist frame-drop denoising auto-disable policy changes."""
+        enabled = bool(state)
+        try:
+            from meetandread.config import set_config, save_config
+            set_config(
+                "transcription.microphone_denoising_auto_disable_on_frame_drops",
+                enabled,
+            )
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save denoising auto-disable setting: %s", exc)
+        logger.info(
+            "Denoising auto-disable on frame drops %s",
+            "enabled" if enabled else "disabled",
+        )
 
     def _on_cc_font_size_changed(self, value: int) -> None:
         """Handle CC font size spinbox change.

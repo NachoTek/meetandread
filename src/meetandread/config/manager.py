@@ -318,6 +318,7 @@ class ConfigManager:
             "transcription.microphone_denoising_enabled",
             "transcription.microphone_denoising_provider",
             "transcription.microphone_denoising_latency_budget_ms",
+            "transcription.microphone_denoising_auto_disable_on_frame_drops",
             # Storage path settings
             "storage_paths.transcripts_path",
             "storage_paths.recordings_path",

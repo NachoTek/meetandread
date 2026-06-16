@@ -123,6 +123,11 @@ class TranscriptionSettings:
         metadata={"description": "CC overlay font color as rgba() string (theme-aware default: grey)"}
     )
 
+    @staticmethod
+    def _coerce_bool(value: object, fallback: bool) -> bool:
+        """Return bool values as-is, otherwise fall back for legacy malformed config."""
+        return value if isinstance(value, bool) else fallback
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return asdict(self)
@@ -142,8 +147,9 @@ class TranscriptionSettings:
             microphone_denoising_enabled=data.get("microphone_denoising_enabled", False),
             microphone_denoising_provider=data.get("microphone_denoising_provider", "spectral_gate"),
             microphone_denoising_latency_budget_ms=data.get("microphone_denoising_latency_budget_ms", 200),
-            microphone_denoising_auto_disable_on_frame_drops=data.get(
-                "microphone_denoising_auto_disable_on_frame_drops", True
+            microphone_denoising_auto_disable_on_frame_drops=cls._coerce_bool(
+                data.get("microphone_denoising_auto_disable_on_frame_drops", True),
+                True,
             ),
             cc_font_size=data.get("cc_font_size", 48),
             cc_auto_open=data.get("cc_auto_open", True),
