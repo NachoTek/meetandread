@@ -23,6 +23,7 @@ from meetandread.audio import (  # noqa: E402
     SessionConfig,
     SourceConfig,
     SessionState,
+    SessionStats,
     SessionError,
     NoSourcesError,
 )
@@ -97,6 +98,7 @@ class ControllerState(Enum):
     """Controller states for UI state management."""
     IDLE = auto()
     STARTING = auto()
+    RETRYING = auto()
     RECORDING = auto()
     STOPPING = auto()
     ERROR = auto()
@@ -180,6 +182,11 @@ class RecordingController:
         self._active_source_identities: Dict[str, ActiveSourceIdentity] = {}
         self._lost_source_identities: Dict[str, ActiveSourceIdentity] = {}
         self._last_recovery_result: Optional[RecoveryResult] = None
+
+        # Start-time retry/fallback tracking (sanitized endpoint identities only)
+        self._retry_lock = threading.Lock()
+        self._retry_events: List[Dict[str, Any]] = []
+        self._retry_started_at: Optional[float] = None
 
         # Audio feed tracking
         self._audio_chunks_fed = 0
@@ -329,10 +336,124 @@ class RecordingController:
             return self._state == ControllerState.RECORDING
 
     def is_busy(self) -> bool:
-        """Check if controller is busy (starting, stopping, etc.)."""
+        """Check if controller is busy (starting, retrying, stopping, etc.)."""
         with self._state_lock:
-            return self._state in (ControllerState.STARTING, ControllerState.STOPPING)
+            return self._state in (
+                ControllerState.STARTING,
+                ControllerState.RETRYING,
+                ControllerState.STOPPING,
+            )
 
+    def begin_start_retry_sequence(self) -> None:
+        """Reset sanitized start-time retry/fallback diagnostics.
+
+        UI orchestration calls this before the first start attempt. It does not
+        start audio, sleep, or change existing synchronous start semantics.
+        """
+        with self._retry_lock:
+            self._retry_events = []
+            self._retry_started_at = _time.monotonic()
+        self._apply_retry_stats(
+            retry_attempts=0,
+            retry_outcome="pending",
+            failed_sources=[],
+            fallback_sources=[],
+        )
+
+    def record_start_retry_attempt(
+        self,
+        *,
+        attempt_number: int,
+        backoff_seconds: float,
+        source_type: Optional[str] = None,
+        device_id: Optional[str] = None,
+        friendly_name: Optional[str] = None,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        """Record one sanitized start-time retry attempt for diagnostics."""
+        attempt = max(0, int(attempt_number))
+        backoff = max(0.0, float(backoff_seconds))
+        source = self._sanitize_source_type(source_type)
+        event = {
+            "attempt_number": attempt,
+            "backoff_seconds": backoff,
+            "source_type": source,
+            "device_id": self._sanitize_optional_text(device_id),
+            "friendly_name": self._sanitize_optional_text(friendly_name),
+            "elapsed_seconds": self._retry_elapsed_seconds(),
+            "error_class": type(error).__name__ if error else None,
+            "error_message": self._sanitize_optional_text(str(error) if error else None),
+        }
+        with self._retry_lock:
+            self._retry_events.append(event)
+        stats = self._session.get_stats()
+        failed_sources = list(getattr(stats, "failed_sources", []))
+        if source and source not in failed_sources:
+            failed_sources.append(source)
+        self._apply_retry_stats(
+            retry_attempts=max(getattr(stats, "retry_attempts", 0), attempt),
+            retry_outcome="retrying",
+            failed_sources=failed_sources,
+            fallback_sources=getattr(stats, "fallback_sources", []),
+        )
+        self._set_state(ControllerState.RETRYING)
+
+    def record_start_retry_outcome(
+        self,
+        *,
+        outcome: str,
+        failed_sources: Optional[List[str]] = None,
+        fallback_sources: Optional[List[str]] = None,
+    ) -> None:
+        """Record the sanitized final outcome of start-time retry/fallback."""
+        self._apply_retry_stats(
+            retry_attempts=getattr(self._session.get_stats(), "retry_attempts", 0),
+            retry_outcome=self._sanitize_retry_outcome(outcome),
+            failed_sources=[self._sanitize_source_type(s) for s in (failed_sources or []) if self._sanitize_source_type(s)],
+            fallback_sources=[self._sanitize_source_type(s) for s in (fallback_sources or []) if self._sanitize_source_type(s)],
+        )
+
+    def _apply_retry_stats(
+        self,
+        *,
+        retry_attempts: int,
+        retry_outcome: str,
+        failed_sources: List[str],
+        fallback_sources: List[str],
+    ) -> None:
+        stats: SessionStats = self._session.get_stats()
+        stats.retry_attempts = max(0, int(retry_attempts))
+        stats.retry_outcome = self._sanitize_retry_outcome(retry_outcome)
+        stats.failed_sources = list(dict.fromkeys(failed_sources))
+        stats.fallback_sources = list(dict.fromkeys(fallback_sources))
+
+    def _retry_elapsed_seconds(self) -> float:
+        with self._retry_lock:
+            started = self._retry_started_at
+        return 0.0 if started is None else max(0.0, _time.monotonic() - started)
+
+    def _retry_diagnostics(self) -> Dict[str, Any]:
+        with self._retry_lock:
+            return {
+                "started": self._retry_started_at is not None,
+                "events": [dict(event) for event in self._retry_events],
+            }
+
+    def _sanitize_source_type(self, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        safe = str(value).strip().lower()
+        return safe[:_SANITIZED_STATUS_MAX_LENGTH] if safe else None
+
+    def _sanitize_optional_text(self, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        safe = str(value).strip()
+        return safe[:_SANITIZED_STATUS_MAX_LENGTH] if safe else None
+
+    def _sanitize_retry_outcome(self, value: str) -> str:
+        safe = str(value or "none").strip().lower().replace(" ", "_")
+        return safe[:_SANITIZED_STATUS_MAX_LENGTH] or "none"
 
     def _source_identity_from_config(self, config: SourceConfig) -> ActiveSourceIdentity:
         device_id = getattr(config, "device_id", None)
@@ -2304,6 +2425,10 @@ class RecordingController:
                 "duration_seconds": stats.duration_seconds,
                 "source_stats": stats.source_stats,
                 "session_error": str(self._session.get_error()) if self._session.get_error() else None,
+                "retry_attempts": stats.retry_attempts,
+                "retry_outcome": stats.retry_outcome,
+                "failed_sources": list(stats.failed_sources),
+                "fallback_sources": list(stats.fallback_sources),
                 "denoising": {
                     "provider": stats.denoising.provider,
                     "enabled": stats.denoising.enabled,
@@ -2320,7 +2445,7 @@ class RecordingController:
             logger.debug("Diagnostics: session stats unavailable")
         # Device hot-plug recovery diagnostics (sanitized - no audio/transcript/secrets)
         diag["hotplug"] = self._hotplug_diagnostics()
-
+        diag["retry"] = self._retry_diagnostics()
 
         # Transcription / VAD stats
         if self._transcription_processor:

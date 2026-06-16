@@ -209,6 +209,10 @@ class SessionStats:
         consecutive_frames_dropped: Largest currently active source-level drop burst
         capture_block_size: Default block size used for real capture sources
         denoising: Denoising diagnostics (empty when disabled)
+        retry_attempts: Number of start-time retry attempts recorded by the controller
+        retry_outcome: Sanitized final retry/fallback outcome ("none" before retry)
+        failed_sources: Sanitized source types that failed during retry/fallback
+        fallback_sources: Sanitized source types used after fallback confirmation
     """
     frames_recorded: int = 0
     frames_dropped: int = 0
@@ -219,6 +223,10 @@ class SessionStats:
     consecutive_frames_dropped: int = 0
     capture_block_size: int = DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE
     denoising: DenoisingStats = field(default_factory=DenoisingStats)
+    retry_attempts: int = 0
+    retry_outcome: str = "none"
+    failed_sources: List[str] = field(default_factory=list)
+    fallback_sources: List[str] = field(default_factory=list)
 
 
 class AudioSourceWrapper:

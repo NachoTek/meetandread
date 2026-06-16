@@ -99,7 +99,7 @@ def test_same_source_reappears_within_window_auto_recovers(monkeypatch):
     assert result.source_type == "mic"
     assert callbacks == [
         ("device", "removed"),
-        ("recovery", "lost", "mic"),
+        ("recovery", "total_loss", "mic"),
         ("device", "added"),
         ("recovery", "auto_recovered", "mic"),
     ]
@@ -133,7 +133,7 @@ def test_partial_source_loss_continues_with_remaining_source(monkeypatch):
     diagnostics = ctrl.get_diagnostics()["hotplug"]
     assert diagnostics["active_source_count"] == 1
     assert diagnostics["lost_source_count"] == 1
-    assert diagnostics["last_result"]["outcome"] == "degraded"
+    assert diagnostics["last_recovery_result"]["outcome"] == "degraded"
 
 
 def test_total_source_loss_sets_recoverable_error(monkeypatch):
