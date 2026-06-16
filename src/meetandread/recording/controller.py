@@ -495,7 +495,6 @@ class RecordingController:
             self._emit_recovery_result(result)
             self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
             return result
-        return result
 
         if self._is_reconnect_event(event):
             with self._hotplug_lock:
