@@ -56,6 +56,9 @@ from meetandread.audio.denoising import (
 
 _log = logging.getLogger(__name__)
 
+# Larger capture blocks reduce audio callback pressure under transcription load.
+DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE = 4096
+
 
 class SessionState(Enum):
     """Recording session states."""
@@ -194,12 +197,20 @@ class SessionStats:
         frames_dropped: Frames dropped due to queue overflow
         duration_seconds: Actual recording duration
         source_stats: Per-source statistics
+        drop_rate: Aggregate dropped-callback rate across active sources
+        max_consecutive_frames_dropped: Largest source-level drop burst observed
+        consecutive_frames_dropped: Largest currently active source-level drop burst
+        capture_block_size: Default block size used for real capture sources
         denoising: Denoising diagnostics (empty when disabled)
     """
     frames_recorded: int = 0
     frames_dropped: int = 0
     duration_seconds: float = 0.0
     source_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    drop_rate: float = 0.0
+    max_consecutive_frames_dropped: int = 0
+    consecutive_frames_dropped: int = 0
+    capture_block_size: int = DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE
     denoising: DenoisingStats = field(default_factory=DenoisingStats)
 
 
@@ -478,8 +489,53 @@ class AudioSession:
         return self._state
     
     def get_stats(self) -> SessionStats:
-        """Get current recording statistics."""
+        """Get current recording statistics with sanitized source telemetry."""
+        self._refresh_drop_stats()
         return self._stats
+
+    def _refresh_drop_stats(self) -> None:
+        """Refresh aggregate sanitized frame-drop telemetry from sources."""
+        source_stats: Dict[str, Dict[str, Any]] = {}
+        total_callbacks = 0
+        total_dropped = 0
+        max_burst = 0
+        current_burst = 0
+
+        for wrapper in self._sources:
+            source = wrapper.source
+            metadata = source.get_metadata() if hasattr(source, "get_metadata") else {}
+            telemetry = (
+                source.get_drop_telemetry()
+                if hasattr(source, "get_drop_telemetry")
+                else {}
+            )
+            stats = {**metadata, **telemetry}
+            label = wrapper.config.type
+            source_stats[label] = stats
+            total_callbacks += int(stats.get("total_callbacks", 0) or 0)
+            total_dropped += int(stats.get("frames_dropped", 0) or 0)
+            max_burst = max(
+                max_burst,
+                int(stats.get("max_consecutive_frames_dropped", 0) or 0),
+            )
+            current_burst = max(
+                current_burst,
+                int(stats.get("consecutive_frames_dropped", 0) or 0),
+            )
+
+        with self._stats_lock:
+            self._stats.source_stats = source_stats
+            # Preserve callback-driven aggregate count if it is ahead of source reads.
+            self._stats.frames_dropped = max(self._stats.frames_dropped, total_dropped)
+            aggregate_dropped = self._stats.frames_dropped
+        self._stats.drop_rate = (
+            aggregate_dropped / total_callbacks
+            if total_callbacks > 0
+            else 0.0
+        )
+        self._stats.max_consecutive_frames_dropped = max_burst
+        self._stats.consecutive_frames_dropped = current_burst
+        self._stats.capture_block_size = DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE
 
     def get_error(self) -> Optional[Exception]:
         """Get the stored consumer thread error, if any.
@@ -500,14 +556,14 @@ class AudioSession:
             if source_config.type == 'mic':
                 source = MicSource(
                     device_id=source_config.device_id,
-                    blocksize=1024,
+                    blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
                     queue_size=10,
                     on_frame_dropped=self._on_source_frame_dropped,
                 )
             elif source_config.type == 'system':
                 source = SystemSource(
                     device_id=source_config.device_id,
-                    blocksize=1024,
+                    blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
                     queue_size=10,
                     on_frame_dropped=self._on_source_frame_dropped,
                 )

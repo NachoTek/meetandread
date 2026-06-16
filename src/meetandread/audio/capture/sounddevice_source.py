@@ -48,8 +48,11 @@ class SoundDeviceSource:
         self._stream: Optional[sounddevice.InputStream] = None
         self._running = False
         self._lock = threading.Lock()
-        # Frame-drop accounting
+        # Frame-drop accounting (sanitized counters only; no audio payloads)
         self._frames_dropped: int = 0
+        self._frames_enqueued: int = 0
+        self._consecutive_frames_dropped: int = 0
+        self._max_consecutive_frames_dropped: int = 0
         self._on_frame_dropped: Optional[Callable[[str, int], None]] = on_frame_dropped
         # Sanitized source label for logging/callbacks (no audio data)
         self._source_label: str = self.__class__.__name__
@@ -57,6 +60,26 @@ class SoundDeviceSource:
     def get_frames_dropped(self) -> int:
         """Return the number of frames dropped due to queue overflow."""
         return self._frames_dropped
+
+    def get_drop_telemetry(self) -> Dict[str, Any]:
+        """Return sanitized frame-drop telemetry for diagnostics."""
+        frames_enqueued = getattr(self, "_frames_enqueued", 0)
+        frames_dropped = getattr(self, "_frames_dropped", 0)
+        total_callbacks = frames_enqueued + frames_dropped
+        drop_rate = (
+            frames_dropped / total_callbacks
+            if total_callbacks > 0
+            else 0.0
+        )
+        return {
+            "block_size": self.blocksize,
+            "frames_dropped": frames_dropped,
+            "frames_enqueued": frames_enqueued,
+            "total_callbacks": total_callbacks,
+            "drop_rate": drop_rate,
+            "consecutive_frames_dropped": getattr(self, "_consecutive_frames_dropped", 0),
+            "max_consecutive_frames_dropped": getattr(self, "_max_consecutive_frames_dropped", 0),
+        }
     
     def _callback(
         self,
@@ -69,9 +92,18 @@ class SoundDeviceSource:
         try:
             # Try to put without blocking - drop if queue is full
             self._queue.put_nowait(indata.copy())
+            self._frames_enqueued = getattr(self, "_frames_enqueued", 0) + 1
+            self._consecutive_frames_dropped = 0
         except queue.Full:
             # Queue is full - drop this frame, increment counter, log, callback
             self._frames_dropped += 1
+            self._consecutive_frames_dropped = (
+                getattr(self, "_consecutive_frames_dropped", 0) + 1
+            )
+            self._max_consecutive_frames_dropped = max(
+                getattr(self, "_max_consecutive_frames_dropped", 0),
+                self._consecutive_frames_dropped,
+            )
             count = self._frames_dropped
             _log.info(
                 "Audio frame dropped: source=%s, count=%d",
@@ -128,7 +160,9 @@ class SoundDeviceSource:
             Numpy array of audio frames, or None if timeout/stopped
         """
         try:
-            return self._queue.get(timeout=timeout)
+            frames = self._queue.get(timeout=timeout)
+            self._consecutive_frames_dropped = 0
+            return frames
         except queue.Empty:
             return None
     
@@ -144,6 +178,7 @@ class SoundDeviceSource:
             'channels': self.channels,
             'dtype': self.dtype,
             'device_id': self.device_id,
+            **self.get_drop_telemetry(),
         }
 
 
@@ -333,3 +368,17 @@ class SystemSource:
         if self._backend is not None:
             return self._backend.get_frames_dropped()
         return 0
+
+    def get_drop_telemetry(self) -> Dict[str, Any]:
+        """Return sanitized frame-drop telemetry for diagnostics."""
+        if self._backend is not None and hasattr(self._backend, "get_drop_telemetry"):
+            return self._backend.get_drop_telemetry()
+        return {
+            "block_size": self._blocksize,
+            "frames_dropped": 0,
+            "frames_enqueued": 0,
+            "total_callbacks": 0,
+            "drop_rate": 0.0,
+            "consecutive_frames_dropped": 0,
+            "max_consecutive_frames_dropped": 0,
+        }
