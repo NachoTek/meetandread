@@ -24,7 +24,7 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsRectItem,
-    QApplication, QMenu
+    QApplication, QMenu, QDialog
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
@@ -33,7 +33,7 @@ from meetandread.recording import RecordingController, ControllerState
 from meetandread.recording.controller import RecoveryOutcome
 from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config
-from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen
+from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog
 from meetandread.widgets.theme import context_menu_css, current_palette
 
 
@@ -1451,24 +1451,10 @@ to avoid clipping issues and enable proper text rendering.
             failed_sources: List of source types that failed
             requested_sources: Set of originally requested source types
         """
-        from PyQt6.QtWidgets import QMessageBox
+        dialog = FallbackConfirmationDialog(self)
+        result = dialog.exec()
         
-        message = (
-            "System audio could not be opened after multiple attempts. "
-            "Recording can proceed with microphone only. "
-            "\n\n"
-            "Would you like to record with microphone only?"
-        )
-        
-        reply = QMessageBox.question(
-            self,
-            "Audio Source Unavailable",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
+        if result == QDialog.DialogCode.Accepted and dialog.accepted_fallback():
             # User accepted fallback - retry with mic-only
             logging.info("User accepted mic-only fallback after system audio failure")
             

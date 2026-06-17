@@ -387,6 +387,75 @@ def _strip_confidence_percentages(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# FallbackConfirmationDialog — mic-only fallback confirmation for system audio failure
+# ---------------------------------------------------------------------------
+
+class FallbackConfirmationDialog(QDialog):
+    """Dialog for confirming fallback to microphone-only recording.
+
+    Shown when system audio cannot be opened after multiple retry attempts.
+    User can choose to record with microphone only or cancel the recording attempt.
+    
+    Returns:
+        True if user accepted fallback (Record with mic only)
+        False if user cancelled or dialog was closed
+    """
+    
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._accepted: bool = False
+        
+        # --- Window setup ---
+        self.setWindowTitle("Audio Source Unavailable")
+        self.setMinimumSize(400, 200)
+        
+        p = current_palette()
+        self.setStyleSheet(dialog_css(p))
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        
+        # --- Message label ---
+        message_label = QLabel(
+            "Recording can proceed with microphone only. "
+            "System audio could not be opened. "
+            "\n\n"
+            "How would you like to proceed?"
+        )
+        message_label.setWordWrap(True)
+        message_label.setStyleSheet(
+            f"font-size: 13px; color: {p.text}; line-height: 1.5;"
+        )
+        layout.addWidget(message_label)
+        
+        # --- Button box ---
+        button_box = QDialogButtonBox()
+        
+        # Add custom buttons with specific text
+        record_button = QPushButton("Record with mic only")
+        record_button.setStyleSheet(action_button_css(p, "primary"))
+        button_box.addButton(record_button, QDialogButtonBox.ButtonRole.AcceptRole)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet(action_button_css(p, "secondary"))
+        button_box.addButton(cancel_button, QDialogButtonBox.ButtonRole.RejectRole)
+        
+        button_box.setStyleSheet(action_button_css(p, "dialog"))
+        button_box.accepted.connect(self._on_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def _on_accept(self) -> None:
+        """Handle user accepting fallback."""
+        self._accepted = True
+        self.accept()
+    
+    def accepted_fallback(self) -> bool:
+        """Return True if user accepted the fallback, False if cancelled."""
+        return self._accepted
+
+
 # SpeakerIdentityLinkDialog — identity selection for history speaker labels
 # ---------------------------------------------------------------------------
 

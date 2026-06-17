@@ -212,9 +212,12 @@ def test_exhausted_retries_show_fallback_dialog(monkeypatch):
     # Mock start to always fail
     mock_controller.start.return_value = ControllerError("AudioSourceError")
 
-    # Mock QMessageBox.question
-    with patch("PyQt6.QtWidgets.QMessageBox.question") as mock_question:
-        mock_question.return_value = QMessageBox.StandardButton.Yes
+    # Mock FallbackConfirmationDialog
+    with patch("meetandread.widgets.main_widget.FallbackConfirmationDialog") as mock_dialog_class:
+        mock_dialog = Mock()
+        mock_dialog.exec.return_value = QDialog.DialogCode.Accepted
+        mock_dialog.accepted_fallback.return_value = True
+        mock_dialog_class.return_value = mock_dialog
 
         widget.mic_lobe.is_active = True
         widget.system_lobe.is_active = True
@@ -224,9 +227,8 @@ def test_exhausted_retries_show_fallback_dialog(monkeypatch):
         widget._start_with_retry({'mic', 'system'}, first_attempt=False)
 
         # Should have shown fallback dialog
-        assert mock_question.called
-        call_args = mock_question.call_args
-        assert "microphone only" in str(call_args).lower() or "system audio" in str(call_args).lower()
+        assert mock_dialog_class.called
+        assert mock_dialog.exec.called
 
 
 def test_fallback_accepted_starts_with_mic_only(monkeypatch):
@@ -236,8 +238,13 @@ def test_fallback_accepted_starts_with_mic_only(monkeypatch):
     # Mock start to succeed
     mock_controller.start.return_value = None
 
-    # Mock QMessageBox to accept fallback
-    with patch("PyQt6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+    # Mock FallbackConfirmationDialog to accept fallback
+    with patch("meetandread.widgets.main_widget.FallbackConfirmationDialog") as mock_dialog_class:
+        mock_dialog = Mock()
+        mock_dialog.exec.return_value = QDialog.DialogCode.Accepted
+        mock_dialog.accepted_fallback.return_value = True
+        mock_dialog_class.return_value = mock_dialog
+
         widget._show_fallback_dialog(failed_sources=['system'], requested_sources={'mic', 'system'})
 
         # Should have recorded retry outcome with fallback
@@ -254,8 +261,13 @@ def test_fallback_rejected_clears_retry_state(monkeypatch):
     """If user rejects fallback, should clear retry state and return to IDLE."""
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
-    # Mock QMessageBox to reject fallback
-    with patch("PyQt6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+    # Mock FallbackConfirmationDialog to reject fallback
+    with patch("meetandread.widgets.main_widget.FallbackConfirmationDialog") as mock_dialog_class:
+        mock_dialog = Mock()
+        mock_dialog.exec.return_value = QDialog.DialogCode.Rejected
+        mock_dialog.accepted_fallback.return_value = False
+        mock_dialog_class.return_value = mock_dialog
+
         widget._show_fallback_dialog(failed_sources=['system'], requested_sources={'mic', 'system'})
 
         # Should have recorded retry outcome as failed
