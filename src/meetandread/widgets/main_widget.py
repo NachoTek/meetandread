@@ -18,7 +18,7 @@ import logging
 import math as _math
 import re
 import time as _time
-from typing import Optional
+from typing import Optional, Set, List
 
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -236,6 +236,14 @@ to avoid clipping issues and enable proper text rendering.
         self._frame_drop_toast_id = "frame-drops"
         self._frame_drop_toast_reminder_seconds = 60.0
         self.toast_manager = ToastManager(self, self)
+
+        # WASAPI start retry state (T02)
+        self._retry_in_progress: bool = False
+        self._retry_attempt: int = 0
+        self._retry_timer: Optional[QTimer] = None
+        self._retry_sources: Set[str] = set()
+        self._retry_backoff_schedule: List[float] = [1.0, 2.0, 4.0]  # seconds
+        self._retry_toast_id: str = "wasapi-retry"
 
         # Visual state machine (idle → recording → processing → idle)
         self._visual_state = _WidgetVisualStateMachine(WidgetVisualState.IDLE)
@@ -949,6 +957,11 @@ to avoid clipping issues and enable proper text rendering.
                 self._cc_overlay.start_delayed_hide()
                 logging.debug("CC overlay: delayed hide scheduled (IDLE)")
             
+        elif state == ControllerState.RETRYING:
+            # WASAPI retry in progress - lock lobes to prevent source toggling
+            self.mic_lobe.set_locked(True)
+            self.system_lobe.set_locked(True)
+            logging.debug("Lobes locked (RETRYING)")
         elif state == ControllerState.ERROR:
             self.is_recording = False
             self.is_processing = False
@@ -1257,7 +1270,16 @@ to avoid clipping issues and enable proper text rendering.
             self.stop_recording()
     
     def start_recording(self):
-        """Start recording via controller."""
+        """Start recording via controller.
+        
+        For system audio requests, implements retry flow with exponential backoff
+        (1s, 2s, 4s) up to 3 attempts. Mic-only starts bypass retry for fast path.
+        """
+        # Cancel any ongoing retry if user clicked record button again
+        if self._retry_in_progress:
+            self._cancel_retry()
+            return
+        
         # Check if any source is selected
         sources = self._get_selected_sources()
         
@@ -1269,10 +1291,217 @@ to avoid clipping issues and enable proper text rendering.
         # Clear any previous error
         self._controller.clear_error()
         
-        # Start recording via controller
+        # Mic-only starts use fast path (no retry)
+        if sources == {'mic'}:
+            error = self._controller.start(sources)
+            if error:
+                self._show_error(error.message)
+            return
+        
+        # System audio requests use retry flow
+        self._start_with_retry(sources, first_attempt=True)
+    
+    def _start_with_retry(self, sources: Set[str], first_attempt: bool) -> None:
+        """Start recording with retry logic for system audio.
+        
+        Args:
+            sources: Set of requested source types ('mic', 'system')
+            first_attempt: True if this is the initial start attempt, False if retry
+        """
+        self._retry_sources = sources
+        
+        # Perform start attempt
         error = self._controller.start(sources)
-        if error:
+        if error is None:
+            # Success - clear any retry state
+            self._clear_retry_state()
+            return
+        
+        # Check if error is retryable (system audio source failure)
+        # Only retry if system audio was requested and error indicates source issue
+        if not ('system' in sources and 'AudioSourceError' in error.message or 'endpoint' in error.message.lower()):
             self._show_error(error.message)
+            self._clear_retry_state()
+            return
+        
+        # First failure - begin retry sequence
+        if first_attempt:
+            self._retry_in_progress = True
+            self._retry_attempt = 1
+            self._controller.begin_start_retry_sequence()
+            logging.info(
+                "WASAPI endpoint unavailable - starting retry sequence for sources=%s",
+                sources
+            )
+        else:
+            self._retry_attempt += 1
+        
+        # Check if retry attempts exhausted
+        if self._retry_attempt > 3:
+            self._show_fallback_dialog(failed_sources=['system'], requested_sources=sources)
+            return
+        
+        # Record this retry attempt
+        self._controller.record_start_retry_attempt(
+            attempt_number=self._retry_attempt,
+            backoff_seconds=self._retry_backoff_schedule[self._retry_attempt - 1],
+            source_type='system',
+            error=RuntimeError(error.message),
+        )
+        
+        # Show retry toast with countdown
+        backoff_seconds = self._retry_backoff_schedule[self._retry_attempt - 1]
+        self._show_retry_toast(self._retry_attempt, backoff_seconds)
+        
+        # Schedule next retry attempt with QTimer
+        if self._retry_timer:
+            self._retry_timer.stop()
+        
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(lambda: self._perform_retry_attempt())
+        self._retry_timer.start(int(backoff_seconds * 1000))
+        
+        logging.info(
+            "Retry attempt %d/3 scheduled in %.1fs for system audio",
+            self._retry_attempt,
+            backoff_seconds
+        )
+    
+    def _perform_retry_attempt(self) -> None:
+        """Perform a retry attempt for WASAPI endpoint.
+        
+        Called by QTimer.timeout signal after backoff period.
+        """
+        if not self._retry_in_progress:
+            return  # Retry was cancelled
+        
+        logging.info(
+            "Executing retry attempt %d/3 for system audio",
+            self._retry_attempt
+        )
+        
+        # Dismiss retry toast before next attempt
+        self.toast_manager.dismiss(self._retry_toast_id)
+        
+        # Try starting again
+        self._start_with_retry(self._retry_sources, first_attempt=False)
+    
+    def _show_retry_toast(self, attempt_number: int, backoff_seconds: float) -> None:
+        """Show/update retry toast with attempt number and countdown.
+        
+        Args:
+            attempt_number: Current retry attempt (1-3)
+            backoff_seconds: Backoff duration for this attempt
+        """
+        title = f"Opening system audio... (Attempt {attempt_number}/3)"
+        message = f"Retrying in {int(backoff_seconds)} second{'s' if backoff_seconds > 1 else ''}."
+        
+        # Use same toast_id to update existing toast instead of spamming
+        self.toast_manager.show(
+            self._retry_toast_id,
+            title,
+            message,
+            duration_ms=0  # Manual dismiss, no auto-hide
+        )
+    
+    def _cancel_retry(self) -> None:
+        """Cancel retry sequence and return to IDLE.
+        
+        Called when user clicks record button during retry.
+        """
+        logging.info("User cancelled WASAPI retry sequence")
+        
+        # Stop retry timer
+        if self._retry_timer:
+            self._retry_timer.stop()
+            self._retry_timer.deleteLater()
+            self._retry_timer = None
+        
+        # Dismiss retry toast
+        self.toast_manager.dismiss(self._retry_toast_id)
+        
+        # Record retry outcome as cancelled
+        if self._retry_in_progress:
+            self._controller.record_start_retry_outcome(
+                outcome='cancelled',
+                failed_sources=['system'],
+            )
+        
+        # Clear retry state
+        self._clear_retry_state()
+    
+    def _clear_retry_state(self) -> None:
+        """Clear retry state and cleanup resources."""
+        self._retry_in_progress = False
+        self._retry_attempt = 0
+        self._retry_sources = set()
+        
+        if self._retry_timer:
+            self._retry_timer.stop()
+            self._retry_timer.deleteLater()
+            self._retry_timer = None
+        
+        self.toast_manager.dismiss(self._retry_toast_id)
+    
+    def _show_fallback_dialog(self, failed_sources: List[str], requested_sources: Set[str]) -> None:
+        """Show modal dialog for fallback to mic-only recording.
+        
+        Args:
+            failed_sources: List of source types that failed
+            requested_sources: Set of originally requested source types
+        """
+        from PyQt6.QtWidgets import QMessageBox
+        
+        message = (
+            "System audio could not be opened after multiple attempts. "
+            "Recording can proceed with microphone only. "
+            "\n\n"
+            "Would you like to record with microphone only?"
+        )
+        
+        reply = QMessageBox.question(
+            self,
+            "Audio Source Unavailable",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # User accepted fallback - retry with mic-only
+            logging.info("User accepted mic-only fallback after system audio failure")
+            
+            # Record retry outcome
+            self._controller.record_start_retry_outcome(
+                outcome='fallback_to_mic_only',
+                failed_sources=failed_sources,
+                fallback_sources=['mic'],
+            )
+            
+            # Clear retry state and start with mic-only
+            self._clear_retry_state()
+            
+            # Start with mic-only (bypass retry since system is unavailable)
+            mic_only_sources = {'mic'}
+            if 'mic' in requested_sources:
+                error = self._controller.start(mic_only_sources)
+                if error:
+                    self._show_error(error.message)
+            else:
+                self._show_error("Microphone not selected - cannot start recording")
+        else:
+            # User cancelled - return to IDLE
+            logging.info("User cancelled fallback after system audio failure")
+            
+            # Record retry outcome as failed
+            self._controller.record_start_retry_outcome(
+                outcome='failed',
+                failed_sources=failed_sources,
+            )
+            
+            self._clear_retry_state()
+            self._show_error("Recording cancelled - system audio unavailable")
     
     def stop_recording(self):
         """Stop recording via controller (non-blocking)."""
