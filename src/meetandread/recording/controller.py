@@ -488,7 +488,7 @@ class RecordingController:
     def _start_hotplug_monitor(self) -> None:
         try:
             self._hotplug_monitor = WindowsDeviceMonitor()
-            self._hotplug_monitor.start()
+            self._hotplug_monitor.start_monitoring(self.handle_device_event)
             self._hotplug_monitor_active = True
             logger.info("Recording hotplug monitor started")
         except Exception as exc:
@@ -503,7 +503,7 @@ class RecordingController:
         if monitor is None:
             return
         try:
-            monitor.stop()
+            monitor.stop_monitoring()
             logger.info("Recording hotplug monitor stopped")
         except Exception as exc:
             logger.warning("Recording hotplug monitor stop failed: %s", exc)
