@@ -624,18 +624,6 @@ class RecordingController:
                 self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
                 return result
 
-            if remaining > 0:
-                result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Recording source lost; continuing with remaining recording source")
-                self._emit_recovery_result(result)
-                logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
-                return result
-            else:
-                result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "Capture source lost: all active capture sources lost", True)
-                self._emit_recovery_result(result)
-                logger.error("Recording hotplug total device loss: %s", result.as_diagnostics())
-                self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
-                return result
-
         if self._is_reconnect_event(event):
             with self._hotplug_lock:
                 lost_identity = self._lost_source_identities.get(source_type)

@@ -1319,7 +1319,7 @@ to avoid clipping issues and enable proper text rendering.
         
         # Check if error is retryable (system audio source failure)
         # Only retry if system audio was requested and error indicates source issue
-        if not ('system' in sources and 'AudioSourceError' in error.message or 'endpoint' in error.message.lower()):
+        if not ('system' in sources and ('AudioSourceError' in error.message or 'endpoint' in error.message.lower())):
             self._show_error(error.message)
             self._clear_retry_state()
             return
