@@ -239,6 +239,23 @@ class WindowsDeviceMonitor:
 
         return dispatched
 
+    def drain_events(self, max_events: Optional[int] = None) -> list[DeviceEvent]:
+        """Return and remove queued events without dispatching the callback.
+
+        Unlike :meth:`drain_pending_events`, this does not invoke the consumer
+        callback — callers (e.g. ``RecordingController.drain_hotplug_events``)
+        route the returned events themselves. This keeps recovery decisions on
+        the owning application thread rather than the monitor's queue consumer.
+        """
+
+        events: list[DeviceEvent] = []
+        while max_events is None or len(events) < max_events:
+            try:
+                events.append(self._queue.get_nowait())
+            except queue.Empty:
+                break
+        return events
+
     def get_diagnostics(self) -> dict[str, Any]:
         """Return sanitized monitor state for controller diagnostics."""
 
