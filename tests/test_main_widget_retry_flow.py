@@ -2,7 +2,7 @@
 import time
 from unittest.mock import Mock, patch, MagicMock
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QDialog
 
 from meetandread.widgets.main_widget import MeetAndReadWidget
 from meetandread.recording.controller import ControllerState, ControllerError
