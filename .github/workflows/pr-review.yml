@@ -20,63 +20,51 @@ jobs:
     # Only run if CI failed — success means we're done
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     steps:
-      - name: Find associated PR and send webhook
+      - name: Send CI failure webhook to Hermes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WEBHOOK_SECRET: ${{ secrets.HERMES_WEBHOOK_SECRET }}
           WEBHOOK_URL: https://homelab.nachotek.com/hooks/meetandread-pr
         run: |
           set -euo pipefail
 
-          RUN_ID="${{ github.event.workflow_run.id }}"
-          REPO="${{ github.repository }}"
+          # Extract PR number from the workflow_run event payload
+          # github.event.workflow_run.pull_requests is populated when
+          # the original workflow was triggered by a pull_request event
+          PR_COUNT=$(echo '${{ toJSON(github.event.workflow_run.pull_requests) }}' | jq 'length')
 
-          echo "Workflow run $RUN_ID completed with failure. Looking for associated PR..."
-
-          # Get PRs associated with this workflow run
-          PR_DATA=$(gh api "/repos/${REPO}/actions/runs/${RUN_ID}/pulls" --jq '.[].number' 2>/dev/null || echo "")
-
-          if [ -z "$PR_DATA" ]; then
+          if [ "$PR_COUNT" = "0" ] || [ -z "$PR_COUNT" ]; then
             echo "No PRs associated with this workflow run. Skipping."
             exit 0
           fi
 
-          for PR_NUMBER in $PR_DATA; do
-            echo "Found PR #$PR_NUMBER. Sending CI failure webhook..."
+          PR_NUMBER=$(echo '${{ toJSON(github.event.workflow_run.pull_requests) }}' | jq -r '.[0].number')
+          REPO="${{ github.repository }}"
+          RUN_ID="${{ github.event.workflow_run.id }}"
 
-            # Build the webhook payload — looks like a pull_request event
-            # with a custom action so the Hermes agent can distinguish it
-            PAYLOAD=$(cat <<EOF
-          {
-            "action": "ci_failed",
-            "number": ${PR_NUMBER},
-            "repository": {
-              "full_name": "${REPO}"
-            },
-            "check_run": {
-              "id": ${RUN_ID},
-              "conclusion": "failure"
-            }
-          }
-          EOF
-            )
+          echo "Build Validation run #$RUN_ID failed for PR #$PR_NUMBER"
 
-            # Compute HMAC-SHA256 signature (GitHub-style X-Hub-Signature-256)
-            SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
+          # Build the webhook payload — uses pull_request event type
+          # with a custom action so the Hermes agent can distinguish it
+          PAYLOAD=$(cat <<ENDJSON
+          {"action":"ci_failed","number":${PR_NUMBER},"repository":{"full_name":"${REPO}"},"check_run":{"id":${RUN_ID},"conclusion":"failure"}}
+          ENDJSON
+          )
 
-            echo "Sending webhook to Hermes..."
-            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-              -X POST "$WEBHOOK_URL" \
-              -H "Content-Type: application/json" \
-              -H "X-GitHub-Event: pull_request" \
-              -H "X-Hub-Signature-256: sha256=${SIGNATURE}" \
-              -d "$PAYLOAD")
+          # Compute HMAC-SHA256 signature (GitHub-style X-Hub-Signature-256)
+          SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
 
-            echo "Webhook response: HTTP $RESPONSE"
+          echo "Sending CI failure webhook to Hermes..."
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: pull_request" \
+            -H "X-Hub-Signature-256: sha256=${SIGNATURE}" \
+            -d "$PAYLOAD")
 
-            if [ "$RESPONSE" = "200" ]; then
-              echo "✅ Review agent triggered for PR #$PR_NUMBER"
-            else
-              echo "❌ Webhook delivery failed (HTTP $RESPONSE)"
-            fi
-          done
+          echo "Webhook response: HTTP $RESPONSE"
+
+          if [ "$RESPONSE" = "200" ]; then
+            echo "Review agent triggered for PR #$PR_NUMBER"
+          else
+            echo "Webhook delivery failed (HTTP $RESPONSE)"
+          fi
