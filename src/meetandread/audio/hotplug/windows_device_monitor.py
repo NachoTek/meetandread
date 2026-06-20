@@ -205,10 +205,12 @@ class WindowsDeviceMonitor:
         try:
             self._queue.put_nowait(event)
         except queue.Full:
-            self._dropped_events += 1
+            with self._lock:
+                self._dropped_events += 1
+                dropped = self._dropped_events
             logger.warning(
                 "Hot-plug monitor queue full; dropping event",
-                extra={"event_type": event.event_type.value, "dropped_events": self._dropped_events},
+                extra={"event_type": event.event_type.value, "dropped_events": dropped},
             )
             return
 
