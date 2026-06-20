@@ -100,7 +100,7 @@ def test_retry_attempts_uses_exponential_backoff_schedule(monkeypatch):
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
     # Mock start to fail consistently
-    mock_controller.start.return_value = ControllerError("AudioSourceError")
+    mock_controller.start.return_value = ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
 
     widget.mic_lobe.is_active = True
     widget.system_lobe.is_active = True
@@ -117,7 +117,7 @@ def test_retry_toast_shows_attempt_number_and_countdown(monkeypatch):
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
     # Mock start to fail
-    mock_controller.start.return_value = ControllerError("AudioSourceError")
+    mock_controller.start.return_value = ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
 
     # Mock ToastManager.show
     toast_calls = []
@@ -144,7 +144,7 @@ def test_user_can_cancel_retry_by_clicking_record_button(monkeypatch):
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
     # Mock start to fail
-    mock_controller.start.return_value = ControllerError("AudioSourceError")
+    mock_controller.start.return_value = ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
 
     # Start recording with system audio (will enter retry flow)
     widget.mic_lobe.is_active = True
@@ -201,7 +201,7 @@ def test_exhausted_retries_show_fallback_dialog(monkeypatch):
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
     # Mock start to always fail
-    mock_controller.start.return_value = ControllerError("AudioSourceError")
+    mock_controller.start.return_value = ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
 
     # Mock FallbackConfirmationDialog
     with patch("meetandread.widgets.main_widget.FallbackConfirmationDialog") as mock_dialog_class:
@@ -312,7 +312,7 @@ def test_retry_updates_same_toast_widget_instead_of_spamming(monkeypatch):
     """Retry attempts should update the same toast widget, not create new ones."""
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
-    mock_controller.start.return_value = ControllerError("AudioSourceError")
+    mock_controller.start.return_value = ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
 
     toast_count = [0]
 
@@ -340,7 +340,7 @@ def test_retry_timer_is_cleaned_up_after_completion(monkeypatch):
     def mock_start_side_effect(sources):
         start_attempts[0] += 1
         if start_attempts[0] == 1:
-            return ControllerError("AudioSourceError")
+            return ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
         return None
 
     mock_controller.start.side_effect = mock_start_side_effect

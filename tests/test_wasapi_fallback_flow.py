@@ -46,7 +46,7 @@ def test_no_silent_degraded_start_without_confirmation(monkeypatch):
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
     # Mock start to always fail
-    mock_controller.start.return_value = ControllerError("AudioSourceError")
+    mock_controller.start.return_value = ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
 
     # Mock FallbackConfirmationDialog to reject fallback
     with patch("meetandread.widgets.main_widget.FallbackConfirmationDialog") as mock_dialog_class:
@@ -151,7 +151,7 @@ def test_fresh_start_attempts_all_requested_sources(monkeypatch):
     widget, mock_controller = _create_widget_with_mocked_controller(monkeypatch)
 
     # Mock start to always fail
-    mock_controller.start.return_value = ControllerError("AudioSourceError")
+    mock_controller.start.return_value = ControllerError("Audio device error: WASAPI loopback endpoint unavailable")
 
     # First attempt with system+mic - will exhaust retries and show fallback
     with patch("meetandread.widgets.main_widget.FallbackConfirmationDialog") as mock_dialog_class:
