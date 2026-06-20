@@ -1318,8 +1318,16 @@ to avoid clipping issues and enable proper text rendering.
             return
         
         # Check if error is retryable (system audio source failure)
-        # Only retry if system audio was requested and error indicates source issue
-        if not ('system' in sources and ('AudioSourceError' in error.message or 'endpoint' in error.message.lower())):
+        # The controller wraps AudioSourceError as "Audio device error: {e}",
+        # so we match on the formatted message rather than the class name.
+        error_lower = error.message.lower()
+        is_retryable = 'system' in sources and (
+            'audio device error' in error_lower
+            or 'wasapi' in error_lower
+            or 'endpoint' in error_lower
+            or 'loopback' in error_lower
+        )
+        if not is_retryable:
             self._show_error(error.message)
             self._clear_retry_state()
             return
