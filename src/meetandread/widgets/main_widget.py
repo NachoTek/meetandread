@@ -1598,9 +1598,12 @@ to avoid clipping issues and enable proper text rendering.
             self._cc_overlay.save_geometry()
         # Dismiss all toast widgets so no orphan top-level windows (including
         # no-auto-dismiss retry toasts) linger on the desktop after hide/quit.
-        _toast_mgr = getattr(self, "toast_manager", None)
-        if _toast_mgr is not None:
-            _toast_mgr.dismiss_all()
+        # Guard with try/except: shutdown tests create widgets via __new__
+        # (bypassing __init__), so SIP raises RuntimeError on attribute access.
+        try:
+            self.toast_manager.dismiss_all()
+        except (AttributeError, RuntimeError):
+            pass
         
         if self._tray_manager is not None:
             # Close-to-tray: hide the widget instead of quitting
