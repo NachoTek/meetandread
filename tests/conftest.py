@@ -16,8 +16,8 @@ def _cleanup_qtimers():
     exhausts retries and opens a blocking ``QDialog.exec()`` which hangs
     forever in headless CI.
 
-    This safety net walks every top-level widget, stops and deletes every
-    ``QTimer`` child, then drains the event queue.
+    This safety net walks every top-level widget, disconnects, stops, and
+    deletes every ``QTimer`` child.
     """
     yield
     app = QApplication.instance()
@@ -25,6 +25,9 @@ def _cleanup_qtimers():
         return
     for widget in app.topLevelWidgets():
         for timer in widget.findChildren(QTimer):
+            try:
+                timer.timeout.disconnect()
+            except (TypeError, RuntimeError):
+                pass
             timer.stop()
             timer.deleteLater()
-    app.processEvents()
