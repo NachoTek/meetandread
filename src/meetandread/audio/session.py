@@ -514,7 +514,13 @@ class AudioSession:
         return self._stats
 
     def _refresh_drop_stats(self) -> None:
-        """Refresh aggregate sanitized frame-drop telemetry from sources."""
+        """Refresh aggregate sanitized frame-drop telemetry from sources.
+
+        Called from the diagnostics path (``get_stats``).  Includes full
+        source metadata which may involve blocking device queries on some
+        backends — **do not** call this on the per-frame hot path; use
+        :meth:`_refresh_drop_counters_only` instead.
+        """
         source_stats: Dict[str, Dict[str, Any]] = {}
         total_callbacks = 0
         total_dropped = 0
@@ -548,14 +554,56 @@ class AudioSession:
             # Preserve callback-driven aggregate count if it is ahead of source reads.
             self._stats.frames_dropped = max(self._stats.frames_dropped, total_dropped)
             aggregate_dropped = self._stats.frames_dropped
-        self._stats.drop_rate = (
-            aggregate_dropped / total_callbacks
-            if total_callbacks > 0
-            else 0.0
-        )
-        self._stats.max_consecutive_frames_dropped = max_burst
-        self._stats.consecutive_frames_dropped = current_burst
-        self._stats.capture_block_size = DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE
+            self._stats.drop_rate = (
+                aggregate_dropped / total_callbacks
+                if total_callbacks > 0
+                else 0.0
+            )
+            self._stats.max_consecutive_frames_dropped = max_burst
+            self._stats.consecutive_frames_dropped = current_burst
+            self._stats.capture_block_size = DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE
+
+    def _refresh_drop_counters_only(self) -> None:
+        """Lightweight drop-counter refresh for the per-frame hot path.
+
+        Unlike :meth:`_refresh_drop_stats`, this skips ``get_metadata()``
+        (which may trigger blocking WASAPI/PyAudio device queries) and
+        reads only the in-memory telemetry counters needed for denoise
+        auto-disable decisions.
+        """
+        total_callbacks = 0
+        total_dropped = 0
+        max_burst = 0
+        current_burst = 0
+
+        for wrapper in self._sources:
+            source = wrapper.source
+            telemetry = (
+                source.get_drop_telemetry()
+                if hasattr(source, "get_drop_telemetry")
+                else {}
+            )
+            total_callbacks += int(telemetry.get("total_callbacks", 0) or 0)
+            total_dropped += int(telemetry.get("frames_dropped", 0) or 0)
+            max_burst = max(
+                max_burst,
+                int(telemetry.get("max_consecutive_frames_dropped", 0) or 0),
+            )
+            current_burst = max(
+                current_burst,
+                int(telemetry.get("consecutive_frames_dropped", 0) or 0),
+            )
+
+        with self._stats_lock:
+            self._stats.frames_dropped = max(self._stats.frames_dropped, total_dropped)
+            aggregate_dropped = self._stats.frames_dropped
+            self._stats.drop_rate = (
+                aggregate_dropped / total_callbacks
+                if total_callbacks > 0
+                else 0.0
+            )
+            self._stats.max_consecutive_frames_dropped = max_burst
+            self._stats.consecutive_frames_dropped = current_burst
 
     def get_error(self) -> Optional[Exception]:
         """Get the stored consumer thread error, if any.
@@ -694,7 +742,7 @@ class AudioSession:
         if self._denoising_disabled or not self._stats.denoising.enabled:
             return
 
-        self._refresh_drop_stats()
+        self._refresh_drop_counters_only()
         stats = self._stats
         if stats.max_consecutive_frames_dropped > 10:
             self._mark_denoising_disabled(

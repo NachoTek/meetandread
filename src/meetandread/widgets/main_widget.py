@@ -1596,6 +1596,9 @@ to avoid clipping issues and enable proper text rendering.
             self._floating_settings_panel.save_geometry()
         if self._cc_overlay:
             self._cc_overlay.save_geometry()
+        # Dismiss all toast widgets so no orphan top-level windows (including
+        # no-auto-dismiss retry toasts) linger on the desktop after hide/quit.
+        self.toast_manager.dismiss_all()
         
         if self._tray_manager is not None:
             # Close-to-tray: hide the widget instead of quitting

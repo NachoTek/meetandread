@@ -79,7 +79,11 @@ class DeviceEvent:
     def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-        normalized = str(value).strip()
+        # Strip control characters (log-injection defense) then whitespace.
+        # Device names from the OS/registry can contain newlines or ANSI
+        # escapes that forge multiline log records.
+        cleaned = "".join(ch for ch in str(value) if ch.isprintable() or ch == " ")
+        normalized = " ".join(cleaned.split())  # collapse internal whitespace
         return normalized or None
 
     def sanitized(self) -> dict[str, Any]:

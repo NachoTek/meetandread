@@ -412,6 +412,20 @@ class RecordingController:
             failed_sources=[self._sanitize_source_type(s) for s in (failed_sources or []) if self._sanitize_source_type(s)],
             fallback_sources=[self._sanitize_source_type(s) for s in (fallback_sources or []) if self._sanitize_source_type(s)],
         )
+        # Transition out of RETRYING for terminal outcomes so the UI can
+        # unlock source toggles and the controller reports a non-busy state.
+        if outcome in ("cancelled", "failed"):
+            with self._state_lock:
+                if self._state == ControllerState.RETRYING:
+                    self._state = ControllerState.IDLE
+                    state_cb = self.on_state_change
+                else:
+                    state_cb = None
+            if state_cb:
+                try:
+                    state_cb(ControllerState.IDLE)
+                except Exception as e:
+                    logger.error("State change callback failed: %s", e)
 
     def _apply_retry_stats(
         self,
