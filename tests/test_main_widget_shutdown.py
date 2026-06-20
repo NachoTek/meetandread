@@ -61,6 +61,7 @@ def _make_widget():
                             widget._cc_overlay = None
                             widget._error_hide_timer = None
                             widget._warning_hide_timer = None
+                            widget.toast_manager = None
                             return widget
 
 
