@@ -63,6 +63,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow (requires model download, deselect with '-m \"not slow\"')",
+    "requires_qt_widgets: mark tests that require real Qt widgets and a display context",
 ]
 
 [tool.flake8]
