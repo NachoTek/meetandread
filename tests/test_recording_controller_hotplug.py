@@ -14,10 +14,10 @@ class FakeMonitor:
         self.stopped = 0
         self.events = []
 
-    def start(self):
+    def start_monitoring(self, callback):
         self.started += 1
 
-    def stop(self):
+    def stop_monitoring(self):
         self.stopped += 1
 
     def drain_events(self, max_events=100):
@@ -59,12 +59,12 @@ def _event(kind, device_id="mic-1", friendly_name="USB Mic", flow="capture", whe
 
 
 def _recording_controller(monkeypatch, *, now=100.0):
-    ctrl = RecordingController(enable_transcription=False)
     fake_session = FakeSession()
     fake_monitor = FakeMonitor()
     monkeypatch.setattr("meetandread.recording.controller.AudioSession", lambda: fake_session)
     monkeypatch.setattr("meetandread.recording.controller.WindowsDeviceMonitor", lambda: fake_monitor)
     monkeypatch.setattr("meetandread.recording.controller._time.time", lambda: now)
+    ctrl = RecordingController(enable_transcription=False)
     return ctrl, fake_session, fake_monitor
 
 

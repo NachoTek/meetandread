@@ -38,12 +38,12 @@ class FakeSession:
 
 def _recording_controller(monkeypatch, *, now=100.0, enable_transcription=False):
     """Build a RecordingController with faked AudioSession."""
-    ctrl = RecordingController(enable_transcription=enable_transcription)
     fake_session = FakeSession()
     monkeypatch.setattr(
         "meetandread.recording.controller.AudioSession",
         lambda: fake_session,
     )
+    ctrl = RecordingController(enable_transcription=enable_transcription)
     monkeypatch.setattr("meetandread.recording.controller._time.time", lambda: now)
     return ctrl, fake_session
 

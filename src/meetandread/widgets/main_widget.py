@@ -1280,6 +1280,10 @@ to avoid clipping issues and enable proper text rendering.
             self._cancel_retry()
             return
         
+        # Don't start if controller is busy (recording, starting, retrying, etc.)
+        if self._controller.is_busy():
+            return
+        
         # Check if any source is selected
         sources = self._get_selected_sources()
         
@@ -2365,6 +2369,8 @@ class TranscriptLobeItem(QGraphicsEllipseItem):
 
 def get_error_help_text(message: str) -> Optional[str]:
     """Return context-specific help text for known error patterns, or None."""
+    if not isinstance(message, str):
+        return None
     patterns = [
         (r'no.*(source|mic|system|audio).*select',
          "Click a lobe on the widget to enable microphone or system audio, then try recording again."),

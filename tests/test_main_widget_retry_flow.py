@@ -102,23 +102,14 @@ def test_retry_attempts_uses_exponential_backoff_schedule(monkeypatch):
     # Mock start to fail consistently
     mock_controller.start.return_value = ControllerError("AudioSourceError")
 
-    # Mock QTimer to verify backoff durations
-    timer_durations = []
-    original_single_shot = QTimer.singleShot
+    widget.mic_lobe.is_active = True
+    widget.system_lobe.is_active = True
+    widget.start_recording()
 
-    def capture_single_shot(ms, callback):
-        timer_durations.append(ms)
-        # Don't actually start timer in test
-
-    with patch.object(QTimer, 'singleShot', side_effect=capture_single_shot):
-        widget.mic_lobe.is_active = True
-        widget.system_lobe.is_active = True
-        widget.start_recording()
-
-        # Should have scheduled first retry timer
-        assert len(timer_durations) >= 1
-        # First backoff is 1000ms (1s)
-        assert timer_durations[0] == 1000
+    # First retry attempt should have been recorded with 1s backoff
+    assert mock_controller.record_start_retry_attempt.called
+    call_kwargs = mock_controller.record_start_retry_attempt.call_args[1]
+    assert call_kwargs['backoff_seconds'] == 1.0  # First backoff is 1s
 
 
 def test_retry_toast_shows_attempt_number_and_countdown(monkeypatch):
@@ -358,11 +349,10 @@ def test_retry_timer_is_cleaned_up_after_completion(monkeypatch):
     widget.system_lobe.is_active = True
     widget.start_recording()
 
-    # Manually trigger retry (simulate timer fire)
+    # Trigger retry by emitting timer timeout (simulates timer fire)
     if hasattr(widget, '_retry_timer') and widget._retry_timer:
-        timer = widget._retry_timer
-        widget._retry_timer = None  # Simulate cleanup
+        widget._retry_timer.timeout.emit()
 
-    # After retry completes, timer reference should be cleared
+    # After successful retry, timer reference should be cleared and state reset
     assert widget._retry_timer is None
     assert widget._retry_in_progress is False

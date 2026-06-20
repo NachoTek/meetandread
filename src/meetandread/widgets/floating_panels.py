@@ -8014,7 +8014,7 @@ class FloatingSettingsPanel(QWidget):
             from meetandread.playback.bookmark import BookmarkManager
             if self._bookmark_manager is None:
                 self._bookmark_manager = BookmarkManager(md_path)
-            self._bookmark_manager.add(position_ms, name=name)  # noqa: F841
+            self._bookmark_manager.add(position_ms, name=name)
             logger.info(
                 "bookmark_added_ui: stem=%s position_ms=%d",
                 md_path.stem, position_ms,
