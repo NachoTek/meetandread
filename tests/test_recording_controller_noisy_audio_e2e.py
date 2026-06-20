@@ -727,7 +727,13 @@ class TestRecordingControllerDenoisingDiarizationIntegration:
                 f"Expected IDLE, got {controller.get_state().name}"
             )
 
-            # --- Step 5: assert diagnostics prove integration ---
+            # --- Step 5: run diarization directly (post-processor is None in this test) ---
+            rec_path = controller.get_last_recording_path()
+            assert rec_path is not None, "Last recording path must be set"
+            # Call the patched _run_diarization method to populate diagnostics
+            controller._run_diarization(rec_path)
+
+            # --- Step 6: assert diagnostics prove integration ---
             diag = controller.get_diagnostics()
 
             # Denoising: enabled, processed frames > 0, fallback count 0

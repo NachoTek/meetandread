@@ -249,6 +249,10 @@ class TestNoSourcePulse:
     def test_start_recording_no_sources_triggers_pulse(self, mock_get, mock_set, mock_save):
         """Full start_recording flow with no sources activates pulse timer."""
         widget = MagicMock(spec=MeetAndReadWidget)
+        widget._retry_in_progress = False
+        widget._controller = MagicMock()
+        widget._controller.is_busy.return_value = False
+        widget._controller.clear_error.return_value = None
         widget._get_selected_sources = MagicMock(return_value=set())
         widget._pulse_lobes = MagicMock()
         widget._show_error = MagicMock()

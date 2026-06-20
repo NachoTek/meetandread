@@ -12,7 +12,7 @@ import time as _time
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, Set, Callable, List
+from typing import Optional, Set, Callable, List, Dict, Any
 
 import numpy as np  # noqa: E402
 from meetandread.speaker.models import DiarizationResult  # noqa: E402
@@ -23,10 +23,12 @@ from meetandread.audio import (  # noqa: E402
     SessionConfig,
     SourceConfig,
     SessionState,
+    SessionStats,
     SessionError,
     NoSourcesError,
 )
 from meetandread.audio.capture import AudioSourceError  # noqa: E402
+from meetandread.audio.hotplug import DeviceEvent, DeviceEventType, WindowsDeviceMonitor  # noqa: E402
 from meetandread.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
 from meetandread.transcription.post_processor import PostProcessingQueue  # noqa: E402
@@ -38,12 +40,65 @@ logger = logging.getLogger(__name__)
 _LIVE_SPEAKER_MATCH_THRESHOLD = 0.75  # Conservative: no match below this
 _SANITIZED_ERROR_MAX_LENGTH = 200  # Truncation for sanitized error messages
 _SANITIZED_STATUS_MAX_LENGTH = 120  # Truncation for status/diagnostic messages
+_HOTPLUG_RECOVERY_WINDOW_SECONDS = 5.0
+
+
+class RecoveryOutcome(Enum):
+    """Sanitized controller outcomes for device hot-plug recovery."""
+    IGNORED = "ignored"
+    LOST = "lost"
+    DEGRADED = "degraded"
+    TOTAL_LOSS = "total_loss"
+    AUTO_RECOVERED = "auto_recovered"
+    MANUAL_RETRY_REQUIRED = "manual_retry_required"
+    MANUAL_RECOVERED = "manual_recovered"
+
+
+@dataclass(frozen=True)
+class ActiveSourceIdentity:
+    """Sanitized identity for a capture source tracked during recording."""
+    type: str
+    device_id: Optional[str]
+    friendly_name: Optional[str]
+    flow: Optional[str]
+    is_active: bool = True
+    lost_at: Optional[float] = None
+
+    def as_diagnostics(self) -> Dict[str, Any]:
+        return {
+            "type": self.type,
+            "device_id": self.device_id,
+            "friendly_name": self.friendly_name,
+            "flow": self.flow,
+            "is_active": self.is_active,
+            "lost_at": self.lost_at,
+        }
+
+
+@dataclass(frozen=True)
+class RecoveryResult:
+    """Sanitized hot-plug recovery decision emitted by RecordingController."""
+    outcome: RecoveryOutcome
+    source_type: Optional[str] = None
+    device_id: Optional[str] = None
+    message: str = ""
+    recoverable: bool = True
+
+    def as_diagnostics(self) -> Dict[str, Any]:
+        return {
+            "outcome": self.outcome.value,
+            "source_type": self.source_type,
+            "device_id": self.device_id,
+            "message": self.message[:_SANITIZED_STATUS_MAX_LENGTH],
+            "recoverable": self.recoverable,
+        }
 
 
 class ControllerState(Enum):
     """Controller states for UI state management."""
     IDLE = auto()
     STARTING = auto()
+    RETRYING = auto()
     RECORDING = auto()
     STOPPING = auto()
     ERROR = auto()
@@ -117,6 +172,21 @@ class RecordingController:
         self.on_phrase_result: Optional[Callable[[SegmentResult], None]] = None  # For accumulating processor results
         self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, transcript_path
         self.on_frames_dropped: Optional[Callable[[int], None]] = None  # Aggregate drop count (UI thread via bridge)
+        self.on_device_change: Optional[Callable[[DeviceEvent], None]] = None
+        self.on_recovery_attempt: Optional[Callable[[RecoveryResult], None]] = None
+
+        # Hot-plug recovery tracking (sanitized endpoint identities only)
+        self._hotplug_monitor: Optional[WindowsDeviceMonitor] = None
+        self._hotplug_monitor_active = False
+        self._hotplug_lock = threading.Lock()
+        self._active_source_identities: Dict[str, ActiveSourceIdentity] = {}
+        self._lost_source_identities: Dict[str, ActiveSourceIdentity] = {}
+        self._last_recovery_result: Optional[RecoveryResult] = None
+
+        # Start-time retry/fallback tracking (sanitized endpoint identities only)
+        self._retry_lock = threading.Lock()
+        self._retry_events: List[Dict[str, Any]] = []
+        self._retry_started_at: Optional[float] = None
 
         # Audio feed tracking
         self._audio_chunks_fed = 0
@@ -266,9 +336,405 @@ class RecordingController:
             return self._state == ControllerState.RECORDING
 
     def is_busy(self) -> bool:
-        """Check if controller is busy (starting, stopping, etc.)."""
+        """Check if controller is busy (starting, retrying, stopping, etc.)."""
         with self._state_lock:
-            return self._state in (ControllerState.STARTING, ControllerState.STOPPING)
+            return self._state in (
+                ControllerState.STARTING,
+                ControllerState.RETRYING,
+                ControllerState.STOPPING,
+            )
+
+    def begin_start_retry_sequence(self) -> None:
+        """Reset sanitized start-time retry/fallback diagnostics.
+
+        UI orchestration calls this before the first start attempt. It does not
+        start audio, sleep, or change existing synchronous start semantics.
+        """
+        with self._retry_lock:
+            self._retry_events = []
+            self._retry_started_at = _time.monotonic()
+        self._apply_retry_stats(
+            retry_attempts=0,
+            retry_outcome="pending",
+            failed_sources=[],
+            fallback_sources=[],
+        )
+
+    def record_start_retry_attempt(
+        self,
+        *,
+        attempt_number: int,
+        backoff_seconds: float,
+        source_type: Optional[str] = None,
+        device_id: Optional[str] = None,
+        friendly_name: Optional[str] = None,
+        error: Optional[BaseException] = None,
+    ) -> None:
+        """Record one sanitized start-time retry attempt for diagnostics."""
+        attempt = max(0, int(attempt_number))
+        backoff = max(0.0, float(backoff_seconds))
+        source = self._sanitize_source_type(source_type)
+        event = {
+            "attempt_number": attempt,
+            "backoff_seconds": backoff,
+            "source_type": source,
+            "device_id": self._sanitize_optional_text(device_id),
+            "friendly_name": self._sanitize_optional_text(friendly_name),
+            "elapsed_seconds": self._retry_elapsed_seconds(),
+            "error_class": type(error).__name__ if error else None,
+            "error_message": self._sanitize_optional_text(str(error) if error else None),
+        }
+        with self._retry_lock:
+            self._retry_events.append(event)
+        stats = self._session.get_stats()
+        failed_sources = list(getattr(stats, "failed_sources", []))
+        if source and source not in failed_sources:
+            failed_sources.append(source)
+        self._apply_retry_stats(
+            retry_attempts=max(getattr(stats, "retry_attempts", 0), attempt),
+            retry_outcome="retrying",
+            failed_sources=failed_sources,
+            fallback_sources=getattr(stats, "fallback_sources", []),
+        )
+        self._set_state(ControllerState.RETRYING)
+
+    def record_start_retry_outcome(
+        self,
+        *,
+        outcome: str,
+        failed_sources: Optional[List[str]] = None,
+        fallback_sources: Optional[List[str]] = None,
+    ) -> None:
+        """Record the sanitized final outcome of start-time retry/fallback."""
+        self._apply_retry_stats(
+            retry_attempts=getattr(self._session.get_stats(), "retry_attempts", 0),
+            retry_outcome=self._sanitize_retry_outcome(outcome),
+            failed_sources=[self._sanitize_source_type(s) for s in (failed_sources or []) if self._sanitize_source_type(s)],
+            fallback_sources=[self._sanitize_source_type(s) for s in (fallback_sources or []) if self._sanitize_source_type(s)],
+        )
+        # Transition out of RETRYING for terminal outcomes so the UI can
+        # unlock source toggles and the controller reports a non-busy state.
+        if outcome in ("cancelled", "failed"):
+            with self._state_lock:
+                if self._state == ControllerState.RETRYING:
+                    self._state = ControllerState.IDLE
+                    state_cb = self.on_state_change
+                else:
+                    state_cb = None
+            if state_cb:
+                try:
+                    state_cb(ControllerState.IDLE)
+                except Exception as e:
+                    logger.error("State change callback failed: %s", e)
+
+    def _apply_retry_stats(
+        self,
+        *,
+        retry_attempts: int,
+        retry_outcome: str,
+        failed_sources: List[str],
+        fallback_sources: List[str],
+    ) -> None:
+        stats: SessionStats = self._session.get_stats()
+        stats.retry_attempts = max(0, int(retry_attempts))
+        stats.retry_outcome = self._sanitize_retry_outcome(retry_outcome)
+        stats.failed_sources = list(dict.fromkeys(failed_sources))
+        stats.fallback_sources = list(dict.fromkeys(fallback_sources))
+
+    def _retry_elapsed_seconds(self) -> float:
+        with self._retry_lock:
+            started = self._retry_started_at
+        return 0.0 if started is None else max(0.0, _time.monotonic() - started)
+
+    def _retry_diagnostics(self) -> Dict[str, Any]:
+        with self._retry_lock:
+            return {
+                "started": self._retry_started_at is not None,
+                "events": [dict(event) for event in self._retry_events],
+            }
+
+    def _sanitize_source_type(self, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        safe = str(value).strip().lower()
+        return safe[:_SANITIZED_STATUS_MAX_LENGTH] if safe else None
+
+    def _sanitize_optional_text(self, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        safe = str(value).strip()
+        return safe[:_SANITIZED_STATUS_MAX_LENGTH] if safe else None
+
+    def _sanitize_retry_outcome(self, value: str) -> str:
+        safe = str(value or "none").strip().lower().replace(" ", "_")
+        return safe[:_SANITIZED_STATUS_MAX_LENGTH] or "none"
+
+    def _source_identity_from_config(self, config: SourceConfig) -> ActiveSourceIdentity:
+        device_id = getattr(config, "device_id", None)
+        friendly_name = getattr(config, "friendly_name", None)
+        if device_id is not None:
+            device_id = str(device_id).strip() or None
+        if friendly_name is not None:
+            friendly_name = str(friendly_name).strip() or None
+        flow = "render" if config.type == "system" else "capture" if config.type == "mic" else None
+        return ActiveSourceIdentity(
+            type=str(config.type),
+            device_id=device_id,
+            friendly_name=friendly_name,
+            flow=flow,
+        )
+
+    def _snapshot_active_sources(self, source_configs: List[SourceConfig]) -> None:
+        identities = {
+            sc.type: self._source_identity_from_config(sc)
+            for sc in source_configs
+            if sc.type in {"mic", "system"}
+        }
+        with self._hotplug_lock:
+            self._active_source_identities = identities
+            self._lost_source_identities = {}
+            self._last_recovery_result = None
+        logger.info(
+            "Recording hotplug active source snapshot: %s",
+            [identity.as_diagnostics() for identity in identities.values()],
+        )
+
+    def _start_hotplug_monitor(self) -> None:
+        try:
+            self._hotplug_monitor = WindowsDeviceMonitor()
+            self._hotplug_monitor.start_monitoring(self.handle_device_event)
+            self._hotplug_monitor_active = True
+            logger.info("Recording hotplug monitor started")
+        except Exception as exc:
+            self._hotplug_monitor = None
+            self._hotplug_monitor_active = False
+            logger.warning("Recording hotplug monitor unavailable: %s", exc)
+
+    def _stop_hotplug_monitor(self) -> None:
+        monitor = self._hotplug_monitor
+        self._hotplug_monitor = None
+        self._hotplug_monitor_active = False
+        if monitor is None:
+            return
+        try:
+            monitor.stop_monitoring()
+            logger.info("Recording hotplug monitor stopped")
+        except Exception as exc:
+            logger.warning("Recording hotplug monitor stop failed: %s", exc)
+
+    def drain_hotplug_events(self, max_events: int = 100) -> List[RecoveryResult]:
+        """Drain queued monitor events through controller recovery decisions."""
+        monitor = self._hotplug_monitor
+        if monitor is None:
+            return []
+        try:
+            events = monitor.drain_events(max_events=max_events)
+        except Exception as exc:
+            logger.warning("Recording hotplug event drain failed: %s", exc)
+            return []
+        results: List[RecoveryResult] = []
+        for event in events:
+            result = self.handle_device_event(event)
+            if result is not None:
+                results.append(result)
+        return results
+
+    def _emit_device_change(self, event: DeviceEvent) -> None:
+        callback = self.on_device_change
+        if callback:
+            try:
+                callback(event)
+            except Exception as exc:
+                logger.error("Device change callback failed: %s", exc)
+
+    def _emit_recovery_result(self, result: RecoveryResult) -> None:
+        with self._hotplug_lock:
+            self._last_recovery_result = result
+        callback = self.on_recovery_attempt
+        if callback:
+            try:
+                callback(result)
+            except Exception as exc:
+                logger.error("Recovery callback failed: %s", exc)
+
+    def _source_type_for_event(self, event: DeviceEvent) -> Optional[str]:
+        event_device_id = (event.device_id or "").strip() or None
+        event_friendly_name = (event.friendly_name or "").strip() or None
+        with self._hotplug_lock:
+            identities = list(self._active_source_identities.values()) + list(self._lost_source_identities.values())
+        for identity in identities:
+            if identity.device_id and event_device_id and identity.device_id == event_device_id:
+                return identity.type
+            if identity.friendly_name and event_friendly_name and identity.friendly_name == event_friendly_name:
+                return identity.type
+        flow = (event.flow or "").lower()
+        if flow == "render":
+            return "system"
+        if flow == "capture":
+            return "mic"
+        return None
+
+    def _is_loss_event(self, event: DeviceEvent) -> bool:
+        state = (event.state or "").lower()
+        return event.event_type is DeviceEventType.REMOVED or state in {"inactive", "disabled", "unplugged", "notpresent"}
+
+    def _is_reconnect_event(self, event: DeviceEvent) -> bool:
+        state = (event.state or "").lower()
+        return event.event_type is DeviceEventType.ADDED or state == "active"
+
+    def handle_device_event(self, event: DeviceEvent, *, now: Optional[float] = None) -> Optional[RecoveryResult]:
+        """Route a sanitized hot-plug event through recording recovery decisions."""
+        with self._state_lock:
+            current_state = self._state
+        if current_state not in (ControllerState.RECORDING, ControllerState.ERROR):
+            return None
+        if current_state is ControllerState.ERROR and not self._is_reconnect_event(event):
+            return None
+
+        now = _time.time() if now is None else now
+        self._emit_device_change(event)
+        source_type = self._source_type_for_event(event)
+        if source_type is None:
+            result = RecoveryResult(RecoveryOutcome.IGNORED, message="Device event did not match an active recording source")
+            self._emit_recovery_result(result)
+            return result
+
+        event_device_id = (event.device_id or "").strip() or None
+        if self._is_loss_event(event):
+            with self._hotplug_lock:
+                # Check if this source is already lost
+                if source_type in self._lost_source_identities:
+                    result = RecoveryResult(RecoveryOutcome.IGNORED, source_type, event_device_id, "Device already lost, ignoring duplicate loss event")
+                else:
+                    identity = self._active_source_identities.pop(source_type, None)
+                    if identity is None:
+                        identity = ActiveSourceIdentity(source_type, event_device_id, event.friendly_name, event.flow)
+                    lost_identity = ActiveSourceIdentity(
+                        type=identity.type,
+                        device_id=event_device_id or identity.device_id,
+                        friendly_name=event.friendly_name or identity.friendly_name,
+                        flow=event.flow or identity.flow,
+                        is_active=False,
+                        lost_at=now,
+                    )
+                    self._lost_source_identities[source_type] = lost_identity
+                    remaining = len(self._active_source_identities)
+                    result = None
+
+            if result is not None:
+                self._emit_recovery_result(result)
+                return result
+
+            # Process actual loss event
+            if remaining > 0:
+                result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Recording source lost; continuing with remaining recording source")
+                self._emit_recovery_result(result)
+                logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
+                return result
+            else:
+                result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "Capture source lost: all active capture sources lost", True)
+                self._emit_recovery_result(result)
+                logger.error("Recording hotplug total device loss: %s", result.as_diagnostics())
+                self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
+                return result
+
+        if self._is_reconnect_event(event):
+            with self._hotplug_lock:
+                lost_identity = self._lost_source_identities.get(source_type)
+            if lost_identity is None:
+                result = RecoveryResult(RecoveryOutcome.IGNORED, source_type, event_device_id, "Reconnect event for source that was not lost")
+                self._emit_recovery_result(result)
+                return result
+            elapsed = now - (lost_identity.lost_at or now)
+            event_friendly_name = (event.friendly_name or "").strip() or None
+            same_device = (
+                (lost_identity.device_id and event_device_id and lost_identity.device_id == event_device_id)
+                or (lost_identity.friendly_name and event_friendly_name and lost_identity.friendly_name == event_friendly_name)
+                or (not lost_identity.device_id and not event_device_id)
+            )
+            if same_device and elapsed <= _HOTPLUG_RECOVERY_WINDOW_SECONDS:
+                recovered = ActiveSourceIdentity(
+                    type=lost_identity.type,
+                    device_id=event_device_id or lost_identity.device_id,
+                    friendly_name=event.friendly_name or lost_identity.friendly_name,
+                    flow=event.flow or lost_identity.flow,
+                    is_active=True,
+                    lost_at=None,
+                )
+                with self._hotplug_lock:
+                    self._active_source_identities[source_type] = recovered
+                    self._lost_source_identities.pop(source_type, None)
+                with self._state_lock:
+                    self._error = None
+                    self._state = ControllerState.RECORDING
+                result = RecoveryResult(RecoveryOutcome.AUTO_RECOVERED, source_type, recovered.device_id, "Recording source reappeared within recovery window")
+                logger.info("Recording hotplug auto-recovered: %s", result.as_diagnostics())
+                self._emit_recovery_result(result)
+                state_cb = self.on_state_change
+                if state_cb:
+                    try:
+                        state_cb(ControllerState.RECORDING)
+                    except Exception as exc:
+                        logger.error("State change callback failed: %s", exc)
+                return result
+
+            result = RecoveryResult(RecoveryOutcome.MANUAL_RETRY_REQUIRED, source_type, event_device_id, "Recovery window expired; manual retry required")
+            logger.warning("Recording hotplug recovery window expired: %s", result.as_diagnostics())
+            self._emit_recovery_result(result)
+            self._set_error("Recording device reconnected after the automatic recovery window. Retry recording recovery manually.", is_recoverable=True)
+            return result
+
+        result = RecoveryResult(RecoveryOutcome.IGNORED, source_type, event_device_id, "Device event type does not affect recording")
+        self._emit_recovery_result(result)
+        return result
+
+    def retry_recovery(self, *, now: Optional[float] = None) -> RecoveryResult:
+        """Manual recovery entry point for UI retry/fallback controls."""
+        del now  # reserved for future endpoint retry/fallback timing
+        with self._hotplug_lock:
+            if not self._lost_source_identities:
+                result = RecoveryResult(RecoveryOutcome.IGNORED, message="No lost recording sources to recover")
+                self._last_recovery_result = result
+                return result
+            for source_type, identity in list(self._lost_source_identities.items()):
+                self._active_source_identities[source_type] = ActiveSourceIdentity(
+                    type=identity.type,
+                    device_id=identity.device_id,
+                    friendly_name=identity.friendly_name,
+                    flow=identity.flow,
+                    is_active=True,
+                    lost_at=None,
+                )
+            self._lost_source_identities.clear()
+        with self._state_lock:
+            self._error = None
+            self._state = ControllerState.RECORDING
+        result = RecoveryResult(RecoveryOutcome.MANUAL_RECOVERED, message="Manual recording recovery retry accepted")
+        logger.info("Recording hotplug manual recovery accepted")
+        self._emit_recovery_result(result)
+        state_cb = self.on_state_change
+        if state_cb:
+            try:
+                state_cb(ControllerState.RECORDING)
+            except Exception as exc:
+                logger.error("State change callback failed: %s", exc)
+        return result
+
+    def _hotplug_diagnostics(self) -> Dict[str, Any]:
+        with self._hotplug_lock:
+            active = [identity.as_diagnostics() for identity in self._active_source_identities.values()]
+            lost = [identity.as_diagnostics() for identity in self._lost_source_identities.values()]
+            last_result = self._last_recovery_result.as_diagnostics() if self._last_recovery_result else None
+        return {
+            "monitor_active": bool(self._hotplug_monitor_active),
+            "active_source_count": len(active),
+            "lost_source_count": len(lost),
+            "active_sources": active,
+            "lost_sources": lost,
+            "last_device_event": None,  # TODO: track last device event
+            "last_recovery_result": last_result,
+            "recovery_window_seconds": _HOTPLUG_RECOVERY_WINDOW_SECONDS,
+        }
 
     def start(
         self,
@@ -350,6 +816,7 @@ class RecordingController:
             denoise_enabled = False  # safe default (disabled due to spectral gate artifacts)
             denoise_provider = "spectral_gate"  # safe default
             denoise_budget_ms = 200.0  # safe default
+            denoise_auto_disable_on_frame_drops = True  # fail open under capture starvation
             try:
                 settings = self._config_manager.get_settings()
                 ts = settings.transcription
@@ -359,6 +826,13 @@ class RecordingController:
                 denoise_enabled = raw_enabled if isinstance(raw_enabled, bool) else False
 
                 # Validate provider - must be a non-empty string in the allowed set
+                raw_auto_disable = getattr(
+                    ts, "microphone_denoising_auto_disable_on_frame_drops", True
+                )
+                denoise_auto_disable_on_frame_drops = (
+                    raw_auto_disable if isinstance(raw_auto_disable, bool) else True
+                )
+
                 raw_provider = ts.microphone_denoising_provider
                 from meetandread.audio.denoising import VALID_PROVIDER_NAMES
                 if isinstance(raw_provider, str) and raw_provider in VALID_PROVIDER_NAMES:
@@ -404,6 +878,7 @@ class RecordingController:
                 enable_microphone_denoising=denoise_enabled,
                 denoising_provider_name=denoise_provider if denoise_enabled else None,
                 denoising_latency_budget_ms=denoise_budget_ms,
+                microphone_denoising_auto_disable_on_frame_drops=denoise_auto_disable_on_frame_drops,
                 on_frames_dropped=self._on_session_frames_dropped,
                 on_error=self._on_session_error,
             )
@@ -416,6 +891,7 @@ class RecordingController:
                 config.on_audio_frame = self.feed_audio_for_transcription
                 logger.debug("Audio callback wired to transcription processor")
 
+            self._snapshot_active_sources(source_configs)
             self._session = AudioSession()
             self._session.start(config)
             logger.debug("Audio session started")
@@ -431,6 +907,7 @@ class RecordingController:
             self._audio_chunks_fed = 0
             self._reset_live_speaker_state()
             self._set_state(ControllerState.RECORDING)
+            self._start_hotplug_monitor()
             logger.info("Recording started successfully")
             return None
 
@@ -460,6 +937,7 @@ class RecordingController:
 
         logger.info("[STOP-TIMER] stop() called on thread: %s",
                     threading.current_thread().name)
+        self._stop_hotplug_monitor()
         self._set_state(ControllerState.STOPPING)
 
         # Run stop/finalize in worker thread to avoid blocking UI
@@ -1949,6 +2427,10 @@ class RecordingController:
                 "duration_seconds": stats.duration_seconds,
                 "source_stats": stats.source_stats,
                 "session_error": str(self._session.get_error()) if self._session.get_error() else None,
+                "retry_attempts": stats.retry_attempts,
+                "retry_outcome": stats.retry_outcome,
+                "failed_sources": list(stats.failed_sources),
+                "fallback_sources": list(stats.fallback_sources),
                 "denoising": {
                     "provider": stats.denoising.provider,
                     "enabled": stats.denoising.enabled,
@@ -1963,6 +2445,9 @@ class RecordingController:
             }
         except Exception:
             logger.debug("Diagnostics: session stats unavailable")
+        # Device hot-plug recovery diagnostics (sanitized - no audio/transcript/secrets)
+        diag["hotplug"] = self._hotplug_diagnostics()
+        diag["retry"] = self._retry_diagnostics()
 
         # Transcription / VAD stats
         if self._transcription_processor:

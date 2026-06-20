@@ -56,6 +56,9 @@ from meetandread.audio.denoising import (
 
 _log = logging.getLogger(__name__)
 
+# Larger capture blocks reduce audio callback pressure under transcription load.
+DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE = 4096
+
 
 class SessionState(Enum):
     """Recording session states."""
@@ -124,6 +127,8 @@ class SessionConfig:
         denoising_provider_factory: Optional callable returning a
             DenoisingProvider. Used by tests to inject a mock/broken provider.
             If None, create_provider() is used.
+        microphone_denoising_auto_disable_on_frame_drops: Whether frame-drop
+            thresholds can fail open to raw mic audio for the rest of the session.
     """
     sources: List[SourceConfig] = field(default_factory=list)
     output_dir: Optional[Path] = None
@@ -136,6 +141,7 @@ class SessionConfig:
     denoising_provider_name: Optional[str] = None
     denoising_latency_budget_ms: float = 200.0
     denoising_provider_factory: Optional[Callable[[], DenoisingProvider]] = None
+    microphone_denoising_auto_disable_on_frame_drops: bool = True
     on_error: Optional[Callable[[Exception], None]] = None
 
 
@@ -156,6 +162,10 @@ class DenoisingStats:
     budget_exceeded_count: int = 0
     last_error_class: str = ""
     last_error_message: str = ""
+    disabled_reason: str = ""
+    disabled_at: float = 0.0
+    disabled_count: int = 0
+    auto_disable_on_frame_drops: bool = True
 
     def record_success(self, latency_ms: float, budget_ms: float) -> None:
         """Record a successful denoising pass."""
@@ -194,13 +204,29 @@ class SessionStats:
         frames_dropped: Frames dropped due to queue overflow
         duration_seconds: Actual recording duration
         source_stats: Per-source statistics
+        drop_rate: Aggregate dropped-callback rate across active sources
+        max_consecutive_frames_dropped: Largest source-level drop burst observed
+        consecutive_frames_dropped: Largest currently active source-level drop burst
+        capture_block_size: Default block size used for real capture sources
         denoising: Denoising diagnostics (empty when disabled)
+        retry_attempts: Number of start-time retry attempts recorded by the controller
+        retry_outcome: Sanitized final retry/fallback outcome ("none" before retry)
+        failed_sources: Sanitized source types that failed during retry/fallback
+        fallback_sources: Sanitized source types used after fallback confirmation
     """
     frames_recorded: int = 0
     frames_dropped: int = 0
     duration_seconds: float = 0.0
     source_stats: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    drop_rate: float = 0.0
+    max_consecutive_frames_dropped: int = 0
+    consecutive_frames_dropped: int = 0
+    capture_block_size: int = DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE
     denoising: DenoisingStats = field(default_factory=DenoisingStats)
+    retry_attempts: int = 0
+    retry_outcome: str = "none"
+    failed_sources: List[str] = field(default_factory=list)
+    fallback_sources: List[str] = field(default_factory=list)
 
 
 class AudioSourceWrapper:
@@ -335,7 +361,8 @@ class AudioSession:
         self._error: Optional[Exception] = None
         # Denoising state
         self._denoising_provider: Optional[DenoisingProvider] = None
-        self._denoising_disabled: bool = False  # True after init/process failure
+        self._denoising_disabled: bool = False  # True after init/process failure or policy disable
+        self._drop_rate_exceeded_since: Optional[float] = None
         # Lock protecting _stats.frames_dropped increments from audio callbacks
         self._stats_lock = threading.Lock()
 
@@ -388,6 +415,10 @@ class AudioSession:
         self._error = None
         self._denoising_provider = None
         self._denoising_disabled = False
+        self._drop_rate_exceeded_since = None
+        self._stats.denoising.auto_disable_on_frame_drops = (
+            config.microphone_denoising_auto_disable_on_frame_drops
+        )
         
         try:
             # Create sources
@@ -478,8 +509,101 @@ class AudioSession:
         return self._state
     
     def get_stats(self) -> SessionStats:
-        """Get current recording statistics."""
+        """Get current recording statistics with sanitized source telemetry."""
+        self._refresh_drop_stats()
         return self._stats
+
+    def _refresh_drop_stats(self) -> None:
+        """Refresh aggregate sanitized frame-drop telemetry from sources.
+
+        Called from the diagnostics path (``get_stats``).  Includes full
+        source metadata which may involve blocking device queries on some
+        backends — **do not** call this on the per-frame hot path; use
+        :meth:`_refresh_drop_counters_only` instead.
+        """
+        source_stats: Dict[str, Dict[str, Any]] = {}
+        total_callbacks = 0
+        total_dropped = 0
+        max_burst = 0
+        current_burst = 0
+
+        for wrapper in self._sources:
+            source = wrapper.source
+            metadata = source.get_metadata() if hasattr(source, "get_metadata") else {}
+            telemetry = (
+                source.get_drop_telemetry()
+                if hasattr(source, "get_drop_telemetry")
+                else {}
+            )
+            stats = {**metadata, **telemetry}
+            label = wrapper.config.type
+            source_stats[label] = stats
+            total_callbacks += int(stats.get("total_callbacks", 0) or 0)
+            total_dropped += int(stats.get("frames_dropped", 0) or 0)
+            max_burst = max(
+                max_burst,
+                int(stats.get("max_consecutive_frames_dropped", 0) or 0),
+            )
+            current_burst = max(
+                current_burst,
+                int(stats.get("consecutive_frames_dropped", 0) or 0),
+            )
+
+        with self._stats_lock:
+            self._stats.source_stats = source_stats
+            # Preserve callback-driven aggregate count if it is ahead of source reads.
+            self._stats.frames_dropped = max(self._stats.frames_dropped, total_dropped)
+            aggregate_dropped = self._stats.frames_dropped
+            self._stats.drop_rate = (
+                aggregate_dropped / total_callbacks
+                if total_callbacks > 0
+                else 0.0
+            )
+            self._stats.max_consecutive_frames_dropped = max_burst
+            self._stats.consecutive_frames_dropped = current_burst
+            self._stats.capture_block_size = DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE
+
+    def _refresh_drop_counters_only(self) -> None:
+        """Lightweight drop-counter refresh for the per-frame hot path.
+
+        Unlike :meth:`_refresh_drop_stats`, this skips ``get_metadata()``
+        (which may trigger blocking WASAPI/PyAudio device queries) and
+        reads only the in-memory telemetry counters needed for denoise
+        auto-disable decisions.
+        """
+        total_callbacks = 0
+        total_dropped = 0
+        max_burst = 0
+        current_burst = 0
+
+        for wrapper in self._sources:
+            source = wrapper.source
+            telemetry = (
+                source.get_drop_telemetry()
+                if hasattr(source, "get_drop_telemetry")
+                else {}
+            )
+            total_callbacks += int(telemetry.get("total_callbacks", 0) or 0)
+            total_dropped += int(telemetry.get("frames_dropped", 0) or 0)
+            max_burst = max(
+                max_burst,
+                int(telemetry.get("max_consecutive_frames_dropped", 0) or 0),
+            )
+            current_burst = max(
+                current_burst,
+                int(telemetry.get("consecutive_frames_dropped", 0) or 0),
+            )
+
+        with self._stats_lock:
+            self._stats.frames_dropped = max(self._stats.frames_dropped, total_dropped)
+            aggregate_dropped = self._stats.frames_dropped
+            self._stats.drop_rate = (
+                aggregate_dropped / total_callbacks
+                if total_callbacks > 0
+                else 0.0
+            )
+            self._stats.max_consecutive_frames_dropped = max_burst
+            self._stats.consecutive_frames_dropped = current_burst
 
     def get_error(self) -> Optional[Exception]:
         """Get the stored consumer thread error, if any.
@@ -500,14 +624,14 @@ class AudioSession:
             if source_config.type == 'mic':
                 source = MicSource(
                     device_id=source_config.device_id,
-                    blocksize=1024,
+                    blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
                     queue_size=10,
                     on_frame_dropped=self._on_source_frame_dropped,
                 )
             elif source_config.type == 'system':
                 source = SystemSource(
                     device_id=source_config.device_id,
-                    blocksize=1024,
+                    blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
                     queue_size=10,
                     on_frame_dropped=self._on_source_frame_dropped,
                 )
@@ -568,16 +692,78 @@ class AudioSession:
                 config.denoising_latency_budget_ms,
             )
         except Exception as exc:
-            self._denoising_disabled = True
             self._stats.denoising.enabled = True
             self._stats.denoising.fallback = True
-            self._stats.denoising.last_error_class = type(exc).__name__
-            self._stats.denoising.last_error_message = str(exc)[:200]
-
-            _log.warning(
-                "Denoising provider init failed, continuing raw: error_class=%s",
-                type(exc).__name__,
+            self._mark_denoising_disabled(
+                "provider_init_error",
+                error_class=type(exc).__name__,
+                error_message=str(exc)[:200],
+                log_level=logging.WARNING,
+                log_message="Denoising provider init failed, continuing raw: error_class=%s",
             )
+
+    def _mark_denoising_disabled(
+        self,
+        reason: str,
+        *,
+        error_class: str = "",
+        error_message: str = "",
+        log_level: int = logging.INFO,
+        log_message: str = "Denoising disabled for session: reason=%s",
+    ) -> None:
+        """Fail open to raw mic audio and record sanitized disable metadata."""
+        stats = self._stats.denoising
+        if self._denoising_disabled and stats.disabled_reason:
+            return
+
+        self._denoising_disabled = True
+        stats.active = False
+        stats.fallback = True
+        stats.disabled_reason = reason
+        stats.disabled_at = time.time()
+        stats.disabled_count += 1
+        if error_class:
+            stats.last_error_class = error_class
+        if error_message:
+            stats.last_error_message = error_message[:200]
+
+        try:
+            _log.log(log_level, log_message, error_class or reason)
+        except TypeError:
+            _log.log(log_level, "Denoising disabled for session: reason=%s", reason)
+
+    def _maybe_disable_denoising_for_frame_drops(self) -> None:
+        """Auto-disable denoising when sanitized frame-drop thresholds are exceeded."""
+        if not self._config:
+            return
+        if not self._config.microphone_denoising_auto_disable_on_frame_drops:
+            self._drop_rate_exceeded_since = None
+            return
+        if self._denoising_disabled or not self._stats.denoising.enabled:
+            return
+
+        self._refresh_drop_counters_only()
+        stats = self._stats
+        if stats.max_consecutive_frames_dropped > 10:
+            self._mark_denoising_disabled(
+                "frame_drop_burst",
+                log_level=logging.WARNING,
+                log_message="Denoising auto-disabled after frame-drop burst: reason=%s",
+            )
+            return
+
+        now = time.time()
+        if stats.drop_rate > 0.01:
+            if self._drop_rate_exceeded_since is None:
+                self._drop_rate_exceeded_since = now
+            elif now - self._drop_rate_exceeded_since > 5.0:
+                self._mark_denoising_disabled(
+                    "frame_drop_rate_sustained",
+                    log_level=logging.WARNING,
+                    log_message="Denoising auto-disabled after sustained frame-drop rate: reason=%s",
+                )
+        else:
+            self._drop_rate_exceeded_since = None
 
     def _apply_denoising(
         self,
@@ -592,6 +778,8 @@ class AudioSession:
         # Fast path: not a denoise-enabled source
         if not wrapper.should_denoise:
             return frames
+
+        self._maybe_disable_denoising_for_frame_drops()
 
         # Fast path: denoising disabled (init failure or already hard-disabled)
         if self._denoising_disabled or self._denoising_provider is None:
@@ -637,13 +825,13 @@ class AudioSession:
 
         except Exception as exc:
             # Hard-disable on exception — continue raw for rest of session
-            self._denoising_disabled = True
-            self._stats.denoising.active = False
             self._stats.denoising.record_fallback(0.0, f"{type(exc).__name__}: {exc}")
-
-            _log.warning(
-                "Denoising process error, hard-disabling for session: error_class=%s",
-                type(exc).__name__,
+            self._mark_denoising_disabled(
+                "provider_process_error",
+                error_class=type(exc).__name__,
+                error_message=str(exc)[:200],
+                log_level=logging.WARNING,
+                log_message="Denoising process error, hard-disabling for session: error_class=%s",
             )
             return frames
     

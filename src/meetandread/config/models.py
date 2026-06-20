@@ -104,6 +104,10 @@ class TranscriptionSettings:
         default=200,
         metadata={"description": "Maximum allowed latency in ms per denoising call (diagnostic, not enforced)"}
     )
+    microphone_denoising_auto_disable_on_frame_drops: bool = field(
+        default=True,
+        metadata={"description": "Auto-disable microphone denoising when frame-drop telemetry indicates capture starvation"}
+    )
 
     # CC OVERLAY SETTINGS
     cc_font_size: int = field(
@@ -118,6 +122,11 @@ class TranscriptionSettings:
         default="rgba(180, 180, 180, 230)",
         metadata={"description": "CC overlay font color as rgba() string (theme-aware default: grey)"}
     )
+
+    @staticmethod
+    def _coerce_bool(value: object, fallback: bool) -> bool:
+        """Return bool values as-is, otherwise fall back for legacy malformed config."""
+        return value if isinstance(value, bool) else fallback
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -138,6 +147,10 @@ class TranscriptionSettings:
             microphone_denoising_enabled=data.get("microphone_denoising_enabled", False),
             microphone_denoising_provider=data.get("microphone_denoising_provider", "spectral_gate"),
             microphone_denoising_latency_budget_ms=data.get("microphone_denoising_latency_budget_ms", 200),
+            microphone_denoising_auto_disable_on_frame_drops=cls._coerce_bool(
+                data.get("microphone_denoising_auto_disable_on_frame_drops", True),
+                True,
+            ),
             cc_font_size=data.get("cc_font_size", 48),
             cc_auto_open=data.get("cc_auto_open", True),
             cc_font_color=data.get("cc_font_color", "rgba(180, 180, 180, 230)"),

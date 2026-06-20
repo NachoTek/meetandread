@@ -329,6 +329,8 @@ class SettingsPersistence:
                 transcription["microphone_denoising_provider"] = "spectral_gate"
             if "microphone_denoising_latency_budget_ms" not in transcription:
                 transcription["microphone_denoising_latency_budget_ms"] = 200
+            if "microphone_denoising_auto_disable_on_frame_drops" not in transcription:
+                transcription["microphone_denoising_auto_disable_on_frame_drops"] = True
             config_dict["transcription"] = transcription
 
         if from_version == 3 and to_version == 4:

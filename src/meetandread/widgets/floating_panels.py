@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QSlider, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QDoubleSpinBox,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect, QObject
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -107,6 +107,168 @@ from meetandread.widgets.icons import create_play_icon, create_pause_icon, creat
 from meetandread.utils.file_utils import atomic_write  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ToastManager — lightweight floating warnings
+# ---------------------------------------------------------------------------
+
+class _ToastWidget(QFrame):
+    """Small floating notification widget owned by ToastManager."""
+
+    def __init__(self, toast_id: str, title: str, message: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.toast_id = toast_id
+        self.setObjectName("meetandread-toast")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(4)
+
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("toast-title")
+        self.message_label = QLabel(message)
+        self.message_label.setObjectName("toast-message")
+        self.message_label.setWordWrap(True)
+        self.message_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+        layout.addWidget(self.title_label)
+        layout.addWidget(self.message_label)
+        self.setFixedWidth(340)
+        self.setStyleSheet(
+            """
+            QFrame#meetandread-toast {
+                background: rgba(22, 24, 28, 242);
+                border: 1px solid rgba(255, 197, 92, 190);
+                border-radius: 12px;
+            }
+            QLabel#toast-title {
+                color: #ffd166;
+                font-weight: 700;
+                font-size: 13px;
+            }
+            QLabel#toast-message {
+                color: #f3f4f6;
+                font-size: 12px;
+            }
+            """
+        )
+
+    def update_content(self, title: str, message: str) -> None:
+        self.title_label.setText(title)
+        self.message_label.setText(message)
+        self.adjustSize()
+
+
+class ToastManager(QObject):
+    """Manage lightweight, replaceable toast notifications.
+
+    Toasts are keyed by ID so repeated warnings update the existing visible
+    widget instead of spamming users. The manager owns auto-dismiss timers,
+    explicit dismiss/dismiss-all behavior, and screen-aware repositioning.
+    """
+
+    def __init__(self, anchor: Optional[QWidget] = None, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent or anchor)
+        self.anchor = anchor
+        self._toasts: Dict[str, _ToastWidget] = {}
+        self._timers: Dict[str, QTimer] = {}
+
+    def show(
+        self,
+        toast_id: str,
+        title: str,
+        message: str,
+        *,
+        duration_ms: int = 8000,
+    ) -> _ToastWidget:
+        """Show or replace a toast by ID and optionally auto-dismiss it."""
+        if not toast_id:
+            toast_id = "default"
+        toast = self._toasts.get(toast_id)
+        if toast is None:
+            toast = _ToastWidget(toast_id, title, message, None)
+            self._toasts[toast_id] = toast
+        else:
+            toast.update_content(title, message)
+
+        toast.adjustSize()
+        self.reposition()
+        toast.show()
+        toast.raise_()
+
+        old_timer = self._timers.pop(toast_id, None)
+        if old_timer is not None:
+            old_timer.stop()
+            old_timer.deleteLater()
+        if duration_ms and duration_ms > 0:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda tid=toast_id: self.dismiss(tid))
+            timer.start(int(duration_ms))
+            self._timers[toast_id] = timer
+
+        logger.info(
+            "Toast emitted: id=%s title=%s duration_ms=%s",
+            toast_id,
+            title,
+            int(duration_ms) if duration_ms else 0,
+        )
+        return toast
+
+    def dismiss(self, toast_id: str) -> None:
+        """Dismiss a specific toast if present."""
+        timer = self._timers.pop(toast_id, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
+        toast = self._toasts.pop(toast_id, None)
+        if toast is not None:
+            toast.hide()
+            toast.deleteLater()
+
+    def dismiss_all(self) -> None:
+        """Dismiss all visible toasts."""
+        for toast_id in list(self._toasts):
+            self.dismiss(toast_id)
+
+    def reposition(self) -> None:
+        """Stack toasts near the anchor widget or active screen."""
+        if not self._toasts:
+            return
+        margin = 12
+        if self.anchor is not None and self.anchor.isVisible():
+            origin = self.anchor.mapToGlobal(QPoint(self.anchor.width() + margin, margin))
+            screen = self.anchor.screen() or QApplication.primaryScreen()
+        else:
+            screen = QApplication.primaryScreen()
+            geo = screen.availableGeometry() if screen else QRect(0, 0, 800, 600)
+            origin = QPoint(geo.right() - 360, geo.top() + margin)
+        geo = screen.availableGeometry() if screen else QRect(0, 0, 800, 600)
+        y = origin.y()
+        for toast in self._toasts.values():
+            toast.adjustSize()
+            x = origin.x()
+            if x + toast.width() > geo.right() - margin:
+                x = geo.right() - toast.width() - margin
+            if x < geo.left() + margin:
+                x = geo.left() + margin
+            if y + toast.height() > geo.bottom() - margin:
+                y = geo.bottom() - toast.height() - margin
+            toast.move(x, y)
+            y += toast.height() + margin
+
+    def active_ids(self) -> List[str]:
+        """Return active toast IDs for tests/diagnostics."""
+        return list(self._toasts.keys())
+
 
 # Lazy import — avoids QtMultimedia DLL issues at module level
 # HistoryPlaybackController is imported inside FloatingSettingsPanel methods.
@@ -225,6 +387,75 @@ def _strip_confidence_percentages(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# FallbackConfirmationDialog — mic-only fallback confirmation for system audio failure
+# ---------------------------------------------------------------------------
+
+class FallbackConfirmationDialog(QDialog):
+    """Dialog for confirming fallback to microphone-only recording.
+
+    Shown when system audio cannot be opened after multiple retry attempts.
+    User can choose to record with microphone only or cancel the recording attempt.
+    
+    Returns:
+        True if user accepted fallback (Record with mic only)
+        False if user cancelled or dialog was closed
+    """
+    
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._accepted: bool = False
+        
+        # --- Window setup ---
+        self.setWindowTitle("Audio Source Unavailable")
+        self.setMinimumSize(400, 200)
+        
+        p = current_palette()
+        self.setStyleSheet(dialog_css(p))
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        
+        # --- Message label ---
+        message_label = QLabel(
+            "Recording can proceed with microphone only. "
+            "System audio could not be opened. "
+            "\n\n"
+            "How would you like to proceed?"
+        )
+        message_label.setWordWrap(True)
+        message_label.setStyleSheet(
+            f"font-size: 13px; color: {p.text}; line-height: 1.5;"
+        )
+        layout.addWidget(message_label)
+        
+        # --- Button box ---
+        button_box = QDialogButtonBox()
+        
+        # Add custom buttons with specific text
+        record_button = QPushButton("Record with mic only")
+        record_button.setStyleSheet(action_button_css(p, "primary"))
+        button_box.addButton(record_button, QDialogButtonBox.ButtonRole.AcceptRole)
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setStyleSheet(action_button_css(p, "secondary"))
+        button_box.addButton(cancel_button, QDialogButtonBox.ButtonRole.RejectRole)
+        
+        button_box.setStyleSheet(action_button_css(p, "dialog"))
+        button_box.accepted.connect(self._on_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+    
+    def _on_accept(self) -> None:
+        """Handle user accepting fallback."""
+        self._accepted = True
+        self.accept()
+    
+    def accepted_fallback(self) -> bool:
+        """Return True if user accepted the fallback, False if cancelled."""
+        return self._accepted
+
+
 # SpeakerIdentityLinkDialog — identity selection for history speaker labels
 # ---------------------------------------------------------------------------
 
@@ -4664,6 +4895,40 @@ class FloatingSettingsPanel(QWidget):
         model_row.addWidget(self._benchmark_model_combo, 1)
         perf_layout.addLayout(model_row)
 
+        # --- Frame-drop denoising auto-disable policy ---
+        self._denoising_auto_disable_checkbox = QCheckBox(
+            "Automatically disable microphone denoising when audio frame drops are detected"
+        )
+        self._denoising_auto_disable_checkbox.setObjectName("AethericCheckBox")
+        self._denoising_auto_disable_checkbox.setCursor(Qt.CursorShape.ArrowCursor)
+        self._denoising_auto_disable_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
+        self._denoising_auto_disable_checkbox.setToolTip(
+            "When enabled, new recordings may temporarily bypass microphone denoising if "
+            "frame-drop telemetry indicates denoising is starving audio capture."
+        )
+        try:
+            from meetandread.config import get_config
+            _auto_disable = get_config(
+                "transcription.microphone_denoising_auto_disable_on_frame_drops"
+            )
+            self._denoising_auto_disable_checkbox.setChecked(
+                _auto_disable if isinstance(_auto_disable, bool) else True
+            )
+        except Exception:
+            self._denoising_auto_disable_checkbox.setChecked(True)
+        self._denoising_auto_disable_checkbox.stateChanged.connect(
+            self._on_denoising_auto_disable_toggled
+        )
+        perf_layout.addWidget(self._denoising_auto_disable_checkbox)
+
+        self._denoising_auto_disable_note = QLabel(
+            "Reliability-oriented default: leave on for smoother capture under load. "
+            "This does not turn denoising on by itself."
+        )
+        self._denoising_auto_disable_note.setObjectName("AethericHintLabel")
+        self._denoising_auto_disable_note.setWordWrap(True)
+        perf_layout.addWidget(self._denoising_auto_disable_note)
+
         # --- Benchmark Button ---
         self._benchmark_btn = QPushButton("Run Benchmark")
         self._benchmark_btn.setCursor(Qt.CursorShape.ArrowCursor)
@@ -6185,6 +6450,23 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.warning("Failed to save noise filter setting: %s", exc)
         logger.info("Background noise filter %s", "enabled" if enabled else "disabled")
+
+    def _on_denoising_auto_disable_toggled(self, state: int) -> None:
+        """Persist frame-drop denoising auto-disable policy changes."""
+        enabled = bool(state)
+        try:
+            from meetandread.config import set_config, save_config
+            set_config(
+                "transcription.microphone_denoising_auto_disable_on_frame_drops",
+                enabled,
+            )
+            save_config()
+        except Exception as exc:
+            logger.warning("Failed to save denoising auto-disable setting: %s", exc)
+        logger.info(
+            "Denoising auto-disable on frame drops %s",
+            "enabled" if enabled else "disabled",
+        )
 
     def _on_cc_font_size_changed(self, value: int) -> None:
         """Handle CC font size spinbox change.
@@ -7732,7 +8014,7 @@ class FloatingSettingsPanel(QWidget):
             from meetandread.playback.bookmark import BookmarkManager
             if self._bookmark_manager is None:
                 self._bookmark_manager = BookmarkManager(md_path)
-            self._bookmark_manager.add(position_ms, name=name)  # noqa: F841
+            self._bookmark_manager.add(position_ms, name=name)
             logger.info(
                 "bookmark_added_ui: stem=%s position_ms=%d",
                 md_path.stem, position_ms,

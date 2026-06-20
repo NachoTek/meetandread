@@ -54,6 +54,8 @@ NOQA_ALLOWLIST: Dict[str, Dict[int, str]] = {
         9211: "F811 — intentional redefinition in standalone test block",
         # Duplicate import in conditional block for standalone execution.
         9395: "F811 — guarded import in __main__ block",
+        # Duplicate import in conditional block for standalone execution.
+        9677: "F811 — guarded import in __main__ block",
     },
 }
 

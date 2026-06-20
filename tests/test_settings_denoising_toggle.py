@@ -2,8 +2,9 @@
 
 Covers:
 - Config persistence: denoising_enabled survives save/reload for True and False
-- Settings panel handler: _on_noise_filter_toggled calls set_config + save_config
-- Non-bool and missing setting edge cases preserved
+- Frame-drop denoising auto-disable defaults on, persists, and has a settings handler
+- Settings panel handlers call set_config + save_config
+- Non-bool, malformed, and missing setting edge cases preserved
 """
 
 import json
@@ -106,13 +107,37 @@ class TestDenoisingTogglePersistence:
         data = json.loads(config_path.read_text(encoding="utf-8"))
         assert data["transcription"]["microphone_denoising_enabled"] is True
 
+    def test_auto_disable_on_frame_drops_default_and_roundtrip(self, tmp_path):
+        """Frame-drop auto-disable defaults on and survives save/reload both ways."""
+        persistence = SettingsPersistence(config_dir=tmp_path)
+        cm = ConfigManager(persistence=persistence)
+        assert cm.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is True
+
+        cm.set("transcription.microphone_denoising_auto_disable_on_frame_drops", False)
+        assert cm.save() is True
+
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        persistence2 = SettingsPersistence(config_dir=tmp_path)
+        cm2 = ConfigManager(persistence=persistence2)
+        assert cm2.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is False
+
+        cm2.set("transcription.microphone_denoising_auto_disable_on_frame_drops", True)
+        assert cm2.save() is True
+
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        persistence3 = SettingsPersistence(config_dir=tmp_path)
+        cm3 = ConfigManager(persistence=persistence3)
+        assert cm3.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is True
+
 
 # ---------------------------------------------------------------------------
-# 2. Settings panel handler (_on_noise_filter_toggled)
+# 2. Settings panel handlers
 # ---------------------------------------------------------------------------
 
 class TestNoiseFilterHandler:
-    """Prove _on_noise_filter_toggled persists via set_config + save_config."""
+    """Prove denoising settings handlers persist via set_config + save_config."""
 
     @pytest.fixture
     def panel(self, isolated_config):
@@ -162,6 +187,26 @@ class TestNoiseFilterHandler:
         assert mock_set.called
         assert mock_save.called
 
+    @patch("meetandread.config.save_config")
+    @patch("meetandread.config.set_config")
+    def test_auto_disable_checked_state_persists_true(self, mock_set, mock_save, panel, isolated_config):
+        """Checked auto-disable state persists the frame-drop policy as True."""
+        panel._on_denoising_auto_disable_toggled(2)
+        mock_set.assert_called_once_with(
+            "transcription.microphone_denoising_auto_disable_on_frame_drops", True
+        )
+        mock_save.assert_called_once()
+
+    @patch("meetandread.config.save_config")
+    @patch("meetandread.config.set_config")
+    def test_auto_disable_unchecked_state_persists_false(self, mock_set, mock_save, panel, isolated_config):
+        """Unchecked auto-disable state persists the frame-drop policy as False."""
+        panel._on_denoising_auto_disable_toggled(0)
+        mock_set.assert_called_once_with(
+            "transcription.microphone_denoising_auto_disable_on_frame_drops", False
+        )
+        mock_save.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # 3. Edge cases: non-bool and missing settings
@@ -171,14 +216,18 @@ class TestDenoisingToggleEdgeCases:
     """Edge-case coverage for denoising config handling."""
 
     def test_set_rejects_non_bool(self, isolated_config):
-        """Setting denoising to a non-bool raises ValueError."""
+        """Setting denoising booleans to non-bools raises ValueError."""
         with pytest.raises(ValueError, match="bool"):
             isolated_config.set("transcription.microphone_denoising_enabled", "yes")
         with pytest.raises(ValueError, match="bool"):
             isolated_config.set("transcription.microphone_denoising_enabled", 1)
+        with pytest.raises(ValueError, match="bool"):
+            isolated_config.set(
+                "transcription.microphone_denoising_auto_disable_on_frame_drops", "yes"
+            )
 
     def test_missing_denoising_key_loads_default_false(self, tmp_path):
-        """A config file without denoising keys loads defaults (False)."""
+        """A config file without denoising keys loads defaults."""
         config_path = tmp_path / "config.json"
         config_path.write_text(json.dumps({"config_version": 6}), encoding="utf-8")
 
@@ -187,6 +236,30 @@ class TestDenoisingToggleEdgeCases:
         persistence = SettingsPersistence(config_dir=tmp_path)
         cm = ConfigManager(persistence=persistence)
         assert cm.get("transcription.microphone_denoising_enabled") is False
+        assert cm.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is True
+
+    def test_malformed_auto_disable_legacy_value_falls_back_to_default_true(self, tmp_path):
+        """Malformed legacy auto-disable values are ignored in favor of safe default-on."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "config_version": 8,
+                    "transcription": {
+                        "microphone_denoising_enabled": False,
+                        "microphone_denoising_auto_disable_on_frame_drops": "false",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        ConfigManager._instance = None
+        ConfigManager._initialized = False
+        persistence = SettingsPersistence(config_dir=tmp_path)
+        cm = ConfigManager(persistence=persistence)
+        assert cm.get("transcription.microphone_denoising_enabled") is False
+        assert cm.get("transcription.microphone_denoising_auto_disable_on_frame_drops") is True
 
     def test_toggle_roundtrip_does_not_touch_other_settings(self, tmp_path):
         """Toggling denoising does not alter other transcription settings."""

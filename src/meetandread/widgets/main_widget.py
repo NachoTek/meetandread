@@ -18,21 +18,22 @@ import logging
 import math as _math
 import re
 import time as _time
-from typing import Optional
+from typing import Optional, Set, List
 
 import numpy as np
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsRectItem,
-    QApplication, QMenu
+    QApplication, QMenu, QDialog
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
 
 from meetandread.recording import RecordingController, ControllerState
+from meetandread.recording.controller import RecoveryOutcome
 from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config
-from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ensure_on_screen
+from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog
 from meetandread.widgets.theme import context_menu_css, current_palette
 
 
@@ -50,6 +51,8 @@ class _ControllerBridge(QObject):
     post_process_complete = pyqtSignal(str, object)   # job_id, transcript_path
     phrase_result = pyqtSignal(object)       # SegmentResult
     frames_dropped = pyqtSignal(int)         # aggregate drop count
+    device_changed = pyqtSignal(object)      # DeviceEvent
+    recovery_attempted = pyqtSignal(object)  # RecoveryResult
 
 
 class _WidgetVisualStateMachine:
@@ -228,6 +231,19 @@ to avoid clipping issues and enable proper text rendering.
         self.drag_start_pos = QPoint()
         self.widget_start_pos = QPoint()
         self.press_time = QTime.currentTime()
+        self._frame_drop_toast_last_count = 0
+        self._frame_drop_toast_last_ts = 0.0
+        self._frame_drop_toast_id = "frame-drops"
+        self._frame_drop_toast_reminder_seconds = 60.0
+        self.toast_manager = ToastManager(self, self)
+
+        # WASAPI start retry state (T02)
+        self._retry_in_progress: bool = False
+        self._retry_attempt: int = 0
+        self._retry_timer: Optional[QTimer] = None
+        self._retry_sources: Set[str] = set()
+        self._retry_backoff_schedule: List[float] = [1.0, 2.0, 4.0]  # seconds
+        self._retry_toast_id: str = "wasapi-retry"
 
         # Visual state machine (idle → recording → processing → idle)
         self._visual_state = _WidgetVisualStateMachine(WidgetVisualState.IDLE)
@@ -248,6 +264,8 @@ to avoid clipping issues and enable proper text rendering.
         self._bridge.post_process_complete.connect(self._on_post_process_complete)
         self._bridge.phrase_result.connect(self._on_phrase_result)
         self._bridge.frames_dropped.connect(self._on_frames_dropped)
+        self._bridge.device_changed.connect(self._on_device_changed)
+        self._bridge.recovery_attempted.connect(self._on_recovery_attempted)
 
         # Controller callbacks emit bridge signals (thread-safe)
         self._controller.on_state_change = self._bridge.state_changed.emit
@@ -256,6 +274,8 @@ to avoid clipping issues and enable proper text rendering.
         self._controller.on_recording_complete = lambda wav, t: self._bridge.recording_complete.emit(wav, t)
         self._controller.on_post_process_complete = lambda jid, tp: self._bridge.post_process_complete.emit(jid, tp)
         self._controller.on_frames_dropped = lambda count: self._bridge.frames_dropped.emit(count)
+        self._controller.on_device_change = lambda event: self._bridge.device_changed.emit(event)
+        self._controller.on_recovery_attempt = lambda result: self._bridge.recovery_attempted.emit(result)
         self._error_indicator = None  # For showing errors
         self._warning_indicator = None  # For showing resource warnings
         self._warning_hide_timer: Optional[QTimer] = None  # Auto-hide timer for warnings
@@ -496,6 +516,9 @@ to avoid clipping issues and enable proper text rendering.
     def moveEvent(self, event):
         """Handle widget move — no panel repositioning (panels are independent)."""
         super().moveEvent(event)
+        manager = getattr(self, "toast_manager", None)
+        if manager is not None:
+            manager.reposition()
     
     def _position_initial(self):
         """Position widget on screen initially."""
@@ -860,6 +883,7 @@ to avoid clipping issues and enable proper text rendering.
         if state == ControllerState.RECORDING:
             self.is_recording = True
             self.is_processing = False
+            self._reset_frame_drop_toast_state()
             self._visual_state.transition_to(WidgetVisualState.RECORDING)
             self.record_button.set_recording_state(True)
             self._hide_error()
@@ -909,6 +933,7 @@ to avoid clipping issues and enable proper text rendering.
         elif state == ControllerState.STOPPING:
             self.is_recording = False
             self.is_processing = True
+            self._reset_frame_drop_toast_state()
             self._visual_state.transition_to(WidgetVisualState.PROCESSING)
             self.record_button.set_recording_state(False)
             self.record_button.set_processing_state(True)
@@ -932,6 +957,11 @@ to avoid clipping issues and enable proper text rendering.
                 self._cc_overlay.start_delayed_hide()
                 logging.debug("CC overlay: delayed hide scheduled (IDLE)")
             
+        elif state == ControllerState.RETRYING:
+            # WASAPI retry in progress - lock lobes to prevent source toggling
+            self.mic_lobe.set_locked(True)
+            self.system_lobe.set_locked(True)
+            logging.debug("Lobes locked (RETRYING)")
         elif state == ControllerState.ERROR:
             self.is_recording = False
             self.is_processing = False
@@ -985,6 +1015,65 @@ to avoid clipping issues and enable proper text rendering.
                 speaker_id
             )
     
+    def _on_device_changed(self, event) -> None:
+        """Show a non-blocking warning for active recording device changes."""
+        try:
+            message = self._format_device_change_message(event)
+            if message:
+                self._show_resource_warning(message)
+        except Exception:
+            logging.exception("Error showing hot-plug device notification")
+
+    def _on_recovery_attempted(self, result) -> None:
+        """Show a non-blocking recovery outcome notification."""
+        try:
+            message = self._format_recovery_message(result)
+            if not message:
+                return
+            recoverable = bool(getattr(result, "recoverable", True))
+            outcome = getattr(result, "outcome", None)
+            if outcome in {RecoveryOutcome.TOTAL_LOSS, RecoveryOutcome.MANUAL_RETRY_REQUIRED} or not recoverable:
+                self._show_error(message, is_recoverable=recoverable)
+            else:
+                self._show_resource_warning(message)
+        except Exception:
+            logging.exception("Error showing hot-plug recovery notification")
+
+    def _format_device_change_message(self, event) -> str:
+        """Return a sanitized user-facing message for a hot-plug event."""
+        event_type = getattr(event, "event_type", "device")
+        value = getattr(event_type, "value", str(event_type))
+        name = (getattr(event, "friendly_name", None) or "audio device").strip()
+        if value in {"removed", "state_changed"}:
+            state = (getattr(event, "state", "") or "").lower()
+            if value == "removed" or state in {"inactive", "disabled", "unplugged", "notpresent"}:
+                return f"Audio device disconnected: {name}. Checking recording..."
+        if value in {"added", "default_changed"}:
+            return f"Audio device connected: {name}. Checking recording..."
+        return f"Audio device changed: {name}. Checking recording..."
+
+    def _format_recovery_message(self, result) -> str:
+        """Return a sanitized user-facing message for a recovery result."""
+        outcome = getattr(result, "outcome", None)
+        source_type = getattr(result, "source_type", None) or "audio"
+        detail = (getattr(result, "message", "") or "").strip()
+        suffix = f" {detail}" if detail else ""
+        if outcome is RecoveryOutcome.IGNORED:
+            return ""
+        if outcome is RecoveryOutcome.LOST:
+            return f"{source_type.title()} source disconnected. Attempting to recover recording...{suffix}"
+        if outcome is RecoveryOutcome.DEGRADED:
+            return f"Recording continues with remaining sources; {source_type} is unavailable.{suffix}"
+        if outcome is RecoveryOutcome.TOTAL_LOSS:
+            return f"All recording sources were lost. Recording is paused until an audio device returns.{suffix}"
+        if outcome is RecoveryOutcome.AUTO_RECOVERED:
+            return f"Recording recovered after {source_type} device reconnect.{suffix}"
+        if outcome is RecoveryOutcome.MANUAL_RETRY_REQUIRED:
+            return f"{source_type.title()} device reconnected. Resume recording manually to continue.{suffix}"
+        if outcome is RecoveryOutcome.MANUAL_RECOVERED:
+            return f"Recording resumed after {source_type} device reconnect.{suffix}"
+        return detail or "Recording device recovery status changed."
+
     def _on_recording_complete(self, wav_path, transcript_path):
         """Handle recording completion."""
         import time as _t
@@ -1027,13 +1116,54 @@ to avoid clipping issues and enable proper text rendering.
         # Always emit, even on failure, so the "(processing speakers...)" indicator clears
         self.history_data_changed.emit()
 
+    def _reset_frame_drop_toast_state(self) -> None:
+        """Reset per-recording frame-drop toast throttling state."""
+        self._frame_drop_toast_last_count = 0
+        self._frame_drop_toast_last_ts = 0.0
+        manager = getattr(self, "toast_manager", None)
+        if manager is not None:
+            manager.dismiss(self._frame_drop_toast_id)
+
+    def _maybe_show_frame_drop_toast(self, safe_count: int) -> None:
+        """Show a non-spammy warning when frame drops continue."""
+        manager = getattr(self, "toast_manager", None)
+        if manager is None:
+            return
+        now = _time.monotonic()
+        first_warning = self._frame_drop_toast_last_count <= 0
+        reminder_due = (now - self._frame_drop_toast_last_ts) >= self._frame_drop_toast_reminder_seconds
+        if not first_warning and not reminder_due:
+            logging.info(
+                "Frame-drop toast throttled: count=%s previous_count=%s seconds_since_last=%.1f",
+                safe_count,
+                self._frame_drop_toast_last_count,
+                now - self._frame_drop_toast_last_ts,
+            )
+            self._frame_drop_toast_last_count = safe_count
+            return
+
+        title = "Recording quality warning"
+        message = (
+            f"Audio capture has dropped {safe_count} frame{'s' if safe_count != 1 else ''}. "
+            "If audio sounds choppy, reduce system load or switch input devices."
+        )
+        manager.show(self._frame_drop_toast_id, title, message, duration_ms=10000)
+        self._frame_drop_toast_last_count = safe_count
+        self._frame_drop_toast_last_ts = now
+        logging.info(
+            "Frame-drop toast emitted: count=%s first=%s reminder_due=%s",
+            safe_count,
+            first_warning,
+            reminder_due,
+        )
+
     def _on_frames_dropped(self, count: int) -> None:
         """Handle frame-drop events forwarded through the Qt bridge.
 
         Runs on the UI thread via signal/slot delivery. Forwards the
         sanitized aggregate count to the record button if it supports
-        frame-drop notifications (T03). Exception-safe so the animation
-        loop is never compromised.
+        frame-drop notifications (T03), then emits throttled toasts.
+        Exception-safe so the animation loop is never compromised.
 
         Args:
             count: Sanitized aggregate frames_dropped count (>= 0).
@@ -1046,12 +1176,14 @@ to avoid clipping issues and enable proper text rendering.
             if safe_count == 0:
                 return  # no-op
 
-            # Forward to record button if it supports frame-drop notifications
+            # Preserve existing record-button notification behavior.
             handler = getattr(self.record_button, "on_frames_dropped", None)
             if callable(handler):
                 handler(safe_count)
+
+            self._maybe_show_frame_drop_toast(safe_count)
         except Exception:
-            logging.exception("Error forwarding frame-drop count to record button")
+            logging.exception("Error forwarding frame-drop count to UI")
 
     def _on_speaker_name_pinned(self, raw_label: str, name: str):
         """Handle user pinning a speaker name in the transcript panel.
@@ -1138,7 +1270,20 @@ to avoid clipping issues and enable proper text rendering.
             self.stop_recording()
     
     def start_recording(self):
-        """Start recording via controller."""
+        """Start recording via controller.
+        
+        For system audio requests, implements retry flow with exponential backoff
+        (1s, 2s, 4s) up to 3 attempts. Mic-only starts bypass retry for fast path.
+        """
+        # Cancel any ongoing retry if user clicked record button again
+        if self._retry_in_progress:
+            self._cancel_retry()
+            return
+        
+        # Don't start if controller is busy (recording, starting, retrying, etc.)
+        if self._controller.is_busy():
+            return
+        
         # Check if any source is selected
         sources = self._get_selected_sources()
         
@@ -1150,10 +1295,211 @@ to avoid clipping issues and enable proper text rendering.
         # Clear any previous error
         self._controller.clear_error()
         
-        # Start recording via controller
+        # Mic-only starts use fast path (no retry)
+        if sources == {'mic'}:
+            error = self._controller.start(sources)
+            if error:
+                self._show_error(error.message)
+            return
+        
+        # System audio requests use retry flow
+        self._start_with_retry(sources, first_attempt=True)
+    
+    def _start_with_retry(self, sources: Set[str], first_attempt: bool) -> None:
+        """Start recording with retry logic for system audio.
+        
+        Args:
+            sources: Set of requested source types ('mic', 'system')
+            first_attempt: True if this is the initial start attempt, False if retry
+        """
+        self._retry_sources = sources
+        
+        # Perform start attempt
         error = self._controller.start(sources)
-        if error:
+        if error is None:
+            # Success - clear any retry state
+            self._clear_retry_state()
+            return
+        
+        # Check if error is retryable (system audio source failure)
+        # The controller wraps AudioSourceError as "Audio device error: {e}",
+        # so we match on the formatted message rather than the class name.
+        error_lower = error.message.lower()
+        is_retryable = 'system' in sources and (
+            'audio device error' in error_lower
+            or 'wasapi' in error_lower
+            or 'endpoint' in error_lower
+            or 'loopback' in error_lower
+        )
+        if not is_retryable:
             self._show_error(error.message)
+            self._clear_retry_state()
+            return
+        
+        # First failure - begin retry sequence
+        if first_attempt:
+            self._retry_in_progress = True
+            self._retry_attempt = 1
+            self._controller.begin_start_retry_sequence()
+            logging.info(
+                "WASAPI endpoint unavailable - starting retry sequence for sources=%s",
+                sources
+            )
+        else:
+            self._retry_attempt += 1
+        
+        # Check if retry attempts exhausted
+        if self._retry_attempt > 3:
+            self._show_fallback_dialog(failed_sources=['system'], requested_sources=sources)
+            return
+        
+        # Record this retry attempt
+        self._controller.record_start_retry_attempt(
+            attempt_number=self._retry_attempt,
+            backoff_seconds=self._retry_backoff_schedule[self._retry_attempt - 1],
+            source_type='system',
+            error=RuntimeError(error.message),
+        )
+        
+        # Show retry toast with countdown
+        backoff_seconds = self._retry_backoff_schedule[self._retry_attempt - 1]
+        self._show_retry_toast(self._retry_attempt, backoff_seconds)
+        
+        # Schedule next retry attempt with QTimer
+        if self._retry_timer:
+            self._retry_timer.stop()
+        
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(lambda: self._perform_retry_attempt())
+        self._retry_timer.start(int(backoff_seconds * 1000))
+        
+        logging.info(
+            "Retry attempt %d/3 scheduled in %.1fs for system audio",
+            self._retry_attempt,
+            backoff_seconds
+        )
+    
+    def _perform_retry_attempt(self) -> None:
+        """Perform a retry attempt for WASAPI endpoint.
+        
+        Called by QTimer.timeout signal after backoff period.
+        """
+        if not self._retry_in_progress:
+            return  # Retry was cancelled
+        
+        logging.info(
+            "Executing retry attempt %d/3 for system audio",
+            self._retry_attempt
+        )
+        
+        # Dismiss retry toast before next attempt
+        self.toast_manager.dismiss(self._retry_toast_id)
+        
+        # Try starting again
+        self._start_with_retry(self._retry_sources, first_attempt=False)
+    
+    def _show_retry_toast(self, attempt_number: int, backoff_seconds: float) -> None:
+        """Show/update retry toast with attempt number and countdown.
+        
+        Args:
+            attempt_number: Current retry attempt (1-3)
+            backoff_seconds: Backoff duration for this attempt
+        """
+        title = f"Opening system audio... (Attempt {attempt_number}/3)"
+        message = f"Retrying in {int(backoff_seconds)} second{'s' if backoff_seconds > 1 else ''}."
+        
+        # Use same toast_id to update existing toast instead of spamming
+        self.toast_manager.show(
+            self._retry_toast_id,
+            title,
+            message,
+            duration_ms=0  # Manual dismiss, no auto-hide
+        )
+    
+    def _cancel_retry(self) -> None:
+        """Cancel retry sequence and return to IDLE.
+        
+        Called when user clicks record button during retry.
+        """
+        logging.info("User cancelled WASAPI retry sequence")
+        
+        # Stop retry timer
+        if self._retry_timer:
+            self._retry_timer.stop()
+            self._retry_timer.deleteLater()
+            self._retry_timer = None
+        
+        # Dismiss retry toast
+        self.toast_manager.dismiss(self._retry_toast_id)
+        
+        # Record retry outcome as cancelled
+        if self._retry_in_progress:
+            self._controller.record_start_retry_outcome(
+                outcome='cancelled',
+                failed_sources=['system'],
+            )
+        
+        # Clear retry state
+        self._clear_retry_state()
+    
+    def _clear_retry_state(self) -> None:
+        """Clear retry state and cleanup resources."""
+        self._retry_in_progress = False
+        self._retry_attempt = 0
+        self._retry_sources = set()
+        
+        if self._retry_timer:
+            self._retry_timer.stop()
+            self._retry_timer.deleteLater()
+            self._retry_timer = None
+        
+        self.toast_manager.dismiss(self._retry_toast_id)
+    
+    def _show_fallback_dialog(self, failed_sources: List[str], requested_sources: Set[str]) -> None:
+        """Show modal dialog for fallback to mic-only recording.
+        
+        Args:
+            failed_sources: List of source types that failed
+            requested_sources: Set of originally requested source types
+        """
+        dialog = FallbackConfirmationDialog(self)
+        result = dialog.exec()
+        
+        if result == QDialog.DialogCode.Accepted and dialog.accepted_fallback():
+            # User accepted fallback - retry with mic-only
+            logging.info("User accepted mic-only fallback after system audio failure")
+            
+            # Record retry outcome
+            self._controller.record_start_retry_outcome(
+                outcome='fallback_to_mic_only',
+                failed_sources=failed_sources,
+                fallback_sources=['mic'],
+            )
+            
+            # Clear retry state and start with mic-only
+            self._clear_retry_state()
+            
+            # Start with mic-only (bypass retry since system is unavailable)
+            mic_only_sources = {'mic'}
+            if 'mic' in requested_sources:
+                error = self._controller.start(mic_only_sources)
+                if error:
+                    self._show_error(error.message)
+            else:
+                self._show_error("Microphone not selected - cannot start recording")
+        else:
+            # User cancelled - return to IDLE
+            logging.info("User cancelled fallback after system audio failure")
+            
+            # Record retry outcome as failed
+            self._controller.record_start_retry_outcome(
+                outcome='failed',
+                failed_sources=failed_sources,
+            )
+            
+            self._clear_retry_state()
+            self._show_error("Recording cancelled - system audio unavailable")
     
     def stop_recording(self):
         """Stop recording via controller (non-blocking)."""
@@ -1250,6 +1596,14 @@ to avoid clipping issues and enable proper text rendering.
             self._floating_settings_panel.save_geometry()
         if self._cc_overlay:
             self._cc_overlay.save_geometry()
+        # Dismiss all toast widgets so no orphan top-level windows (including
+        # no-auto-dismiss retry toasts) linger on the desktop after hide/quit.
+        # Guard with try/except: shutdown tests create widgets via __new__
+        # (bypassing __init__), so SIP raises RuntimeError on attribute access.
+        try:
+            self.toast_manager.dismiss_all()
+        except (AttributeError, RuntimeError):
+            pass
         
         if self._tray_manager is not None:
             # Close-to-tray: hide the widget instead of quitting
@@ -2023,6 +2377,8 @@ class TranscriptLobeItem(QGraphicsEllipseItem):
 
 def get_error_help_text(message: str) -> Optional[str]:
     """Return context-specific help text for known error patterns, or None."""
+    if not isinstance(message, str):
+        return None
     patterns = [
         (r'no.*(source|mic|system|audio).*select',
          "Click a lobe on the widget to enable microphone or system audio, then try recording again."),

@@ -78,8 +78,11 @@ class PyAudioWPatchSource:
         self._running: bool = False
         self._lock = threading.Lock()
 
-        # Frame-drop accounting
+        # Frame-drop accounting (sanitized counters only; no audio payloads)
         self._frames_dropped: int = 0
+        self._frames_enqueued: int = 0
+        self._consecutive_frames_dropped: int = 0
+        self._max_consecutive_frames_dropped: int = 0
         self._on_frame_dropped: Optional[Any] = on_frame_dropped
         self._source_label: str = "system"
 
@@ -118,9 +121,18 @@ class PyAudioWPatchSource:
             frames = np.frombuffer(in_data, dtype=np.float32).copy()
             frames = frames.reshape(-1, self.channels)
             self._queue.put_nowait(frames)
+            self._frames_enqueued = getattr(self, "_frames_enqueued", 0) + 1
+            self._consecutive_frames_dropped = 0
         except queue.Full:
             # Drop frame — better than blocking the audio thread
             self._frames_dropped += 1
+            self._consecutive_frames_dropped = (
+                getattr(self, "_consecutive_frames_dropped", 0) + 1
+            )
+            self._max_consecutive_frames_dropped = max(
+                getattr(self, "_max_consecutive_frames_dropped", 0),
+                self._consecutive_frames_dropped,
+            )
             count = self._frames_dropped
             logger.info(
                 "Audio frame dropped: source=%s, count=%d",
@@ -232,7 +244,9 @@ class PyAudioWPatchSource:
             or None on timeout.
         """
         try:
-            return self._queue.get(timeout=timeout)
+            frames = self._queue.get(timeout=timeout)
+            self._consecutive_frames_dropped = 0
+            return frames
         except queue.Empty:
             return None
 
@@ -245,6 +259,26 @@ class PyAudioWPatchSource:
         """Return the number of frames dropped due to queue overflow."""
         return self._frames_dropped
 
+    def get_drop_telemetry(self) -> Dict[str, Any]:
+        """Return sanitized frame-drop telemetry for diagnostics."""
+        frames_enqueued = getattr(self, "_frames_enqueued", 0)
+        frames_dropped = getattr(self, "_frames_dropped", 0)
+        total_callbacks = frames_enqueued + frames_dropped
+        drop_rate = (
+            frames_dropped / total_callbacks
+            if total_callbacks > 0
+            else 0.0
+        )
+        return {
+            "block_size": self.blocksize,
+            "frames_dropped": frames_dropped,
+            "frames_enqueued": frames_enqueued,
+            "total_callbacks": total_callbacks,
+            "drop_rate": drop_rate,
+            "consecutive_frames_dropped": getattr(self, "_consecutive_frames_dropped", 0),
+            "max_consecutive_frames_dropped": getattr(self, "_max_consecutive_frames_dropped", 0),
+        }
+
     def get_metadata(self) -> Dict[str, Any]:
         """Return diagnostic metadata about this source."""
         meta: Dict[str, Any] = {
@@ -255,6 +289,7 @@ class PyAudioWPatchSource:
             "device_id": self.device_index,
             "running": self.is_running(),
             "available": _HAS_PYAUDIOWPATCH,
+            **self.get_drop_telemetry(),
         }
         # Include loopback device name if available
         if _HAS_PYAUDIOWPATCH and self.device_index is not None:
