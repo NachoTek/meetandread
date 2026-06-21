@@ -1147,6 +1147,9 @@ class RecordingController:
         # It runs independently of the controller's state.
         def _finalize():
             ft0 = _time.monotonic()
+            # Initialize variables outside try block so they're available in finally
+            wav_path = None
+            transcript_path = None
             try:
                 # (1) Wait for transcription processor thread to finish.
                 if old_processor and hasattr(old_processor, '_processing_thread'):
@@ -1165,7 +1168,6 @@ class RecordingController:
                             _time.monotonic() - ft0, wav_path)
 
                 # (3) Save transcript if available (before post-processing)
-                transcript_path = None
                 if old_store and self._last_wav_path:
                     # Commit any remaining live phrase words before saving
                     old_store.commit_live_phrase()
@@ -1199,7 +1201,17 @@ class RecordingController:
                         "exists" if old_store else "None",
                     )
 
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                logger.error("Finalizer error: %s", e)
+                with self._state_lock:
+                    self._error = ControllerError(
+                        f"Finalization warning: {e}", is_recoverable=True,
+                    )
+            finally:
                 # (5) Notify completion — triggers history refresh on UI thread
+                # Moved to finally block to ensure callback fires even when exceptions occur
                 logger.info("[STOP-TIMER] firing on_recording_complete: %.2fs",
                             _time.monotonic() - ft0)
                 if self.on_recording_complete:
@@ -1209,15 +1221,6 @@ class RecordingController:
                         logger.error("Recording complete callback failed: %s", e)
                 logger.info("[STOP-TIMER] finalizer done: %.2fs",
                             _time.monotonic() - ft0)
-
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                logger.error("Finalizer error: %s", e)
-                with self._state_lock:
-                    self._error = ControllerError(
-                        f"Finalization warning: {e}", is_recoverable=True,
-                    )
 
         finalizer = threading.Thread(
             target=_finalize,
