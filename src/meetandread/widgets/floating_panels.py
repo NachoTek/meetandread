@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect, QObject
 from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
-from typing import Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass
 from pathlib import Path
 import html as _html_module
@@ -141,6 +141,8 @@ class _ToastWidget(QFrame):
 
         layout.addWidget(self.title_label)
         layout.addWidget(self.message_label)
+        self._layout = layout
+        self._action_button: Optional[QPushButton] = None
         self.setFixedWidth(340)
         self.setStyleSheet(
             """
@@ -166,6 +168,31 @@ class _ToastWidget(QFrame):
         self.message_label.setText(message)
         self.adjustSize()
 
+    def set_action(
+        self,
+        label: Optional[str],
+        callback: Optional[Callable[[], None]],
+    ) -> None:
+        """Replace the toast action, removing stale signal wiring when absent."""
+        if self._action_button is not None:
+            self._action_button.clicked.disconnect()
+
+        if not label or callback is None:
+            if self._action_button is not None:
+                self._action_button.setParent(None)
+                self._action_button.deleteLater()
+                self._action_button = None
+            self.adjustSize()
+            return
+
+        if self._action_button is None:
+            self._action_button = QPushButton(self)
+            self._action_button.setObjectName("toast-action")
+            self._layout.addWidget(self._action_button)
+        self._action_button.setText(label)
+        self._action_button.clicked.connect(lambda _checked=False, action=callback: action())
+        self.adjustSize()
+
 
 class ToastManager(QObject):
     """Manage lightweight, replaceable toast notifications.
@@ -188,6 +215,8 @@ class ToastManager(QObject):
         message: str,
         *,
         duration_ms: int = 8000,
+        action_label: Optional[str] = None,
+        action_callback: Optional[Callable[[], None]] = None,
     ) -> _ToastWidget:
         """Show or replace a toast by ID and optionally auto-dismiss it."""
         if not toast_id:
@@ -199,6 +228,7 @@ class ToastManager(QObject):
         else:
             toast.update_content(title, message)
 
+        toast.set_action(action_label, action_callback)
         toast.adjustSize()
         self.reposition()
         toast.show()

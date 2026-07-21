@@ -39,12 +39,30 @@ class RaisingMonitor(FakeMonitor):
         raise RuntimeError("backend drain failed")
 
 
-class FakeIndicator:
+class FakeToastManager:
     def __init__(self):
-        self.messages = []
+        self.shown = []
 
-    def set_text(self, message, is_recoverable=True):
-        self.messages.append((message, is_recoverable))
+    def show(
+        self,
+        toast_id,
+        title,
+        message,
+        *,
+        duration_ms=8000,
+        action_label=None,
+        action_callback=None,
+    ):
+        self.shown.append(
+            {
+                "toast_id": toast_id,
+                "title": title,
+                "message": message,
+                "duration_ms": duration_ms,
+                "action_label": action_label,
+                "action_callback": action_callback,
+            }
+        )
 
 
 def _source(source_type, device_id=None, friendly_name=None):
@@ -66,8 +84,9 @@ def _recording_controller(*sources, monitor=None):
 def _widget_shell():
     QApplication.instance() or QApplication([])
     widget = MeetAndReadWidget.__new__(MeetAndReadWidget)
-    widget._warning_indicator = FakeIndicator()
-    widget._error_indicator = FakeIndicator()
+    widget.toast_manager = FakeToastManager()
+    widget._recovery_toast_id = "recording-device-recovery"
+    widget._controller = None
     return widget
 
 
@@ -114,12 +133,20 @@ def test_monitor_controller_and_ui_emit_ordered_hotplug_recovery_messages():
     widget = _widget_shell()
     _emit_to_widget(widget, device_callbacks, results)
 
-    warning_messages = [message for message, _ in widget._warning_indicator.messages]
-    assert len(warning_messages) >= 1  # At least one device change message
-    # The actual messages depend on which recovery events fire before/after device events
-    # Check that device change info is present somewhere
-    assert any("Audio device" in msg for msg in warning_messages)
-    assert widget._error_indicator.messages == []
+    notifications = widget.toast_manager.shown
+    assert [notification["title"] for notification in notifications] == [
+        "Recording device disconnected",
+        "Recording device changed",
+        "Recording continued",
+        "Recording recovered",
+    ]
+    assert {notification["toast_id"] for notification in notifications} == {
+        "recording-device-recovery"
+    }
+    assert notifications[0]["duration_ms"] == 0
+    assert notifications[-1]["duration_ms"] > 0
+    assert notifications[-1]["action_label"] is None
+    assert notifications[-1]["action_callback"] is None
 
 
 def test_duplicate_remove_unknown_device_and_callback_exceptions_are_contained():

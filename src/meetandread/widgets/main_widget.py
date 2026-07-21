@@ -235,6 +235,7 @@ to avoid clipping issues and enable proper text rendering.
         self._frame_drop_toast_last_ts = 0.0
         self._frame_drop_toast_id = "frame-drops"
         self._frame_drop_toast_reminder_seconds = 60.0
+        self._recovery_toast_id = "recording-device-recovery"
         self.toast_manager = ToastManager(self, self)
 
         # WASAPI start retry state (T02)
@@ -1016,28 +1017,85 @@ to avoid clipping issues and enable proper text rendering.
             )
     
     def _on_device_changed(self, event) -> None:
-        """Show a non-blocking warning for active recording device changes."""
+        """Show replaceable, persistent feedback while device recovery is pending."""
         try:
             message = self._format_device_change_message(event)
-            if message:
-                self._show_resource_warning(message)
+            if not message:
+                return
+            event_type = getattr(event, "event_type", "device")
+            value = getattr(event_type, "value", str(event_type))
+            state = (getattr(event, "state", "") or "").lower()
+            disconnected = value == "removed" or state in {
+                "inactive", "disabled", "unplugged", "notpresent",
+            }
+            title = (
+                "Recording device disconnected"
+                if disconnected
+                else "Recording device changed"
+            )
+            self.toast_manager.show(
+                self._recovery_toast_id,
+                title,
+                message,
+                duration_ms=0,
+            )
         except Exception:
             logging.exception("Error showing hot-plug device notification")
 
     def _on_recovery_attempted(self, result) -> None:
-        """Show a non-blocking recovery outcome notification."""
+        """Replace pending device feedback with the latest recovery outcome."""
         try:
             message = self._format_recovery_message(result)
             if not message:
                 return
-            recoverable = bool(getattr(result, "recoverable", True))
             outcome = getattr(result, "outcome", None)
-            if outcome in {RecoveryOutcome.TOTAL_LOSS, RecoveryOutcome.MANUAL_RETRY_REQUIRED} or not recoverable:
-                self._show_error(message, is_recoverable=recoverable)
+            if outcome in {
+                RecoveryOutcome.TOTAL_LOSS,
+                RecoveryOutcome.MANUAL_RETRY_REQUIRED,
+            }:
+                self.toast_manager.show(
+                    self._recovery_toast_id,
+                    "Recording paused",
+                    message,
+                    duration_ms=0,
+                    action_label="Resume Recording",
+                    action_callback=self._retry_recording_recovery,
+                )
+                return
+            if outcome is RecoveryOutcome.AUTO_RECOVERED:
+                title = "Recording recovered"
+            elif outcome is RecoveryOutcome.MANUAL_RECOVERED:
+                title = "Recording resumed"
+            elif outcome is RecoveryOutcome.DEGRADED:
+                title = "Recording continued"
+            elif outcome is RecoveryOutcome.LOST:
+                title = "Recording device disconnected"
             else:
-                self._show_resource_warning(message)
+                title = "Recording device recovery"
+            duration_ms = 0 if outcome is RecoveryOutcome.LOST else 8000
+            self.toast_manager.show(
+                self._recovery_toast_id,
+                title,
+                message,
+                duration_ms=duration_ms,
+            )
         except Exception:
             logging.exception("Error showing hot-plug recovery notification")
+
+    def _retry_recording_recovery(self) -> None:
+        """Retry lost-source recovery without creating a new AudioSession."""
+        try:
+            self._controller.retry_recovery()
+        except Exception:
+            logging.exception("Manual recording-device recovery failed")
+            self.toast_manager.show(
+                self._recovery_toast_id,
+                "Recording recovery failed",
+                "The audio device is still unavailable. Check the connection and try again.",
+                duration_ms=0,
+                action_label="Resume Recording",
+                action_callback=self._retry_recording_recovery,
+            )
 
     def _format_device_change_message(self, event) -> str:
         """Return a sanitized user-facing message for a hot-plug event."""

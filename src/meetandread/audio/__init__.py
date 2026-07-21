@@ -31,6 +31,7 @@ Storage:
 # Session management (high-level API)
 from meetandread.audio.session import (
     AudioSession,
+    AudioSourceWrapper,
     SessionConfig,
     SourceConfig,
     SessionStats,
@@ -38,6 +39,7 @@ from meetandread.audio.session import (
     SessionState,
     SessionError,
     NoSourcesError,
+    DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
 )
 
 # Capture sources (low-level API)
@@ -72,6 +74,7 @@ from meetandread.audio.storage import (
 __all__ = [
     # Session management
     "AudioSession",
+    "AudioSourceWrapper",
     "SessionConfig",
     "SourceConfig",
     "SessionStats",
@@ -79,6 +82,7 @@ __all__ = [
     "SessionState",
     "SessionError",
     "NoSourcesError",
+    "DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE",
     # Capture sources
     "MicSource",
     "SystemSource",

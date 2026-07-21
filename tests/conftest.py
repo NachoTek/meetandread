@@ -5,6 +5,27 @@ from PyQt6.QtCore import QTimer
 
 
 @pytest.fixture(autouse=True)
+def _isolate_native_live_speaker_extraction(request, monkeypatch):
+    """Keep ordinary tests from initializing sherpa-onnx against user data.
+
+    The dedicated live-speaker module mocks the native boundary explicitly and
+    remains exempt. Other tests may leave recording workers alive briefly;
+    disabling lazy extractor initialization prevents those workers from reading
+    the real user speaker store or crashing pytest inside native ONNX code.
+    """
+    if request.node.path.name in ("test_live_speaker_names.py", "test_speaker_identity_integration.py"):
+        return
+
+    from meetandread.recording.controller import RecordingController
+
+    monkeypatch.setattr(
+        RecordingController,
+        "_ensure_live_extractor",
+        lambda self: False,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _cleanup_qtimers():
     """Stop any leaked QTimers after each test.
 

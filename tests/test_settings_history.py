@@ -1182,14 +1182,15 @@ class TestRefreshHistoryIfVisible:
 
         mock_refresh.assert_called_once()
 
-    def test_skips_when_on_different_page(self, settings_panel, qapp):
-        """Panel is on Settings page (index 0), not History."""
+    def test_refreshes_on_different_page(self, settings_panel, qapp):
+        """Panel is on Settings page (index 0), not History — refreshes
+        anyway so data is current when user navigates to History."""
         with patch.object(
             settings_panel, "_refresh_history"
         ) as mock_refresh:
             settings_panel.refresh_history_if_visible()
 
-        mock_refresh.assert_not_called()
+        mock_refresh.assert_called_once()
 
     def test_refreshes_even_when_hidden(self, settings_panel_on_history, qapp):
         """Panel is on History but hidden — still refreshes so data is
@@ -1310,10 +1311,11 @@ class TestSignalBasedReactivity:
 
         mock_refresh.assert_called_once()
 
-    def test_history_signal_skips_when_not_on_history(
+    def test_history_signal_refreshes_even_when_not_on_history(
         self, settings_panel, qapp
     ):
-        """history_data_changed signal is a no-op when not on History tab."""
+        """history_data_changed signal refreshes data even when not on History tab
+        so it's current when the user navigates there."""
         # Stay on Settings tab (default)
         assert settings_panel._content_stack.currentIndex() == FloatingSettingsPanel._NAV_SETTINGS
 
@@ -1322,7 +1324,7 @@ class TestSignalBasedReactivity:
         ) as mock_refresh:
             settings_panel.refresh_history_if_visible()
 
-        mock_refresh.assert_not_called()
+        mock_refresh.assert_called_once()
 
     def test_identity_signal_refreshes_visible_identities_tab(
         self, settings_panel, qapp

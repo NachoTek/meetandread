@@ -15,22 +15,22 @@ MODEL INFORMATION
 PERFORMANCE
 ----------------------------------------
   Audio duration:       150.0s
-  Processing time:      66.7s
-  Throughput:           2.2x realtime
+  Processing time:      35.5s
+  Throughput:           4.2x realtime
   Chunks processed:     30
-  Avg chunk latency:    2.224s
-  Max chunk latency:    2.297s
+  Avg chunk latency:    1.184s
+  Max chunk latency:    1.250s
 
 WORD ERROR RATE
 ----------------------------------------
-  WER:                  0.1735 (17.35%)
+  WER:                  0.1751 (17.51%)
   Target:               ≤ 5%
   Substitutions (S):    15
   Deletions (D):        74
-  Insertions (I):       17
+  Insertions (I):       18
   Reference words (N):  611
-  Hypothesis words:     554
-  Error count (S+D+I):  106
+  Hypothesis words:     555
+  Error count (S+D+I):  107
   Target met:           NO [X]
 
 GROUND TRUTH (first 500 chars)
@@ -57,9 +57,9 @@ HYPOTHESIS (first 500 chars)
 GAP ANALYSIS — WER exceeds target
 ======================================================================
 
-  Actual WER:   17.35%
+  Actual WER:   17.51%
   Target WER:   5%
-  Gap:          12.35% above target
+  Gap:          12.51% above target
 
 LIKELY CAUSES:
   1. Base model limitations — the 'base' model (74M params) has limited

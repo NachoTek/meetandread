@@ -20,14 +20,17 @@ from meetandread.speaker.models import DiarizationResult  # noqa: E402
 
 from meetandread.audio import (  # noqa: E402
     AudioSession,
+    AudioSourceWrapper,
     SessionConfig,
     SourceConfig,
     SessionState,
     SessionStats,
     SessionError,
     NoSourcesError,
+    DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
 )
-from meetandread.audio.capture import AudioSourceError  # noqa: E402
+from meetandread.audio.capture import AudioSourceError, MicSource, SystemSource  # noqa: E402
+from meetandread.audio.capture import FakeAudioModule  # noqa: E402
 from meetandread.audio.hotplug import DeviceEvent, DeviceEventType, WindowsDeviceMonitor  # noqa: E402
 from meetandread.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
@@ -670,6 +673,10 @@ class RecordingController:
                 result = RecoveryResult(RecoveryOutcome.AUTO_RECOVERED, source_type, recovered.device_id, "Recording source reappeared within recovery window")
                 logger.info("Recording hotplug auto-recovered: %s", result.as_diagnostics())
                 self._emit_recovery_result(result)
+                # Rebuild and swap the source into the running session
+                new_wrapper = self._rebuild_source_wrapper(source_type, recovered.device_id)
+                if new_wrapper is not None:
+                    self.swap_session_source(source_type, new_wrapper)
                 state_cb = self.on_state_change
                 if state_cb:
                     try:
@@ -712,6 +719,11 @@ class RecordingController:
         result = RecoveryResult(RecoveryOutcome.MANUAL_RECOVERED, message="Manual recording recovery retry accepted")
         logger.info("Recording hotplug manual recovery accepted")
         self._emit_recovery_result(result)
+        # Rebuild and swap each recovered source into the running session
+        for stype in list(self._active_source_identities.keys()):
+            new_wrapper = self._rebuild_source_wrapper(stype)
+            if new_wrapper is not None:
+                self.swap_session_source(stype, new_wrapper)
         state_cb = self.on_state_change
         if state_cb:
             try:
@@ -2280,6 +2292,79 @@ class RecordingController:
                 ))
 
         return configs
+
+    def _rebuild_source_wrapper(self, source_type: str, device_id=None) -> Optional[AudioSourceWrapper]:
+        """Build a fresh AudioSourceWrapper for *source_type*.
+
+        Uses the current session's ``_config`` to locate the matching
+        :class:`SourceConfig` and create the appropriate source.  Returns
+        ``None`` for unknown source types or when the config is unavailable.
+        """
+        config = getattr(self._session, '_config', None)
+        if config is None:
+            return None
+
+        # Find the matching SourceConfig to get device_id, gain, etc.
+        source_config = None
+        for sc in config.sources:
+            if sc.type == source_type:
+                source_config = sc
+                break
+
+        if source_config is None:
+            return None
+
+        # Use the caller-provided device_id if given (reconnect may target
+        # a different endpoint), otherwise fall back to the original config.
+        effective_device_id = device_id if device_id is not None else source_config.device_id
+
+        if source_type == 'mic':
+            source = MicSource(
+                device_id=effective_device_id,
+                blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
+                queue_size=10,
+                on_frame_dropped=self._on_session_frames_dropped,
+            )
+        elif source_type == 'system':
+            source = SystemSource(
+                device_id=effective_device_id,
+                blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
+                queue_size=10,
+                on_frame_dropped=self._on_session_frames_dropped,
+            )
+        elif source_type == 'fake':
+            source = FakeAudioModule(
+                wav_path=source_config.fake_path,
+                blocksize=1024,
+                queue_size=10,
+                loop=source_config.loop,
+            )
+        else:
+            return None
+
+        wrapper = AudioSourceWrapper(
+            source=source,
+            config=source_config,
+            target_rate=config.sample_rate,
+            target_channels=config.channels,
+        )
+        return wrapper
+
+    def swap_session_source(self, source_type: str, new_wrapper: AudioSourceWrapper) -> bool:
+        """Delegate a source swap to the underlying AudioSession.
+
+        Returns True on success, False on error.  Never raises.
+        """
+        try:
+            self._session.swap_source(source_type, new_wrapper)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "swap_session_source failed for %s: error_class=%s",
+                source_type,
+                type(exc).__name__,
+            )
+            return False
 
     def get_last_recording_path(self) -> Optional[Path]:
         """Get path to the most recently completed recording (thread-safe snapshot)."""

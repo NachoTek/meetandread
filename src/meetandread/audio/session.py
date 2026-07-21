@@ -365,6 +365,8 @@ class AudioSession:
         self._drop_rate_exceeded_since: Optional[float] = None
         # Lock protecting _stats.frames_dropped increments from audio callbacks
         self._stats_lock = threading.Lock()
+        # Lock protecting _sources list for atomic swap mid-recording
+        self._sources_lock = threading.Lock()
 
     def _on_source_frame_dropped(self, source_type: str, source_count: int) -> None:
         """Thread-safe handler called from audio callback threads on queue overflow.
@@ -474,7 +476,9 @@ class AudioSession:
         self._stop_event.set()
 
         # Stop all sources first (prevents new frames from being added)
-        for wrapper in self._sources:
+        with self._sources_lock:
+            sources_snapshot = list(self._sources)
+        for wrapper in sources_snapshot:
             wrapper.stop()
 
         # Wait for consumer thread to finish (drains existing frames)
@@ -513,6 +517,60 @@ class AudioSession:
         self._refresh_drop_stats()
         return self._stats
 
+    def swap_source(self, source_type: str, new_wrapper: AudioSourceWrapper) -> Optional[AudioSourceWrapper]:
+        """Atomically swap a source wrapper mid-recording.
+
+        Finds the first wrapper whose config.type matches *source_type*,
+        starts the new wrapper *before* stopping the old one, then
+        replaces the entry in ``_sources`` — all under ``_sources_lock``.
+        If the new wrapper fails to start, the old wrapper is left
+        untouched and a :class:`SessionError` is raised.
+
+        Args:
+            source_type: Source type string to match (e.g. ``'mic'``).
+            new_wrapper: The replacement :class:`AudioSourceWrapper`.
+
+        Returns:
+            The old wrapper that was replaced, or ``None`` if no
+            wrapper matched *source_type*.
+
+        Raises:
+            SessionError: If the session is not in RECORDING state,
+                or if the new wrapper fails to start.
+        """
+        if self._state != SessionState.RECORDING:
+            raise SessionError("swap_source requires session must be RECORDING")
+
+        # Find the target wrapper first (read-only, under lock)
+        with self._sources_lock:
+            old_wrapper = None
+            old_index = None
+            for i, wrapper in enumerate(self._sources):
+                if wrapper.config.type == source_type:
+                    old_wrapper = wrapper
+                    old_index = i
+                    break
+
+        if old_wrapper is None:
+            return None
+
+        # Start the new source *before* removing the old one.
+        # This ensures the consumer loop never sees a broken wrapper.
+        try:
+            new_wrapper.start()
+        except Exception:
+            raise SessionError(f"Failed to start replacement source: {source_type}")
+
+        # Atomically swap under lock: the new wrapper is already running
+        # so the consumer loop will immediately pick it up.
+        with self._sources_lock:
+            self._sources[old_index] = new_wrapper
+
+        # Stop the old wrapper *after* the swap is committed
+        old_wrapper.stop()
+
+        return old_wrapper
+
     def _refresh_drop_stats(self) -> None:
         """Refresh aggregate sanitized frame-drop telemetry from sources.
 
@@ -527,7 +585,9 @@ class AudioSession:
         max_burst = 0
         current_burst = 0
 
-        for wrapper in self._sources:
+        with self._sources_lock:
+            sources_snapshot = list(self._sources)
+        for wrapper in sources_snapshot:
             source = wrapper.source
             metadata = source.get_metadata() if hasattr(source, "get_metadata") else {}
             telemetry = (
@@ -576,7 +636,9 @@ class AudioSession:
         max_burst = 0
         current_burst = 0
 
-        for wrapper in self._sources:
+        with self._sources_lock:
+            sources_snapshot = list(self._sources)
+        for wrapper in sources_snapshot:
             source = wrapper.source
             telemetry = (
                 source.get_drop_telemetry()
@@ -868,7 +930,9 @@ class AudioSession:
 
             # Read from all sources, applying denoising per-source before mixing
             frames_list = []
-            for wrapper in self._sources:
+            with self._sources_lock:
+                sources_snapshot = list(self._sources)
+            for wrapper in sources_snapshot:
                 frames = wrapper.read_and_process(timeout=0.05)
                 if frames is not None:
                     # Apply denoising to denoise-enabled sources before mixing
@@ -922,12 +986,16 @@ class AudioSession:
             # Check if we've already hit the cap
             if max_frames is not None and self._stats.frames_recorded >= max_frames:
                 # Consume but discard remaining frames to prevent queue blocking
-                for wrapper in self._sources:
+                with self._sources_lock:
+                    sources_snapshot = list(self._sources)
+                for wrapper in sources_snapshot:
                     wrapper.read_and_process(timeout=0.01)
                 continue
 
             frames_list = []
-            for wrapper in self._sources:
+            with self._sources_lock:
+                sources_snapshot = list(self._sources)
+            for wrapper in sources_snapshot:
                 frames = wrapper.read_and_process(timeout=0.01)
                 if frames is not None:
                     frames = self._apply_denoising(frames, wrapper)
@@ -980,7 +1048,9 @@ class AudioSession:
     
     def _cleanup(self) -> None:
         """Clean up resources after error."""
-        for wrapper in self._sources:
+        with self._sources_lock:
+            sources_snapshot = list(self._sources)
+        for wrapper in sources_snapshot:
             try:
                 wrapper.stop()
             except Exception:

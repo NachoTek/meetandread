@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
 
 
 @pytest.fixture
@@ -74,6 +74,83 @@ class TestToastManager:
             assert first is second
             assert manager.active_ids() == ["frame-drops"]
             assert "9" in second.message_label.text()
+        finally:
+            manager.dismiss_all()
+            anchor.deleteLater()
+
+    def test_replacing_toast_replaces_and_clears_action(self, qapp):
+        from meetandread.widgets.floating_panels import ToastManager
+
+        anchor = QWidget()
+        manager = ToastManager(anchor)
+        first_callback = MagicMock()
+        replacement_callback = MagicMock()
+        try:
+            toast = manager.show(
+                "recovery",
+                "Recording interrupted",
+                "Reconnect the microphone.",
+                duration_ms=0,
+                action_label="Retry old",
+                action_callback=first_callback,
+            )
+            action = toast.findChild(QPushButton, "toast-action")
+            assert action is not None
+            assert action.text() == "Retry old"
+            action.click()
+            assert first_callback.call_count == 1
+
+            replacement = manager.show(
+                "recovery",
+                "Recording paused",
+                "Resume when ready.",
+                duration_ms=0,
+                action_label="Resume Recording",
+                action_callback=replacement_callback,
+            )
+            assert replacement is toast
+            action = replacement.findChild(QPushButton, "toast-action")
+            assert action is not None
+            assert action.text() == "Resume Recording"
+            action.click()
+            assert first_callback.call_count == 1
+            assert replacement_callback.call_count == 1
+
+            manager.show(
+                "recovery",
+                "Recording resumed",
+                "Your microphone is available again.",
+                duration_ms=0,
+            )
+            assert toast.findChild(QPushButton, "toast-action") is None
+        finally:
+            manager.dismiss_all()
+            anchor.deleteLater()
+
+    @pytest.mark.parametrize(
+        ("action_label", "action_callback"),
+        [("Resume Recording", None), (None, MagicMock())],
+    )
+    def test_incomplete_action_is_not_rendered(
+        self,
+        qapp,
+        action_label,
+        action_callback,
+    ):
+        from meetandread.widgets.floating_panels import ToastManager
+
+        anchor = QWidget()
+        manager = ToastManager(anchor)
+        try:
+            toast = manager.show(
+                "recovery",
+                "Recording paused",
+                "Resume when ready.",
+                duration_ms=0,
+                action_label=action_label,
+                action_callback=action_callback,
+            )
+            assert toast.findChild(QPushButton, "toast-action") is None
         finally:
             manager.dismiss_all()
             anchor.deleteLater()

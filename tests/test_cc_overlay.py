@@ -303,10 +303,12 @@ class TestShellMethods:
         qapp.processEvents()
         assert cc_panel.isVisible()
         cc_panel.toggle_panel()
-        # The fade-out timer runs 15 steps of 10ms each
-        # Process timer events by spinning the event loop with delays
+        # The fade-out timer runs 15 steps of 10ms each. Wait for the
+        # observable result rather than assuming every timer fires within a
+        # fixed 200 ms window when the full suite is under load.
         import time
-        for _ in range(20):
+        deadline = time.monotonic() + 1.0
+        while cc_panel.isVisible() and time.monotonic() < deadline:
             qapp.processEvents()
             time.sleep(0.01)
         qapp.processEvents()

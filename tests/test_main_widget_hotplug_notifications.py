@@ -15,20 +15,37 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-class FakeIndicator:
+class FakeToastManager:
     def __init__(self):
-        self.messages = []
+        self.shown = []
 
-    def set_text(self, message, is_recoverable=True):
-        self.messages.append((message, is_recoverable))
+    def show(
+        self,
+        toast_id,
+        title,
+        message,
+        *,
+        duration_ms=8000,
+        action_label=None,
+        action_callback=None,
+    ):
+        self.shown.append(
+            {
+                "toast_id": toast_id,
+                "title": title,
+                "message": message,
+                "duration_ms": duration_ms,
+                "action_label": action_label,
+                "action_callback": action_callback,
+            }
+        )
 
 
 def widget_shell():
     widget = MeetAndReadWidget.__new__(MeetAndReadWidget)
-    widget._warning_indicator = FakeIndicator()
-    widget._error_indicator = FakeIndicator()
-    widget._show_resource_warning = lambda message: widget._warning_indicator.set_text(message)
-    widget._show_error = lambda message, is_recoverable=True: widget._error_indicator.set_text(message, is_recoverable)
+    widget.toast_manager = FakeToastManager()
+    widget._recovery_toast_id = "recording-device-recovery"
+    widget._controller = None
     return widget
 
 
@@ -48,40 +65,47 @@ def test_bridge_exposes_hotplug_signals(qapp):
     assert observed == [("device", event), ("recovery", result)]
 
 
-def test_device_disconnect_notification_is_non_blocking_warning(qapp):
+def test_device_disconnect_notification_is_persistent_stable_toast(qapp):
     widget = widget_shell()
     event = DeviceEvent(DeviceEventType.REMOVED, "dev-1", friendly_name="USB Headset", state="inactive")
 
     widget._on_device_changed(event)
 
-    message, _recoverable = widget._warning_indicator.messages[-1]
-    assert "disconnected" in message
-    assert "USB Headset" in message
-    assert widget._error_indicator.messages == []
+    toast = widget.toast_manager.shown[-1]
+    assert toast["toast_id"] == "recording-device-recovery"
+    assert toast["title"] == "Recording device disconnected"
+    assert "disconnected" in toast["message"]
+    assert "USB Headset" in toast["message"]
+    assert toast["duration_ms"] == 0
 
 
 @pytest.mark.parametrize(
-    "outcome,expected_fragment,error_expected",
+    "outcome,expected_fragment,title,persistent,actionable",
     [
-        (RecoveryOutcome.LOST, "Attempting to recover", False),
-        (RecoveryOutcome.DEGRADED, "continues with remaining sources", False),
-        (RecoveryOutcome.AUTO_RECOVERED, "recovered", False),
-        (RecoveryOutcome.MANUAL_RECOVERED, "resumed", False),
-        (RecoveryOutcome.MANUAL_RETRY_REQUIRED, "Resume recording manually", True),
-        (RecoveryOutcome.TOTAL_LOSS, "paused until an audio device returns", True),
+        (RecoveryOutcome.LOST, "Attempting to recover", "Recording device disconnected", True, False),
+        (RecoveryOutcome.DEGRADED, "continues with remaining sources", "Recording continued", False, False),
+        (RecoveryOutcome.AUTO_RECOVERED, "recovered", "Recording recovered", False, False),
+        (RecoveryOutcome.MANUAL_RECOVERED, "resumed", "Recording resumed", False, False),
+        (RecoveryOutcome.MANUAL_RETRY_REQUIRED, "Resume recording manually", "Recording paused", True, True),
+        (RecoveryOutcome.TOTAL_LOSS, "paused until an audio device returns", "Recording paused", True, True),
     ],
 )
-def test_recovery_outcome_notifications(outcome, expected_fragment, error_expected, qapp):
+def test_recovery_outcome_notifications(
+    outcome, expected_fragment, title, persistent, actionable, qapp
+):
     widget = widget_shell()
-    result = RecoveryResult(outcome, source_type="mic", message="sanitized detail", recoverable=not error_expected)
+    result = RecoveryResult(outcome, source_type="mic", message="sanitized detail")
 
     widget._on_recovery_attempted(result)
 
-    indicator = widget._error_indicator if error_expected else widget._warning_indicator
-    message, recoverable = indicator.messages[-1]
-    assert expected_fragment in message
-    assert "sanitized detail" in message
-    assert recoverable is (not error_expected)
+    toast = widget.toast_manager.shown[-1]
+    assert toast["toast_id"] == "recording-device-recovery"
+    assert toast["title"] == title
+    assert expected_fragment in toast["message"]
+    assert "sanitized detail" in toast["message"]
+    assert (toast["duration_ms"] == 0) is persistent
+    assert (toast["action_label"] == "Resume Recording") is actionable
+    assert callable(toast["action_callback"]) is actionable
 
 
 def test_ignored_recovery_outcome_is_silent(qapp):
@@ -90,5 +114,4 @@ def test_ignored_recovery_outcome_is_silent(qapp):
 
     widget._on_recovery_attempted(result)
 
-    assert widget._warning_indicator.messages == []
-    assert widget._error_indicator.messages == []
+    assert widget.toast_manager.shown == []

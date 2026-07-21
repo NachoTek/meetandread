@@ -481,14 +481,19 @@ class TestLiveSpeakerMatching:
 
     def test_phrase_result_remains_none_on_no_match(self, controller):
         """_on_phrase_result leaves speaker_id=None when no match."""
+        from unittest.mock import patch
+
         result = SegmentResult(
             text="No match here", confidence=80,
             start_time=0.0, end_time=1.0,
             segment_index=0, is_final=True,
         )
 
-        # Default _try_live_speaker_match returns None (no audio, no extractor)
-        controller._on_phrase_result(result)
+        # Isolate the no-match propagation contract from the native ONNX
+        # boundary. The controller fixture contains a full matching window,
+        # so leaving this unpatched would initialize the real extractor.
+        with patch.object(controller, "_try_live_speaker_match", return_value=None):
+            controller._on_phrase_result(result)
 
         assert result.speaker_id is None
 
