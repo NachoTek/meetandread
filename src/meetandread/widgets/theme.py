@@ -407,19 +407,21 @@ def action_button_css(p: ThemePalette, variant: str = "scrub") -> str:
     """Action button with semantic variants.
 
     Variants:
-        'scrub'     — info-tinted background, info text
+        'retranscribe' — info-tinted background, info text (canonical name)
+        'scrub'        — alias for 'retranscribe' (legacy name)
         'delete'    — danger-tinted background, danger text
         'benchmark' — neutral background, accent text
         'dialog'    — neutral background for dialog buttons
 
     Args:
         p: Active theme palette.
-        variant: One of 'scrub', 'delete', 'benchmark', 'dialog'.
+        variant: One of 'retranscribe', 'scrub', 'delete', 'benchmark',
+            'dialog'. ``'scrub'`` and ``'retranscribe'`` are equivalent.
 
     Returns:
         QSS string for the button.
     """
-    if variant == "scrub":
+    if variant in ("scrub", "retranscribe"):
         return f"""
             QPushButton {{
                 background-color: {p.surface};
@@ -1234,7 +1236,8 @@ def aetheric_history_action_button_css(p: ThemePalette) -> str:
     Supports four action variants driven by a Qt dynamic property
     ``action`` on the button:
 
-    - ``action="scrub"``   — cyan/info tint
+    - ``action="retranscribe"`` — cyan/info tint (canonical name)
+    - ``action="scrub"``   — cyan/info tint (legacy alias for retranscribe)
     - ``action="delete"``  — red/danger tint
     - ``action="accept"``  — green/accent tint
     - ``action="reject"``  — purple/secondary tint
@@ -1277,6 +1280,13 @@ def aetheric_history_action_button_css(p: ThemePalette) -> str:
             color: {AETHERIC_CYAN};
         }}
         QPushButton#AethericHistoryActionButton[action="scrub"]:hover {{
+            border-color: {AETHERIC_CYAN};
+            color: {AETHERIC_CYAN};
+        }}
+        QPushButton#AethericHistoryActionButton[action="retranscribe"] {{
+            color: {AETHERIC_CYAN};
+        }}
+        QPushButton#AethericHistoryActionButton[action="retranscribe"]:hover {{
             border-color: {AETHERIC_CYAN};
             color: {AETHERIC_CYAN};
         }}

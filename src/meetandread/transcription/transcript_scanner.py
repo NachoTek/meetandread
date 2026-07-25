@@ -190,9 +190,14 @@ def scan_recordings(recordings_dir: Optional[Path] = None) -> List[RecordingMeta
         # Skip legacy _enhanced.md files
         if md_path.name.endswith("_enhanced.md"):
             continue
-        # Skip scrub sidecar files — these are temporary scrub results
-        # waiting for Accept/Reject, not standalone recordings.
+        # Skip re-transcription sidecar files — these are temporary
+        # comparison results waiting for Accept/Reject, not standalone
+        # recordings. Both the legacy ``_scrub_`` and the canonical
+        # ``_retranscribe_`` naming patterns are excluded so existing
+        # on-disk artifacts continue to be hidden from the Library.
         if "_scrub_" in md_path.stem:
+            continue
+        if "_retranscribe_" in md_path.stem:
             continue
 
         meta = parse_metadata(md_path)

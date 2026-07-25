@@ -310,6 +310,55 @@ class TestScanRecordings:
         assert len(results) == 1
         assert results[0].path.name == "valid.md"
 
+    def test_skips_retranscribe_sidecar_files(self, tmp_path: Path) -> None:
+        """scan_recordings skips ``*_retranscribe_*.md`` sidecar files.
+
+        Re-transcription sidecars are temporary comparison artifacts waiting
+        for Accept/Reject, not standalone recordings — they must not appear
+        in the Library listing.
+        """
+        _write_transcript_md(
+            tmp_path / "recording-good.md",
+            recording_start_time="2026-04-22T10:00:00",
+            words=[{"text": "good", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": None}],
+        )
+        _write_transcript_md(
+            tmp_path / "recording-good_retranscribe_small.md",
+            recording_start_time="2026-04-21T10:00:00",
+            words=[{"text": "sidecar", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": None}],
+        )
+
+        results = scan_recordings(tmp_path)
+
+        assert len(results) == 1
+        assert results[0].path.name == "recording-good.md"
+
+    def test_skips_both_scrub_and_retranscribe_sidecar_files(
+        self, tmp_path: Path
+    ) -> None:
+        """scan_recordings skips both legacy ``_scrub_`` and new
+        ``_retranscribe_`` sidecar files (backwards compat)."""
+        _write_transcript_md(
+            tmp_path / "recording-good.md",
+            recording_start_time="2026-04-22T10:00:00",
+            words=[{"text": "good", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": None}],
+        )
+        _write_transcript_md(
+            tmp_path / "recording-good_scrub_small.md",
+            recording_start_time="2026-04-21T10:00:00",
+            words=[{"text": "legacy", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": None}],
+        )
+        _write_transcript_md(
+            tmp_path / "recording-good_retranscribe_base.md",
+            recording_start_time="2026-04-20T10:00:00",
+            words=[{"text": "modern", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": None}],
+        )
+
+        results = scan_recordings(tmp_path)
+
+        assert len(results) == 1
+        assert results[0].path.name == "recording-good.md"
+
     def test_empty_directory(self, tmp_path: Path) -> None:
         """scan_recordings returns empty list for a directory with no .md files."""
         results = scan_recordings(tmp_path)

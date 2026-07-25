@@ -483,6 +483,13 @@ class TestAethericHistoryActionButtonCss:
         assert 'action="scrub"' in css
         assert AETHERIC_CYAN in css
 
+    def test_retranscribe_variant_uses_cyan(self):
+        """``action="retranscribe"`` is supported alongside the legacy
+        ``action="scrub"`` selector and uses the same cyan/info tint."""
+        css = aetheric_history_action_button_css(DARK_PALETTE)
+        assert 'action="retranscribe"' in css
+        assert AETHERIC_CYAN in css
+
     def test_delete_variant_uses_red(self):
         css = aetheric_history_action_button_css(DARK_PALETTE)
         assert 'action="delete"' in css

@@ -341,6 +341,22 @@ class TestActionButtonCss:
         css = action_button_css(DARK_PALETTE, "benchmark")
         assert DARK_PALETTE.accent in css
 
+    def test_retranscribe_produces_qss(self):
+        """``retranscribe`` is a recognised variant (alongside ``scrub``)."""
+        css = action_button_css(DARK_PALETTE, "retranscribe")
+        assert "QPushButton" in css
+
+    def test_retranscribe_has_info(self):
+        """The ``retranscribe`` variant uses the same info tint as ``scrub``."""
+        css = action_button_css(DARK_PALETTE, "retranscribe")
+        assert DARK_PALETTE.info in css
+
+    def test_retranscribe_matches_scrub(self):
+        """``retranscribe`` and ``scrub`` render identically (same semantics)."""
+        assert action_button_css(DARK_PALETTE, "retranscribe") == action_button_css(
+            DARK_PALETTE, "scrub"
+        )
+
 
 class TestListWidgetCss:
     def test_produces_qss(self):
