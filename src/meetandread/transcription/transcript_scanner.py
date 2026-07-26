@@ -192,11 +192,7 @@ def scan_recordings(recordings_dir: Optional[Path] = None) -> List[RecordingMeta
             continue
         # Skip re-transcription sidecar files — these are temporary
         # comparison results waiting for Accept/Reject, not standalone
-        # recordings. Both the legacy ``_scrub_`` and the canonical
-        # ``_retranscribe_`` naming patterns are excluded so existing
-        # on-disk artifacts continue to be hidden from the Library.
-        if "_scrub_" in md_path.stem:
-            continue
+        # recordings.
         if "_retranscribe_" in md_path.stem:
             continue
 

@@ -478,17 +478,16 @@ class TestAethericHistoryActionButtonCss:
         css = aetheric_history_action_button_css(DARK_PALETTE)
         assert "border-radius: 6px" in css
 
-    def test_scrub_variant_uses_cyan(self):
-        css = aetheric_history_action_button_css(DARK_PALETTE)
-        assert 'action="scrub"' in css
-        assert AETHERIC_CYAN in css
-
     def test_retranscribe_variant_uses_cyan(self):
-        """``action="retranscribe"`` is supported alongside the legacy
-        ``action="scrub"`` selector and uses the same cyan/info tint."""
+        """``action="retranscribe"`` uses the cyan/info tint."""
         css = aetheric_history_action_button_css(DARK_PALETTE)
         assert 'action="retranscribe"' in css
         assert AETHERIC_CYAN in css
+
+    def test_no_legacy_scrub_selector(self):
+        """The legacy ``action="scrub"`` CSS variant has been removed."""
+        css = aetheric_history_action_button_css(DARK_PALETTE)
+        assert 'action="scrub"' not in css
 
     def test_delete_variant_uses_red(self):
         css = aetheric_history_action_button_css(DARK_PALETTE)

@@ -1122,7 +1122,7 @@ def _propagate_identity_to_all_transcripts(
     updated_count = 0
     for md_path in transcripts_dir.glob("*.md"):
         # Skip sidecar and enhanced files
-        if "_scrub_" in md_path.stem or md_path.name.endswith("_enhanced.md"):
+        if "_retranscribe_" in md_path.stem or md_path.name.endswith("_enhanced.md"):
             continue
         # Skip the source file (already updated)
         if md_path.resolve() == source_md_path.resolve():
@@ -1972,8 +1972,8 @@ class FloatingTranscriptPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_tab_changed(self, index: int) -> None:
-        """Refresh history when switching to the History tab."""
-        if index == 1:  # History tab
+        """Refresh the Library when switching to the Library tab."""
+        if index == 1:  # Library tab
             self._refresh_history()
 
     def _refresh_history(self) -> None:
@@ -5350,7 +5350,7 @@ class FloatingSettingsPanel(QWidget):
         )
         self._identity_recordings_table.verticalHeader().setVisible(False)
         self._identity_recordings_table.setAccessibleName("Associated recordings")
-        self._identity_recordings_table.setToolTip("Click a recording to navigate to it in History")
+        self._identity_recordings_table.setToolTip("Click a recording to navigate to it in the Library")
         self._identity_recordings_table.setMaximumHeight(160)
         self._identity_recordings_table.cellDoubleClicked.connect(self._on_recording_row_double_clicked)
         _detail_fields_layout.addWidget(self._identity_recordings_table)
@@ -7312,7 +7312,7 @@ class FloatingSettingsPanel(QWidget):
         self._identity_recordings_table.setItem(0, 2, QTableWidgetItem("—"))
 
     def _on_recording_row_double_clicked(self, row: int, column: int) -> None:
-        """Navigate to History and select the recording matching this row."""
+        """Navigate to the Library and select the recording matching this row."""
         item = self._identity_recordings_table.item(row, 0)
         if item is None:
             return

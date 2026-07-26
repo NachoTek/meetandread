@@ -324,13 +324,13 @@ class TestComboBoxCss:
 
 
 class TestActionButtonCss:
-    @pytest.mark.parametrize("variant", ["scrub", "delete", "benchmark", "dialog"])
+    @pytest.mark.parametrize("variant", ["retranscribe", "delete", "benchmark", "dialog"])
     def test_variants_produce_qss(self, variant):
         css = action_button_css(DARK_PALETTE, variant)
         assert "QPushButton" in css
 
-    def test_scrub_has_info(self):
-        css = action_button_css(DARK_PALETTE, "scrub")
+    def test_retranscribe_default_has_info(self):
+        css = action_button_css(DARK_PALETTE)
         assert DARK_PALETTE.info in css
 
     def test_delete_has_danger(self):
@@ -342,20 +342,14 @@ class TestActionButtonCss:
         assert DARK_PALETTE.accent in css
 
     def test_retranscribe_produces_qss(self):
-        """``retranscribe`` is a recognised variant (alongside ``scrub``)."""
+        """``retranscribe`` is the canonical action variant."""
         css = action_button_css(DARK_PALETTE, "retranscribe")
         assert "QPushButton" in css
 
     def test_retranscribe_has_info(self):
-        """The ``retranscribe`` variant uses the same info tint as ``scrub``."""
+        """The ``retranscribe`` variant uses the info tint."""
         css = action_button_css(DARK_PALETTE, "retranscribe")
         assert DARK_PALETTE.info in css
-
-    def test_retranscribe_matches_scrub(self):
-        """``retranscribe`` and ``scrub`` render identically (same semantics)."""
-        assert action_button_css(DARK_PALETTE, "retranscribe") == action_button_css(
-            DARK_PALETTE, "scrub"
-        )
 
 
 class TestListWidgetCss:

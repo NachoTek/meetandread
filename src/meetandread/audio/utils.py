@@ -1,6 +1,6 @@
 """Shared audio utility functions.
 
-Centralizes WAV loading helpers used across transcription and scrub
+Centralizes WAV loading helpers used across transcription and retranscribe
 pipelines so that sample-width validation, stereo downmix, and
 resampling are tested and maintained in one place.
 """

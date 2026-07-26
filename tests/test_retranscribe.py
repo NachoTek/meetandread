@@ -1,10 +1,7 @@
 """Tests for the RetranscribeRunner background re-transcription module.
 
-This is the domain-aligned home for the runner previously called
-``ScrubRunner``. The legacy name is preserved as a backward-compat subclass
-re-exported from ``scrub.py`` and is covered by :class:`TestScrubBackwardCompat`
-below. New code should import :class:`RetranscribeRunner` from
-:mod:`meetandread.transcription.retranscribe`.
+Covers sidecar naming, the re-transcribe lifecycle (start, progress, accept,
+reject), cancellation, and speaker identification during re-transcription.
 """
 
 import threading
@@ -59,29 +56,13 @@ def panel(qapp):
 
 
 # ---------------------------------------------------------------------------
-# Module + shim exports
+# Module shape
 # ---------------------------------------------------------------------------
 
 class TestModuleShape:
     def test_retranscribe_runner_exists(self):
         from meetandread.transcription import retranscribe
         assert hasattr(retranscribe, "RetranscribeRunner")
-
-    def test_scrub_module_re_exports_retranscribe_runner(self):
-        """scrub.py is a backward-compat shim that re-exports RetranscribeRunner."""
-        from meetandread.transcription import scrub
-        assert hasattr(scrub, "RetranscribeRunner")
-
-    def test_scrub_module_still_exports_scrub_runner(self):
-        """ScrubRunner remains importable from scrub.py for legacy callers."""
-        from meetandread.transcription import scrub
-        assert hasattr(scrub, "ScrubRunner")
-
-    def test_scrub_runner_is_distinct_class_for_backward_compat(self):
-        """ScrubRunner is a real class (subclass) that produces legacy _scrub_ names."""
-        from meetandread.transcription.scrub import ScrubRunner
-        # ScrubRunner must be related to RetranscribeRunner (sharing logic)
-        assert issubclass(ScrubRunner, RetranscribeRunner)
 
 
 # ---------------------------------------------------------------------------
@@ -873,45 +854,3 @@ class TestRetranscribeSpeakerIdentification:
         words = result_store.get_all_words()
         assert words[0].speaker_id == "Commercial Guy"
         assert words[1].speaker_id == "Commercial Guy"
-
-
-# ---------------------------------------------------------------------------
-# Backward compat — ScrubRunner shim still produces legacy _scrub_ naming
-# ---------------------------------------------------------------------------
-
-class TestScrubBackwardCompat:
-    """The legacy ScrubRunner (imported via the scrub.py shim) must keep
-    producing ``_scrub_`` sidecar names so existing callers/tests behave
-    unchanged. This locks in the alongside-not-replace nature of the Expand.
-    """
-
-    def test_scrub_runner_uses_legacy_scrub_tag(self, transcript_path: Path):
-        from meetandread.transcription.scrub import ScrubRunner
-        result = ScrubRunner.sidecar_path(transcript_path, "small")
-        assert result == transcript_path.parent / (
-            "recording-2026-04-26-120000_scrub_small.md"
-        )
-
-    def test_scrub_runner_accept_uses_legacy_path(self, transcript_path: Path):
-        from meetandread.transcription.scrub import ScrubRunner
-        # Create sidecar at the LEGACY path
-        sidecar = transcript_path.parent / (
-            "recording-2026-04-26-120000_scrub_small.md"
-        )
-        sidecar.write_text("# Legacy scrub output\n")
-
-        ScrubRunner.accept_scrub(transcript_path, "small")
-
-        assert transcript_path.read_text() == "# Legacy scrub output\n"
-        assert not sidecar.exists()
-
-    def test_scrub_runner_and_retranscribe_runner_independent(
-        self, transcript_path: Path
-    ):
-        """Both runners can compute sidecar paths without colliding."""
-        from meetandread.transcription.scrub import ScrubRunner
-        legacy = ScrubRunner.sidecar_path(transcript_path, "small")
-        modern = RetranscribeRunner.sidecar_path(transcript_path, "small")
-        assert legacy != modern
-        assert legacy.name.endswith("_scrub_small.md")
-        assert modern.name.endswith("_retranscribe_small.md")

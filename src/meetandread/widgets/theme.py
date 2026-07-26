@@ -403,25 +403,23 @@ def combo_box_css(p: ThemePalette, accent_color: str | None = None) -> str:
     """
 
 
-def action_button_css(p: ThemePalette, variant: str = "scrub") -> str:
+def action_button_css(p: ThemePalette, variant: str = "retranscribe") -> str:
     """Action button with semantic variants.
 
     Variants:
         'retranscribe' — info-tinted background, info text (canonical name)
-        'scrub'        — alias for 'retranscribe' (legacy name)
         'delete'    — danger-tinted background, danger text
         'benchmark' — neutral background, accent text
         'dialog'    — neutral background for dialog buttons
 
     Args:
         p: Active theme palette.
-        variant: One of 'retranscribe', 'scrub', 'delete', 'benchmark',
-            'dialog'. ``'scrub'`` and ``'retranscribe'`` are equivalent.
+        variant: One of 'retranscribe', 'delete', 'benchmark', 'dialog'.
 
     Returns:
         QSS string for the button.
     """
-    if variant in ("scrub", "retranscribe"):
+    if variant == "retranscribe":
         return f"""
             QPushButton {{
                 background-color: {p.surface};
@@ -1236,8 +1234,7 @@ def aetheric_history_action_button_css(p: ThemePalette) -> str:
     Supports four action variants driven by a Qt dynamic property
     ``action`` on the button:
 
-    - ``action="retranscribe"`` — cyan/info tint (canonical name)
-    - ``action="scrub"``   — cyan/info tint (legacy alias for retranscribe)
+    - ``action="retranscribe"`` — cyan/info tint
     - ``action="delete"``  — red/danger tint
     - ``action="accept"``  — green/accent tint
     - ``action="reject"``  — purple/secondary tint
@@ -1275,13 +1272,6 @@ def aetheric_history_action_button_css(p: ThemePalette) -> str:
         QPushButton#AethericHistoryActionButton:disabled {{
             color: {AETHERIC_BORDER_DARK};
             border-color: {AETHERIC_BORDER_DARK};
-        }}
-        QPushButton#AethericHistoryActionButton[action="scrub"] {{
-            color: {AETHERIC_CYAN};
-        }}
-        QPushButton#AethericHistoryActionButton[action="scrub"]:hover {{
-            border-color: {AETHERIC_CYAN};
-            color: {AETHERIC_CYAN};
         }}
         QPushButton#AethericHistoryActionButton[action="retranscribe"] {{
             color: {AETHERIC_CYAN};

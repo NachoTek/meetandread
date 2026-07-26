@@ -124,7 +124,7 @@ class TranscriptStore:
     def set_recording_start_time(self, dt: Optional[datetime]) -> None:
         """Override the recording start timestamp.
 
-        Used by post-processing and scrub to preserve the original
+        Used by post-processing and retranscribe to preserve the original
         recording time from the source transcript instead of stamping
         ``datetime.now()`` (which would reflect processing time).
         """

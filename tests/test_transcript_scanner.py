@@ -333,11 +333,14 @@ class TestScanRecordings:
         assert len(results) == 1
         assert results[0].path.name == "recording-good.md"
 
-    def test_skips_both_scrub_and_retranscribe_sidecar_files(
+    def test_skips_retranscribe_sidecar_files(
         self, tmp_path: Path
     ) -> None:
-        """scan_recordings skips both legacy ``_scrub_`` and new
-        ``_retranscribe_`` sidecar files (backwards compat)."""
+        """scan_recordings skips ``_retranscribe_`` sidecar files.
+
+        Legacy ``_scrub_`` sidecars are no longer excluded — backward compat
+        was removed, so only the canonical ``_retranscribe_`` pattern is
+        skipped."""
         _write_transcript_md(
             tmp_path / "recording-good.md",
             recording_start_time="2026-04-22T10:00:00",
@@ -356,8 +359,13 @@ class TestScanRecordings:
 
         results = scan_recordings(tmp_path)
 
-        assert len(results) == 1
-        assert results[0].path.name == "recording-good.md"
+        # Only the _retranscribe_ sidecar is skipped; the legacy _scrub_ file
+        # is now surfaced (backward compat removed).
+        assert len(results) == 2
+        names = {r.path.name for r in results}
+        assert "recording-good.md" in names
+        assert "recording-good_scrub_small.md" in names
+        assert "recording-good_retranscribe_base.md" not in names
 
     def test_empty_directory(self, tmp_path: Path) -> None:
         """scan_recordings returns empty list for a directory with no .md files."""

@@ -64,7 +64,7 @@ REQUIRED_IMPORTS = [
     "meetandread.transcription.post_processor",
     "meetandread.transcription.transcript_store",
     "meetandread.transcription.transcript_scanner",
-    "meetandread.transcription.scrub",
+    "meetandread.transcription.retranscribe",
     "pywhispercpp",
     "pywhispercpp.model",
     "sherpa_onnx",

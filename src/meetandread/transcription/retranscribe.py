@@ -18,13 +18,6 @@ lifecycle semantics:
 * Writes to a sidecar file (never overwrites the canonical transcript).
 * Supports accept (promote sidecar → canonical) and reject (delete sidecar).
 * Supports cancellation via a ``threading.Event``.
-
-Backward compatibility
-----------------------
-The legacy ``ScrubRunner`` name is preserved as a subclass in
-``meetandread.transcription.scrub`` that overrides only the sidecar tag so
-existing sidecar files named ``{stem}_scrub_{model}.md`` continue to work
-unchanged. New code should import ``RetranscribeRunner`` from this module.
 """
 
 import json
@@ -69,9 +62,7 @@ class RetranscribeRunner:
     >>> runner.accept_scrub(transcript_path, "small")
     """
 
-    #: Tag used when building sidecar filenames. Subclasses (e.g. the
-    #: backward-compat ``ScrubRunner``) override this to preserve legacy
-    #: naming conventions.
+    #: Tag used when building sidecar filenames.
     SIDECAR_TAG: str = "retranscribe"
 
     def __init__(

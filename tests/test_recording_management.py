@@ -173,8 +173,10 @@ class TestEnumerateRecordingFiles:
         assert f"{stem}_retranscribe_v1.md" in names
         assert f"{stem}_retranscribe_v2.md" in names
 
-    def test_enumerate_finds_legacy_scrub_sidecars(self, recording_dirs):
-        """Legacy ``_scrub_`` sidecars are still enumerated (backwards compat)."""
+    def test_enumerate_ignores_legacy_scrub_sidecars(self, recording_dirs):
+        """Legacy ``_scrub_`` sidecars are no longer enumerated (backward
+        compat removed). Only the canonical ``_retranscribe_`` pattern is
+        tracked."""
         _, transcripts_dir = recording_dirs
         stem = "rec-legacy"
         (transcripts_dir / f"{stem}.md").write_text("t")
@@ -182,7 +184,7 @@ class TestEnumerateRecordingFiles:
 
         found = enumerate_recording_files(stem)
         names = {p.name for p in found}
-        assert f"{stem}_scrub_v1.md" in names
+        assert f"{stem}_scrub_v1.md" not in names
 
     def test_enumerate_skips_missing(self, recording_dirs):
         recordings_dir, _ = recording_dirs
