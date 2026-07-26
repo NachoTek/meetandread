@@ -13,7 +13,6 @@ sidecars written by older code (``{stem}_scrub_{model}.md``) keep their
 original naming. New code should prefer :class:`RetranscribeRunner`.
 """
 
-from meetandread.audio.utils import load_wav_as_float32_mono
 from meetandread.transcription.retranscribe import RetranscribeRunner
 
 __all__ = ["ScrubRunner", "RetranscribeRunner"]
@@ -27,11 +26,3 @@ class ScrubRunner(RetranscribeRunner):
     """
 
     SIDECAR_TAG = "scrub"
-
-    # Re-declared here as a thin delegate to satisfy the S04 code-dedup
-    # regression test (``test_scrub_load_delegates``), which inspects this
-    # source file for a ``_load_audio_file`` definition that delegates to
-    # the canonical ``load_wav_as_float32_mono`` helper.
-    @staticmethod
-    def _load_audio_file(audio_path):
-        return load_wav_as_float32_mono(audio_path)

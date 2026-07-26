@@ -75,8 +75,8 @@ def _create_recording(recording_dirs, stem, with_sidecar=False, with_pcm=False):
         created.append(meta)
 
     if with_sidecar:
-        sc = tra_dir / f"{stem}_scrub_v1.md"
-        sc.write_text("# scrub")
+        sc = tra_dir / f"{stem}_retranscribe_v1.md"
+        sc.write_text("# retranscribe")
         created.append(sc)
 
     return created
@@ -165,13 +165,24 @@ class TestEnumerateRecordingFiles:
         _, transcripts_dir = recording_dirs
         stem = "rec-sidecar"
         (transcripts_dir / f"{stem}.md").write_text("t")
+        (transcripts_dir / f"{stem}_retranscribe_v1.md").write_text("r1")
+        (transcripts_dir / f"{stem}_retranscribe_v2.md").write_text("r2")
+
+        found = enumerate_recording_files(stem)
+        names = {p.name for p in found}
+        assert f"{stem}_retranscribe_v1.md" in names
+        assert f"{stem}_retranscribe_v2.md" in names
+
+    def test_enumerate_finds_legacy_scrub_sidecars(self, recording_dirs):
+        """Legacy ``_scrub_`` sidecars are still enumerated (backwards compat)."""
+        _, transcripts_dir = recording_dirs
+        stem = "rec-legacy"
+        (transcripts_dir / f"{stem}.md").write_text("t")
         (transcripts_dir / f"{stem}_scrub_v1.md").write_text("s1")
-        (transcripts_dir / f"{stem}_scrub_v2.md").write_text("s2")
 
         found = enumerate_recording_files(stem)
         names = {p.name for p in found}
         assert f"{stem}_scrub_v1.md" in names
-        assert f"{stem}_scrub_v2.md" in names
 
     def test_enumerate_skips_missing(self, recording_dirs):
         recordings_dir, _ = recording_dirs
@@ -216,16 +227,16 @@ class TestRenameRecording:
         assert (rec_dir / f"{new_stem}.pcm.part").exists()
         assert (rec_dir / f"{new_stem}.pcm.part.json").exists()
 
-    def test_rename_with_scrub_sidecars(self, recording_dirs):
+    def test_rename_with_retranscribe_sidecars(self, recording_dirs):
         _, tra_dir = recording_dirs
-        old_stem = "with-scrub"
-        new_stem = "scrubbed"
+        old_stem = "with-retranscribe"
+        new_stem = "retranscribed"
         _create_recording(recording_dirs, old_stem, with_sidecar=True)
 
         result = rename_recording(old_stem, new_stem)
 
-        assert len(result.renamed) == 3  # wav + md + scrub sidecar
-        assert (tra_dir / f"{new_stem}_scrub_v1.md").exists()
+        assert len(result.renamed) == 3  # wav + md + retranscribe sidecar
+        assert (tra_dir / f"{new_stem}_retranscribe_v1.md").exists()
 
     def test_rename_target_conflict_aborts(self, recording_dirs):
         rec_dir, tra_dir = recording_dirs
@@ -776,7 +787,7 @@ class TestRenameThenEnumerate:
         names = {p.name for p in new_files}
         assert f"{new_stem}.wav" in names
         assert f"{new_stem}.md" in names
-        assert f"{new_stem}_scrub_v1.md" in names
+        assert f"{new_stem}_retranscribe_v1.md" in names
 
 
 class TestStartupCleanupIntegration:

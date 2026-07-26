@@ -2,7 +2,7 @@
 
 Provides stem-based file discovery and cleanup across the recordings/
 and transcripts/ directories. Used by the History tab delete action,
-by scrub file management, and by the cleanup queue service.
+by re-transcribe file management, and by the cleanup queue service.
 
 T02 extension: rollback-minded rename, structured deletion results,
 and optional directory overrides for testability and custom path support.
@@ -111,7 +111,8 @@ def enumerate_recording_files(
     - ``recordings/{stem}.pcm.part``
     - ``recordings/{stem}.pcm.part.json``
     - ``transcripts/{stem}.md``
-    - ``transcripts/{stem}_scrub_*.md``  (sidecars from scrub operations)
+    - ``transcripts/{stem}_retranscribe_*.md``  (re-transcribe sidecars)
+    - ``transcripts/{stem}_scrub_*.md``  (legacy re-transcribe sidecars)
 
     Files that do not exist on disk are silently skipped.
 
@@ -134,8 +135,11 @@ def enumerate_recording_files(
         tra_dir / f"{stem}.md",
     ]
 
-    # Scrub sidecars: transcripts/{stem}_scrub_*.md
+    # Re-transcribe sidecars: transcripts/{stem}_{tag}_*.md
+    # Both the canonical ``_retranscribe_`` and legacy ``_scrub_`` naming
+    # patterns are enumerated so existing on-disk artifacts are handled.
     if tra_dir.exists():
+        candidates.extend(tra_dir.glob(f"{stem}_retranscribe_*.md"))
         candidates.extend(tra_dir.glob(f"{stem}_scrub_*.md"))
 
     # Filter to files that actually exist
@@ -170,12 +174,17 @@ def _enumerate_rename_pairs(
         (transcripts_dir / f"{old_stem}.md", transcripts_dir / f"{new_stem}.md"),
     ]
 
-    # Scrub sidecars
+    # Re-transcribe sidecars — rename both canonical ``_retranscribe_``
+    # and legacy ``_scrub_`` sidecars so neither is orphaned by rename.
     if transcripts_dir.exists():
-        for old_sidecar in transcripts_dir.glob(f"{old_stem}_scrub_*.md"):
-            suffix = old_sidecar.name[len(old_stem):]  # e.g. "_scrub_v1.md"
-            new_sidecar = transcripts_dir / f"{new_stem}{suffix}"
-            pairs.append((old_sidecar, new_sidecar))
+        for pattern in (
+            f"{old_stem}_retranscribe_*.md",
+            f"{old_stem}_scrub_*.md",
+        ):
+            for old_sidecar in transcripts_dir.glob(pattern):
+                suffix = old_sidecar.name[len(old_stem):]  # e.g. "_retranscribe_v1.md"
+                new_sidecar = transcripts_dir / f"{new_stem}{suffix}"
+                pairs.append((old_sidecar, new_sidecar))
 
     return [(old, new) for old, new in pairs if old.is_file()]
 

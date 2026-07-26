@@ -174,19 +174,19 @@ class TestFileErrors:
 
 
 # ---------------------------------------------------------------------------
-# Integration: scrub and post_processor callers
+# Integration: retranscribe and post_processor callers
 # ---------------------------------------------------------------------------
 
 
 class TestAudioUtilsIntegration:
     """Verify callers still work with the shared utility."""
 
-    def test_scrub_runner_loads_wav(self, tmp_path: Path) -> None:
-        from meetandread.transcription.scrub import ScrubRunner
+    def test_retranscribe_runner_loads_wav(self, tmp_path: Path) -> None:
+        from meetandread.transcription.retranscribe import RetranscribeRunner
 
         samples = [int(16000 * 0.5) for _ in range(1600)]
         wav = _write_wav(tmp_path / "test.wav", samples)
-        audio = ScrubRunner._load_audio_file(wav)
+        audio = RetranscribeRunner._load_audio_file(wav)
         assert len(audio) == 1600
         assert audio.dtype == np.float32
 

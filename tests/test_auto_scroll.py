@@ -21,7 +21,7 @@ from meetandread.widgets.floating_panels import FloatingTranscriptPanel
 
 
 # ---------------------------------------------------------------------------
-# Fixtures — same pattern as test_scrub.py
+# Fixtures — same pattern as test_retranscribe.py
 # ---------------------------------------------------------------------------
 
 @pytest.fixture

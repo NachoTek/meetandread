@@ -131,21 +131,21 @@ class TestAudioLoadingDedup:
         else:
             pytest.fail("_load_audio_file not found in post_processor.py")
 
-    def test_scrub_load_delegates(self) -> None:
-        """ScrubRunner._load_audio_file delegates to load_wav_as_float32_mono."""
-        source = _read("transcription/scrub.py")
+    def test_retranscribe_load_delegates(self) -> None:
+        """RetranscribeRunner._load_audio_file delegates to load_wav_as_float32_mono."""
+        source = _read("transcription/retranscribe.py")
         tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == "_load_audio_file":
                 body_src = ast.get_source_segment(source, node)
                 assert body_src is not None
                 assert "load_wav_as_float32_mono" in body_src, (
-                    "_load_audio_file in scrub.py does not delegate "
+                    "_load_audio_file in retranscribe.py does not delegate "
                     "to load_wav_as_float32_mono"
                 )
                 break
         else:
-            pytest.fail("_load_audio_file not found in scrub.py")
+            pytest.fail("_load_audio_file not found in retranscribe.py")
 
     def test_canonical_load_wav_exists(self) -> None:
         """Canonical ``load_wav_as_float32_mono`` in audio/utils.py."""
