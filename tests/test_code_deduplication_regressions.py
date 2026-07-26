@@ -226,3 +226,69 @@ class TestDeadCodeRemoval:
         assert hits == [], (
             f"Import of streaming_pipeline found in: {hits}"
         )
+
+
+# ===================================================================
+# #33: Re-transcribe flow centralization (RetranscribeController)
+# ===================================================================
+
+
+class TestRetranscribeFlowDedup:
+    """The re-transcribe UI flow lives once in ``RetranscribeController``.
+
+    The flow (start -> show comparison -> accept/reject) was previously
+    duplicated across ``FloatingTranscriptPanel`` and ``FloatingSettingsPanel``.
+    These checks ensure the duplicated panel-level definitions have not been
+    reintroduced and that the controller owns the canonical entry points.
+    """
+
+    def test_controller_class_exists(self) -> None:
+        source = _read("widgets/floating_panels.py")
+        assert "class RetranscribeController(QObject):" in source, (
+            "RetranscribeController missing from floating_panels.py"
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "_on_retranscribe_clicked",
+            "_create_retranscribe_dialog",
+            "_start_retranscribe",
+            "_handle_retranscribe_complete",
+            "_show_retranscribe_comparison",
+            "_show_retranscribe_accept_reject",
+            "_hide_retranscribe_accept_reject",
+            "_on_retranscribe_accept",
+            "_on_retranscribe_reject",
+            "_refresh_after_retranscribe",
+        ],
+    )
+    def test_no_duplicated_retranscribe_methods_on_panels(self, name: str) -> None:
+        """No panel-level retranscribe flow method definitions remain."""
+        source = _read("widgets/floating_panels.py")
+        count = _count_funcdef(source, name)
+        assert count == 0, (
+            f"Duplicated retranscribe method {name!r} still defined in "
+            f"floating_panels.py (count={count}); the flow must live in "
+            "RetranscribeController only."
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        ["on_clicked", "on_accept", "on_reject", "handle_complete", "_show_comparison"],
+    )
+    def test_controller_owns_each_flow_method_once(self, name: str) -> None:
+        """Each flow entry point is defined exactly once (on the controller)."""
+        source = _read("widgets/floating_panels.py")
+        count = _count_funcdef(source, name)
+        assert count == 1, (
+            f"Expected exactly 1 def {name}() in floating_panels.py, "
+            f"found {count}"
+        )
+
+    def test_panels_delegate_to_controller_attribute(self) -> None:
+        """Both panels construct a ``_retranscribe`` RetranscribeController."""
+        source = _read("widgets/floating_panels.py")
+        assert source.count("RetranscribeController(self,") >= 2, (
+            "Expected both panels to construct a RetranscribeController"
+        )

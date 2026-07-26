@@ -343,8 +343,8 @@ class TestAcceptRejectUI:
         sidecar.write_text("# Re-transcribed\n\nOne two three four five\n")
 
         # Set retranscribe state
-        panel._retranscribe_model_size = "small"
-        panel._is_comparison_mode = True
+        panel._retranscribe.model_size = "small"
+        panel._retranscribe.is_comparison_mode = True
 
         # Perform accept
         RetranscribeRunner.accept_retranscribe(md_path, "small")
@@ -358,7 +358,7 @@ class TestAcceptRejectUI:
                 )
             mock_refresh.side_effect = do_refresh
 
-            panel._refresh_after_retranscribe()
+            panel._retranscribe._refresh_after_decision()
 
         # List should have been refreshed with new word count
         assert panel._history_list.count() == 1
@@ -385,8 +385,8 @@ class TestAcceptRejectUI:
         item = panel._history_list.item(0)
         panel._history_list.setCurrentItem(item)
         panel._current_history_md_path = md_path
-        panel._retranscribe_model_size = "base"
-        panel._is_comparison_mode = True
+        panel._retranscribe.model_size = "base"
+        panel._retranscribe.is_comparison_mode = True
 
         # Reject
         RetranscribeRunner.reject_retranscribe(md_path, "base")
@@ -399,7 +399,7 @@ class TestAcceptRejectUI:
                 )
             mock_refresh.side_effect = do_refresh
 
-            panel._refresh_after_retranscribe()
+            panel._retranscribe._refresh_after_decision()
 
         # Original transcript unchanged
         assert "Original content" in md_path.read_text()
@@ -448,11 +448,12 @@ class TestAcceptRejectUI:
 class TestRetranscribeQtSafeSignals:
     """Verify retranscribe callbacks use PyQt signals instead of QTimer.singleShot.
 
-    Tests that:
-    - _on_retranscribe_progress (background thread callback) emits _retranscribe_progress_sig
-    - _retranscribe_progress_sig delivers to _on_retranscribe_progress_gui which updates button
-    - _on_retranscribe_complete (background thread callback) emits _retranscribe_complete_sig
-    - _retranscribe_complete_sig delivers to _on_retranscribe_complete_gui -> _handle_retranscribe_complete
+    The flow now lives on RetranscribeController (shared with the settings
+    panel, issue #33). Tests drive the controller through the panel:
+    - _on_progress (background thread callback) emits _progress_sig
+    - _progress_sig delivers to _on_progress_gui -> adapter.on_progress (button text)
+    - _on_complete (background thread callback) emits _complete_sig
+    - _complete_sig delivers to _on_complete_gui -> handle_complete
     """
 
     def test_progress_signal_updates_button_text(self, panel, qapp):
@@ -461,7 +462,7 @@ class TestRetranscribeQtSafeSignals:
         panel._retranscribe_btn.setText("Re-transcribing... 0%")
 
         # Simulate background thread calling the callback
-        panel._on_retranscribe_progress(42)
+        panel._retranscribe._on_progress(42)
         qapp.processEvents()
 
         assert panel._retranscribe_btn.text() == "Re-transcribing... 42%"
@@ -470,38 +471,38 @@ class TestRetranscribeQtSafeSignals:
         """Progress signal delivers 100% correctly."""
         panel._retranscribe_btn.setEnabled(False)
 
-        panel._on_retranscribe_progress(100)
+        panel._retranscribe._on_progress(100)
         qapp.processEvents()
 
         assert panel._retranscribe_btn.text() == "Re-transcribing... 100%"
 
     def test_complete_signal_success_shows_comparison(self, panel, qapp, tmp_path):
         """_on_retranscribe_complete emits signal that triggers comparison view."""
-        panel._is_retranscribing = True
+        panel._retranscribe.is_retranscribing = True
         panel._retranscribe_btn.setEnabled(False)
-        panel._retranscribe_model_size = "small"
+        panel._retranscribe.model_size = "small"
 
         sidecar = tmp_path / "test_retranscribe_small.md"
         sidecar.write_text("**SPK_0**\nNew text.\n", encoding="utf-8")
 
         # Simulate background thread calling the completion callback
-        panel._on_retranscribe_complete(str(sidecar), None)
+        panel._retranscribe._on_complete(str(sidecar), None)
         qapp.processEvents()
 
-        assert panel._is_retranscribing is False
+        assert panel._retranscribe.is_retranscribing is False
         assert panel._retranscribe_btn.isEnabled()
-        assert panel._is_comparison_mode is True
+        assert panel._retranscribe.is_comparison_mode is True
 
     def test_complete_signal_error_reenables_button(self, panel, qapp):
         """_on_retranscribe_complete with error re-enables controls."""
-        panel._is_retranscribing = True
+        panel._retranscribe.is_retranscribing = True
         panel._retranscribe_btn.setEnabled(False)
 
         with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
-            panel._on_retranscribe_complete("/fake/path.md", "Model load failed")
+            panel._retranscribe._on_complete("/fake/path.md", "Model load failed")
             qapp.processEvents()
 
-        assert panel._is_retranscribing is False
+        assert panel._retranscribe.is_retranscribing is False
         assert panel._retranscribe_btn.isEnabled()
         assert panel._retranscribe_btn.text() == "🔄 Re-transcribe"
 
@@ -526,16 +527,16 @@ class TestRetranscribeStartupFailure:
         ), patch(
             "meetandread.widgets.floating_panels.QMessageBox.warning",
         ) as mock_warn:
-            panel._start_retranscribe(wav_path, md_path, "tiny")
+            panel._retranscribe.start(wav_path, md_path, "tiny")
             qapp.processEvents()
 
         # State should be fully reset
-        assert panel._is_retranscribing is False
+        assert panel._retranscribe.is_retranscribing is False
         assert panel._retranscribe_btn.isEnabled()
         assert panel._retranscribe_btn.text() == "🔄 Re-transcribe"
-        assert panel._is_comparison_mode is False
-        assert panel._retranscribe_runner is None
-        assert panel._retranscribe_sidecar_path is None
+        assert panel._retranscribe.is_comparison_mode is False
+        assert panel._retranscribe.runner is None
+        assert panel._retranscribe.sidecar_path is None
         # Warning shown
         mock_warn.assert_called_once()
         call_args = mock_warn.call_args
@@ -557,10 +558,10 @@ class TestRetranscribeStartupFailure:
         ), patch(
             "meetandread.widgets.floating_panels.QMessageBox.warning",
         ) as mock_warn:
-            panel._start_retranscribe(wav_path, md_path, "base")
+            panel._retranscribe.start(wav_path, md_path, "base")
             qapp.processEvents()
 
-        assert panel._is_retranscribing is False
+        assert panel._retranscribe.is_retranscribing is False
         assert panel._retranscribe_btn.isEnabled()
         assert panel._retranscribe_btn.text() == "🔄 Re-transcribe"
         mock_warn.assert_called_once()
