@@ -333,14 +333,14 @@ class TestScanRecordings:
         assert len(results) == 1
         assert results[0].path.name == "recording-good.md"
 
-    def test_skips_retranscribe_sidecar_files(
-        self, tmp_path: Path
-    ) -> None:
-        """scan_recordings skips ``_retranscribe_`` sidecar files.
+    def test_legacy_scrub_sidecar_files_are_surfaced(self, tmp_path: Path) -> None:
+        """scan_recordings surfaces legacy ``*_scrub_*.md`` files now that backward compat is gone.
 
-        Legacy ``_scrub_`` sidecars are no longer excluded — backward compat
-        was removed, so only the canonical ``_retranscribe_`` pattern is
-        skipped."""
+        With backward compatibility removed, ``scan_recordings`` no longer
+        excludes legacy ``*_scrub_*.md`` files — they appear in the Library
+        listing alongside real recordings. The canonical ``_retranscribe_``
+        sidecar is still skipped.
+        """
         _write_transcript_md(
             tmp_path / "recording-good.md",
             recording_start_time="2026-04-22T10:00:00",
