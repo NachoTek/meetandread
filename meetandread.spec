@@ -108,7 +108,7 @@ hiddenimports = [
     'meetandread.transcription.post_processor',
     'meetandread.transcription.transcript_store',
     'meetandread.transcription.transcript_scanner',
-    'meetandread.transcription.scrub',
+    'meetandread.transcription.retranscribe',
     # Native packages
     'pywhispercpp',
     'pywhispercpp.model',

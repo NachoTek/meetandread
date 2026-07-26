@@ -80,7 +80,7 @@ The widget sits on your desktop like a record button — click to start, click t
 
 ## Features
 
-### 🎙️ Audio Capture
+### 🎙️ Recording
 - **Microphone input** — capture your voice via any recording device
 - **System audio** — WASAPI loopback captures what others are saying (Windows 11)
 - **Dual-source** — record both simultaneously for complete coverage
@@ -108,7 +108,7 @@ The widget sits on your desktop like a record button — click to start, click t
 - **Model selection** — choose real-time and post-process models independently
 - **Benchmark history** — see WER and speed for each model on your hardware
 - **Recording management** — browse, review, rename, and delete past recordings
-- **Transcript scrub** — re-transcribe with a stronger model and compare results
+- **Re-transcribe** — re-transcribe with a stronger model and compare results
 - **Startup cleanup** — orphaned files from prior sessions cleaned automatically on launch
 
 ### 🏗️ Production Ready
@@ -154,7 +154,7 @@ python -m meetandread.main
 2. **Select audio sources** — click the mic and/or system audio lobes around the record button
 3. **Click the record button** — recording starts, live transcription appears in the CC overlay
 4. **Click again to stop** — post-processing runs with a stronger model
-5. **Review** — open the Settings panel → History tab to browse transcripts
+5. **Review** — open the Settings panel → Library tab to browse transcripts
 
 Your recordings and transcripts are saved in your Documents folder under `MeetAndRead/`.
 
@@ -166,7 +166,7 @@ MeetAndRead uses a **hybrid transcription** architecture:
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│ Audio Input  │────▶│ Real-Time Engine │────▶│ CC Overlay      │
+│ Audio Source │────▶│ Real-Time Engine │────▶│ CC Overlay      │
 │ (mic+system) │     │ (tiny/base Whisper)│    │ (live display)  │
 └─────────────┘     └──────────────────┘     └─────────────────┘
                             │
