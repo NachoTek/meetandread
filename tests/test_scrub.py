@@ -313,7 +313,7 @@ class TestAcceptRejectUI:
         sidecar.write_text("# Scrubbed\n\nOne two three four five\n")
 
         # Set scrub state
-        panel._scrub_model_size = "small"
+        panel._retranscribe_model_size = "small"
         panel._is_comparison_mode = True
 
         # Perform accept
@@ -328,7 +328,7 @@ class TestAcceptRejectUI:
                 )
             mock_refresh.side_effect = do_refresh
 
-            panel._refresh_after_scrub()
+            panel._refresh_after_retranscribe()
 
         # List should have been refreshed with new word count
         assert panel._history_list.count() == 1
@@ -357,7 +357,7 @@ class TestAcceptRejectUI:
         item = panel._history_list.item(0)
         panel._history_list.setCurrentItem(item)
         panel._current_history_md_path = md_path
-        panel._scrub_model_size = "base"
+        panel._retranscribe_model_size = "base"
         panel._is_comparison_mode = True
 
         # Reject
@@ -371,7 +371,7 @@ class TestAcceptRejectUI:
                 )
             mock_refresh.side_effect = do_refresh
 
-            panel._refresh_after_scrub()
+            panel._refresh_after_retranscribe()
 
         # Original transcript unchanged
         assert "Original content" in md_path.read_text()
@@ -418,13 +418,13 @@ class TestAcceptRejectUI:
 # ---------------------------------------------------------------------------
 
 class TestScubQtSafeSignals:
-    """Verify scrub callbacks use PyQt signals instead of QTimer.singleShot.
+    """Verify retranscribe callbacks use PyQt signals instead of QTimer.singleShot.
 
     Tests that:
-    - _on_scrub_progress (background thread callback) emits _scrub_progress_sig
-    - _scrub_progress_sig delivers to _on_scrub_progress_gui which updates button
-    - _on_scrub_complete (background thread callback) emits _scrub_complete_sig
-    - _scrub_complete_sig delivers to _on_scrub_complete_gui → _handle_scrub_complete
+    - _on_retranscribe_progress (background thread callback) emits _retranscribe_progress_sig
+    - _retranscribe_progress_sig delivers to _on_retranscribe_progress_gui which updates button
+    - _on_retranscribe_complete (background thread callback) emits _retranscribe_complete_sig
+    - _retranscribe_complete_sig delivers to _on_retranscribe_complete_gui → _handle_retranscribe_complete
     """
 
     @staticmethod
@@ -452,61 +452,61 @@ class TestScubQtSafeSignals:
         )
 
     def test_progress_signal_updates_button_text(self, panel, qapp):
-        """_on_scrub_progress emits signal that updates button text on GUI thread."""
-        panel._scrub_btn.setEnabled(False)
-        panel._scrub_btn.setText("Scrubbing... 0%")
+        """_on_retranscribe_progress emits signal that updates button text on GUI thread."""
+        panel._retranscribe_btn.setEnabled(False)
+        panel._retranscribe_btn.setText("Re-transcribing... 0%")
 
         # Simulate background thread calling the callback
-        panel._on_scrub_progress(42)
+        panel._on_retranscribe_progress(42)
         qapp.processEvents()
 
-        assert panel._scrub_btn.text() == "Scrubbing... 42%"
+        assert panel._retranscribe_btn.text() == "Re-transcribing... 42%"
 
     def test_progress_signal_reaches_100(self, panel, qapp):
         """Progress signal delivers 100% correctly."""
-        panel._scrub_btn.setEnabled(False)
+        panel._retranscribe_btn.setEnabled(False)
 
-        panel._on_scrub_progress(100)
+        panel._on_retranscribe_progress(100)
         qapp.processEvents()
 
-        assert panel._scrub_btn.text() == "Scrubbing... 100%"
+        assert panel._retranscribe_btn.text() == "Re-transcribing... 100%"
 
     def test_complete_signal_success_shows_comparison(self, panel, qapp, tmp_path):
-        """_on_scrub_complete emits signal that triggers comparison view."""
-        panel._is_scrubbing = True
-        panel._scrub_btn.setEnabled(False)
-        panel._scrub_model_size = "small"
+        """_on_retranscribe_complete emits signal that triggers comparison view."""
+        panel._is_retranscribing = True
+        panel._retranscribe_btn.setEnabled(False)
+        panel._retranscribe_model_size = "small"
 
         sidecar = tmp_path / "test_scrub_small.md"
         sidecar.write_text("**SPK_0**\nNew text.\n", encoding="utf-8")
 
         # Simulate background thread calling the completion callback
-        panel._on_scrub_complete(str(sidecar), None)
+        panel._on_retranscribe_complete(str(sidecar), None)
         qapp.processEvents()
 
-        assert panel._is_scrubbing is False
-        assert panel._scrub_btn.isEnabled()
+        assert panel._is_retranscribing is False
+        assert panel._retranscribe_btn.isEnabled()
         assert panel._is_comparison_mode is True
 
     def test_complete_signal_error_reenables_button(self, panel, qapp):
-        """_on_scrub_complete with error re-enables controls."""
-        panel._is_scrubbing = True
-        panel._scrub_btn.setEnabled(False)
+        """_on_retranscribe_complete with error re-enables controls."""
+        panel._is_retranscribing = True
+        panel._retranscribe_btn.setEnabled(False)
 
         with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
-            panel._on_scrub_complete("/fake/path.md", "Model load failed")
+            panel._on_retranscribe_complete("/fake/path.md", "Model load failed")
             qapp.processEvents()
 
-        assert panel._is_scrubbing is False
-        assert panel._scrub_btn.isEnabled()
-        assert panel._scrub_btn.text() == "🔄 Scrub"
+        assert panel._is_retranscribing is False
+        assert panel._retranscribe_btn.isEnabled()
+        assert panel._retranscribe_btn.text() == "🔄 Re-transcribe"
 
 
 class TestScrubStartupFailure:
-    """Verify ScrubRunner construction and startup failures are caught.
+    """Verify RetranscribeRunner construction and startup failures are caught.
 
-    Tests that exceptions during ScrubRunner() or scrub_recording()
-    restore scrub state and show a warning dialog.
+    Tests that exceptions during RetranscribeRunner() or scrub_recording()
+    restore retranscribe state and show a warning dialog.
     """
 
     @staticmethod
@@ -534,35 +534,35 @@ class TestScrubStartupFailure:
         )
 
     def test_scrub_runner_construction_failure_resets_state(self, panel, qapp, tmp_path):
-        """If ScrubRunner() raises, scrub state is fully reset."""
+        """If RetranscribeRunner() raises, retranscribe state is fully reset."""
         wav_path = tmp_path / "test.wav"
         wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
         md_path = tmp_path / "test.md"
         md_path.write_text("# Transcript\n")
 
         with patch(
-            "meetandread.transcription.scrub.ScrubRunner",
+            "meetandread.transcription.retranscribe.RetranscribeRunner",
             side_effect=RuntimeError("Whisper not available"),
         ), patch(
             "meetandread.widgets.floating_panels.QMessageBox.warning",
         ) as mock_warn:
-            panel._start_scrub(wav_path, md_path, "tiny")
+            panel._start_retranscribe(wav_path, md_path, "tiny")
             qapp.processEvents()
 
         # State should be fully reset
-        assert panel._is_scrubbing is False
-        assert panel._scrub_btn.isEnabled()
-        assert panel._scrub_btn.text() == "🔄 Scrub"
+        assert panel._is_retranscribing is False
+        assert panel._retranscribe_btn.isEnabled()
+        assert panel._retranscribe_btn.text() == "🔄 Re-transcribe"
         assert panel._is_comparison_mode is False
-        assert panel._scrub_runner is None
-        assert panel._scrub_sidecar_path is None
+        assert panel._retranscribe_runner is None
+        assert panel._retranscribe_sidecar_path is None
         # Warning shown
         mock_warn.assert_called_once()
         call_args = mock_warn.call_args
-        assert "Scrub Failed" in call_args[0][1]
+        assert "Re-transcribe Failed" in call_args[0][1]
 
     def test_scrub_recording_startup_failure_resets_state(self, panel, qapp, tmp_path):
-        """If scrub_recording() raises, scrub state is fully reset."""
+        """If scrub_recording() raises, retranscribe state is fully reset."""
         wav_path = tmp_path / "test.wav"
         wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
         md_path = tmp_path / "test.md"
@@ -572,17 +572,17 @@ class TestScrubStartupFailure:
         mock_runner.scrub_recording.side_effect = FileNotFoundError("Audio file vanished")
 
         with patch(
-            "meetandread.transcription.scrub.ScrubRunner",
+            "meetandread.transcription.retranscribe.RetranscribeRunner",
             return_value=mock_runner,
         ), patch(
             "meetandread.widgets.floating_panels.QMessageBox.warning",
         ) as mock_warn:
-            panel._start_scrub(wav_path, md_path, "base")
+            panel._start_retranscribe(wav_path, md_path, "base")
             qapp.processEvents()
 
-        assert panel._is_scrubbing is False
-        assert panel._scrub_btn.isEnabled()
-        assert panel._scrub_btn.text() == "🔄 Scrub"
+        assert panel._is_retranscribing is False
+        assert panel._retranscribe_btn.isEnabled()
+        assert panel._retranscribe_btn.text() == "🔄 Re-transcribe"
         mock_warn.assert_called_once()
 
 

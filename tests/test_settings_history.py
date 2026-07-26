@@ -962,13 +962,18 @@ class TestCrossPanelStateIsolation:
     def test_scrubbing_state_is_independent(
         self, settings_panel, transcript_panel, qapp,
     ):
-        """Scrubbing state in one panel does not affect the other."""
-        settings_panel._is_scrubbing = True
-        assert transcript_panel._is_scrubbing is False
+        """Scrubbing state in one panel does not affect the other.
 
-        transcript_panel._is_scrubbing = True
+        The legacy FloatingTranscriptPanel uses ``_is_retranscribing`` while the
+        aetheric FloatingSettingsPanel still uses ``_is_scrubbing``; both must
+        remain independent per-instance.
+        """
+        settings_panel._is_scrubbing = True
+        assert transcript_panel._is_retranscribing is False
+
+        transcript_panel._is_retranscribing = True
         assert settings_panel._is_scrubbing is True  # still True
-        assert transcript_panel._is_scrubbing is True
+        assert transcript_panel._is_retranscribing is True
 
     def test_comparison_mode_is_independent(
         self, settings_panel, transcript_panel, qapp,

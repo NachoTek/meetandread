@@ -1277,8 +1277,8 @@ class FloatingTranscriptPanel(QWidget):
     closed = pyqtSignal()  # Emitted when user closes panel
     segment_ready = pyqtSignal(str, int, int, bool, bool, object)  # text, confidence, segment_index, is_final, phrase_start, speaker_id
     speaker_name_pinned = pyqtSignal(str, str)  # raw_speaker_label, user_chosen_name
-    _scrub_progress_sig = pyqtSignal(int)  # Qt-safe scrub progress (pct)
-    _scrub_complete_sig = pyqtSignal(str, object)  # Qt-safe scrub completion (sidecar_path, error_or_None)
+    _retranscribe_progress_sig = pyqtSignal(int)  # Qt-safe retranscribe progress (pct)
+    _retranscribe_complete_sig = pyqtSignal(str, object)  # Qt-safe retranscribe completion (sidecar_path, error_or_None)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -1401,12 +1401,12 @@ class FloatingTranscriptPanel(QWidget):
 
         detail_header_layout.addStretch()
 
-        self._scrub_btn = QPushButton("🔄 Scrub")
-        self._scrub_btn.setFixedHeight(26)
-        self._scrub_btn.setCursor(Qt.CursorShape.ArrowCursor)
-        self._scrub_btn.setToolTip("Re-transcribe with a different model")
-        self._scrub_btn.clicked.connect(self._on_scrub_clicked)
-        detail_header_layout.addWidget(self._scrub_btn)
+        self._retranscribe_btn = QPushButton("🔄 Re-transcribe")
+        self._retranscribe_btn.setFixedHeight(26)
+        self._retranscribe_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._retranscribe_btn.setToolTip("Re-transcribe with a different model")
+        self._retranscribe_btn.clicked.connect(self._on_retranscribe_clicked)
+        detail_header_layout.addWidget(self._retranscribe_btn)
 
         self._delete_btn = QPushButton("🗑 Delete")
         self._delete_btn.setFixedHeight(26)
@@ -1442,17 +1442,17 @@ class FloatingTranscriptPanel(QWidget):
         # Track the currently-viewed history transcript path (for rename)
         self._current_history_md_path: Optional[Path] = None
 
-        # Scrub state
-        self._scrub_runner: Optional[object] = None  # ScrubRunner instance
-        self._scrub_model_size: Optional[str] = None  # model being scrubbed
-        self._scrub_sidecar_path: Optional[str] = None  # expected sidecar path
-        self._scrub_original_html: Optional[str] = None  # original transcript HTML
-        self._is_scrubbing: bool = False  # True while scrub is in progress
+        # Retranscribe state
+        self._retranscribe_runner: Optional[object] = None  # RetranscribeRunner instance
+        self._retranscribe_model_size: Optional[str] = None  # model being re-transcribed
+        self._retranscribe_sidecar_path: Optional[str] = None  # expected sidecar path
+        self._retranscribe_original_html: Optional[str] = None  # original transcript HTML
+        self._is_retranscribing: bool = False  # True while retranscribe is in progress
         self._is_comparison_mode: bool = False  # True when showing side-by-side
 
-        # Connect Qt-safe scrub signals to GUI-thread handlers
-        self._scrub_progress_sig.connect(self._on_scrub_progress_gui)
-        self._scrub_complete_sig.connect(self._on_scrub_complete_gui)
+        # Connect Qt-safe retranscribe signals to GUI-thread handlers
+        self._retranscribe_progress_sig.connect(self._on_retranscribe_progress_gui)
+        self._retranscribe_complete_sig.connect(self._on_retranscribe_complete_gui)
 
         # Dragging
         self._dragging = False
@@ -1721,7 +1721,7 @@ class FloatingTranscriptPanel(QWidget):
         self._splitter.setStyleSheet(splitter_css(p))
         self._history_list.setStyleSheet(list_widget_css(p))
         self._detail_header.setStyleSheet(detail_header_css(p))
-        self._scrub_btn.setStyleSheet(action_button_css(p, "scrub"))
+        self._retranscribe_btn.setStyleSheet(action_button_css(p, "retranscribe"))
         self._delete_btn.setStyleSheet(action_button_css(p, "delete"))
         self._history_viewer.setStyleSheet(text_area_css(p))
 
@@ -2009,7 +2009,7 @@ class FloatingTranscriptPanel(QWidget):
         """Load and display the transcript for the clicked history item."""
         # Reset comparison mode when switching items
         if self._is_comparison_mode:
-            self._hide_scrub_accept_reject()
+            self._hide_retranscribe_accept_reject()
 
         md_path_str = item.data(Qt.ItemDataRole.UserRole)
         if not md_path_str:
@@ -2057,10 +2057,10 @@ class FloatingTranscriptPanel(QWidget):
         p = current_palette()
         menu.setStyleSheet(context_menu_css(p, accent_color=p.danger))
 
-        scrub_action = menu.addAction("🔄  Scrub Recording")
+        retranscribe_action = menu.addAction("🔄  Re-transcribe Recording")
         rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
-        scrub_action.triggered.connect(lambda: self._on_scrub_clicked())
+        retranscribe_action.triggered.connect(lambda: self._on_retranscribe_clicked())
         rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
         delete_action.triggered.connect(lambda: self._delete_recording(item))
         menu.exec(self._history_list.viewport().mapToGlobal(pos))
@@ -2236,16 +2236,16 @@ class FloatingTranscriptPanel(QWidget):
         self._refresh_history()
 
     # ------------------------------------------------------------------
-    # Scrub (re-transcribe) functionality
+    # Re-transcribe functionality
     # ------------------------------------------------------------------
 
-    def _on_scrub_clicked(self) -> None:
-        """Handle Scrub button / context-menu click.
+    def _on_retranscribe_clicked(self) -> None:
+        """Handle Re-transcribe button / context-menu click.
 
         Validates that the selected recording has a WAV file, shows a model
-        picker dialog, then starts ScrubRunner in a background thread.
+        picker dialog, then starts RetranscribeRunner in a background thread.
         """
-        if self._is_scrubbing:
+        if self._is_retranscribing:
             return
 
         current = self._history_list.currentItem()
@@ -2269,14 +2269,14 @@ class FloatingTranscriptPanel(QWidget):
             parent = self.parent() if self.parent() else self
             QMessageBox.information(
                 parent,
-                "Cannot Scrub",
-                "Cannot scrub — audio file missing.\n\n"
+                "Cannot Re-transcribe",
+                "Cannot re-transcribe — audio file missing.\n\n"
                 "The original .wav recording file is required for re-transcription.",
             )
             return
 
         # Show model picker dialog
-        dialog = self._create_scrub_dialog()
+        dialog = self._create_retranscribe_dialog()
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -2284,18 +2284,18 @@ class FloatingTranscriptPanel(QWidget):
         if not model_size:
             return
 
-        # Start the scrub
-        self._start_scrub(wav_path, md_path, model_size)
+        # Start the re-transcription
+        self._start_retranscribe(wav_path, md_path, model_size)
 
-    def _create_scrub_dialog(self) -> QDialog:
-        """Create the model picker dialog for scrub.
+    def _create_retranscribe_dialog(self) -> QDialog:
+        """Create the model picker dialog for re-transcription.
 
         Returns a QDialog with a QComboBox showing all 5 Whisper models
         with WER from benchmark_history. Default selection is the current
         post-process model from config.
         """
         dialog = QDialog(self)
-        dialog.setWindowTitle("Scrub Recording")
+        dialog.setWindowTitle("Re-transcribe Recording")
         dialog.setFixedSize(340, 180)
         p = current_palette()
         dialog.setStyleSheet(dialog_css(p))
@@ -2353,51 +2353,51 @@ class FloatingTranscriptPanel(QWidget):
 
         return dialog
 
-    def _start_scrub(self, wav_path: Path, md_path: Path, model_size: str) -> None:
-        """Start a ScrubRunner background re-transcription.
+    def _start_retranscribe(self, wav_path: Path, md_path: Path, model_size: str) -> None:
+        """Start a RetranscribeRunner background re-transcription.
 
         Args:
             wav_path: Path to the source .wav audio file.
             md_path: Path to the canonical transcript .md file.
             model_size: Whisper model size (e.g. "small").
         """
-        from meetandread.transcription.scrub import ScrubRunner
+        from meetandread.transcription.retranscribe import RetranscribeRunner
 
         # Store state
-        self._scrub_model_size = model_size
-        self._is_scrubbing = True
+        self._retranscribe_model_size = model_size
+        self._is_retranscribing = True
         self._is_comparison_mode = False
 
         # Save original transcript HTML for comparison later
-        self._scrub_original_html = self._history_viewer.toHtml()
+        self._retranscribe_original_html = self._history_viewer.toHtml()
 
-        # Disable scrub button and update text
-        self._scrub_btn.setEnabled(False)
-        self._scrub_btn.setText("Scrubbing... 0%")
+        # Disable retranscribe button and update text
+        self._retranscribe_btn.setEnabled(False)
+        self._retranscribe_btn.setText("Re-transcribing... 0%")
 
         try:
             # Create and start runner
-            self._scrub_runner = ScrubRunner(
+            self._retranscribe_runner = RetranscribeRunner(
                 settings=self._get_app_settings(),
-                on_progress=self._on_scrub_progress,
-                on_complete=self._on_scrub_complete,
+                on_progress=self._on_retranscribe_progress,
+                on_complete=self._on_retranscribe_complete,
             )
-            self._scrub_sidecar_path = self._scrub_runner.scrub_recording(
+            self._retranscribe_sidecar_path = self._retranscribe_runner.scrub_recording(
                 wav_path, md_path, model_size,
             )
         except Exception as exc:
-            logger.error("Scrub startup failed: %s", exc, exc_info=True)
-            # Restore all scrub state so the UI is not stuck
-            self._is_scrubbing = False
+            logger.error("Retranscribe startup failed: %s", exc, exc_info=True)
+            # Restore all retranscribe state so the UI is not stuck
+            self._is_retranscribing = False
             self._is_comparison_mode = False
-            self._scrub_btn.setEnabled(True)
-            self._scrub_btn.setText("🔄 Scrub")
-            self._scrub_runner = None
-            self._scrub_sidecar_path = None
+            self._retranscribe_btn.setEnabled(True)
+            self._retranscribe_btn.setText("🔄 Re-transcribe")
+            self._retranscribe_runner = None
+            self._retranscribe_sidecar_path = None
             parent = self.parent() if self.parent() else self
             QMessageBox.warning(
                 parent,
-                "Scrub Failed",
+                "Re-transcribe Failed",
                 f"Could not start re-transcription:\n\n{exc}",
             )
 
@@ -2410,45 +2410,45 @@ class FloatingTranscriptPanel(QWidget):
             from meetandread.config.models import AppSettings
             return AppSettings()
 
-    def _on_scrub_progress(self, pct: int) -> None:
-        """ScrubRunner progress callback (background thread).
+    def _on_retranscribe_progress(self, pct: int) -> None:
+        """RetranscribeRunner progress callback (background thread).
 
         Emits a Qt signal so the GUI update happens on the main thread.
         """
-        self._scrub_progress_sig.emit(pct)
+        self._retranscribe_progress_sig.emit(pct)
 
-    def _on_scrub_progress_gui(self, pct: int) -> None:
-        """GUI-thread handler for scrub progress updates."""
-        self._scrub_btn.setText(f"Scrubbing... {pct}%")
+    def _on_retranscribe_progress_gui(self, pct: int) -> None:
+        """GUI-thread handler for retranscribe progress updates."""
+        self._retranscribe_btn.setText(f"Re-transcribing... {pct}%")
 
-    def _on_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
-        """ScrubRunner completion callback (background thread).
+    def _on_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """RetranscribeRunner completion callback (background thread).
 
         Emits a Qt signal so the heavy UI work happens on the main thread.
         """
-        self._scrub_complete_sig.emit(sidecar_path, error)
+        self._retranscribe_complete_sig.emit(sidecar_path, error)
 
-    def _on_scrub_complete_gui(self, sidecar_path: str, error: Optional[str]) -> None:
-        """GUI-thread handler for scrub completion."""
-        self._handle_scrub_complete(sidecar_path, error)
+    def _on_retranscribe_complete_gui(self, sidecar_path: str, error: Optional[str]) -> None:
+        """GUI-thread handler for retranscribe completion."""
+        self._handle_retranscribe_complete(sidecar_path, error)
 
-    def _handle_scrub_complete(self, sidecar_path: str, error: Optional[str]) -> None:
-        """Process scrub completion on the GUI thread."""
-        self._is_scrubbing = False
-        self._scrub_btn.setEnabled(True)
-        self._scrub_btn.setText("🔄 Scrub")
+    def _handle_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """Process retranscribe completion on the GUI thread."""
+        self._is_retranscribing = False
+        self._retranscribe_btn.setEnabled(True)
+        self._retranscribe_btn.setText("🔄 Re-transcribe")
 
         if error:
             parent = self.parent() if self.parent() else self
             QMessageBox.warning(
                 parent,
-                "Scrub Failed",
+                "Re-transcribe Failed",
                 f"Re-transcription failed:\n\n{error}",
             )
-            logger.error("Scrub failed: %s", error)
+            logger.error("Retranscribe failed: %s", error)
             return
 
-        # Emit history data changed — scrub adds a new sidecar recording
+        # Emit history data changed — retranscribe adds a new sidecar recording
         try:
             from meetandread.widgets.main_widget import MeetAndReadWidget
             widget = self.parent()
@@ -2461,15 +2461,15 @@ class FloatingTranscriptPanel(QWidget):
             pass
 
         # Show side-by-side comparison
-        self._show_scrub_comparison(sidecar_path)
+        self._show_retranscribe_comparison(sidecar_path)
 
-    def _show_scrub_comparison(self, sidecar_path: str) -> None:
-        """Show side-by-side comparison of original vs scrubbed transcript.
+    def _show_retranscribe_comparison(self, sidecar_path: str) -> None:
+        """Show side-by-side comparison of original vs re-transcribed transcript.
 
         Renders both transcripts in a split view with Accept/Reject buttons.
 
         Args:
-            sidecar_path: Path to the sidecar .md file with scrub result.
+            sidecar_path: Path to the sidecar .md file with retranscribe result.
         """
         sidecar = Path(sidecar_path)
         if not sidecar.exists():
@@ -2477,13 +2477,13 @@ class FloatingTranscriptPanel(QWidget):
             return
 
         self._is_comparison_mode = True
-        self._scrub_sidecar_path = sidecar_path
+        self._retranscribe_sidecar_path = sidecar_path
 
         # Build the comparison view as HTML in the history viewer
         original_text = self._extract_transcript_body(
             self._current_history_md_path
         )
-        scrubbed_text = self._extract_transcript_body(sidecar)
+        retranscribed_text = self._extract_transcript_body(sidecar)
 
         # Build HTML with two-column layout
         html = f"""
@@ -2500,7 +2500,7 @@ class FloatingTranscriptPanel(QWidget):
                 text-align: center;
             }}
             .original .column-header {{ background-color: #37474F; color: #B0BEC5; }}
-            .scrubbed .column-header {{ background-color: #1B5E20; color: #A5D6A7; }}
+            .retranscribed .column-header {{ background-color: #1B5E20; color: #A5D6A7; }}
             .content {{
                 padding: 6px 8px;
                 background-color: #333;
@@ -2517,9 +2517,9 @@ class FloatingTranscriptPanel(QWidget):
                 <div class="column-header">Original</div>
                 <div class="content">{_escape_html(original_text)}</div>
             </div>
-            <div class="column scrubbed">
-                <div class="column-header">Scrubbed ({_escape_html(self._scrub_model_size or "?")})</div>
-                <div class="content">{_escape_html(scrubbed_text)}</div>
+            <div class="column retranscribed">
+                <div class="column-header">Re-transcribed ({_escape_html(self._retranscribe_model_size or "?")})</div>
+                <div class="content">{_escape_html(retranscribed_text)}</div>
             </div>
         </div>
         </body></html>
@@ -2528,18 +2528,18 @@ class FloatingTranscriptPanel(QWidget):
         self._history_viewer.setHtml(html)
 
         # Show Accept/Reject buttons instead of normal header buttons
-        self._show_scrub_accept_reject()
+        self._show_retranscribe_accept_reject()
 
-    def _show_scrub_accept_reject(self) -> None:
-        """Replace the scrub button with Accept/Reject during comparison mode."""
-        self._scrub_btn.hide()
+    def _show_retranscribe_accept_reject(self) -> None:
+        """Replace the retranscribe button with Accept/Reject during comparison mode."""
+        self._retranscribe_btn.hide()
 
         # Create Accept button
-        if not hasattr(self, '_scrub_accept_btn'):
-            self._scrub_accept_btn = QPushButton("✓ Accept")
-            self._scrub_accept_btn.setFixedHeight(26)
+        if not hasattr(self, '_retranscribe_accept_btn'):
+            self._retranscribe_accept_btn = QPushButton("✓ Accept")
+            self._retranscribe_accept_btn.setFixedHeight(26)
             p = current_palette()
-            self._scrub_accept_btn.setStyleSheet(f"""
+            self._retranscribe_accept_btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {p.surface};
                     color: {p.accent};
@@ -2557,47 +2557,47 @@ class FloatingTranscriptPanel(QWidget):
                     background-color: {p.surface};
                 }}
             """)
-            self._scrub_accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
-            self._scrub_accept_btn.clicked.connect(self._on_scrub_accept)
+            self._retranscribe_accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._retranscribe_accept_btn.clicked.connect(self._on_retranscribe_accept)
 
             # Create Reject button
-            self._scrub_reject_btn = QPushButton("✗ Reject")
-            self._scrub_reject_btn.setFixedHeight(26)
-            self._scrub_reject_btn.setStyleSheet(action_button_css(p, "delete"))
-            self._scrub_reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
-            self._scrub_reject_btn.clicked.connect(self._on_scrub_reject)
+            self._retranscribe_reject_btn = QPushButton("✗ Reject")
+            self._retranscribe_reject_btn.setFixedHeight(26)
+            self._retranscribe_reject_btn.setStyleSheet(action_button_css(p, "delete"))
+            self._retranscribe_reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._retranscribe_reject_btn.clicked.connect(self._on_retranscribe_reject)
 
             # Insert into detail header layout (before delete button)
             header_layout = self._detail_header.layout()
             delete_idx = header_layout.indexOf(self._delete_btn)
-            header_layout.insertWidget(delete_idx, self._scrub_accept_btn)
-            header_layout.insertWidget(delete_idx + 1, self._scrub_reject_btn)
+            header_layout.insertWidget(delete_idx, self._retranscribe_accept_btn)
+            header_layout.insertWidget(delete_idx + 1, self._retranscribe_reject_btn)
         else:
-            self._scrub_accept_btn.show()
-            self._scrub_reject_btn.show()
+            self._retranscribe_accept_btn.show()
+            self._retranscribe_reject_btn.show()
 
-    def _hide_scrub_accept_reject(self) -> None:
-        """Hide Accept/Reject buttons and show the scrub button again."""
-        if hasattr(self, '_scrub_accept_btn'):
-            self._scrub_accept_btn.hide()
-        if hasattr(self, '_scrub_reject_btn'):
-            self._scrub_reject_btn.hide()
-        self._scrub_btn.show()
+    def _hide_retranscribe_accept_reject(self) -> None:
+        """Hide Accept/Reject buttons and show the retranscribe button again."""
+        if hasattr(self, '_retranscribe_accept_btn'):
+            self._retranscribe_accept_btn.hide()
+        if hasattr(self, '_retranscribe_reject_btn'):
+            self._retranscribe_reject_btn.hide()
+        self._retranscribe_btn.show()
         self._is_comparison_mode = False
 
-    def _on_scrub_accept(self) -> None:
-        """Accept the scrub result — promote sidecar to canonical transcript."""
-        if self._current_history_md_path is None or self._scrub_model_size is None:
+    def _on_retranscribe_accept(self) -> None:
+        """Accept the retranscribe result — promote sidecar to canonical transcript."""
+        if self._current_history_md_path is None or self._retranscribe_model_size is None:
             return
 
         try:
-            from meetandread.transcription.scrub import ScrubRunner
-            ScrubRunner.accept_scrub(
-                self._current_history_md_path, self._scrub_model_size,
+            from meetandread.transcription.retranscribe import RetranscribeRunner
+            RetranscribeRunner.accept_scrub(
+                self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
-                "Accepted scrub: %s model %s",
-                self._current_history_md_path, self._scrub_model_size,
+                "Accepted retranscribe: %s model %s",
+                self._current_history_md_path, self._retranscribe_model_size,
             )
         except FileNotFoundError:
             parent = self.parent() if self.parent() else self
@@ -2605,42 +2605,42 @@ class FloatingTranscriptPanel(QWidget):
                 parent, "Accept Failed",
                 "Sidecar file not found. It may have been deleted.",
             )
-            self._hide_scrub_accept_reject()
+            self._hide_retranscribe_accept_reject()
             return
         except Exception as exc:
             parent = self.parent() if self.parent() else self
             QMessageBox.warning(
-                parent, "Accept Failed", f"Could not accept scrub result:\n\n{exc}",
+                parent, "Accept Failed", f"Could not accept re-transcribe result:\n\n{exc}",
             )
-            self._hide_scrub_accept_reject()
+            self._hide_retranscribe_accept_reject()
             return
 
         # Refresh the viewer with the updated transcript
-        self._hide_scrub_accept_reject()
-        self._refresh_after_scrub()
+        self._hide_retranscribe_accept_reject()
+        self._refresh_after_retranscribe()
 
-    def _on_scrub_reject(self) -> None:
-        """Reject the scrub result — delete the sidecar file."""
-        if self._current_history_md_path is None or self._scrub_model_size is None:
+    def _on_retranscribe_reject(self) -> None:
+        """Reject the retranscribe result — delete the sidecar file."""
+        if self._current_history_md_path is None or self._retranscribe_model_size is None:
             return
 
         try:
-            from meetandread.transcription.scrub import ScrubRunner
-            ScrubRunner.reject_scrub(
-                self._current_history_md_path, self._scrub_model_size,
+            from meetandread.transcription.retranscribe import RetranscribeRunner
+            RetranscribeRunner.reject_scrub(
+                self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
-                "Rejected scrub: %s model %s",
-                self._current_history_md_path, self._scrub_model_size,
+                "Rejected retranscribe: %s model %s",
+                self._current_history_md_path, self._retranscribe_model_size,
             )
         except Exception as exc:
-            logger.warning("Error rejecting scrub: %s", exc)
+            logger.warning("Error rejecting retranscribe: %s", exc)
 
         # Restore original view
-        self._hide_scrub_accept_reject()
-        self._refresh_after_scrub()
+        self._hide_retranscribe_accept_reject()
+        self._refresh_after_retranscribe()
 
-    def _refresh_after_scrub(self) -> None:
+    def _refresh_after_retranscribe(self) -> None:
         """Refresh the history list and viewer after accept/reject.
 
         After accept the canonical transcript changes (word count may differ),
