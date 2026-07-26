@@ -150,11 +150,11 @@ class TestSettingsHistoryStructure:
         assert settings_panel._history_viewer.objectName() == "AethericHistoryViewer"
 
     def test_row_widget_scrub_button_object_name(self, settings_panel_on_history, qapp):
-        """Scrub button lives on _HistoryRowWidget, not directly on the panel."""
+        """Re-transcribe button lives on _HistoryRowWidget, not directly on the panel."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row = list(settings_panel_on_history._history_row_widgets.values())[0]
-        assert row._scrub_btn.objectName() == "AethericHistoryActionButton"
+        assert row._retranscribe_btn.objectName() == "AethericHistoryActionButton"
 
     def test_row_widget_delete_button_object_name(self, settings_panel_on_history, qapp):
         """Delete button lives on _HistoryRowWidget, not directly on the panel."""
@@ -167,7 +167,7 @@ class TestSettingsHistoryStructure:
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row = list(settings_panel_on_history._history_row_widgets.values())[0]
-        assert row._scrub_btn.property("action") == "scrub"
+        assert row._retranscribe_btn.property("action") == "retranscribe"
 
     def test_row_widget_delete_button_action_property(self, settings_panel_on_history, qapp):
         recordings = [_make_meta("/fake/a.md")]
@@ -197,9 +197,9 @@ class TestSettingsHistoryStructure:
 
     def test_state_attributes_initialized(self, settings_panel):
         assert settings_panel._current_history_md_path is None
-        assert settings_panel._scrub_runner is None
-        assert settings_panel._scrub_model_size is None
-        assert settings_panel._is_scrubbing is False
+        assert settings_panel._retranscribe_runner is None
+        assert settings_panel._retranscribe_model_size is None
+        assert settings_panel._is_retranscribing is False
         assert settings_panel._is_comparison_mode is False
 
     def test_no_placeholder_labels(self, settings_panel):
@@ -595,12 +595,12 @@ class TestSettingsScrubWorkflow:
 
         # get_recordings_dir returns real dir, WAV won't exist there
         with patch("meetandread.widgets.floating_panels.QMessageBox.information") as info:
-            settings_panel_on_history._on_scrub_clicked()
+            settings_panel_on_history._on_retranscribe_clicked()
             info.assert_called_once()
 
     def test_scrub_already_scrubbing_is_noop(self, settings_panel_on_history, qapp):
-        settings_panel_on_history._is_scrubbing = True
-        settings_panel_on_history._on_scrub_clicked()
+        settings_panel_on_history._is_retranscribing = True
+        settings_panel_on_history._on_retranscribe_clicked()
 
     def test_scrub_dialog_cancel_does_nothing(self, settings_panel_on_history, qapp, tmp_path):
         _select_recording(settings_panel_on_history, tmp_path, qapp)
@@ -610,13 +610,13 @@ class TestSettingsScrubWorkflow:
 
         mock_dialog = MagicMock()
         mock_dialog.exec.return_value = 0
-        settings_panel_on_history._create_scrub_dialog = lambda: mock_dialog
+        settings_panel_on_history._create_retranscribe_dialog = lambda: mock_dialog
 
         with patch("meetandread.audio.storage.paths.get_recordings_dir",
                     return_value=wav_dir):
-            settings_panel_on_history._on_scrub_clicked()
+            settings_panel_on_history._on_retranscribe_clicked()
 
-        assert not settings_panel_on_history._is_scrubbing
+        assert not settings_panel_on_history._is_retranscribing
 
     def test_scrub_start_sets_state(self, settings_panel_on_history, qapp, tmp_path):
         md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
@@ -626,34 +626,34 @@ class TestSettingsScrubWorkflow:
         mock_runner = MagicMock()
         mock_runner.scrub_recording.return_value = "/fake/sidecar.md"
 
-        with patch("meetandread.transcription.scrub.ScrubRunner",
+        with patch("meetandread.transcription.retranscribe.RetranscribeRunner",
                     return_value=mock_runner), \
              patch.object(settings_panel_on_history, "_get_app_settings",
                           return_value=MagicMock()):
-            settings_panel_on_history._start_scrub(wav_path, md_path, "small")
+            settings_panel_on_history._start_retranscribe(wav_path, md_path, "small")
 
-        assert settings_panel_on_history._is_scrubbing is True
-        assert settings_panel_on_history._scrub_model_size == "small"
+        assert settings_panel_on_history._is_retranscribing is True
+        assert settings_panel_on_history._retranscribe_model_size == "small"
 
     def test_scrub_complete_error_reenables_state(self, settings_panel_on_history, qapp):
-        settings_panel_on_history._is_scrubbing = True
+        settings_panel_on_history._is_retranscribing = True
 
         with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
-            settings_panel_on_history._handle_scrub_complete(None, "Transcription failed")
+            settings_panel_on_history._handle_retranscribe_complete(None, "Transcription failed")
 
-        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._is_retranscribing is False
         assert not settings_panel_on_history._is_comparison_mode
 
     def test_scrub_complete_shows_comparison(self, settings_panel_on_history, qapp, tmp_path):
-        settings_panel_on_history._is_scrubbing = True
-        settings_panel_on_history._scrub_model_size = "small"
+        settings_panel_on_history._is_retranscribing = True
+        settings_panel_on_history._retranscribe_model_size = "small"
 
         sidecar = tmp_path / "test_rec_scrub_small.md"
         sidecar.write_text("**SPK_0**\nScrubbed text.\n", encoding="utf-8")
 
         with patch.object(settings_panel_on_history, "_refresh_history"), \
              patch.object(settings_panel_on_history, "_emit_history_changed"):
-            settings_panel_on_history._handle_scrub_complete(str(sidecar), None)
+            settings_panel_on_history._handle_retranscribe_complete(str(sidecar), None)
             qapp.processEvents()
 
         assert settings_panel_on_history._is_comparison_mode is True
@@ -668,40 +668,40 @@ class TestSettingsScrubAcceptReject:
 
     def test_accept_promotes_sidecar(self, settings_panel_on_history, qapp, tmp_path):
         md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
-        settings_panel_on_history._scrub_model_size = "small"
+        settings_panel_on_history._retranscribe_model_size = "small"
         settings_panel_on_history._is_comparison_mode = True
 
-        with patch("meetandread.transcription.scrub.ScrubRunner.accept_scrub") as mock_accept:
-            settings_panel_on_history._on_scrub_accept()
+        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.accept_scrub") as mock_accept:
+            settings_panel_on_history._on_retranscribe_accept()
             mock_accept.assert_called_once_with(md_path, "small")
 
         assert not settings_panel_on_history._is_comparison_mode
 
     def test_accept_missing_sidecar_shows_warning(self, settings_panel_on_history, qapp, tmp_path):
         _select_recording(settings_panel_on_history, tmp_path, qapp)
-        settings_panel_on_history._scrub_model_size = "small"
+        settings_panel_on_history._retranscribe_model_size = "small"
 
-        with patch("meetandread.transcription.scrub.ScrubRunner.accept_scrub",
+        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.accept_scrub",
                     side_effect=FileNotFoundError("gone")), \
              patch("meetandread.widgets.floating_panels.QMessageBox.warning") as warn:
-            settings_panel_on_history._on_scrub_accept()
+            settings_panel_on_history._on_retranscribe_accept()
             warn.assert_called_once()
 
     def test_reject_deletes_sidecar(self, settings_panel_on_history, qapp, tmp_path):
         md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
-        settings_panel_on_history._scrub_model_size = "small"
+        settings_panel_on_history._retranscribe_model_size = "small"
         settings_panel_on_history._is_comparison_mode = True
 
-        with patch("meetandread.transcription.scrub.ScrubRunner.reject_scrub") as mock_reject:
-            settings_panel_on_history._on_scrub_reject()
+        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.reject_scrub") as mock_reject:
+            settings_panel_on_history._on_retranscribe_reject()
             mock_reject.assert_called_once_with(md_path, "small")
 
         assert not settings_panel_on_history._is_comparison_mode
 
     def test_reject_no_path_is_noop(self, settings_panel_on_history, qapp):
         settings_panel_on_history._current_history_md_path = None
-        settings_panel_on_history._scrub_model_size = None
-        settings_panel_on_history._on_scrub_reject()
+        settings_panel_on_history._retranscribe_model_size = None
+        settings_panel_on_history._on_retranscribe_reject()
 
 
 # ---------------------------------------------------------------------------
@@ -709,55 +709,55 @@ class TestSettingsScrubAcceptReject:
 # ---------------------------------------------------------------------------
 
 class TestSettingsScrubQtSafeSignals:
-    """Verify scrub callbacks use PyQt signals instead of QTimer.singleShot.
+    """Verify retranscribe callbacks use PyQt signals instead of QTimer.singleShot.
 
     Tests that:
-    - _on_scrub_progress emits _scrub_progress_sig → button text updates
-    - _on_scrub_complete emits _scrub_complete_sig → _handle_scrub_complete
+    - _on_retranscribe_progress emits _retranscribe_progress_sig → button text updates
+    - _on_retranscribe_complete emits _retranscribe_complete_sig → _handle_retranscribe_complete
     """
 
     def test_progress_signal_emitted(self, settings_panel_on_history, qapp):
         """Progress callback emits the signal successfully."""
-        settings_panel_on_history._on_scrub_progress(42)
+        settings_panel_on_history._on_retranscribe_progress(42)
         qapp.processEvents()
         # Signal emission itself is the test — no crash means success
 
     def test_progress_signal_reaches_100(self, settings_panel_on_history, qapp):
-        settings_panel_on_history._on_scrub_progress(100)
+        settings_panel_on_history._on_retranscribe_progress(100)
         qapp.processEvents()
         # No crash = signal emitted and processed
 
     def test_complete_signal_success_shows_comparison(self, settings_panel_on_history, qapp, tmp_path):
-        settings_panel_on_history._is_scrubbing = True
-        settings_panel_on_history._scrub_model_size = "small"
+        settings_panel_on_history._is_retranscribing = True
+        settings_panel_on_history._retranscribe_model_size = "small"
 
         sidecar = tmp_path / "test_rec_scrub_small.md"
         sidecar.write_text("**SPK_0**\nNew text.\n", encoding="utf-8")
 
         with patch.object(settings_panel_on_history, "_refresh_history"), \
              patch.object(settings_panel_on_history, "_emit_history_changed"):
-            settings_panel_on_history._on_scrub_complete(str(sidecar), None)
+            settings_panel_on_history._on_retranscribe_complete(str(sidecar), None)
             qapp.processEvents()
 
-        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._is_retranscribing is False
         assert settings_panel_on_history._is_comparison_mode is True
 
     def test_complete_signal_error_reenables_state(self, settings_panel_on_history, qapp):
-        settings_panel_on_history._is_scrubbing = True
+        settings_panel_on_history._is_retranscribing = True
 
         with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
-            settings_panel_on_history._on_scrub_complete("/fake/path.md", "Model load failed")
+            settings_panel_on_history._on_retranscribe_complete("/fake/path.md", "Model load failed")
             qapp.processEvents()
 
-        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._is_retranscribing is False
         assert not settings_panel_on_history._is_comparison_mode
 
 
 class TestSettingsScrubStartupFailure:
-    """Verify ScrubRunner construction and startup failures are caught.
+    """Verify RetranscribeRunner construction and startup failures are caught.
 
-    Tests that exceptions during ScrubRunner() or scrub_recording()
-    restore scrub state and show a warning dialog.
+    Tests that exceptions during RetranscribeRunner() or scrub_recording()
+    restore retranscribe state and show a warning dialog.
     """
 
     def test_scrub_runner_construction_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
@@ -767,21 +767,21 @@ class TestSettingsScrubStartupFailure:
         md_path.write_text("# Transcript\n")
 
         with patch(
-            "meetandread.transcription.scrub.ScrubRunner",
+            "meetandread.transcription.retranscribe.RetranscribeRunner",
             side_effect=RuntimeError("Whisper not available"),
         ), patch(
             "meetandread.widgets.floating_panels.QMessageBox.warning",
         ) as mock_warn:
-            settings_panel_on_history._start_scrub(wav_path, md_path, "tiny")
+            settings_panel_on_history._start_retranscribe(wav_path, md_path, "tiny")
             qapp.processEvents()
 
-        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._is_retranscribing is False
         assert settings_panel_on_history._is_comparison_mode is False
-        assert settings_panel_on_history._scrub_runner is None
-        assert settings_panel_on_history._scrub_sidecar_path is None
+        assert settings_panel_on_history._retranscribe_runner is None
+        assert settings_panel_on_history._retranscribe_sidecar_path is None
         mock_warn.assert_called_once()
         call_args = mock_warn.call_args
-        assert "Scrub Failed" in call_args[0][1]
+        assert "Re-transcribe Failed" in call_args[0][1]
 
     def test_scrub_recording_startup_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
         wav_path = tmp_path / "test.wav"
@@ -793,15 +793,15 @@ class TestSettingsScrubStartupFailure:
         mock_runner.scrub_recording.side_effect = FileNotFoundError("Audio file vanished")
 
         with patch(
-            "meetandread.transcription.scrub.ScrubRunner",
+            "meetandread.transcription.retranscribe.RetranscribeRunner",
             return_value=mock_runner,
         ), patch(
             "meetandread.widgets.floating_panels.QMessageBox.warning",
         ) as mock_warn:
-            settings_panel_on_history._start_scrub(wav_path, md_path, "base")
+            settings_panel_on_history._start_retranscribe(wav_path, md_path, "base")
             qapp.processEvents()
 
-        assert settings_panel_on_history._is_scrubbing is False
+        assert settings_panel_on_history._is_retranscribing is False
         mock_warn.assert_called_once()
 
 
@@ -962,17 +962,17 @@ class TestCrossPanelStateIsolation:
     def test_scrubbing_state_is_independent(
         self, settings_panel, transcript_panel, qapp,
     ):
-        """Scrubbing state in one panel does not affect the other.
+        """Retranscribe state in one panel does not affect the other.
 
-        The legacy FloatingTranscriptPanel uses ``_is_retranscribing`` while the
-        aetheric FloatingSettingsPanel still uses ``_is_scrubbing``; both must
-        remain independent per-instance.
+        Both the legacy FloatingTranscriptPanel and the aetheric
+        FloatingSettingsPanel use ``_is_retranscribing``; each must remain
+        independent per-instance.
         """
-        settings_panel._is_scrubbing = True
+        settings_panel._is_retranscribing = True
         assert transcript_panel._is_retranscribing is False
 
         transcript_panel._is_retranscribing = True
-        assert settings_panel._is_scrubbing is True  # still True
+        assert settings_panel._is_retranscribing is True  # still True
         assert transcript_panel._is_retranscribing is True
 
     def test_comparison_mode_is_independent(
@@ -1625,12 +1625,12 @@ class TestHistoryRowWidgetStructure:
         assert len(settings_panel_on_history._history_row_widgets) == 2
 
     def test_row_widget_has_scrub_button(self, settings_panel_on_history, qapp):
-        """Row widget has a Scrub button with correct object name."""
+        """Row widget has a Re-transcribe button with correct object name."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row_widget = settings_panel_on_history._history_row_widgets[0]
-        assert row_widget._scrub_btn.objectName() == "AethericHistoryActionButton"
-        assert row_widget._scrub_btn.property("action") == "scrub"
+        assert row_widget._retranscribe_btn.objectName() == "AethericHistoryActionButton"
+        assert row_widget._retranscribe_btn.property("action") == "retranscribe"
 
     def test_row_widget_has_delete_button(self, settings_panel_on_history, qapp):
         """Row widget has a Delete button with correct object name."""
@@ -1645,7 +1645,7 @@ class TestHistoryRowWidgetStructure:
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row_widget = settings_panel_on_history._history_row_widgets[0]
-        assert row_widget._scrub_btn.isHidden()
+        assert row_widget._retranscribe_btn.isHidden()
         assert row_widget._delete_btn.isHidden()
 
     def test_buttons_have_tooltips(self, settings_panel_on_history, qapp):
@@ -1653,7 +1653,7 @@ class TestHistoryRowWidgetStructure:
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row_widget = settings_panel_on_history._history_row_widgets[0]
-        assert row_widget._scrub_btn.toolTip() != ""
+        assert row_widget._retranscribe_btn.toolTip() != ""
         assert row_widget._delete_btn.toolTip() != ""
 
     def test_buttons_have_accessible_names(self, settings_panel_on_history, qapp):
@@ -1661,7 +1661,7 @@ class TestHistoryRowWidgetStructure:
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row_widget = settings_panel_on_history._history_row_widgets[0]
-        assert row_widget._scrub_btn.accessibleName() == "Scrub recording"
+        assert row_widget._retranscribe_btn.accessibleName() == "Re-transcribe recording"
         assert row_widget._delete_btn.accessibleName() == "Delete recording"
 
     def test_item_text_preserved_for_accessibility(self, settings_panel_on_history, qapp):
@@ -1809,14 +1809,14 @@ class TestHistoryRowWidgetButtonActions:
     """Verify inline button clicks route to existing handlers."""
 
     def test_scrub_button_routes_to_handler(self, settings_panel_on_history, qapp):
-        """Inline scrub button calls setCurrentItem then _on_scrub_clicked."""
+        """Inline re-transcribe button calls setCurrentItem then _on_retranscribe_clicked."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row_widget = settings_panel_on_history._history_row_widgets[0]
 
-        with patch.object(settings_panel_on_history, '_on_scrub_clicked') as mock_scrub:
-            row_widget._on_scrub()
-            mock_scrub.assert_called_once()
+        with patch.object(settings_panel_on_history, '_on_retranscribe_clicked') as mock_retranscribe:
+            row_widget._on_retranscribe()
+            mock_retranscribe.assert_called_once()
 
         # Verify item was selected (MEM103)
         current = settings_panel_on_history._history_list.currentItem()
@@ -1839,7 +1839,7 @@ class TestHistoryRowWidgetButtonActions:
         assert current is not None
 
     def test_scrub_button_disabled_when_no_path(self, settings_panel_on_history, qapp):
-        """Scrub button is disabled when item has no path."""
+        """Re-transcribe button is disabled when item has no path."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         # Simulate empty path by creating widget with empty path
@@ -1848,17 +1848,17 @@ class TestHistoryRowWidgetButtonActions:
         item.setData(Qt.ItemDataRole.UserRole, "")
         widget = _HistoryRowWidget("test", "", settings_panel_on_history, item,
                                    settings_panel_on_history._history_list.viewport())
-        assert not widget._scrub_btn.isEnabled()
+        assert not widget._retranscribe_btn.isEnabled()
         assert not widget._delete_btn.isEnabled()
 
     def test_scrub_button_disabled_when_none_path(self, settings_panel_on_history, qapp):
-        """Scrub button is disabled when path is None."""
+        """Re-transcribe button is disabled when path is None."""
         from meetandread.widgets.floating_panels import _HistoryRowWidget
         item = QListWidgetItem("test")
         item.setData(Qt.ItemDataRole.UserRole, None)
         widget = _HistoryRowWidget("test", None, settings_panel_on_history, item,
                                    settings_panel_on_history._history_list.viewport())
-        assert not widget._scrub_btn.isEnabled()
+        assert not widget._retranscribe_btn.isEnabled()
         assert not widget._delete_btn.isEnabled()
 
     def test_row_widget_click_selects_item(self, settings_panel_on_history, qapp, tmp_path):
@@ -1929,12 +1929,12 @@ class TestHistoryRowWidgetExistingFlows:
             mock_del.assert_called_once()
 
     def test_header_scrub_button_still_works(self, settings_panel_on_history, qapp, tmp_path):
-        """Header Scrub button still triggers scrub handler."""
+        """Header Re-transcribe button still triggers the retranscribe handler."""
         _select_recording(settings_panel_on_history, tmp_path, qapp)
 
-        with patch.object(settings_panel_on_history, '_on_scrub_clicked') as mock_scrub:
-            settings_panel_on_history._on_scrub_clicked()
-            mock_scrub.assert_called_once()
+        with patch.object(settings_panel_on_history, '_on_retranscribe_clicked') as mock_retranscribe:
+            settings_panel_on_history._on_retranscribe_clicked()
+            mock_retranscribe.assert_called_once()
 
     def test_header_delete_button_still_works(self, settings_panel_on_history, qapp, tmp_path):
         """Header Delete button still triggers delete handler."""

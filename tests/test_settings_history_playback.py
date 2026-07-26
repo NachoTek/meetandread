@@ -277,14 +277,14 @@ class TestCircularPlaybackControlStructure:
             parent = parent.parent()
         assert found_history_page
 
-    @pytest.mark.skip(reason="Scrub/Delete buttons removed from playback toolbar — inline hover buttons replace them")
+    @pytest.mark.skip(reason="Re-transcribe/Delete buttons removed from playback toolbar — inline hover buttons replace them")
     def test_controls_before_scrub_delete(self, settings_panel):
         """Progress slider should appear before Scrub/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
         slider_idx = layout.indexOf(settings_panel._playback_progress_slider)
-        scrub_idx = layout.indexOf(settings_panel._scrub_btn)
+        retranscribe_idx = layout.indexOf(settings_panel._retranscribe_btn)
         delete_idx = layout.indexOf(settings_panel._delete_btn)
-        assert slider_idx < scrub_idx
+        assert slider_idx < retranscribe_idx
         assert slider_idx < delete_idx
 
 
@@ -2658,14 +2658,14 @@ class TestBookmarkToolbarStructure:
         assert btn_idx > slider_idx
         assert combo_idx > slider_idx
 
-    @pytest.mark.skip(reason="Scrub/Delete buttons removed from playback toolbar — inline hover buttons replace them")
+    @pytest.mark.skip(reason="Re-transcribe/Delete buttons removed from playback toolbar — inline hover buttons replace them")
     def test_bookmark_controls_before_scrub_delete(self, settings_panel):
         """Bookmark controls should appear before Scrub/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
         btn_idx = layout.indexOf(settings_panel._bookmark_add_btn)
-        scrub_idx = layout.indexOf(settings_panel._scrub_btn)
+        retranscribe_idx = layout.indexOf(settings_panel._retranscribe_btn)
         delete_idx = layout.indexOf(settings_panel._delete_btn)
-        assert btn_idx < scrub_idx
+        assert btn_idx < retranscribe_idx
         assert btn_idx < delete_idx
 
     def test_bookmark_items_initially_empty(self, settings_panel):
@@ -3254,13 +3254,13 @@ class TestBookmarkDeleteButtonStructure:
         delete_idx = layout.indexOf(settings_panel._bookmark_delete_btn)
         assert delete_idx > combo_idx
 
-    @pytest.mark.skip(reason="Scrub/Delete buttons removed from playback toolbar — inline hover buttons replace them")
+    @pytest.mark.skip(reason="Re-transcribe/Delete buttons removed from playback toolbar — inline hover buttons replace them")
     def test_delete_button_before_scrub_delete(self, settings_panel):
         """Delete button appears before Scrub/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
         delete_btn_idx = layout.indexOf(settings_panel._bookmark_delete_btn)
-        scrub_idx = layout.indexOf(settings_panel._scrub_btn)
-        assert delete_btn_idx < scrub_idx
+        retranscribe_idx = layout.indexOf(settings_panel._retranscribe_btn)
+        assert delete_btn_idx < retranscribe_idx
 
     def test_delete_button_has_scoped_selector(self, settings_panel):
         css = settings_panel._bookmark_delete_btn.styleSheet()
