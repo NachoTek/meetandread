@@ -281,7 +281,7 @@ class TestHistoryTab:
         assert tabs is not None, "Panel must have a QTabWidget"
         assert tabs.count() == 2
         assert tabs.tabText(0) == "Live"
-        assert tabs.tabText(1) == "History"
+        assert tabs.tabText(1) == "Library"
 
     def test_history_tab_has_list_and_viewer(self, panel) -> None:
         """History tab must contain a QListWidget and a read-only QTextEdit."""

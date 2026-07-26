@@ -1434,7 +1434,7 @@ class FloatingTranscriptPanel(QWidget):
         self._splitter.setSizes([160, 240])
 
         history_layout.addWidget(self._splitter)
-        self._tab_widget.addTab(history_tab, "History")
+        self._tab_widget.addTab(history_tab, "Library")
 
         # Connect tab change to refresh history when switching to it
         self._tab_widget.currentChanged.connect(self._on_tab_changed)
@@ -4298,7 +4298,7 @@ class FloatingSettingsPanel(QWidget):
         self._nav_buttons.append(self._nav_performance_btn)
 
         # History nav (placeholder — S02 builds the real list)
-        self._nav_history_btn = QPushButton("🕐  History")
+        self._nav_history_btn = QPushButton("🕐  Library")
         self._nav_history_btn.setObjectName("AethericNavButton")
         self._nav_history_btn.setCheckable(True)
         self._nav_history_btn.setCursor(Qt.CursorShape.ArrowCursor)
@@ -4934,7 +4934,7 @@ class FloatingSettingsPanel(QWidget):
         self._denoising_auto_disable_checkbox.setStyleSheet(aetheric_checkbox_css(current_palette()))
         self._denoising_auto_disable_checkbox.setToolTip(
             "When enabled, new recordings may temporarily bypass microphone denoising if "
-            "frame-drop telemetry indicates denoising is starving audio capture."
+            "frame-drop telemetry indicates denoising is starving the active Recording."
         )
         try:
             from meetandread.config import get_config
@@ -4952,7 +4952,7 @@ class FloatingSettingsPanel(QWidget):
         perf_layout.addWidget(self._denoising_auto_disable_checkbox)
 
         self._denoising_auto_disable_note = QLabel(
-            "Reliability-oriented default: leave on for smoother capture under load. "
+            "Reliability-oriented default: leave on for smoother Recording under load. "
             "This does not turn denoising on by itself."
         )
         self._denoising_auto_disable_note.setObjectName("AethericHintLabel")
