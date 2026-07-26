@@ -278,8 +278,8 @@ class TestCircularPlaybackControlStructure:
         assert found_history_page
 
     @pytest.mark.skip(reason="Re-transcribe/Delete buttons removed from playback toolbar — inline hover buttons replace them")
-    def test_controls_before_scrub_delete(self, settings_panel):
-        """Progress slider should appear before Scrub/Delete buttons."""
+    def test_controls_before_retranscribe_delete(self, settings_panel):
+        """Progress slider should appear before Re-transcribe/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
         slider_idx = layout.indexOf(settings_panel._playback_progress_slider)
         retranscribe_idx = layout.indexOf(settings_panel._retranscribe_btn)
@@ -2659,8 +2659,8 @@ class TestBookmarkToolbarStructure:
         assert combo_idx > slider_idx
 
     @pytest.mark.skip(reason="Re-transcribe/Delete buttons removed from playback toolbar — inline hover buttons replace them")
-    def test_bookmark_controls_before_scrub_delete(self, settings_panel):
-        """Bookmark controls should appear before Scrub/Delete buttons."""
+    def test_bookmark_controls_before_retranscribe_delete(self, settings_panel):
+        """Bookmark controls should appear before Re-transcribe/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
         btn_idx = layout.indexOf(settings_panel._bookmark_add_btn)
         retranscribe_idx = layout.indexOf(settings_panel._retranscribe_btn)
@@ -3255,8 +3255,8 @@ class TestBookmarkDeleteButtonStructure:
         assert delete_idx > combo_idx
 
     @pytest.mark.skip(reason="Re-transcribe/Delete buttons removed from playback toolbar — inline hover buttons replace them")
-    def test_delete_button_before_scrub_delete(self, settings_panel):
-        """Delete button appears before Scrub/Delete buttons."""
+    def test_delete_button_before_retranscribe_delete(self, settings_panel):
+        """Delete button appears before Re-transcribe/Delete buttons."""
         layout = settings_panel._history_detail_header.layout()
         delete_btn_idx = layout.indexOf(settings_panel._bookmark_delete_btn)
         retranscribe_idx = layout.indexOf(settings_panel._retranscribe_btn)

@@ -3,7 +3,7 @@ Tests for the Settings History page in FloatingSettingsPanel.
 
 Covers: structure, nav refresh, list population, item selection,
 empty state, missing-file fallback, speaker anchor rendering,
-delete workflows, scrub workflows, and speaker rename workflows.
+delete workflows, retranscribe workflows, and speaker rename workflows.
 """
 
 import os
@@ -149,7 +149,7 @@ class TestSettingsHistoryStructure:
     def test_history_viewer_object_name(self, settings_panel):
         assert settings_panel._history_viewer.objectName() == "AethericHistoryViewer"
 
-    def test_row_widget_scrub_button_object_name(self, settings_panel_on_history, qapp):
+    def test_row_widget_retranscribe_button_object_name(self, settings_panel_on_history, qapp):
         """Re-transcribe button lives on _HistoryRowWidget, not directly on the panel."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
@@ -163,7 +163,7 @@ class TestSettingsHistoryStructure:
         row = list(settings_panel_on_history._history_row_widgets.values())[0]
         assert row._delete_btn.objectName() == "AethericHistoryActionButton"
 
-    def test_row_widget_scrub_button_action_property(self, settings_panel_on_history, qapp):
+    def test_row_widget_retranscribe_button_action_property(self, settings_panel_on_history, qapp):
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
         row = list(settings_panel_on_history._history_row_widgets.values())[0]
@@ -584,13 +584,13 @@ class TestSettingsDeleteWorkflow:
 
 
 # ---------------------------------------------------------------------------
-# Scrub workflow tests
+# Retranscribe workflow tests
 # ---------------------------------------------------------------------------
 
-class TestSettingsScrubWorkflow:
-    """Verify scrub start/progress/error/comparison flows."""
+class TestSettingsRetranscribeWorkflow:
+    """Verify retranscribe start/progress/error/comparison flows."""
 
-    def test_scrub_refuses_missing_wav(self, settings_panel_on_history, qapp, tmp_path):
+    def test_retranscribe_refuses_missing_wav(self, settings_panel_on_history, qapp, tmp_path):
         _select_recording(settings_panel_on_history, tmp_path, qapp)
 
         # get_recordings_dir returns real dir, WAV won't exist there
@@ -598,11 +598,11 @@ class TestSettingsScrubWorkflow:
             settings_panel_on_history._on_retranscribe_clicked()
             info.assert_called_once()
 
-    def test_scrub_already_scrubbing_is_noop(self, settings_panel_on_history, qapp):
+    def test_retranscribe_already_retranscribing_is_noop(self, settings_panel_on_history, qapp):
         settings_panel_on_history._is_retranscribing = True
         settings_panel_on_history._on_retranscribe_clicked()
 
-    def test_scrub_dialog_cancel_does_nothing(self, settings_panel_on_history, qapp, tmp_path):
+    def test_retranscribe_dialog_cancel_does_nothing(self, settings_panel_on_history, qapp, tmp_path):
         _select_recording(settings_panel_on_history, tmp_path, qapp)
         wav_dir = tmp_path / "recordings"
         wav_dir.mkdir(exist_ok=True)
@@ -618,13 +618,13 @@ class TestSettingsScrubWorkflow:
 
         assert not settings_panel_on_history._is_retranscribing
 
-    def test_scrub_start_sets_state(self, settings_panel_on_history, qapp, tmp_path):
+    def test_retranscribe_start_sets_state(self, settings_panel_on_history, qapp, tmp_path):
         md_path, item = _select_recording(settings_panel_on_history, tmp_path, qapp)
         wav_path = tmp_path / "test_rec.wav"
         wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
 
         mock_runner = MagicMock()
-        mock_runner.scrub_recording.return_value = "/fake/sidecar.md"
+        mock_runner.retranscribe_recording.return_value = "/fake/sidecar.md"
 
         with patch("meetandread.transcription.retranscribe.RetranscribeRunner",
                     return_value=mock_runner), \
@@ -635,7 +635,7 @@ class TestSettingsScrubWorkflow:
         assert settings_panel_on_history._is_retranscribing is True
         assert settings_panel_on_history._retranscribe_model_size == "small"
 
-    def test_scrub_complete_error_reenables_state(self, settings_panel_on_history, qapp):
+    def test_retranscribe_complete_error_reenables_state(self, settings_panel_on_history, qapp):
         settings_panel_on_history._is_retranscribing = True
 
         with patch("meetandread.widgets.floating_panels.QMessageBox.warning"):
@@ -644,12 +644,12 @@ class TestSettingsScrubWorkflow:
         assert settings_panel_on_history._is_retranscribing is False
         assert not settings_panel_on_history._is_comparison_mode
 
-    def test_scrub_complete_shows_comparison(self, settings_panel_on_history, qapp, tmp_path):
+    def test_retranscribe_complete_shows_comparison(self, settings_panel_on_history, qapp, tmp_path):
         settings_panel_on_history._is_retranscribing = True
         settings_panel_on_history._retranscribe_model_size = "small"
 
-        sidecar = tmp_path / "test_rec_scrub_small.md"
-        sidecar.write_text("**SPK_0**\nScrubbed text.\n", encoding="utf-8")
+        sidecar = tmp_path / "test_rec_retranscribe_small.md"
+        sidecar.write_text("**SPK_0**\nRe-transcribed text.\n", encoding="utf-8")
 
         with patch.object(settings_panel_on_history, "_refresh_history"), \
              patch.object(settings_panel_on_history, "_emit_history_changed"):
@@ -660,10 +660,10 @@ class TestSettingsScrubWorkflow:
 
 
 # ---------------------------------------------------------------------------
-# Scrub accept/reject tests
+# Retranscribe accept/reject tests
 # ---------------------------------------------------------------------------
 
-class TestSettingsScrubAcceptReject:
+class TestSettingsRetranscribeAcceptReject:
     """Verify accept/reject refresh and reselection."""
 
     def test_accept_promotes_sidecar(self, settings_panel_on_history, qapp, tmp_path):
@@ -671,7 +671,7 @@ class TestSettingsScrubAcceptReject:
         settings_panel_on_history._retranscribe_model_size = "small"
         settings_panel_on_history._is_comparison_mode = True
 
-        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.accept_scrub") as mock_accept:
+        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.accept_retranscribe") as mock_accept:
             settings_panel_on_history._on_retranscribe_accept()
             mock_accept.assert_called_once_with(md_path, "small")
 
@@ -681,7 +681,7 @@ class TestSettingsScrubAcceptReject:
         _select_recording(settings_panel_on_history, tmp_path, qapp)
         settings_panel_on_history._retranscribe_model_size = "small"
 
-        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.accept_scrub",
+        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.accept_retranscribe",
                     side_effect=FileNotFoundError("gone")), \
              patch("meetandread.widgets.floating_panels.QMessageBox.warning") as warn:
             settings_panel_on_history._on_retranscribe_accept()
@@ -692,7 +692,7 @@ class TestSettingsScrubAcceptReject:
         settings_panel_on_history._retranscribe_model_size = "small"
         settings_panel_on_history._is_comparison_mode = True
 
-        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.reject_scrub") as mock_reject:
+        with patch("meetandread.transcription.retranscribe.RetranscribeRunner.reject_retranscribe") as mock_reject:
             settings_panel_on_history._on_retranscribe_reject()
             mock_reject.assert_called_once_with(md_path, "small")
 
@@ -705,10 +705,10 @@ class TestSettingsScrubAcceptReject:
 
 
 # ---------------------------------------------------------------------------
-# Qt-safe scrub signal tests (FloatingSettingsPanel)
+# Qt-safe retranscribe signal tests (FloatingSettingsPanel)
 # ---------------------------------------------------------------------------
 
-class TestSettingsScrubQtSafeSignals:
+class TestSettingsRetranscribeQtSafeSignals:
     """Verify retranscribe callbacks use PyQt signals instead of QTimer.singleShot.
 
     Tests that:
@@ -731,7 +731,7 @@ class TestSettingsScrubQtSafeSignals:
         settings_panel_on_history._is_retranscribing = True
         settings_panel_on_history._retranscribe_model_size = "small"
 
-        sidecar = tmp_path / "test_rec_scrub_small.md"
+        sidecar = tmp_path / "test_rec_retranscribe_small.md"
         sidecar.write_text("**SPK_0**\nNew text.\n", encoding="utf-8")
 
         with patch.object(settings_panel_on_history, "_refresh_history"), \
@@ -753,14 +753,14 @@ class TestSettingsScrubQtSafeSignals:
         assert not settings_panel_on_history._is_comparison_mode
 
 
-class TestSettingsScrubStartupFailure:
+class TestSettingsRetranscribeStartupFailure:
     """Verify RetranscribeRunner construction and startup failures are caught.
 
-    Tests that exceptions during RetranscribeRunner() or scrub_recording()
+    Tests that exceptions during RetranscribeRunner() or retranscribe_recording()
     restore retranscribe state and show a warning dialog.
     """
 
-    def test_scrub_runner_construction_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
+    def test_retranscribe_runner_construction_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
         wav_path = tmp_path / "test.wav"
         wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
         md_path = tmp_path / "test.md"
@@ -783,14 +783,14 @@ class TestSettingsScrubStartupFailure:
         call_args = mock_warn.call_args
         assert "Re-transcribe Failed" in call_args[0][1]
 
-    def test_scrub_recording_startup_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
+    def test_retranscribe_recording_startup_failure_resets_state(self, settings_panel_on_history, qapp, tmp_path):
         wav_path = tmp_path / "test.wav"
         wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
         md_path = tmp_path / "test.md"
         md_path.write_text("# Transcript\n")
 
         mock_runner = MagicMock()
-        mock_runner.scrub_recording.side_effect = FileNotFoundError("Audio file vanished")
+        mock_runner.retranscribe_recording.side_effect = FileNotFoundError("Audio file vanished")
 
         with patch(
             "meetandread.transcription.retranscribe.RetranscribeRunner",
@@ -959,7 +959,7 @@ class TestCrossPanelStateIsolation:
         assert transcript_panel._current_history_md_path == md_path
         assert settings_panel._current_history_md_path is None
 
-    def test_scrubbing_state_is_independent(
+    def test_retranscribing_state_is_independent(
         self, settings_panel, transcript_panel, qapp,
     ):
         """Retranscribe state in one panel does not affect the other.
@@ -1624,7 +1624,7 @@ class TestHistoryRowWidgetStructure:
         settings_panel_on_history._populate_history_list(recordings)
         assert len(settings_panel_on_history._history_row_widgets) == 2
 
-    def test_row_widget_has_scrub_button(self, settings_panel_on_history, qapp):
+    def test_row_widget_has_retranscribe_button(self, settings_panel_on_history, qapp):
         """Row widget has a Re-transcribe button with correct object name."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
@@ -1808,7 +1808,7 @@ class TestHistoryRowWidgetVisibility:
 class TestHistoryRowWidgetButtonActions:
     """Verify inline button clicks route to existing handlers."""
 
-    def test_scrub_button_routes_to_handler(self, settings_panel_on_history, qapp):
+    def test_retranscribe_button_routes_to_handler(self, settings_panel_on_history, qapp):
         """Inline re-transcribe button calls setCurrentItem then _on_retranscribe_clicked."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
@@ -1838,7 +1838,7 @@ class TestHistoryRowWidgetButtonActions:
         current = settings_panel_on_history._history_list.currentItem()
         assert current is not None
 
-    def test_scrub_button_disabled_when_no_path(self, settings_panel_on_history, qapp):
+    def test_retranscribe_button_disabled_when_no_path(self, settings_panel_on_history, qapp):
         """Re-transcribe button is disabled when item has no path."""
         recordings = [_make_meta("/fake/a.md")]
         settings_panel_on_history._populate_history_list(recordings)
@@ -1851,7 +1851,7 @@ class TestHistoryRowWidgetButtonActions:
         assert not widget._retranscribe_btn.isEnabled()
         assert not widget._delete_btn.isEnabled()
 
-    def test_scrub_button_disabled_when_none_path(self, settings_panel_on_history, qapp):
+    def test_retranscribe_button_disabled_when_none_path(self, settings_panel_on_history, qapp):
         """Re-transcribe button is disabled when path is None."""
         from meetandread.widgets.floating_panels import _HistoryRowWidget
         item = QListWidgetItem("test")
@@ -1928,7 +1928,7 @@ class TestHistoryRowWidgetExistingFlows:
             settings_panel_on_history.keyPressEvent(event)
             mock_del.assert_called_once()
 
-    def test_header_scrub_button_still_works(self, settings_panel_on_history, qapp, tmp_path):
+    def test_header_retranscribe_button_still_works(self, settings_panel_on_history, qapp, tmp_path):
         """Header Re-transcribe button still triggers the retranscribe handler."""
         _select_recording(settings_panel_on_history, tmp_path, qapp)
 

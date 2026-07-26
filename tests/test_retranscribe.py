@@ -64,6 +64,17 @@ class TestModuleShape:
         from meetandread.transcription import retranscribe
         assert hasattr(retranscribe, "RetranscribeRunner")
 
+    def test_public_api_uses_retranscribe_names(self):
+        """The runner exposes the canonical retranscribe_* public methods."""
+        for name in ("retranscribe_recording", "accept_retranscribe",
+                     "reject_retranscribe"):
+            assert callable(getattr(RetranscribeRunner, name)), name
+
+    def test_public_api_has_no_scrub_names(self):
+        """No scrub-named public methods remain on the runner."""
+        for name in ("scrub_recording", "accept_scrub", "reject_scrub"):
+            assert not hasattr(RetranscribeRunner, name), name
+
 
 # ---------------------------------------------------------------------------
 # Sidecar naming — uses _retranscribe_ tag
@@ -141,7 +152,7 @@ class TestRetranscribeCreatesSidecar:
         runner = RetranscribeRunner(settings, on_progress=on_progress, on_complete=on_complete)
 
         with patch.object(runner, "_get_or_create_engine", return_value=mock_engine):
-            sidecar_str = runner.scrub_recording(audio_path, transcript_path, "tiny")
+            sidecar_str = runner.retranscribe_recording(audio_path, transcript_path, "tiny")
 
         # Wait for background thread
         assert completed.wait(timeout=5), "Re-transcribe did not complete in time"
@@ -183,7 +194,7 @@ class TestRetranscribeCreatesSidecar:
 
         runner = RetranscribeRunner(settings, on_complete=lambda p, e: completed.set())
         with patch.object(runner, "_get_or_create_engine", return_value=mock_engine):
-            runner.scrub_recording(audio_path, transcript_path, "base")
+            runner.retranscribe_recording(audio_path, transcript_path, "base")
 
         assert completed.wait(timeout=5)
         content = sidecar.read_text()
@@ -228,7 +239,7 @@ class TestRetranscribeCancel:
         mock_engine.transcribe_chunk.side_effect = slow_transcribe
 
         with patch.object(runner, "_get_or_create_engine", return_value=mock_engine):
-            runner.scrub_recording(audio_path, transcript_path, "tiny")
+            runner.retranscribe_recording(audio_path, transcript_path, "tiny")
             # Cancel before transcription finishes
             runner.cancel()
 
@@ -248,7 +259,7 @@ class TestAcceptRetranscribe:
         sidecar = RetranscribeRunner.sidecar_path(transcript_path, "small")
         sidecar.write_text("# Re-transcribed\n\nBetter text\n")
 
-        result = RetranscribeRunner.accept_scrub(transcript_path, "small")
+        result = RetranscribeRunner.accept_retranscribe(transcript_path, "small")
 
         assert result == transcript_path
         assert transcript_path.read_text() == "# Re-transcribed\n\nBetter text\n"
@@ -257,7 +268,7 @@ class TestAcceptRetranscribe:
 
     def test_accept_missing_sidecar_raises(self, transcript_path: Path):
         with pytest.raises(FileNotFoundError, match="Sidecar not found"):
-            RetranscribeRunner.accept_scrub(transcript_path, "small")
+            RetranscribeRunner.accept_retranscribe(transcript_path, "small")
 
 
 class TestRejectRetranscribe:
@@ -265,13 +276,13 @@ class TestRejectRetranscribe:
         sidecar = RetranscribeRunner.sidecar_path(transcript_path, "small")
         sidecar.write_text("unwanted")
 
-        RetranscribeRunner.reject_scrub(transcript_path, "small")
+        RetranscribeRunner.reject_retranscribe(transcript_path, "small")
 
         assert not sidecar.exists()
 
     def test_reject_idempotent(self, transcript_path: Path):
         # Sidecar doesn't exist — should not raise
-        RetranscribeRunner.reject_scrub(transcript_path, "small")
+        RetranscribeRunner.reject_retranscribe(transcript_path, "small")
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +347,7 @@ class TestAcceptRejectUI:
         panel._is_comparison_mode = True
 
         # Perform accept
-        RetranscribeRunner.accept_scrub(md_path, "small")
+        RetranscribeRunner.accept_retranscribe(md_path, "small")
 
         # Simulate the updated scan returning new word count
         with patch.object(panel, "_refresh_history") as mock_refresh:
@@ -378,7 +389,7 @@ class TestAcceptRejectUI:
         panel._is_comparison_mode = True
 
         # Reject
-        RetranscribeRunner.reject_scrub(md_path, "base")
+        RetranscribeRunner.reject_retranscribe(md_path, "base")
 
         # Refresh — list should still be present
         with patch.object(panel, "_refresh_history") as mock_refresh:
@@ -498,7 +509,7 @@ class TestRetranscribeQtSafeSignals:
 class TestRetranscribeStartupFailure:
     """Verify RetranscribeRunner construction and startup failures are caught.
 
-    Tests that exceptions during RetranscribeRunner() or scrub_recording()
+    Tests that exceptions during RetranscribeRunner() or retranscribe_recording()
     restore retranscribe state and show a warning dialog.
     """
 
@@ -530,15 +541,15 @@ class TestRetranscribeStartupFailure:
         call_args = mock_warn.call_args
         assert "Re-transcribe Failed" in call_args[0][1]
 
-    def test_scrub_recording_startup_failure_resets_state(self, panel, qapp, tmp_path):
-        """If scrub_recording() raises, retranscribe state is fully reset."""
+    def test_retranscribe_recording_startup_failure_resets_state(self, panel, qapp, tmp_path):
+        """If retranscribe_recording() raises, retranscribe state is fully reset."""
         wav_path = tmp_path / "test.wav"
         wav_path.write_bytes(b"RIFF" + b"\x00" * 100)
         md_path = tmp_path / "test.md"
         md_path.write_text("# Transcript\n")
 
         mock_runner = MagicMock()
-        mock_runner.scrub_recording.side_effect = FileNotFoundError("Audio file vanished")
+        mock_runner.retranscribe_recording.side_effect = FileNotFoundError("Audio file vanished")
 
         with patch(
             "meetandread.transcription.retranscribe.RetranscribeRunner",

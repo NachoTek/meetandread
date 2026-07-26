@@ -1114,15 +1114,17 @@ def _propagate_identity_to_all_transcripts(
     Returns the number of additional transcripts updated.
     """
     from meetandread.audio.storage.paths import get_transcripts_dir
+    from meetandread.transcription.retranscribe import RetranscribeRunner
 
     transcripts_dir = get_transcripts_dir()
     if not transcripts_dir.exists():
         return 0
 
+    sidecar_tag = f"_{RetranscribeRunner.SIDECAR_TAG}_"
     updated_count = 0
     for md_path in transcripts_dir.glob("*.md"):
         # Skip sidecar and enhanced files
-        if "_retranscribe_" in md_path.stem or md_path.name.endswith("_enhanced.md"):
+        if sidecar_tag in md_path.stem or md_path.name.endswith("_enhanced.md"):
             continue
         # Skip the source file (already updated)
         if md_path.resolve() == source_md_path.resolve():
@@ -2382,7 +2384,7 @@ class FloatingTranscriptPanel(QWidget):
                 on_progress=self._on_retranscribe_progress,
                 on_complete=self._on_retranscribe_complete,
             )
-            self._retranscribe_sidecar_path = self._retranscribe_runner.scrub_recording(
+            self._retranscribe_sidecar_path = self._retranscribe_runner.retranscribe_recording(
                 wav_path, md_path, model_size,
             )
         except Exception as exc:
@@ -2592,7 +2594,7 @@ class FloatingTranscriptPanel(QWidget):
 
         try:
             from meetandread.transcription.retranscribe import RetranscribeRunner
-            RetranscribeRunner.accept_scrub(
+            RetranscribeRunner.accept_retranscribe(
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
@@ -2626,7 +2628,7 @@ class FloatingTranscriptPanel(QWidget):
 
         try:
             from meetandread.transcription.retranscribe import RetranscribeRunner
-            RetranscribeRunner.reject_scrub(
+            RetranscribeRunner.reject_retranscribe(
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
@@ -9458,7 +9460,7 @@ class FloatingSettingsPanel(QWidget):
                 on_progress=self._on_retranscribe_progress,
                 on_complete=self._on_retranscribe_complete,
             )
-            self._retranscribe_sidecar_path = self._retranscribe_runner.scrub_recording(
+            self._retranscribe_sidecar_path = self._retranscribe_runner.retranscribe_recording(
                 wav_path, md_path, model_size,
             )
         except Exception as exc:
@@ -9616,7 +9618,7 @@ class FloatingSettingsPanel(QWidget):
 
         try:
             from meetandread.transcription.retranscribe import RetranscribeRunner
-            RetranscribeRunner.accept_scrub(
+            RetranscribeRunner.accept_retranscribe(
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
@@ -9649,7 +9651,7 @@ class FloatingSettingsPanel(QWidget):
 
         try:
             from meetandread.transcription.retranscribe import RetranscribeRunner
-            RetranscribeRunner.reject_scrub(
+            RetranscribeRunner.reject_retranscribe(
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(

@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from meetandread.audio.storage.paths import get_recordings_dir
 from meetandread.playback.bookmark import Bookmark, _parse_bookmark_entry
+from meetandread.transcription.retranscribe import RetranscribeRunner
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,7 @@ def scan_recordings(recordings_dir: Optional[Path] = None) -> List[RecordingMeta
         # Skip re-transcription sidecar files — these are temporary
         # comparison results waiting for Accept/Reject, not standalone
         # recordings.
-        if "_retranscribe_" in md_path.stem:
+        if f"_{RetranscribeRunner.SIDECAR_TAG}_" in md_path.stem:
             continue
 
         meta = parse_metadata(md_path)

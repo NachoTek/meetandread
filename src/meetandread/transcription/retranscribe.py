@@ -57,9 +57,9 @@ class RetranscribeRunner:
     Example
     -------
     >>> runner = RetranscribeRunner(settings, on_progress=print, on_complete=print)
-    >>> runner.scrub_recording(audio_path, transcript_path, "small")
+    >>> runner.retranscribe_recording(audio_path, transcript_path, "small")
     >>> # … later, in the progress callback:
-    >>> runner.accept_scrub(transcript_path, "small")
+    >>> runner.accept_retranscribe(transcript_path, "small")
     """
 
     #: Tag used when building sidecar filenames.
@@ -89,7 +89,7 @@ class RetranscribeRunner:
     # Public API
     # ------------------------------------------------------------------
 
-    def scrub_recording(
+    def retranscribe_recording(
         self,
         audio_path: Path,
         transcript_path: Path,
@@ -143,7 +143,7 @@ class RetranscribeRunner:
         return cls._sidecar_path(transcript_path, model_size)
 
     @classmethod
-    def accept_scrub(cls, transcript_path: Path, model_size: str) -> Path:
+    def accept_retranscribe(cls, transcript_path: Path, model_size: str) -> Path:
         """Promote a sidecar to the canonical transcript.
 
         Overwrites *transcript_path* with the sidecar content and deletes
@@ -161,7 +161,7 @@ class RetranscribeRunner:
         return transcript_path
 
     @classmethod
-    def reject_scrub(cls, transcript_path: Path, model_size: str) -> None:
+    def reject_retranscribe(cls, transcript_path: Path, model_size: str) -> None:
         """Delete the sidecar file for a rejected re-transcription."""
         sidecar = cls._sidecar_path(transcript_path, model_size)
         if sidecar.exists():

@@ -18,6 +18,7 @@ from meetandread.audio.storage.paths import (
     get_recordings_dir,
     get_transcripts_dir,
 )
+from meetandread.transcription.retranscribe import RetranscribeRunner
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +135,11 @@ def enumerate_recording_files(
         tra_dir / f"{stem}.md",
     ]
 
-    # Re-transcribe sidecars: transcripts/{stem}_retranscribe_*.md
+    # Re-transcribe sidecars: transcripts/{stem}_{SIDECAR_TAG}_*.md
     if tra_dir.exists():
-        candidates.extend(tra_dir.glob(f"{stem}_retranscribe_*.md"))
+        candidates.extend(
+            tra_dir.glob(f"{stem}_{RetranscribeRunner.SIDECAR_TAG}_*.md")
+        )
 
     # Filter to files that actually exist
     found = [p for p in candidates if p.is_file()]
@@ -170,11 +173,11 @@ def _enumerate_rename_pairs(
         (transcripts_dir / f"{old_stem}.md", transcripts_dir / f"{new_stem}.md"),
     ]
 
-    # Re-transcribe sidecars — rename canonical ``_retranscribe_``
+    # Re-transcribe sidecars — rename canonical ``_{SIDECAR_TAG}_``
     # sidecars so they follow the renamed transcript.
     if transcripts_dir.exists():
         for pattern in (
-            f"{old_stem}_retranscribe_*.md",
+            f"{old_stem}_{RetranscribeRunner.SIDECAR_TAG}_*.md",
         ):
             for old_sidecar in transcripts_dir.glob(pattern):
                 suffix = old_sidecar.name[len(old_stem):]  # e.g. "_retranscribe_v1.md"
