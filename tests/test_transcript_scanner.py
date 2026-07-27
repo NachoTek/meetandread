@@ -333,13 +333,13 @@ class TestScanRecordings:
         assert len(results) == 1
         assert results[0].path.name == "recording-good.md"
 
-    def test_legacy_scrub_sidecar_files_are_surfaced(self, tmp_path: Path) -> None:
-        """scan_recordings surfaces legacy ``*_scrub_*.md`` files now that backward compat is gone.
+    def test_skips_legacy_scrub_sidecar_files(self, tmp_path: Path) -> None:
+        """scan_recordings skips legacy ``*_scrub_*.md`` sidecar files.
 
-        With backward compatibility removed, ``scan_recordings`` no longer
-        excludes legacy ``*_scrub_*.md`` files — they appear in the Library
-        listing alongside real recordings. The canonical ``_retranscribe_``
-        sidecar is still skipped.
+        Legacy ``_scrub_`` sidecars are pre-rename comparison artifacts
+        that must stay hidden from the Library, just like the canonical
+        ``_retranscribe_`` sidecars. Both naming formats are excluded so
+        in-progress comparisons are never surfaced as standalone recordings.
         """
         _write_transcript_md(
             tmp_path / "recording-good.md",
@@ -359,13 +359,10 @@ class TestScanRecordings:
 
         results = scan_recordings(tmp_path)
 
-        # Only the _retranscribe_ sidecar is skipped; the legacy _scrub_ file
-        # is now surfaced (backward compat removed).
-        assert len(results) == 2
-        names = {r.path.name for r in results}
-        assert "recording-good.md" in names
-        assert "recording-good_scrub_small.md" in names
-        assert "recording-good_retranscribe_base.md" not in names
+        # Both sidecar formats are skipped; only the canonical recording
+        # appears in the Library.
+        assert len(results) == 1
+        assert results[0].path.name == "recording-good.md"
 
     def test_empty_directory(self, tmp_path: Path) -> None:
         """scan_recordings returns empty list for a directory with no .md files."""

@@ -54,7 +54,13 @@ def patch_dirs(monkeypatch, recording_dirs):
     )
 
 
-def _create_recording(recording_dirs, stem, with_sidecar=False, with_pcm=False):
+def _create_recording(
+    recording_dirs,
+    stem,
+    with_sidecar=False,
+    with_legacy_sidecar=False,
+    with_pcm=False,
+):
     """Helper to create a set of recording files on disk."""
     rec_dir, tra_dir = recording_dirs
     created = []
@@ -77,6 +83,11 @@ def _create_recording(recording_dirs, stem, with_sidecar=False, with_pcm=False):
     if with_sidecar:
         sc = tra_dir / f"{stem}_retranscribe_v1.md"
         sc.write_text("# retranscribe")
+        created.append(sc)
+
+    if with_legacy_sidecar:
+        sc = tra_dir / f"{stem}_scrub_v1.md"
+        sc.write_text("# legacy scrub")
         created.append(sc)
 
     return created
@@ -173,18 +184,20 @@ class TestEnumerateRecordingFiles:
         assert f"{stem}_retranscribe_v1.md" in names
         assert f"{stem}_retranscribe_v2.md" in names
 
-    def test_enumerate_ignores_legacy_scrub_sidecars(self, recording_dirs):
-        """Legacy ``_scrub_`` sidecars are no longer enumerated (backward
-        compat removed). Only the canonical ``_retranscribe_`` pattern is
-        tracked."""
+    def test_enumerate_finds_legacy_scrub_sidecars(self, recording_dirs):
+        """Legacy ``_scrub_`` sidecars are enumerated alongside canonical
+        ``_retranscribe_`` sidecars so they follow the recording through
+        rename and deletion instead of being orphaned on disk."""
         _, transcripts_dir = recording_dirs
         stem = "rec-legacy"
         (transcripts_dir / f"{stem}.md").write_text("t")
         (transcripts_dir / f"{stem}_scrub_v1.md").write_text("s1")
+        (transcripts_dir / f"{stem}_retranscribe_v1.md").write_text("r1")
 
         found = enumerate_recording_files(stem)
         names = {p.name for p in found}
-        assert f"{stem}_scrub_v1.md" not in names
+        assert f"{stem}_scrub_v1.md" in names
+        assert f"{stem}_retranscribe_v1.md" in names
 
     def test_enumerate_skips_missing(self, recording_dirs):
         recordings_dir, _ = recording_dirs
@@ -239,6 +252,47 @@ class TestRenameRecording:
 
         assert len(result.renamed) == 3  # wav + md + retranscribe sidecar
         assert (tra_dir / f"{new_stem}_retranscribe_v1.md").exists()
+
+    def test_rename_with_legacy_scrub_sidecars(self, recording_dirs):
+        """Legacy ``_scrub_`` sidecars follow the renamed recording, and
+        the legacy tag is preserved (not normalized to ``_retranscribe_``)
+        so the file remains identifiable as a legacy artifact."""
+        _, tra_dir = recording_dirs
+        old_stem = "with-legacy"
+        new_stem = "legacied"
+        _create_recording(recording_dirs, old_stem, with_legacy_sidecar=True)
+
+        result = rename_recording(old_stem, new_stem)
+
+        assert len(result.renamed) == 3  # wav + md + legacy scrub sidecar
+        # Tag preserved — not converted to _retranscribe_.
+        assert (tra_dir / f"{new_stem}_scrub_v1.md").exists()
+        assert not (tra_dir / f"{new_stem}_retranscribe_v1.md").exists()
+        # Original legacy sidecar is gone.
+        assert not (tra_dir / f"{old_stem}_scrub_v1.md").exists()
+
+    def test_rename_preserves_both_sidecar_tags_without_collision(
+        self, recording_dirs
+    ):
+        """When a recording has both a legacy ``_scrub_`` and a canonical
+        ``_retranscribe_`` sidecar sharing the same suffix, both are
+        renamed without colliding — the tag distinguishes them."""
+        _, tra_dir = recording_dirs
+        old_stem = "mixed-tags"
+        new_stem = "renamed-mixed"
+        # Both sidecars share the ``_v1`` suffix but use different tags.
+        (tra_dir / f"{old_stem}.md").write_text("# transcript")
+        (tra_dir / f"{old_stem}_scrub_v1.md").write_text("legacy")
+        (tra_dir / f"{old_stem}_retranscribe_v1.md").write_text("modern")
+
+        result = rename_recording(old_stem, new_stem)
+
+        assert result.failed == []
+        assert (tra_dir / f"{new_stem}_scrub_v1.md").exists()
+        assert (tra_dir / f"{new_stem}_retranscribe_v1.md").exists()
+        # No data loss: content survives the rename.
+        assert (tra_dir / f"{new_stem}_scrub_v1.md").read_text() == "legacy"
+        assert (tra_dir / f"{new_stem}_retranscribe_v1.md").read_text() == "modern"
 
     def test_rename_target_conflict_aborts(self, recording_dirs):
         rec_dir, tra_dir = recording_dirs
@@ -331,6 +385,26 @@ class TestDeleteRecording:
         assert count == 2
         assert not (rec_dir / f"{stem}.wav").exists()
         assert not (tra_dir / f"{stem}.md").exists()
+
+    def test_delete_removes_both_sidecar_formats(self, recording_dirs):
+        """Deleting a recording removes every associated sidecar — both the
+        canonical ``_retranscribe_`` and the legacy ``_scrub_`` — so legacy
+        comparison artifacts are not orphaned on disk."""
+        rec_dir, tra_dir = recording_dirs
+        stem = "del-sidecars"
+        _create_recording(
+            recording_dirs, stem, with_sidecar=True, with_legacy_sidecar=True
+        )
+
+        count, deleted = delete_recording(stem)
+
+        # wav + md + retranscribe sidecar + scrub sidecar
+        assert count == 4
+        deleted_names = {Path(p).name for p in deleted}
+        assert f"{stem}_retranscribe_v1.md" in deleted_names
+        assert f"{stem}_scrub_v1.md" in deleted_names
+        assert not (tra_dir / f"{stem}_retranscribe_v1.md").exists()
+        assert not (tra_dir / f"{stem}_scrub_v1.md").exists()
 
     def test_delete_with_dir_overrides(self, tmp_path):
         custom_rec = tmp_path / "r"

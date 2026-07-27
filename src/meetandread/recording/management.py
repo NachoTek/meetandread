@@ -113,6 +113,7 @@ def enumerate_recording_files(
     - ``recordings/{stem}.pcm.part.json``
     - ``transcripts/{stem}.md``
     - ``transcripts/{stem}_retranscribe_*.md``  (re-transcribe sidecars)
+    - ``transcripts/{stem}_scrub_*.md``         (legacy sidecars, pre-rename)
 
     Files that do not exist on disk are silently skipped.
 
@@ -135,11 +136,12 @@ def enumerate_recording_files(
         tra_dir / f"{stem}.md",
     ]
 
-    # Re-transcribe sidecars: transcripts/{stem}_{SIDECAR_TAG}_*.md
+    # Re-transcribe sidecars: transcripts/{stem}_{tag}_*.md for every
+    # sidecar tag (canonical ``retranscribe`` and legacy ``scrub``), so
+    # pre-rename sidecars are tracked through rename and deletion instead
+    # of being orphaned on disk.
     if tra_dir.exists():
-        candidates.extend(
-            tra_dir.glob(f"{stem}_{RetranscribeRunner.SIDECAR_TAG}_*.md")
-        )
+        candidates.extend(RetranscribeRunner.find_sidecars(tra_dir, stem))
 
     # Filter to files that actually exist
     found = [p for p in candidates if p.is_file()]
@@ -173,16 +175,18 @@ def _enumerate_rename_pairs(
         (transcripts_dir / f"{old_stem}.md", transcripts_dir / f"{new_stem}.md"),
     ]
 
-    # Re-transcribe sidecars — rename canonical ``_{SIDECAR_TAG}_``
-    # sidecars so they follow the renamed transcript.
+    # Re-transcribe sidecars — rename every matching tag (canonical
+    # ``_retranscribe_`` and legacy ``_scrub_``) so they follow the
+    # renamed transcript. The tag is preserved rather than normalized,
+    # so same-suffix files of different vintages (e.g. ``_scrub_v1`` and
+    # ``_retranscribe_v1``) don't collide on the new stem.
     if transcripts_dir.exists():
-        for pattern in (
-            f"{old_stem}_{RetranscribeRunner.SIDECAR_TAG}_*.md",
+        for old_sidecar in RetranscribeRunner.find_sidecars(
+            transcripts_dir, old_stem
         ):
-            for old_sidecar in transcripts_dir.glob(pattern):
-                suffix = old_sidecar.name[len(old_stem):]  # e.g. "_retranscribe_v1.md"
-                new_sidecar = transcripts_dir / f"{new_stem}{suffix}"
-                pairs.append((old_sidecar, new_sidecar))
+            suffix = old_sidecar.name[len(old_stem):]  # e.g. "_retranscribe_v1.md"
+            new_sidecar = transcripts_dir / f"{new_stem}{suffix}"
+            pairs.append((old_sidecar, new_sidecar))
 
     return [(old, new) for old, new in pairs if old.is_file()]
 

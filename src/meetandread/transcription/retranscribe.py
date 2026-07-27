@@ -65,6 +65,47 @@ class RetranscribeRunner:
     #: Tag used when building sidecar filenames.
     SIDECAR_TAG: str = "retranscribe"
 
+    #: Tags from legacy sidecar naming conventions. These files are no
+    #: longer produced, but pre-rename sidecars on disk must still be
+    #: tracked through Library scanning, rename, and deletion alongside
+    #: canonical ``_retranscribe_`` sidecars.
+    LEGACY_SIDECAR_TAGS: tuple[str, ...] = ("scrub",)
+
+    @classmethod
+    def all_sidecar_tags(cls) -> tuple[str, ...]:
+        """Every sidecar filename tag, current and legacy.
+
+        The canonical tag comes first. Callers that need to recognise or
+        enumerate all comparison sidecars on disk (Library scanner,
+        recording file management) iterate over this tuple instead of
+        hard-coding a single tag, so legacy files are never orphaned.
+        """
+        return (cls.SIDECAR_TAG, *cls.LEGACY_SIDECAR_TAGS)
+
+    @classmethod
+    def is_sidecar_path(cls, path: Path) -> bool:
+        """Return True if *path* looks like a comparison sidecar.
+
+        Matches every sidecar naming convention (canonical
+        ``_retranscribe_`` and legacy ``_scrub_``) so callers don't
+        need to know the tag list.
+        """
+        stem = path.stem
+        return any(f"_{tag}_" in stem for tag in cls.all_sidecar_tags())
+
+    @classmethod
+    def find_sidecars(cls, directory: Path, stem: str) -> list[Path]:
+        """Every sidecar file for *stem* in *directory*, all tags.
+
+        Used by recording file management to enumerate the sidecars
+        that must follow a recording through rename and deletion.
+        Only existing files are returned (``Path.glob`` semantics).
+        """
+        sidecars: list[Path] = []
+        for tag in cls.all_sidecar_tags():
+            sidecars.extend(directory.glob(f"{stem}_{tag}_*.md"))
+        return sidecars
+
     def __init__(
         self,
         settings: AppSettings,

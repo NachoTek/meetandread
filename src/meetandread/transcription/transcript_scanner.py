@@ -193,8 +193,9 @@ def scan_recordings(recordings_dir: Optional[Path] = None) -> List[RecordingMeta
             continue
         # Skip re-transcription sidecar files — these are temporary
         # comparison results waiting for Accept/Reject, not standalone
-        # recordings.
-        if f"_{RetranscribeRunner.SIDECAR_TAG}_" in md_path.stem:
+        # recordings. Match every sidecar tag (canonical ``_retranscribe_``
+        # and legacy ``_scrub_``) so pre-rename sidecars stay hidden too.
+        if RetranscribeRunner.is_sidecar_path(md_path):
             continue
 
         meta = parse_metadata(md_path)
