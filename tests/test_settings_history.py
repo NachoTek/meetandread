@@ -826,8 +826,8 @@ class TestSettingsSpeakerRenameWorkflow:
 
         # _open_identity_link_dialog is mocked so the file is not actually updated.
         # Verify by calling the persistence helper directly.
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
-        _link_speaker_identity_in_file(md_path, "SPK_0", "Alice")
+        from meetandread.speaker.identity_linking import link_identity
+        link_identity(md_path, "SPK_0", "Alice")
         content = md_path.read_text(encoding="utf-8")
         assert "**Alice**" in content
         assert "**SPK_0**" not in content

@@ -2,7 +2,7 @@
 
 Covers the history identification portion: create a two-speaker transcript,
 seed a temp VoiceSignatureStore, link identities via
-``_link_speaker_identity_in_file``, and verify that markdown headings,
+``link_identity``, and verify that markdown headings,
 metadata words/segments/speaker_matches, and store signatures all reflect
 the linked identities — while untouched labels remain exact-match safe.
 
@@ -139,7 +139,7 @@ class TestHistoryIdentityLinkIntegration:
 
     def test_two_speaker_full_link(self, tmp_path: Path) -> None:
         """Link SPK_0→Alice and SPK_1→Bob, verify every surface is consistent."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         # 1. Seed store with raw signatures
         db = tmp_path / "speaker_signatures.db"
@@ -149,10 +149,10 @@ class TestHistoryIdentityLinkIntegration:
         md = _make_two_speaker_transcript(tmp_path)
 
         # 3. Link SPK_0 → Alice
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
 
         # 4. Link SPK_1 → Bob
-        _link_speaker_identity_in_file(md, "SPK_1", "Bob")
+        link_identity(md, "SPK_1", "Bob")
 
         # 5. Verify markdown body headings
         body = md.read_text(encoding="utf-8")
@@ -206,13 +206,13 @@ class TestHistoryIdentityLinkIntegration:
 
     def test_link_first_speaker_preserves_second(self, tmp_path: Path) -> None:
         """After linking SPK_0 only, SPK_1 remains untouched everywhere."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         db = tmp_path / "speaker_signatures.db"
         _seed_store(db, ["SPK_0", "SPK_1"], seeds=[10, 11])
 
         md = _make_two_speaker_transcript(tmp_path)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
 
         body = md.read_text(encoding="utf-8")
         assert "**Alice**" in body
@@ -233,14 +233,14 @@ class TestHistoryIdentityLinkIntegration:
 
     def test_exact_label_matching_no_substring_rewrite(self, tmp_path: Path) -> None:
         """Linking SPK_0 must NOT rewrite SPK_01 (boundary condition)."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         extra = [
             {"text": "Extra", "start_time": 3.0, "end_time": 3.5, "confidence": 80, "speaker_id": "SPK_01"},
         ]
         md = _make_two_speaker_transcript(tmp_path, extra_words=extra)
 
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
 
         body = md.read_text(encoding="utf-8")
         assert "**SPK_01**" in body, "SPK_01 heading must not be rewritten"
@@ -252,7 +252,7 @@ class TestHistoryIdentityLinkIntegration:
 
     def test_preserves_prior_match_scores_on_relink(self, tmp_path: Path) -> None:
         """Re-linking a speaker preserves prior score/confidence if present."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         md = _make_two_speaker_transcript(
             tmp_path,
@@ -262,7 +262,7 @@ class TestHistoryIdentityLinkIntegration:
             },
         )
 
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
 
         data = _parse_metadata(md)
         m = data["speaker_matches"]["SPK_0"]
@@ -272,14 +272,14 @@ class TestHistoryIdentityLinkIntegration:
 
     def test_no_store_mutation_on_missing_profile(self, tmp_path: Path) -> None:
         """Linking a speaker not in the store should not add any entry."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         db = tmp_path / "speaker_signatures.db"
         # Only seed SPK_0, not SPK_1
         _seed_store(db, ["SPK_0"], seeds=[0])
 
         md = _make_two_speaker_transcript(tmp_path)
-        _link_speaker_identity_in_file(md, "SPK_1", "Bob")
+        link_identity(md, "SPK_1", "Bob")
 
         with VoiceSignatureStore(db_path=str(db)) as store:
             names = [p.name for p in store.load_signatures()]
@@ -925,38 +925,38 @@ class TestMalformedInputsIntegration:
 
     def test_malformed_metadata_no_mutation(self, tmp_path: Path) -> None:
         """Malformed metadata footer → file content unchanged."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         p = tmp_path / "bad.md"
         original = "# Transcript\n\n**SPK_0**\n\nHello\n\n---\n\n<!-- METADATA: {bad json} -->\n"
         p.write_text(original, encoding="utf-8")
 
-        _link_speaker_identity_in_file(p, "SPK_0", "Alice")
+        link_identity(p, "SPK_0", "Alice")
 
         assert p.read_text(encoding="utf-8") == original
 
     def test_no_metadata_footer_no_mutation(self, tmp_path: Path) -> None:
         """Transcript without metadata footer → no crash, no mutation."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         p = tmp_path / "bare.md"
         original = "# Bare\n\n**SPK_0**\n\nHello\n"
         p.write_text(original, encoding="utf-8")
 
-        _link_speaker_identity_in_file(p, "SPK_0", "Alice")
+        link_identity(p, "SPK_0", "Alice")
 
         assert p.read_text(encoding="utf-8") == original
 
     def test_store_paths_stay_in_tmp_path(self, tmp_path: Path) -> None:
         """Ensure propagation only touches the tmp_path store, never real paths."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         from unittest.mock import patch
 
         db = tmp_path / "speaker_signatures.db"
         _seed_store(db, ["SPK_0"], seeds=[42])
 
         md = _make_two_speaker_transcript(tmp_path)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
 
         # The db in tmp_path should now have Alice
         with VoiceSignatureStore(db_path=str(db)) as store:

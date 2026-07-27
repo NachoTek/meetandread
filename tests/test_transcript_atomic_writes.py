@@ -268,47 +268,28 @@ class TestFloatingPanelsAtomicWrite:
     """Prove panel identity/rename helpers delegate to atomic_write."""
 
     def test_link_speaker_identity_uses_atomic_write(self, tmp_path: Path) -> None:
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         path = _write_transcript_md(tmp_path / "rec.md")
 
-        with patch("meetandread.widgets.floating_panels.atomic_write",
+        with patch("meetandread.speaker.identity_linking.atomic_write",
                     wraps=atomic_write) as mock_aw:
-            _link_speaker_identity_in_file(path, "SPK_0", "Alice")
+            link_identity(path, "SPK_0", "Alice")
             mock_aw.assert_called_once()
 
         data = _parse_metadata(path)
         assert data["speaker_matches"]["SPK_0"]["identity_name"] == "Alice"
 
-    def test_try_link_identity_uses_atomic_write(self, tmp_path: Path) -> None:
-        from meetandread.widgets.floating_panels import _try_link_identity_in_file
-
-        path = _write_transcript_md(
-            tmp_path / "rec.md",
-            extra_metadata={
-                "speaker_matches": {"SPK_0": None},
-            },
-        )
-
-        with patch("meetandread.widgets.floating_panels.atomic_write",
-                    wraps=atomic_write) as mock_aw:
-            result = _try_link_identity_in_file(path, "SPK_0", "Bob")
-            assert result is True
-            mock_aw.assert_called_once()
-
-        data = _parse_metadata(path)
-        assert data["speaker_matches"]["SPK_0"]["identity_name"] == "Bob"
-
     def test_link_failure_preserves_existing(self, tmp_path: Path) -> None:
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
 
         path = _write_transcript_md(tmp_path / "rec.md")
         original_content = path.read_text(encoding="utf-8")
 
-        with patch("meetandread.widgets.floating_panels.atomic_write",
+        with patch("meetandread.speaker.identity_linking.atomic_write",
                     side_effect=OSError("fail")):
             with pytest.raises(OSError):
-                _link_speaker_identity_in_file(path, "SPK_0", "Alice")
+                link_identity(path, "SPK_0", "Alice")
 
         assert path.read_text(encoding="utf-8") == original_content
 

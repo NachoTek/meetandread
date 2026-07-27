@@ -803,9 +803,9 @@ class TestSpeakerRename:
             "meetandread.widgets.floating_panels._open_identity_link_dialog",
             return_value=True,
         ) as mock_link:
-            # Also mock _link_speaker_identity_in_file so the file is actually updated
+            # Also mock link_identity so the file is actually updated
             with patch(
-                "meetandread.widgets.floating_panels._link_speaker_identity_in_file",
+                "meetandread.speaker.identity_linking.link_identity",
             ) as mock_persist:
                 panel._on_history_anchor_clicked(QUrl("speaker:SPK_0"))
                 # Verify the dialog helper was called
@@ -815,9 +815,9 @@ class TestSpeakerRename:
                 # calls it). Instead verify that the dialog got the right arguments.
                 assert mock_link.call_args[0][1] == "SPK_0"
 
-        # For a real end-to-end test, verify via _link_speaker_identity_in_file directly
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
-        _link_speaker_identity_in_file(md_path, "SPK_0", "Alice")
+        # For a real end-to-end test, verify via link_identity directly
+        from meetandread.speaker.identity_linking import link_identity
+        link_identity(md_path, "SPK_0", "Alice")
 
         data = self._read_metadata(md_path)
         assert data["words"][0]["speaker_id"] == "Alice"
@@ -881,8 +881,8 @@ class TestSpeakerRename:
         # Viewer HTML should contain the new name as an anchor
         # Note: since _open_identity_link_dialog is mocked, the file wasn't actually updated.
         # We test viewer refresh by first updating the file then triggering the handler.
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
-        _link_speaker_identity_in_file(md_path, "SPK_0", "Carol")
+        from meetandread.speaker.identity_linking import link_identity
+        link_identity(md_path, "SPK_0", "Carol")
         html_rendered = panel._render_history_transcript(md_path)
         assert html_rendered is not None
         assert "Carol" in html_rendered

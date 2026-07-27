@@ -63,7 +63,7 @@ def _make_md(
 class TestMetadataAndBody:
 
     def test_updates_all_surfaces(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [
             {"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
             {"text": "Bye", "start_time": 0.5, "end_time": 1.0, "confidence": 85, "speaker_id": "SPK_0"},
@@ -74,7 +74,7 @@ class TestMetadataAndBody:
             {"start_time": 1.0, "end_time": 1.5, "speaker_id": "SPK_1"},
         ]
         md = _make_md(tmp_path, w, s, {"SPK_0": None, "SPK_1": None})
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
         assert d["words"][0]["speaker_id"] == "Alice"
         assert d["words"][2]["speaker_id"] == "SPK_1"
@@ -82,11 +82,11 @@ class TestMetadataAndBody:
         assert "**Alice**" in md.read_text(encoding="utf-8")
 
     def test_creates_speaker_matches_when_missing(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
         m = d["speaker_matches"]["SPK_0"]
         assert m["identity_name"] == "Alice"
@@ -94,12 +94,12 @@ class TestMetadataAndBody:
         assert m["confidence"] == "manual"
 
     def test_preserves_prior_score(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         sm = {"SPK_0": {"identity_name": "Bob", "score": 0.92, "confidence": "high"}}
         md = _make_md(tmp_path, w, s, sm)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
         m = d["speaker_matches"]["SPK_0"]
         assert m["identity_name"] == "Alice"
@@ -107,11 +107,11 @@ class TestMetadataAndBody:
         assert m["confidence"] == "high"
 
     def test_replaces_null_match(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s, {"SPK_0": None})
-        _link_speaker_identity_in_file(md, "SPK_0", "Carol")
+        link_identity(md, "SPK_0", "Carol")
         d = _parse_metadata(md)
         assert isinstance(d["speaker_matches"]["SPK_0"], dict)
         assert d["speaker_matches"]["SPK_0"]["identity_name"] == "Carol"
@@ -120,27 +120,27 @@ class TestMetadataAndBody:
 class TestSegmentKeyVariants:
 
     def test_speaker_key(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker": "SPK_0"}]
         md = _make_md(tmp_path, w, s, name="sk.md")
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         assert _parse_metadata(md)["segments"][0]["speaker"] == "Alice"
 
     def test_speaker_id_key(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s, name="sid.md")
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         assert _parse_metadata(md)["segments"][0]["speaker_id"] == "Alice"
 
     def test_both_keys(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0", "speaker": "SPK_0"}]
         md = _make_md(tmp_path, w, s, name="both.md")
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
         assert d["segments"][0]["speaker_id"] == "Alice"
         assert d["segments"][0]["speaker"] == "Alice"
@@ -149,50 +149,50 @@ class TestSegmentKeyVariants:
 class TestMalformedAndNegative:
 
     def test_malformed_json_no_write(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         p = tmp_path / "bad.md"
         c = "# T\n\n**SPK_0**\n\nHi\n\n---\n\n<!-- METADATA: {bad} -->\n"
         p.write_text(c, encoding="utf-8")
-        _link_speaker_identity_in_file(p, "SPK_0", "Alice")
+        link_identity(p, "SPK_0", "Alice")
         assert p.read_text(encoding="utf-8") == c
 
     def test_no_footer_no_write(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         p = tmp_path / "bare.md"
         c = "# Bare\n\n**SPK_0**\n\nHi\n"
         p.write_text(c, encoding="utf-8")
-        _link_speaker_identity_in_file(p, "SPK_0", "Alice")
+        link_identity(p, "SPK_0", "Alice")
         assert p.read_text(encoding="utf-8") == c
 
     def test_same_name_noop(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
         orig = md.read_text(encoding="utf-8")
-        _link_speaker_identity_in_file(md, "SPK_0", "SPK_0")
+        link_identity(md, "SPK_0", "SPK_0")
         assert md.read_text(encoding="utf-8") == orig
 
     def test_empty_identity_noop(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
         orig = md.read_text(encoding="utf-8")
-        _link_speaker_identity_in_file(md, "SPK_0", "")
+        link_identity(md, "SPK_0", "")
         assert md.read_text(encoding="utf-8") == orig
 
     def test_whitespace_identity_noop(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
         orig = md.read_text(encoding="utf-8")
-        _link_speaker_identity_in_file(md, "SPK_0", "   ")
+        link_identity(md, "SPK_0", "   ")
         assert md.read_text(encoding="utf-8") == orig
 
     def test_substring_not_replaced(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [
             {"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
             {"text": "Yo", "start_time": 0.5, "end_time": 1.0, "confidence": 88, "speaker_id": "SPK_01"},
@@ -202,7 +202,7 @@ class TestMalformedAndNegative:
             {"start_time": 0.5, "end_time": 1.0, "speaker_id": "SPK_01"},
         ]
         md = _make_md(tmp_path, w, s)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
         assert d["words"][0]["speaker_id"] == "Alice"
         assert d["words"][1]["speaker_id"] == "SPK_01"
@@ -212,7 +212,7 @@ class TestMalformedAndNegative:
 class TestSignaturePropagation:
 
     def test_propagates_existing_profile(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         db = tmp_path / "speaker_signatures.db"
         emb = np.random.randn(256).astype(np.float32)
         with VoiceSignatureStore(db_path=str(db)) as st:
@@ -220,29 +220,29 @@ class TestSignaturePropagation:
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         with VoiceSignatureStore(db_path=str(db)) as st:
             names = [p.name for p in st.load_signatures()]
             assert "Alice" in names
             assert "SPK_0" not in names
 
     def test_no_crash_no_db(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         assert _parse_metadata(md)["words"][0]["speaker_id"] == "Alice"
 
     def test_no_crash_missing_profile(self, tmp_path):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         db = tmp_path / "speaker_signatures.db"
         with VoiceSignatureStore(db_path=str(db)) as st:
             st.save_signature("SPK_1", np.random.randn(256).astype(np.float32))
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         with VoiceSignatureStore(db_path=str(db)) as st:
             names = [p.name for p in st.load_signatures()]
             assert "SPK_1" in names
@@ -252,32 +252,32 @@ class TestSignaturePropagation:
 class TestPIISafeLogging:
 
     def test_no_identity_name_in_logs(self, tmp_path, caplog):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s)
-        with caplog.at_level(logging.DEBUG, logger="meetandread.widgets.floating_panels"):
-            _link_speaker_identity_in_file(md, "SPK_0", "SecretName")
+        with caplog.at_level(logging.DEBUG, logger="meetandread.speaker.identity_linking"):
+            link_identity(md, "SPK_0", "SecretName")
         for r in caplog.records:
             assert "SecretName" not in r.message
 
     def test_no_prior_match_in_logs(self, tmp_path, caplog):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         md = _make_md(tmp_path, w, s, {"SPK_0": {"identity_name": "OldName", "score": 0.9, "confidence": "high"}})
-        with caplog.at_level(logging.DEBUG, logger="meetandread.widgets.floating_panels"):
-            _link_speaker_identity_in_file(md, "SPK_0", "NewName")
+        with caplog.at_level(logging.DEBUG, logger="meetandread.speaker.identity_linking"):
+            link_identity(md, "SPK_0", "NewName")
         for r in caplog.records:
             assert "OldName" not in r.message
             assert "NewName" not in r.message
 
     def test_malformed_metadata_warning(self, tmp_path, caplog):
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         p = tmp_path / "bad.md"
         p.write_text("# T\n\n---\n\n<!-- METADATA: {bad} -->\n", encoding="utf-8")
-        with caplog.at_level(logging.WARNING, logger="meetandread.widgets.floating_panels"):
-            _link_speaker_identity_in_file(p, "SPK_0", "Alice")
+        with caplog.at_level(logging.WARNING, logger="meetandread.speaker.identity_linking"):
+            link_identity(p, "SPK_0", "Alice")
         assert any("malformed" in r.message.lower() or "metadata" in r.message.lower() for r in caplog.records)
 
 
@@ -344,7 +344,7 @@ class TestOpenIdentityLinkDialogIntegration:
         mock_dialog.selected_identity_name.return_value = "Alice"
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog", return_value=mock_dialog), \
-             patch("meetandread.widgets.floating_panels._propagate_identity_to_signatures"):
+             patch("meetandread.speaker.identity_linking._propagate_to_signature_store"):
             result = _open_identity_link_dialog(md, "SPK_0", None)
 
         assert result is True
@@ -438,12 +438,12 @@ class TestSpeakerMatchesCaseMismatch:
 
     def test_link_resolves_lowercase_key(self, tmp_path):
         """_link_speaker_identity_in_file updates the lowercase spk0 key."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         sm = {"spk0": {"identity_name": "SPK_0", "score": 0.95, "confidence": "high"}}
         md = _make_md(tmp_path, w, s, speaker_matches=sm)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
 
         # The lowercase key should be updated (not a new SPK_0 key added)
@@ -454,7 +454,7 @@ class TestSpeakerMatchesCaseMismatch:
 
     def test_link_removes_duplicate_case_key(self, tmp_path):
         """If both spk0 and SPK_0 keys exist, the duplicate is removed."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         sm = {
@@ -462,7 +462,7 @@ class TestSpeakerMatchesCaseMismatch:
             "SPK_0": {"identity_name": "SPK_0", "score": 1.0, "confidence": "manual"},
         }
         md = _make_md(tmp_path, w, s, speaker_matches=sm)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
 
         sm_keys = list(d["speaker_matches"].keys())
@@ -473,54 +473,13 @@ class TestSpeakerMatchesCaseMismatch:
 
     def test_link_resolves_null_lowercase_key(self, tmp_path):
         """Updating a lowercase key with a None value (no prior match)."""
-        from meetandread.widgets.floating_panels import _link_speaker_identity_in_file
+        from meetandread.speaker.identity_linking import link_identity
         w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
         s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
         sm = {"spk0": None}
         md = _make_md(tmp_path, w, s, speaker_matches=sm)
-        _link_speaker_identity_in_file(md, "SPK_0", "Alice")
+        link_identity(md, "SPK_0", "Alice")
         d = _parse_metadata(md)
 
         assert d["speaker_matches"]["spk0"]["identity_name"] == "Alice"
 
-    def test_try_link_propagation_resolves_lowercase_key(self, tmp_path):
-        """_try_link_identity_in_file (propagation) updates lowercase key."""
-        from meetandread.widgets.floating_panels import _try_link_identity_in_file
-        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
-        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
-        sm = {"spk0": {"identity_name": "SPK_0", "score": 0.88, "confidence": "medium"}}
-        md = _make_md(tmp_path, w, s, speaker_matches=sm)
-        result = _try_link_identity_in_file(md, "SPK_0", "Alice")
-        assert result is True
-
-        d = _parse_metadata(md)
-        assert d["words"][0]["speaker_id"] == "Alice"
-        assert d["speaker_matches"]["spk0"]["identity_name"] == "Alice"
-        assert d["speaker_matches"]["spk0"]["score"] == 0.88
-
-    def test_try_link_propagation_removes_duplicate_key(self, tmp_path):
-        """_try_link_identity_in_file deduplicates case-variant keys."""
-        from meetandread.widgets.floating_panels import _try_link_identity_in_file
-        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
-        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
-        sm = {
-            "spk0": {"identity_name": "SPK_0", "score": 0.9, "confidence": "high"},
-            "SPK_0": {"identity_name": "SPK_0", "score": 1.0, "confidence": "manual"},
-        }
-        md = _make_md(tmp_path, w, s, speaker_matches=sm)
-        _try_link_identity_in_file(md, "SPK_0", "Alice")
-
-        d = _parse_metadata(md)
-        sm_keys = list(d["speaker_matches"].keys())
-        assert len(sm_keys) == 1, f"Expected 1 key, got {sm_keys}"
-        assert d["speaker_matches"][sm_keys[0]]["identity_name"] == "Alice"
-
-    def test_try_link_no_match_returns_false(self, tmp_path):
-        """_try_link_identity_in_file returns False when label not in file."""
-        from meetandread.widgets.floating_panels import _try_link_identity_in_file
-        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_1"}]
-        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_1"}]
-        sm = {"spk1": None}
-        md = _make_md(tmp_path, w, s, speaker_matches=sm)
-        result = _try_link_identity_in_file(md, "SPK_0", "Alice")
-        assert result is False

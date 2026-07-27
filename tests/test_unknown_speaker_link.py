@@ -2,7 +2,7 @@
 
 Covers:
 - "Unknown Speaker" renders as a clickable anchor (not just bold text)
-- _link_speaker_identity_in_file updates words with speaker_id=None
+- link_identity updates words with speaker_id=None
 - After linking, the transcript body shows the chosen identity name
 """
 import json
@@ -10,8 +10,8 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from meetandread.widgets.floating_panels import (
-    _link_speaker_identity_in_file,
+from meetandread.speaker.identity_linking import (
+    link_identity,
 )
 
 
@@ -97,7 +97,7 @@ def _read_body(md_path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tests: _link_speaker_identity_in_file with __unknown__
+# Tests: link_identity with __unknown__
 # ---------------------------------------------------------------------------
 
 class TestLinkUnknownSpeaker:
@@ -111,7 +111,7 @@ class TestLinkUnknownSpeaker:
         ]
         md_path = _make_transcript_md(tmp_path, words)
 
-        _link_speaker_identity_in_file(md_path, "__unknown__", "Alice")
+        link_identity(md_path, "__unknown__", "Alice")
 
         metadata = _read_metadata(md_path)
         assert all(w["speaker_id"] == "Alice" for w in metadata["words"])
@@ -123,7 +123,7 @@ class TestLinkUnknownSpeaker:
         ]
         md_path = _make_transcript_md(tmp_path, words)
 
-        _link_speaker_identity_in_file(md_path, "__unknown__", "Bob")
+        link_identity(md_path, "__unknown__", "Bob")
 
         metadata = _read_metadata(md_path)
         assert all(seg["speaker_id"] == "Bob" for seg in metadata["segments"])
@@ -135,7 +135,7 @@ class TestLinkUnknownSpeaker:
         ]
         md_path = _make_transcript_md(tmp_path, words)
 
-        _link_speaker_identity_in_file(md_path, "__unknown__", "Alice")
+        link_identity(md_path, "__unknown__", "Alice")
 
         body = _read_body(md_path)
         assert "**Alice**" in body
@@ -148,7 +148,7 @@ class TestLinkUnknownSpeaker:
         ]
         md_path = _make_transcript_md(tmp_path, words)
 
-        _link_speaker_identity_in_file(md_path, "__unknown__", "Carol")
+        link_identity(md_path, "__unknown__", "Carol")
 
         metadata = _read_metadata(md_path)
         assert "__unknown__" in metadata["speaker_matches"]
@@ -164,7 +164,7 @@ class TestLinkUnknownSpeaker:
         ]
         md_path = _make_transcript_md(tmp_path, words)
 
-        _link_speaker_identity_in_file(md_path, "__unknown__", "Dave")
+        link_identity(md_path, "__unknown__", "Dave")
 
         metadata = _read_metadata(md_path)
         assert metadata["words"][0]["speaker_id"] == "SPK_0"  # unchanged
@@ -179,8 +179,8 @@ class TestLinkUnknownSpeaker:
         ]
         md_path = _make_transcript_md(tmp_path, words)
 
-        with patch("meetandread.widgets.floating_panels._propagate_identity_to_signatures") as mock_prop:
-            _link_speaker_identity_in_file(md_path, "__unknown__", "Eve")
+        with patch("meetandread.speaker.identity_linking._propagate_to_signature_store") as mock_prop:
+            link_identity(md_path, "__unknown__", "Eve")
             mock_prop.assert_not_called()
 
     def test_empty_identity_name_is_noop(self, tmp_path):
@@ -191,7 +191,7 @@ class TestLinkUnknownSpeaker:
         md_path = _make_transcript_md(tmp_path, words)
         original = md_path.read_text(encoding="utf-8")
 
-        _link_speaker_identity_in_file(md_path, "__unknown__", "")
+        link_identity(md_path, "__unknown__", "")
 
         assert md_path.read_text(encoding="utf-8") == original
 
@@ -204,7 +204,7 @@ class TestLinkUnknownSpeaker:
         original = md_path.read_text(encoding="utf-8")
 
         # SPK_0 renamed to SPK_0 should be noop
-        _link_speaker_identity_in_file(md_path, "SPK_0", "SPK_0")
+        link_identity(md_path, "SPK_0", "SPK_0")
 
         assert md_path.read_text(encoding="utf-8") == original
 
@@ -267,7 +267,7 @@ class TestRenderUnknownSpeakerAnchor:
         md_path = _make_transcript_md(tmp_path, words)
 
         # First link it
-        _link_speaker_identity_in_file(md_path, "__unknown__", "Frank")
+        link_identity(md_path, "__unknown__", "Frank")
 
         # Now render — should show [Frank] as clickable
         html = panel._render_history_transcript(md_path)
