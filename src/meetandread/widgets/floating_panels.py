@@ -1264,596 +1264,6 @@ def _try_link_identity_in_file(
     return True
 
 
-# ---------------------------------------------------------------------------
-# RetranscribeController — the single shared re-transcribe flow (issue #33)
-# ---------------------------------------------------------------------------
-
-
-class RetranscribeController(QObject):
-    """Owns the re-transcribe UI flow: start → compare → accept/reject.
-
-    Extracted from the duplicated logic previously carried by both
-    ``FloatingTranscriptPanel`` and ``FloatingSettingsPanel``. Both panels
-    delegate to one instance of this controller so the flow lives in exactly
-    one place and changes no longer pay a shotgun-surgery tax across two
-    copies.
-
-    The controller owns the flow state machine and the Qt thread-crossing
-    signals. Panel-specific UI (which button reflects progress, how the
-    Accept/Reject buttons are styled and placed, how history-changed is
-    announced, how the list/viewer is refreshed) is supplied by an *adapter*
-    object passed to the constructor (see the adapter contract below).
-
-    Adapter contract (duck-typed):
-
-    Data access:
-      - ``get_history_list()`` -> QListWidget (for currentItem / UserRole data)
-      - ``get_history_viewer()`` -> widget exposing toHtml/setHtml/setMarkdown/clear/setPlaceholderText
-      - ``get_current_md_path()`` -> Optional[Path]
-      - ``extract_transcript_body(md_path)`` -> str
-      - ``render_history_transcript(md_path)`` -> Optional[str]
-
-    List/viewer mutation:
-      - ``refresh_history_list()``
-      - ``reselect_history_item(md_path)``
-
-    Notifications (panel-specific side effects):
-      - ``on_completed()``           called once when the background run finishes
-      - ``notify_after_decision()``  called after accept/reject
-
-    UI affordance hooks (panel-specific look/feel):
-      - ``on_started()``    retranscribe began (e.g. disable a button)
-      - ``on_progress(pct)`` progress update (e.g. button text)
-      - ``on_finished()``   retranscribe ended — success or error (e.g. re-enable a button)
-      - ``enter_comparison_ui()``  show the Accept/Reject affordance
-      - ``exit_comparison_ui()``   hide the Accept/Reject affordance
-    """
-
-    _progress_sig = pyqtSignal(int)  # Qt-safe retranscribe progress (pct)
-    _complete_sig = pyqtSignal(str, object)  # Qt-safe completion (sidecar_path, error_or_None)
-
-    def __init__(self, panel: QWidget, adapter) -> None:
-        super().__init__(panel)
-        self._panel = panel
-        self._adapter = adapter
-
-        # Flow state
-        self.is_retranscribing: bool = False
-        self.is_comparison_mode: bool = False
-        self.runner: Optional[object] = None
-        self.model_size: Optional[str] = None
-        self.sidecar_path: Optional[str] = None
-        self.original_html: Optional[str] = None
-
-        # Thread-crossing signals deliver to GUI-thread handlers
-        self._progress_sig.connect(self._on_progress_gui)
-        self._complete_sig.connect(self._on_complete_gui)
-
-    # ------------------------------------------------------------------
-    # Entry points
-    # ------------------------------------------------------------------
-
-    def on_clicked(self) -> None:
-        """Handle Re-transcribe button / context-menu click.
-
-        Validates that the selected recording has a WAV file, shows a model
-        picker dialog, then starts RetranscribeRunner in a background thread.
-        """
-        if self.is_retranscribing:
-            return
-
-        current = self._adapter.get_history_list().currentItem()
-        if current is None:
-            return
-
-        md_path_str = current.data(Qt.ItemDataRole.UserRole)
-        if not md_path_str:
-            return
-        md_path = Path(md_path_str)
-        stem = md_path.stem
-
-        # Check for WAV file
-        try:
-            from meetandread.audio.storage.paths import get_recordings_dir
-            wav_path = get_recordings_dir() / f"{stem}.wav"
-        except Exception:
-            wav_path = md_path.parent.parent / "recordings" / f"{stem}.wav"
-
-        if not wav_path.exists():
-            parent = self._panel.parent() if self._panel.parent() else self._panel
-            QMessageBox.information(
-                parent,
-                "Cannot Re-transcribe",
-                "Cannot re-transcribe — audio file missing.\n\n"
-                "The original .wav recording file is required for re-transcription.",
-            )
-            return
-
-        # Show model picker dialog
-        dialog = self._create_dialog()
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        model_size = dialog._model_combo.currentData()
-        if not model_size:
-            return
-
-        # Start the re-transcription
-        self.start(wav_path, md_path, model_size)
-
-    def start(self, wav_path: Path, md_path: Path, model_size: str) -> None:
-        """Start a RetranscribeRunner background re-transcription.
-
-        Args:
-            wav_path: Path to the source .wav audio file.
-            md_path: Path to the canonical transcript .md file.
-            model_size: Whisper model size (e.g. "small").
-        """
-        from meetandread.transcription.retranscribe import RetranscribeRunner
-
-        # Store state
-        self.model_size = model_size
-        self.is_retranscribing = True
-        self.is_comparison_mode = False
-
-        # Save original transcript HTML for comparison later
-        self.original_html = self._adapter.get_history_viewer().toHtml()
-
-        # Panel-specific start affordance (e.g. disable button, show "0%")
-        self._adapter.on_started()
-
-        try:
-            # Create and start runner
-            self.runner = RetranscribeRunner(
-                settings=self._get_app_settings(),
-                on_progress=self._on_progress,
-                on_complete=self._on_complete,
-            )
-            self.sidecar_path = self.runner.retranscribe_recording(
-                wav_path, md_path, model_size,
-            )
-        except Exception as exc:
-            logger.error("Retranscribe startup failed: %s", exc, exc_info=True)
-            # Restore all retranscribe state so the UI is not stuck
-            self.is_retranscribing = False
-            self.is_comparison_mode = False
-            self.runner = None
-            self.sidecar_path = None
-            self._adapter.on_finished()
-            parent = self._panel.parent() if self._panel.parent() else self._panel
-            QMessageBox.warning(
-                parent,
-                "Re-transcribe Failed",
-                f"Could not start re-transcription:\n\n{exc}",
-            )
-
-    def on_accept(self) -> None:
-        """Accept the retranscribe result — promote sidecar to canonical transcript."""
-        md_path = self._adapter.get_current_md_path()
-        if md_path is None or self.model_size is None:
-            return
-
-        try:
-            from meetandread.transcription.retranscribe import RetranscribeRunner
-            RetranscribeRunner.accept_retranscribe(md_path, self.model_size)
-            logger.info("Accepted retranscribe: %s model %s", md_path, self.model_size)
-        except FileNotFoundError:
-            parent = self._panel.parent() if self._panel.parent() else self._panel
-            QMessageBox.warning(
-                parent, "Accept Failed",
-                "Sidecar file not found. It may have been deleted.",
-            )
-            self.exit_comparison()
-            return
-        except Exception as exc:
-            parent = self._panel.parent() if self._panel.parent() else self._panel
-            QMessageBox.warning(
-                parent, "Accept Failed", f"Could not accept re-transcribe result:\n\n{exc}",
-            )
-            self.exit_comparison()
-            return
-
-        self.exit_comparison()
-        self._refresh_after_decision()
-
-    def on_reject(self) -> None:
-        """Reject the retranscribe result — delete the sidecar file."""
-        md_path = self._adapter.get_current_md_path()
-        if md_path is None or self.model_size is None:
-            return
-
-        try:
-            from meetandread.transcription.retranscribe import RetranscribeRunner
-            RetranscribeRunner.reject_retranscribe(md_path, self.model_size)
-            logger.info("Rejected retranscribe: %s model %s", md_path, self.model_size)
-        except Exception as exc:
-            logger.warning("Error rejecting retranscribe: %s", exc)
-
-        self.exit_comparison()
-        self._refresh_after_decision()
-
-    def exit_comparison(self) -> None:
-        """Exit comparison mode — called when leaving or after accept/reject."""
-        self.is_comparison_mode = False
-        self._adapter.exit_comparison_ui()
-
-    # ------------------------------------------------------------------
-    # Dialog + config helpers
-    # ------------------------------------------------------------------
-
-    def _create_dialog(self) -> QDialog:
-        """Create the model picker dialog for re-transcription.
-
-        Returns a QDialog with a QComboBox showing all 5 Whisper models
-        with WER from benchmark_history. Default selection is the current
-        post-process model from config.
-        """
-        dialog = QDialog(self._panel)
-        dialog.setWindowTitle("Re-transcribe Recording")
-        dialog.setFixedSize(340, 180)
-        p = current_palette()
-        dialog.setStyleSheet(dialog_css(p))
-
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-
-        # Title label
-        title_label = QLabel("Re-transcribe with a different model:")
-        title_label.setStyleSheet(f"font-weight: bold; color: {p.info}; font-size: 13px;")
-        layout.addWidget(title_label)
-
-        # Model combo
-        combo = QComboBox()
-        combo.setStyleSheet(combo_box_css(p, accent_color=p.info))
-
-        # Populate with models + WER
-        try:
-            from meetandread.config import get_config
-            _cfg = get_config()
-            _bench_history = _cfg.transcription.benchmark_history
-            _default_model = _cfg.transcription.postprocess_model_size
-        except Exception:
-            _bench_history = {}
-            _default_model = "base"
-
-        _model_order = ["tiny", "base", "small", "medium", "large"]
-        _select_idx = 0
-        for _i, _mn in enumerate(_model_order):
-            _entry = _bench_history.get(_mn)
-            if _entry and "wer" in _entry:
-                _wer_pct = _entry["wer"] * 100
-                _item_text = f"{_mn} — WER: {_wer_pct:.1f}%"
-            else:
-                _item_text = f"{_mn} (not benchmarked)"
-            combo.addItem(_item_text, _mn)
-            if _mn == _default_model:
-                _select_idx = _i
-        combo.setCurrentIndex(_select_idx)
-
-        layout.addWidget(combo)
-        dialog._model_combo = combo  # store reference for caller
-
-        layout.addStretch()
-
-        # OK / Cancel buttons
-        btn_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-        )
-        btn_box.setStyleSheet(action_button_css(p, "dialog"))
-        btn_box.accepted.connect(dialog.accept)
-        btn_box.rejected.connect(dialog.reject)
-        layout.addWidget(btn_box)
-
-        return dialog
-
-    def _get_app_settings(self):
-        """Get the current AppSettings from config."""
-        try:
-            from meetandread.config import get_config
-            return get_config()
-        except Exception:
-            from meetandread.config.models import AppSettings
-            return AppSettings()
-
-    # ------------------------------------------------------------------
-    # Thread-crossing callbacks (background thread -> GUI thread)
-    # ------------------------------------------------------------------
-
-    def _on_progress(self, pct: int) -> None:
-        """RetranscribeRunner progress callback (background thread).
-
-        Emits a Qt signal so the GUI update happens on the main thread.
-        """
-        self._progress_sig.emit(pct)
-
-    def _on_progress_gui(self, pct: int) -> None:
-        """GUI-thread handler for retranscribe progress updates."""
-        self._adapter.on_progress(pct)
-
-    def _on_complete(self, sidecar_path: str, error: Optional[str]) -> None:
-        """RetranscribeRunner completion callback (background thread).
-
-        Emits a Qt signal so the heavy UI work happens on the main thread.
-        """
-        self._complete_sig.emit(sidecar_path, error)
-
-    def _on_complete_gui(self, sidecar_path: str, error: Optional[str]) -> None:
-        """GUI-thread handler for retranscribe completion."""
-        self.handle_complete(sidecar_path, error)
-
-    def handle_complete(self, sidecar_path: str, error: Optional[str]) -> None:
-        """Process retranscribe completion on the GUI thread."""
-        self.is_retranscribing = False
-        self._adapter.on_finished()
-
-        if error:
-            parent = self._panel.parent() if self._panel.parent() else self._panel
-            QMessageBox.warning(
-                parent,
-                "Re-transcribe Failed",
-                f"Re-transcription failed:\n\n{error}",
-            )
-            logger.error("Retranscribe failed: %s", error)
-            return
-
-        # Panel-specific completion side-effects (e.g. refresh list / announce change)
-        self._adapter.on_completed()
-
-        # Show side-by-side comparison
-        self._show_comparison(sidecar_path)
-
-    # ------------------------------------------------------------------
-    # Comparison view
-    # ------------------------------------------------------------------
-
-    def _show_comparison(self, sidecar_path: str) -> None:
-        """Show side-by-side comparison of original vs re-transcribed transcript.
-
-        Renders both transcripts in a split view then asks the adapter to
-        reveal the Accept/Reject affordance.
-
-        Args:
-            sidecar_path: Path to the sidecar .md file with retranscribe result.
-        """
-        sidecar = Path(sidecar_path)
-        if not sidecar.exists():
-            logger.warning("Sidecar not found for comparison: %s", sidecar_path)
-            return
-
-        self.is_comparison_mode = True
-        self.sidecar_path = sidecar_path
-
-        # Build the comparison view as HTML
-        original_text = self._adapter.extract_transcript_body(
-            self._adapter.get_current_md_path()
-        )
-        retranscribed_text = self._adapter.extract_transcript_body(sidecar)
-
-        # Build HTML with two-column layout
-        html = f"""
-        <html>
-        <head><style>
-            body {{ margin: 0; padding: 4px; background-color: #2a2a2a; color: #fff; font-size: 12px; }}
-            .comparison {{ display: flex; gap: 8px; }}
-            .column {{ flex: 1; }}
-            .column-header {{
-                font-weight: bold;
-                padding: 4px 8px;
-                border-radius: 4px 4px 0 0;
-                font-size: 11px;
-                text-align: center;
-            }}
-            .original .column-header {{ background-color: #37474F; color: #B0BEC5; }}
-            .retranscribed .column-header {{ background-color: #1B5E20; color: #A5D6A7; }}
-            .content {{
-                padding: 6px 8px;
-                background-color: #333;
-                border-radius: 0 0 4px 4px;
-                min-height: 50px;
-                line-height: 1.4;
-                white-space: pre-wrap;
-                word-wrap: break-word;
-            }}
-        </style></head>
-        <body>
-        <div class="comparison">
-            <div class="column original">
-                <div class="column-header">Original</div>
-                <div class="content">{_escape_html(original_text)}</div>
-            </div>
-            <div class="column retranscribed">
-                <div class="column-header">Re-transcribed ({_escape_html(self.model_size or "?")})</div>
-                <div class="content">{_escape_html(retranscribed_text)}</div>
-            </div>
-        </div>
-        </body></html>
-        """
-
-        self._adapter.get_history_viewer().setHtml(html)
-
-        # Reveal the panel-specific Accept/Reject affordance
-        self._adapter.enter_comparison_ui()
-
-    # ------------------------------------------------------------------
-    # Post-decision refresh
-    # ------------------------------------------------------------------
-
-    def _refresh_after_decision(self) -> None:
-        """Refresh the history list and viewer after accept/reject.
-
-        After accept the canonical transcript changes (word count may differ),
-        so the recording list must be repopulated.  After reject the list is
-        refreshed as well (harmless, ensures consistency).  The previously
-        selected item is re-selected so the user stays on the same recording.
-        """
-        md_path = self._adapter.get_current_md_path()
-
-        # Refresh the history list (word count may have changed after accept)
-        self._adapter.refresh_history_list()
-        self._adapter.notify_after_decision()
-
-        # Re-select the item that was being viewed
-        if md_path is not None:
-            self._adapter.reselect_history_item(md_path)
-
-        # Refresh the viewer content
-        viewer = self._adapter.get_history_viewer()
-        if md_path is not None and md_path.exists():
-            html = self._adapter.render_history_transcript(md_path)
-            if html is not None:
-                viewer.setHtml(html)
-            else:
-                try:
-                    content = md_path.read_text(encoding="utf-8")
-                except OSError:
-                    content = ""
-                from meetandread.speaker.identity_management import _FOOTER_MARKER
-                marker_idx = content.rfind(_FOOTER_MARKER)
-                if marker_idx != -1:
-                    content = content[:marker_idx]
-                viewer.setMarkdown(_strip_confidence_percentages(content))
-        else:
-            viewer.clear()
-            viewer.setPlaceholderText("Select a recording to view its transcript")
-
-
-class _RetranscribeAdapterBase:
-    """Common adapter glue shared by both panel adapters.
-
-    The data-access and list/viewer-mutation methods are identical across
-    panels (both expose ``_history_list``/``_history_viewer``/
-    ``_current_history_md_path`` and the same helper names), so they live
-    here once. Each panel's adapter subclass supplies only the parts that
-    genuinely differ: notifications (``on_completed``/
-    ``notify_after_decision``) and UI affordance hooks
-    (``on_started``/``on_progress``/``on_finished``/
-    ``enter_comparison_ui``/``exit_comparison_ui``).
-    """
-
-    def __init__(self, panel: QWidget) -> None:
-        self._panel = panel
-        self._accept_btn: Optional[QPushButton] = None
-        self._reject_btn: Optional[QPushButton] = None
-
-    # --- data access ---
-    def get_history_list(self):
-        return self._panel._history_list
-
-    def get_history_viewer(self):
-        return self._panel._history_viewer
-
-    def get_current_md_path(self) -> Optional[Path]:
-        return self._panel._current_history_md_path
-
-    def extract_transcript_body(self, md_path):
-        return self._panel._extract_transcript_body(md_path)
-
-    def render_history_transcript(self, md_path):
-        return self._panel._render_history_transcript(md_path)
-
-    # --- list/viewer mutation ---
-    def refresh_history_list(self) -> None:
-        self._panel._refresh_history()
-
-    def reselect_history_item(self, md_path) -> None:
-        self._panel._reselect_history_item(md_path)
-
-
-class _TranscriptRetranscribeAdapter(_RetranscribeAdapterBase):
-    """RetranscribeController adapter for FloatingTranscriptPanel.
-
-    Wires the shared re-transcribe flow to the legacy panel's UI: the
-    detail-header Re-transcribe button (which doubles as a progress
-    indicator) and the inline-styled Accept/Reject buttons inserted before
-    the Delete button.
-    """
-
-    # --- notifications ---
-    def on_completed(self) -> None:
-        # Announce via the owning MeetAndReadWidget (walks the parent tree).
-        try:
-            from meetandread.widgets.main_widget import MeetAndReadWidget
-            widget = self._panel.parent()
-            while widget is not None:
-                if isinstance(widget, MeetAndReadWidget):
-                    widget.history_data_changed.emit()
-                    break
-                widget = widget.parent()
-        except Exception:
-            pass
-
-    def notify_after_decision(self) -> None:
-        # Legacy panel does not announce after accept/reject.
-        pass
-
-    # --- UI affordance hooks ---
-    def on_started(self) -> None:
-        btn = self._panel._retranscribe_btn
-        btn.setEnabled(False)
-        btn.setText("Re-transcribing... 0%")
-
-    def on_progress(self, pct: int) -> None:
-        self._panel._retranscribe_btn.setText(f"Re-transcribing... {pct}%")
-
-    def on_finished(self) -> None:
-        btn = self._panel._retranscribe_btn
-        btn.setEnabled(True)
-        btn.setText("🔄 Re-transcribe")
-
-    def enter_comparison_ui(self) -> None:
-        """Replace the retranscribe button with Accept/Reject during comparison."""
-        panel = self._panel
-        panel._retranscribe_btn.hide()
-
-        if self._accept_btn is None:
-            self._accept_btn = QPushButton("✓ Accept")
-            self._accept_btn.setFixedHeight(26)
-            p = current_palette()
-            self._accept_btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {p.surface};
-                    color: {p.accent};
-                    border: 1px solid {p.accent};
-                    border-radius: 4px;
-                    padding: 2px 10px;
-                    font-size: 11px;
-                    font-weight: bold;
-                }}
-                QPushButton:hover {{
-                    background-color: {p.surface_hover};
-                    border-color: {p.accent};
-                }}
-                QPushButton:pressed {{
-                    background-color: {p.surface};
-                }}
-            """)
-            self._accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
-            self._accept_btn.clicked.connect(panel._retranscribe.on_accept)
-
-            self._reject_btn = QPushButton("✗ Reject")
-            self._reject_btn.setFixedHeight(26)
-            self._reject_btn.setStyleSheet(action_button_css(p, "delete"))
-            self._reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
-            self._reject_btn.clicked.connect(panel._retranscribe.on_reject)
-
-            header_layout = panel._detail_header.layout()
-            delete_idx = header_layout.indexOf(panel._delete_btn)
-            header_layout.insertWidget(delete_idx, self._accept_btn)
-            header_layout.insertWidget(delete_idx + 1, self._reject_btn)
-        else:
-            self._accept_btn.show()
-            self._reject_btn.show()
-
-    def exit_comparison_ui(self) -> None:
-        """Hide Accept/Reject buttons and show the retranscribe button again."""
-        if self._accept_btn is not None:
-            self._accept_btn.hide()
-        if self._reject_btn is not None:
-            self._reject_btn.hide()
-        self._panel._retranscribe_btn.show()
-
-
 class FloatingTranscriptPanel(QWidget):
     """
     Floating transcript panel that appears outside the main widget.
@@ -1869,6 +1279,8 @@ class FloatingTranscriptPanel(QWidget):
     closed = pyqtSignal()  # Emitted when user closes panel
     segment_ready = pyqtSignal(str, int, int, bool, bool, object)  # text, confidence, segment_index, is_final, phrase_start, speaker_id
     speaker_name_pinned = pyqtSignal(str, str)  # raw_speaker_label, user_chosen_name
+    _retranscribe_progress_sig = pyqtSignal(int)  # Qt-safe retranscribe progress (pct)
+    _retranscribe_complete_sig = pyqtSignal(str, object)  # Qt-safe retranscribe completion (sidecar_path, error_or_None)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -1995,6 +1407,7 @@ class FloatingTranscriptPanel(QWidget):
         self._retranscribe_btn.setFixedHeight(26)
         self._retranscribe_btn.setCursor(Qt.CursorShape.ArrowCursor)
         self._retranscribe_btn.setToolTip("Re-transcribe with a different model")
+        self._retranscribe_btn.clicked.connect(self._on_retranscribe_clicked)
         detail_header_layout.addWidget(self._retranscribe_btn)
 
         self._delete_btn = QPushButton("🗑 Delete")
@@ -2031,10 +1444,17 @@ class FloatingTranscriptPanel(QWidget):
         # Track the currently-viewed history transcript path (for rename)
         self._current_history_md_path: Optional[Path] = None
 
-        # Re-transcribe flow controller — shared with FloatingSettingsPanel (#33).
-        # Owns the flow state machine; panel-specific UI lives in the adapter.
-        self._retranscribe = RetranscribeController(self, _TranscriptRetranscribeAdapter(self))
-        self._retranscribe_btn.clicked.connect(self._retranscribe.on_clicked)
+        # Retranscribe state
+        self._retranscribe_runner: Optional[object] = None  # RetranscribeRunner instance
+        self._retranscribe_model_size: Optional[str] = None  # model being re-transcribed
+        self._retranscribe_sidecar_path: Optional[str] = None  # expected sidecar path
+        self._retranscribe_original_html: Optional[str] = None  # original transcript HTML
+        self._is_retranscribing: bool = False  # True while retranscribe is in progress
+        self._is_comparison_mode: bool = False  # True when showing side-by-side
+
+        # Connect Qt-safe retranscribe signals to GUI-thread handlers
+        self._retranscribe_progress_sig.connect(self._on_retranscribe_progress_gui)
+        self._retranscribe_complete_sig.connect(self._on_retranscribe_complete_gui)
 
         # Dragging
         self._dragging = False
@@ -2590,8 +2010,8 @@ class FloatingTranscriptPanel(QWidget):
     def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
         """Load and display the transcript for the clicked history item."""
         # Reset comparison mode when switching items
-        if self._retranscribe.is_comparison_mode:
-            self._retranscribe.exit_comparison()
+        if self._is_comparison_mode:
+            self._hide_retranscribe_accept_reject()
 
         md_path_str = item.data(Qt.ItemDataRole.UserRole)
         if not md_path_str:
@@ -2642,7 +2062,7 @@ class FloatingTranscriptPanel(QWidget):
         retranscribe_action = menu.addAction("🔄  Re-transcribe Recording")
         rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
-        retranscribe_action.triggered.connect(lambda: self._retranscribe.on_clicked())
+        retranscribe_action.triggered.connect(lambda: self._on_retranscribe_clicked())
         rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
         delete_action.triggered.connect(lambda: self._delete_recording(item))
         menu.exec(self._history_list.viewport().mapToGlobal(pos))
@@ -2816,6 +2236,449 @@ class FloatingTranscriptPanel(QWidget):
 
         # Refresh the history list to show the new name
         self._refresh_history()
+
+    # ------------------------------------------------------------------
+    # Re-transcribe functionality
+    # ------------------------------------------------------------------
+
+    def _on_retranscribe_clicked(self) -> None:
+        """Handle Re-transcribe button / context-menu click.
+
+        Validates that the selected recording has a WAV file, shows a model
+        picker dialog, then starts RetranscribeRunner in a background thread.
+        """
+        if self._is_retranscribing:
+            return
+
+        current = self._history_list.currentItem()
+        if current is None:
+            return
+
+        md_path_str = current.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+        md_path = Path(md_path_str)
+        stem = md_path.stem
+
+        # Check for WAV file
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            wav_path = get_recordings_dir() / f"{stem}.wav"
+        except Exception:
+            wav_path = md_path.parent.parent / "recordings" / f"{stem}.wav"
+
+        if not wav_path.exists():
+            parent = self.parent() if self.parent() else self
+            QMessageBox.information(
+                parent,
+                "Cannot Re-transcribe",
+                "Cannot re-transcribe — audio file missing.\n\n"
+                "The original .wav recording file is required for re-transcription.",
+            )
+            return
+
+        # Show model picker dialog
+        dialog = self._create_retranscribe_dialog()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        model_size = dialog._model_combo.currentData()
+        if not model_size:
+            return
+
+        # Start the re-transcription
+        self._start_retranscribe(wav_path, md_path, model_size)
+
+    def _create_retranscribe_dialog(self) -> QDialog:
+        """Create the model picker dialog for re-transcription.
+
+        Returns a QDialog with a QComboBox showing all 5 Whisper models
+        with WER from benchmark_history. Default selection is the current
+        post-process model from config.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Re-transcribe Recording")
+        dialog.setFixedSize(340, 180)
+        p = current_palette()
+        dialog.setStyleSheet(dialog_css(p))
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Title label
+        title_label = QLabel("Re-transcribe with a different model:")
+        title_label.setStyleSheet(f"font-weight: bold; color: {p.info}; font-size: 13px;")
+        layout.addWidget(title_label)
+
+        # Model combo
+        combo = QComboBox()
+        combo.setStyleSheet(combo_box_css(p, accent_color=p.info))
+
+        # Populate with models + WER
+        try:
+            from meetandread.config import get_config
+            _cfg = get_config()
+            _bench_history = _cfg.transcription.benchmark_history
+            _default_model = _cfg.transcription.postprocess_model_size
+        except Exception:
+            _bench_history = {}
+            _default_model = "base"
+
+        _model_order = ["tiny", "base", "small", "medium", "large"]
+        _select_idx = 0
+        for _i, _mn in enumerate(_model_order):
+            _entry = _bench_history.get(_mn)
+            if _entry and "wer" in _entry:
+                _wer_pct = _entry["wer"] * 100
+                _item_text = f"{_mn} — WER: {_wer_pct:.1f}%"
+            else:
+                _item_text = f"{_mn} (not benchmarked)"
+            combo.addItem(_item_text, _mn)
+            if _mn == _default_model:
+                _select_idx = _i
+        combo.setCurrentIndex(_select_idx)
+
+        layout.addWidget(combo)
+        dialog._model_combo = combo  # store reference for caller
+
+        layout.addStretch()
+
+        # OK / Cancel buttons
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+        )
+        btn_box.setStyleSheet(action_button_css(p, "dialog"))
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        return dialog
+
+    def _start_retranscribe(self, wav_path: Path, md_path: Path, model_size: str) -> None:
+        """Start a RetranscribeRunner background re-transcription.
+
+        Args:
+            wav_path: Path to the source .wav audio file.
+            md_path: Path to the canonical transcript .md file.
+            model_size: Whisper model size (e.g. "small").
+        """
+        from meetandread.transcription.retranscribe import RetranscribeRunner
+
+        # Store state
+        self._retranscribe_model_size = model_size
+        self._is_retranscribing = True
+        self._is_comparison_mode = False
+
+        # Save original transcript HTML for comparison later
+        self._retranscribe_original_html = self._history_viewer.toHtml()
+
+        # Disable retranscribe button and update text
+        self._retranscribe_btn.setEnabled(False)
+        self._retranscribe_btn.setText("Re-transcribing... 0%")
+
+        try:
+            # Create and start runner
+            self._retranscribe_runner = RetranscribeRunner(
+                settings=self._get_app_settings(),
+                on_progress=self._on_retranscribe_progress,
+                on_complete=self._on_retranscribe_complete,
+            )
+            self._retranscribe_sidecar_path = self._retranscribe_runner.retranscribe_recording(
+                wav_path, md_path, model_size,
+            )
+        except Exception as exc:
+            logger.error("Retranscribe startup failed: %s", exc, exc_info=True)
+            # Restore all retranscribe state so the UI is not stuck
+            self._is_retranscribing = False
+            self._is_comparison_mode = False
+            self._retranscribe_btn.setEnabled(True)
+            self._retranscribe_btn.setText("🔄 Re-transcribe")
+            self._retranscribe_runner = None
+            self._retranscribe_sidecar_path = None
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Re-transcribe Failed",
+                f"Could not start re-transcription:\n\n{exc}",
+            )
+
+    def _get_app_settings(self):
+        """Get the current AppSettings from config."""
+        try:
+            from meetandread.config import get_config
+            return get_config()
+        except Exception:
+            from meetandread.config.models import AppSettings
+            return AppSettings()
+
+    def _on_retranscribe_progress(self, pct: int) -> None:
+        """RetranscribeRunner progress callback (background thread).
+
+        Emits a Qt signal so the GUI update happens on the main thread.
+        """
+        self._retranscribe_progress_sig.emit(pct)
+
+    def _on_retranscribe_progress_gui(self, pct: int) -> None:
+        """GUI-thread handler for retranscribe progress updates."""
+        self._retranscribe_btn.setText(f"Re-transcribing... {pct}%")
+
+    def _on_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """RetranscribeRunner completion callback (background thread).
+
+        Emits a Qt signal so the heavy UI work happens on the main thread.
+        """
+        self._retranscribe_complete_sig.emit(sidecar_path, error)
+
+    def _on_retranscribe_complete_gui(self, sidecar_path: str, error: Optional[str]) -> None:
+        """GUI-thread handler for retranscribe completion."""
+        self._handle_retranscribe_complete(sidecar_path, error)
+
+    def _handle_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """Process retranscribe completion on the GUI thread."""
+        self._is_retranscribing = False
+        self._retranscribe_btn.setEnabled(True)
+        self._retranscribe_btn.setText("🔄 Re-transcribe")
+
+        if error:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Re-transcribe Failed",
+                f"Re-transcription failed:\n\n{error}",
+            )
+            logger.error("Retranscribe failed: %s", error)
+            return
+
+        # Emit history data changed — retranscribe adds a new sidecar recording
+        try:
+            from meetandread.widgets.main_widget import MeetAndReadWidget
+            widget = self.parent()
+            while widget is not None:
+                if isinstance(widget, MeetAndReadWidget):
+                    widget.history_data_changed.emit()
+                    break
+                widget = widget.parent()
+        except Exception:
+            pass
+
+        # Show side-by-side comparison
+        self._show_retranscribe_comparison(sidecar_path)
+
+    def _show_retranscribe_comparison(self, sidecar_path: str) -> None:
+        """Show side-by-side comparison of original vs re-transcribed transcript.
+
+        Renders both transcripts in a split view with Accept/Reject buttons.
+
+        Args:
+            sidecar_path: Path to the sidecar .md file with retranscribe result.
+        """
+        sidecar = Path(sidecar_path)
+        if not sidecar.exists():
+            logger.warning("Sidecar not found for comparison: %s", sidecar_path)
+            return
+
+        self._is_comparison_mode = True
+        self._retranscribe_sidecar_path = sidecar_path
+
+        # Build the comparison view as HTML in the history viewer
+        original_text = self._extract_transcript_body(
+            self._current_history_md_path
+        )
+        retranscribed_text = self._extract_transcript_body(sidecar)
+
+        # Build HTML with two-column layout
+        html = f"""
+        <html>
+        <head><style>
+            body {{ margin: 0; padding: 4px; background-color: #2a2a2a; color: #fff; font-size: 12px; }}
+            .comparison {{ display: flex; gap: 8px; }}
+            .column {{ flex: 1; }}
+            .column-header {{
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 4px 4px 0 0;
+                font-size: 11px;
+                text-align: center;
+            }}
+            .original .column-header {{ background-color: #37474F; color: #B0BEC5; }}
+            .retranscribed .column-header {{ background-color: #1B5E20; color: #A5D6A7; }}
+            .content {{
+                padding: 6px 8px;
+                background-color: #333;
+                border-radius: 0 0 4px 4px;
+                min-height: 50px;
+                line-height: 1.4;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }}
+        </style></head>
+        <body>
+        <div class="comparison">
+            <div class="column original">
+                <div class="column-header">Original</div>
+                <div class="content">{_escape_html(original_text)}</div>
+            </div>
+            <div class="column retranscribed">
+                <div class="column-header">Re-transcribed ({_escape_html(self._retranscribe_model_size or "?")})</div>
+                <div class="content">{_escape_html(retranscribed_text)}</div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        self._history_viewer.setHtml(html)
+
+        # Show Accept/Reject buttons instead of normal header buttons
+        self._show_retranscribe_accept_reject()
+
+    def _show_retranscribe_accept_reject(self) -> None:
+        """Replace the retranscribe button with Accept/Reject during comparison mode."""
+        self._retranscribe_btn.hide()
+
+        # Create Accept button
+        if not hasattr(self, '_retranscribe_accept_btn'):
+            self._retranscribe_accept_btn = QPushButton("✓ Accept")
+            self._retranscribe_accept_btn.setFixedHeight(26)
+            p = current_palette()
+            self._retranscribe_accept_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {p.surface};
+                    color: {p.accent};
+                    border: 1px solid {p.accent};
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 11px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: {p.surface_hover};
+                    border-color: {p.accent};
+                }}
+                QPushButton:pressed {{
+                    background-color: {p.surface};
+                }}
+            """)
+            self._retranscribe_accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._retranscribe_accept_btn.clicked.connect(self._on_retranscribe_accept)
+
+            # Create Reject button
+            self._retranscribe_reject_btn = QPushButton("✗ Reject")
+            self._retranscribe_reject_btn.setFixedHeight(26)
+            self._retranscribe_reject_btn.setStyleSheet(action_button_css(p, "delete"))
+            self._retranscribe_reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._retranscribe_reject_btn.clicked.connect(self._on_retranscribe_reject)
+
+            # Insert into detail header layout (before delete button)
+            header_layout = self._detail_header.layout()
+            delete_idx = header_layout.indexOf(self._delete_btn)
+            header_layout.insertWidget(delete_idx, self._retranscribe_accept_btn)
+            header_layout.insertWidget(delete_idx + 1, self._retranscribe_reject_btn)
+        else:
+            self._retranscribe_accept_btn.show()
+            self._retranscribe_reject_btn.show()
+
+    def _hide_retranscribe_accept_reject(self) -> None:
+        """Hide Accept/Reject buttons and show the retranscribe button again."""
+        if hasattr(self, '_retranscribe_accept_btn'):
+            self._retranscribe_accept_btn.hide()
+        if hasattr(self, '_retranscribe_reject_btn'):
+            self._retranscribe_reject_btn.hide()
+        self._retranscribe_btn.show()
+        self._is_comparison_mode = False
+
+    def _on_retranscribe_accept(self) -> None:
+        """Accept the retranscribe result — promote sidecar to canonical transcript."""
+        if self._current_history_md_path is None or self._retranscribe_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.retranscribe import RetranscribeRunner
+            RetranscribeRunner.accept_retranscribe(
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+            logger.info(
+                "Accepted retranscribe: %s model %s",
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+        except FileNotFoundError:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed",
+                "Sidecar file not found. It may have been deleted.",
+            )
+            self._hide_retranscribe_accept_reject()
+            return
+        except Exception as exc:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed", f"Could not accept re-transcribe result:\n\n{exc}",
+            )
+            self._hide_retranscribe_accept_reject()
+            return
+
+        # Refresh the viewer with the updated transcript
+        self._hide_retranscribe_accept_reject()
+        self._refresh_after_retranscribe()
+
+    def _on_retranscribe_reject(self) -> None:
+        """Reject the retranscribe result — delete the sidecar file."""
+        if self._current_history_md_path is None or self._retranscribe_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.retranscribe import RetranscribeRunner
+            RetranscribeRunner.reject_retranscribe(
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+            logger.info(
+                "Rejected retranscribe: %s model %s",
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+        except Exception as exc:
+            logger.warning("Error rejecting retranscribe: %s", exc)
+
+        # Restore original view
+        self._hide_retranscribe_accept_reject()
+        self._refresh_after_retranscribe()
+
+    def _refresh_after_retranscribe(self) -> None:
+        """Refresh the history list and viewer after accept/reject.
+
+        After accept the canonical transcript changes (word count may differ),
+        so the recording list must be repopulated.  After reject the list is
+        refreshed as well (harmless, ensures consistency).  The previously
+        selected item is re-selected so the user stays on the same recording.
+        """
+        md_path = self._current_history_md_path
+
+        # Refresh the history list (word count may have changed after accept)
+        self._refresh_history()
+
+        # Re-select the item that was being viewed
+        if md_path is not None:
+            self._reselect_history_item(md_path)
+
+        # Refresh the viewer content
+        if md_path is not None and md_path.exists():
+            html = self._render_history_transcript(md_path)
+            if html is not None:
+                self._history_viewer.setHtml(html)
+            else:
+                try:
+                    content = md_path.read_text(encoding="utf-8")
+                except OSError:
+                    content = ""
+                from meetandread.speaker.identity_management import _FOOTER_MARKER
+                marker_idx = content.rfind(_FOOTER_MARKER)
+                if marker_idx != -1:
+                    content = content[:marker_idx]
+                self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
+        else:
+            self._history_viewer.clear()
+            self._history_viewer.setPlaceholderText(
+                "Select a recording to view its transcript",
+            )
 
     def _reselect_history_item(self, md_path: Path) -> None:
         """Re-select a history list item by its transcript path.
@@ -4244,9 +4107,9 @@ class _HistoryRowWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _on_retranscribe(self) -> None:
-        """Set current item and delegate to the shared retranscribe controller."""
+        """Set current item and delegate to panel's existing retranscribe handler."""
         self._panel._history_list.setCurrentItem(self._item)
-        self._panel._retranscribe.on_clicked()
+        self._panel._on_retranscribe_clicked()
 
     def _on_delete(self) -> None:
         """Set current item and delegate to panel's existing delete handler."""
@@ -4274,75 +4137,6 @@ class _HistoryRowWidget(QWidget):
         event.accept()
 
 
-class _SettingsRetranscribeAdapter(_RetranscribeAdapterBase):
-    """RetranscribeController adapter for FloatingSettingsPanel.
-
-    Wires the shared re-transcribe flow to the Aetheric settings shell: the
-    Accept/Reject buttons use the Aetheric action-button styling and are
-    appended to the history detail header. There is no detail-header
-    progress button (the Re-transcribe button lives in the row widget), so
-    the start/progress/finished hooks are no-ops. History changes are
-    announced through the panel's ``_emit_history_changed`` helper.
-    """
-
-    # --- notifications ---
-    def on_completed(self) -> None:
-        # Refresh the list (the sidecar appears as a new entry) and announce.
-        self._panel._refresh_history()
-        self._panel._emit_history_changed()
-
-    def notify_after_decision(self) -> None:
-        # The settings panel announces after accept/reject too.
-        self._panel._emit_history_changed()
-
-    # --- UI affordance hooks ---
-    def on_started(self) -> None:
-        # No detail-header progress button in the settings shell.
-        pass
-
-    def on_progress(self, pct: int) -> None:
-        logger.debug("Retranscribe progress: %d%%", pct)
-
-    def on_finished(self) -> None:
-        # No detail-header progress button to restore.
-        pass
-
-    def enter_comparison_ui(self) -> None:
-        """Show Aetheric-styled Accept/Reject buttons during comparison mode."""
-        if self._accept_btn is None:
-            panel = self._panel
-            self._accept_btn = QPushButton("✓ Accept")
-            self._accept_btn.setObjectName("AethericHistoryActionButton")
-            self._accept_btn.setProperty("action", "accept")
-            self._accept_btn.setFixedHeight(26)
-            p = current_palette()
-            self._accept_btn.setStyleSheet(aetheric_history_action_button_css(p))
-            self._accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
-            self._accept_btn.clicked.connect(panel._retranscribe.on_accept)
-
-            self._reject_btn = QPushButton("✗ Reject")
-            self._reject_btn.setObjectName("AethericHistoryActionButton")
-            self._reject_btn.setProperty("action", "reject")
-            self._reject_btn.setFixedHeight(26)
-            self._reject_btn.setStyleSheet(aetheric_history_action_button_css(p))
-            self._reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
-            self._reject_btn.clicked.connect(panel._retranscribe.on_reject)
-
-            header_layout = panel._history_detail_header.layout()
-            header_layout.insertWidget(-1, self._accept_btn)
-            header_layout.insertWidget(-1, self._reject_btn)
-        else:
-            self._accept_btn.show()
-            self._reject_btn.show()
-
-    def exit_comparison_ui(self) -> None:
-        """Hide Accept/Reject buttons."""
-        if self._accept_btn is not None:
-            self._accept_btn.hide()
-        if self._reject_btn is not None:
-            self._reject_btn.hide()
-
-
 class FloatingSettingsPanel(QWidget):
     """Frameless Aetheric Glass settings shell with sidebar navigation.
 
@@ -4355,6 +4149,8 @@ class FloatingSettingsPanel(QWidget):
     model_changed = pyqtSignal(str)  # Emit model name when changed
     cc_font_size_changed = pyqtSignal(int)  # Emit font size in px when changed
     cc_font_color_changed = pyqtSignal(str)  # Emit font color as rgba() string when changed
+    _retranscribe_progress_sig = pyqtSignal(int)  # Qt-safe retranscribe progress (pct)
+    _retranscribe_complete_sig = pyqtSignal(str, object)  # Qt-safe retranscribe completion (sidecar_path, error_or_None)
 
     # Nav page indices — correspond to QStackedWidget indices
     _NAV_SETTINGS = 0
@@ -5577,9 +5373,17 @@ class FloatingSettingsPanel(QWidget):
         self._identity_usage: Dict[str, Any] = {}  # name -> IdentityUsage
         self._identity_profile_names: List[str] = []  # sorted identity names
 
-        # Re-transcribe flow controller — shared with FloatingTranscriptPanel (#33).
-        # Owns the flow state machine; panel-specific UI lives in the adapter.
-        self._retranscribe = RetranscribeController(self, _SettingsRetranscribeAdapter(self))
+        # Retranscribe state
+        self._retranscribe_runner: Optional[object] = None
+        self._retranscribe_model_size: Optional[str] = None
+        self._retranscribe_sidecar_path: Optional[str] = None
+        self._retranscribe_original_html: Optional[str] = None
+        self._is_retranscribing: bool = False
+        self._is_comparison_mode: bool = False
+
+        # Connect Qt-safe retranscribe signals to GUI-thread handlers
+        self._retranscribe_progress_sig.connect(self._on_retranscribe_progress_gui)
+        self._retranscribe_complete_sig.connect(self._on_retranscribe_complete_gui)
 
         # ------------------------------------------------------------------
         # Resize grip — direct child of panel, positioned at bottom-right
@@ -7791,8 +7595,8 @@ class FloatingSettingsPanel(QWidget):
         Also loads companion audio via the playback helper, updating
         toolbar control enabled/disabled state and status text.
         """
-        if self._retranscribe.is_comparison_mode:
-            self._retranscribe.exit_comparison()
+        if self._is_comparison_mode:
+            self._hide_retranscribe_accept_reject()
 
         md_path_str = item.data(Qt.ItemDataRole.UserRole)
         if not md_path_str:
@@ -9018,7 +8822,7 @@ class FloatingSettingsPanel(QWidget):
         retranscribe_action = menu.addAction("🔄  Re-transcribe Recording")
         rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
-        retranscribe_action.triggered.connect(lambda: self._retranscribe.on_clicked())
+        retranscribe_action.triggered.connect(lambda: self._on_retranscribe_clicked())
         rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
         delete_action.triggered.connect(lambda: self._delete_recording(item))
         menu.exec(self._history_list.viewport().mapToGlobal(pos))
@@ -9528,6 +9332,366 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.warning(
                 "Failed to propagate rename to signature store: %s", exc,
+            )
+
+    def _on_retranscribe_clicked(self) -> None:
+        """Handle Re-transcribe button click — placeholder for S03 full retranscribe."""
+        if self._is_retranscribing:
+            return
+
+        current = self._history_list.currentItem()
+        if current is None:
+            return
+
+        md_path_str = current.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+        md_path = Path(md_path_str)
+        stem = md_path.stem
+
+        # Check for WAV file
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            wav_path = get_recordings_dir() / f"{stem}.wav"
+        except Exception:
+            wav_path = md_path.parent.parent / "recordings" / f"{stem}.wav"
+
+        if not wav_path.exists():
+            parent = self.parent() if self.parent() else self
+            QMessageBox.information(
+                parent,
+                "Cannot Re-transcribe",
+                "Cannot re-transcribe — audio file missing.\n\n"
+                "The original .wav recording file is required for re-transcription.",
+            )
+            return
+
+        # Show model picker dialog
+        dialog = self._create_retranscribe_dialog()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        model_size = dialog._model_combo.currentData()
+        if not model_size:
+            return
+
+        # Start the re-transcription
+        self._start_retranscribe(wav_path, md_path, model_size)
+
+    def _create_retranscribe_dialog(self) -> QDialog:
+        """Create the model picker dialog for re-transcription."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Re-transcribe Recording")
+        dialog.setFixedSize(340, 180)
+        p = current_palette()
+        dialog.setStyleSheet(dialog_css(p))
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title_label = QLabel("Re-transcribe with a different model:")
+        title_label.setStyleSheet(f"font-weight: bold; color: {p.info}; font-size: 13px;")
+        layout.addWidget(title_label)
+
+        combo = QComboBox()
+        combo.setStyleSheet(combo_box_css(p, accent_color=p.info))
+
+        try:
+            from meetandread.config import get_config
+            _cfg = get_config()
+            _bench_history = _cfg.transcription.benchmark_history
+            _default_model = _cfg.transcription.postprocess_model_size
+        except Exception:
+            _bench_history = {}
+            _default_model = "base"
+
+        _model_order = ["tiny", "base", "small", "medium", "large"]
+        _select_idx = 0
+        for _i, _mn in enumerate(_model_order):
+            _entry = _bench_history.get(_mn)
+            if _entry and "wer" in _entry:
+                _wer_pct = _entry["wer"] * 100
+                _item_text = f"{_mn} — WER: {_wer_pct:.1f}%"
+            else:
+                _item_text = f"{_mn} (not benchmarked)"
+            combo.addItem(_item_text, _mn)
+            if _mn == _default_model:
+                _select_idx = _i
+        combo.setCurrentIndex(_select_idx)
+
+        layout.addWidget(combo)
+        dialog._model_combo = combo
+
+        layout.addStretch()
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+        )
+        btn_box.setStyleSheet(action_button_css(p, "dialog"))
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        return dialog
+
+    def _get_app_settings(self):
+        """Get the current AppSettings from config."""
+        try:
+            from meetandread.config import get_config
+            return get_config()
+        except Exception:
+            from meetandread.config.models import AppSettings
+            return AppSettings()
+
+    def _start_retranscribe(self, wav_path: Path, md_path: Path, model_size: str) -> None:
+        """Start a RetranscribeRunner background re-transcription."""
+        from meetandread.transcription.retranscribe import RetranscribeRunner
+
+        self._retranscribe_model_size = model_size
+        self._is_retranscribing = True
+        self._is_comparison_mode = False
+
+        self._retranscribe_original_html = self._history_viewer.toHtml()
+
+        try:
+            self._retranscribe_runner = RetranscribeRunner(
+                settings=self._get_app_settings(),
+                on_progress=self._on_retranscribe_progress,
+                on_complete=self._on_retranscribe_complete,
+            )
+            self._retranscribe_sidecar_path = self._retranscribe_runner.retranscribe_recording(
+                wav_path, md_path, model_size,
+            )
+        except Exception as exc:
+            logger.error("Retranscribe startup failed: %s", exc, exc_info=True)
+            # Restore all retranscribe state so the UI is not stuck
+            self._is_retranscribing = False
+            self._is_comparison_mode = False
+            self._retranscribe_runner = None
+            self._retranscribe_sidecar_path = None
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Re-transcribe Failed",
+                f"Could not start re-transcription:\n\n{exc}",
+            )
+
+    def _on_retranscribe_progress(self, pct: int) -> None:
+        """RetranscribeRunner progress callback (background thread).
+
+        Emits a Qt signal so the GUI update happens on the main thread.
+        """
+        self._retranscribe_progress_sig.emit(pct)
+
+    def _on_retranscribe_progress_gui(self, pct: int) -> None:
+        """GUI-thread handler for retranscribe progress updates."""
+        logger.debug("Retranscribe progress: %d%%", pct)
+
+    def _on_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """RetranscribeRunner completion callback (background thread).
+
+        Emits a Qt signal so the heavy UI work happens on the main thread.
+        """
+        self._retranscribe_complete_sig.emit(sidecar_path, error)
+
+    def _on_retranscribe_complete_gui(self, sidecar_path: str, error: Optional[str]) -> None:
+        """GUI-thread handler for retranscribe completion."""
+        self._handle_retranscribe_complete(sidecar_path, error)
+
+    def _handle_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
+        """Process retranscribe completion on the GUI thread."""
+        self._is_retranscribing = False
+
+        if error:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent,
+                "Re-transcribe Failed",
+                f"Re-transcription failed:\n\n{error}",
+            )
+            logger.error("Retranscribe failed: %s", error)
+            return
+
+        # Refresh history list — retranscribe adds a new sidecar recording
+        self._refresh_history()
+        self._emit_history_changed()
+
+        self._show_retranscribe_comparison(sidecar_path)
+
+    def _show_retranscribe_comparison(self, sidecar_path: str) -> None:
+        """Show side-by-side comparison of original vs re-transcribed transcript."""
+        sidecar = Path(sidecar_path)
+        if not sidecar.exists():
+            logger.warning("Sidecar not found for comparison: %s", sidecar_path)
+            return
+
+        self._is_comparison_mode = True
+        self._retranscribe_sidecar_path = sidecar_path
+
+        original_text = self._extract_transcript_body(
+            self._current_history_md_path
+        )
+        retranscribed_text = self._extract_transcript_body(sidecar)
+
+        html = f"""
+        <html>
+        <head><style>
+            body {{ margin: 0; padding: 4px; background-color: #2a2a2a; color: #fff; font-size: 12px; }}
+            .comparison {{ display: flex; gap: 8px; }}
+            .column {{ flex: 1; }}
+            .column-header {{
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 4px 4px 0 0;
+                font-size: 11px;
+                text-align: center;
+            }}
+            .original .column-header {{ background-color: #37474F; color: #B0BEC5; }}
+            .retranscribed .column-header {{ background-color: #1B5E20; color: #A5D6A7; }}
+            .content {{
+                padding: 6px 8px;
+                background-color: #333;
+                border-radius: 0 0 4px 4px;
+                min-height: 50px;
+                line-height: 1.4;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }}
+        </style></head>
+        <body>
+        <div class="comparison">
+            <div class="column original">
+                <div class="column-header">Original</div>
+                <div class="content">{_escape_html(original_text)}</div>
+            </div>
+            <div class="column retranscribed">
+                <div class="column-header">Re-transcribed ({_escape_html(self._retranscribe_model_size or "?")})</div>
+                <div class="content">{_escape_html(retranscribed_text)}</div>
+            </div>
+        </div>
+        </body></html>
+        """
+
+        self._history_viewer.setHtml(html)
+        self._show_retranscribe_accept_reject()
+
+    def _show_retranscribe_accept_reject(self) -> None:
+        """Show Accept/Reject buttons during comparison mode."""
+        if not hasattr(self, '_retranscribe_accept_btn'):
+            self._retranscribe_accept_btn = QPushButton("✓ Accept")
+            self._retranscribe_accept_btn.setObjectName("AethericHistoryActionButton")
+            self._retranscribe_accept_btn.setProperty("action", "accept")
+            self._retranscribe_accept_btn.setFixedHeight(26)
+            p = current_palette()
+            self._retranscribe_accept_btn.setStyleSheet(aetheric_history_action_button_css(p))
+            self._retranscribe_accept_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._retranscribe_accept_btn.clicked.connect(self._on_retranscribe_accept)
+
+            self._retranscribe_reject_btn = QPushButton("✗ Reject")
+            self._retranscribe_reject_btn.setObjectName("AethericHistoryActionButton")
+            self._retranscribe_reject_btn.setProperty("action", "reject")
+            self._retranscribe_reject_btn.setFixedHeight(26)
+            self._retranscribe_reject_btn.setStyleSheet(aetheric_history_action_button_css(p))
+            self._retranscribe_reject_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._retranscribe_reject_btn.clicked.connect(self._on_retranscribe_reject)
+
+            header_layout = self._history_detail_header.layout()
+            header_layout.insertWidget(-1, self._retranscribe_accept_btn)
+            header_layout.insertWidget(-1, self._retranscribe_reject_btn)
+        else:
+            self._retranscribe_accept_btn.show()
+            self._retranscribe_reject_btn.show()
+
+    def _hide_retranscribe_accept_reject(self) -> None:
+        """Hide Accept/Reject buttons."""
+        if hasattr(self, '_retranscribe_accept_btn'):
+            self._retranscribe_accept_btn.hide()
+        if hasattr(self, '_retranscribe_reject_btn'):
+            self._retranscribe_reject_btn.hide()
+        self._is_comparison_mode = False
+
+    def _on_retranscribe_accept(self) -> None:
+        """Accept the retranscribe result — promote sidecar to canonical transcript."""
+        if self._current_history_md_path is None or self._retranscribe_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.retranscribe import RetranscribeRunner
+            RetranscribeRunner.accept_retranscribe(
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+            logger.info(
+                "Accepted retranscribe: %s model %s",
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+        except FileNotFoundError:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed",
+                "Sidecar file not found. It may have been deleted.",
+            )
+            self._hide_retranscribe_accept_reject()
+            return
+        except Exception as exc:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.warning(
+                parent, "Accept Failed", f"Could not accept re-transcribe result:\n\n{exc}",
+            )
+            self._hide_retranscribe_accept_reject()
+            return
+
+        self._hide_retranscribe_accept_reject()
+        self._refresh_after_retranscribe()
+
+    def _on_retranscribe_reject(self) -> None:
+        """Reject the retranscribe result — delete the sidecar file."""
+        if self._current_history_md_path is None or self._retranscribe_model_size is None:
+            return
+
+        try:
+            from meetandread.transcription.retranscribe import RetranscribeRunner
+            RetranscribeRunner.reject_retranscribe(
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+            logger.info(
+                "Rejected retranscribe: %s model %s",
+                self._current_history_md_path, self._retranscribe_model_size,
+            )
+        except Exception as exc:
+            logger.warning("Error rejecting retranscribe: %s", exc)
+
+        self._hide_retranscribe_accept_reject()
+        self._refresh_after_retranscribe()
+
+    def _refresh_after_retranscribe(self) -> None:
+        """Refresh the history list and viewer after accept/reject."""
+        md_path = self._current_history_md_path
+
+        self._refresh_history()
+        self._emit_history_changed()
+
+        if md_path is not None:
+            self._reselect_history_item(md_path)
+
+        if md_path is not None and md_path.exists():
+            html = self._render_history_transcript(md_path)
+            if html is not None:
+                self._history_viewer.setHtml(html)
+            else:
+                try:
+                    content = md_path.read_text(encoding="utf-8")
+                except OSError:
+                    content = ""
+                from meetandread.speaker.identity_management import _FOOTER_MARKER
+                marker_idx = content.rfind(_FOOTER_MARKER)
+                if marker_idx != -1:
+                    content = content[:marker_idx]
+                self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
+        else:
+            self._history_viewer.clear()
+            self._history_viewer.setPlaceholderText(
+                "Select a recording to view its transcript",
             )
 
     def closeEvent(self, event):
