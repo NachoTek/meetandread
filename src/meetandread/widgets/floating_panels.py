@@ -27,7 +27,10 @@ from meetandread.hardware.detector import HardwareDetector
 from meetandread.hardware.recommender import ModelRecommender
 from meetandread.speaker.identity_linking import (
     link_identity as _link_speaker_identity_in_file,
+    propagate_rename_to_signature_store as _propagate_speaker_rename_to_signatures,
+    rename_identity as _rename_speaker_identity_in_file,
 )
+from meetandread.speaker.identity_management import scan_identity_usage as _scan_identity_usage
 
 
 def clamp_to_screen(widget: QWidget, pos: QPoint) -> QPoint:
@@ -6542,12 +6545,25 @@ class FloatingSettingsPanel(QWidget):
             return
 
         try:
-            store, transcripts_dir = self._get_identity_store_and_transcripts_dir()
-            try:
-                from meetandread.speaker.identity_management import rename_identity
-                rename_identity(store, transcripts_dir, old_name, new_name)
-            finally:
-                store.close()
+            from meetandread.audio.storage.paths import get_transcripts_dir
+
+            transcripts_dir = get_transcripts_dir()
+            usage = _scan_identity_usage(transcripts_dir, [old_name]).get(old_name)
+            transcript_paths = [ref.path for ref in usage.recordings] if usage else []
+
+            for transcript_path in transcript_paths:
+                _rename_speaker_identity_in_file(
+                    transcript_path, old_name, new_name
+                )
+
+            signature_context = (
+                transcript_paths[0]
+                if transcript_paths
+                else transcripts_dir / "identity-rename.md"
+            )
+            _propagate_speaker_rename_to_signatures(
+                signature_context, old_name, new_name
+            )
         except Exception as exc:
             QMessageBox.warning(
                 self, "Rename Failed", f"Could not rename identity: {exc}"

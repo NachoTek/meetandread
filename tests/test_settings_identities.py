@@ -748,7 +748,7 @@ class TestPIISafeLogging:
 # ===========================================================================
 
 import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, call, patch
 
 from PyQt6.QtWidgets import (
     QApplication,
@@ -1370,30 +1370,63 @@ class TestIdentitiesRenameAction:
     """Verify rename flow: dialog, validation, service call, refresh."""
 
     def test_rename_success(self, settings_panel_on_identities, qapp):
-        """Successful rename refreshes list and reselects new name."""
+        """Successful rename composes the canonical identity-linking functions."""
+        from meetandread.speaker import identity_linking
+        from meetandread.widgets import floating_panels
+
+        assert (
+            floating_panels._rename_speaker_identity_in_file
+            is identity_linking.rename_identity
+        )
+        assert (
+            floating_panels._propagate_speaker_rename_to_signatures
+            is identity_linking.propagate_rename_to_signature_store
+        )
+
         panel = settings_panel_on_identities
-        _make_panel_with_identities(qapp, panel, ["Alice", "Bob"])
+        transcript_paths = [Path("/tmp/first.md"), Path("/tmp/second.md")]
+        usage = {
+            "Alice": IdentityUsage(
+                identity_name="Alice",
+                recordings=[
+                    IdentityRecordingRef(path=path, recording_count=1)
+                    for path in transcript_paths
+                ],
+            )
+        }
+        _make_panel_with_identities(qapp, panel, ["Alice", "Bob"], usage)
+        panel._identity_usage = usage
         _select_identity(panel, "Alice", qapp)
 
-        with patch.object(
-            panel, "_get_identity_store_and_transcripts_dir"
-        ) as mock_get:
-            mock_store = MagicMock()
-            mock_store.load_signatures.return_value = []
-            mock_get.return_value = (mock_store, Path("/tmp/t"))
-            with patch(
-                "meetandread.speaker.identity_management.rename_identity"
-            ) as mock_rename:
-                # Mock QInputDialog to return "Carol"
-                with patch(
-                    "meetandread.widgets.floating_panels.QInputDialog.getText"
-                ) as mock_input:
-                    mock_input.return_value = ("Carol", True)
-                    panel._on_identity_rename()
-                    qapp.processEvents()
-                    mock_rename.assert_called_once_with(
-                        mock_store, Path("/tmp/t"), "Alice", "Carol"
-                    )
+        with (
+            patch(
+                "meetandread.audio.storage.paths.get_transcripts_dir",
+                return_value=Path("/tmp"),
+            ),
+            patch(
+                "meetandread.widgets.floating_panels._scan_identity_usage",
+                return_value=usage,
+            ),
+            patch(
+                "meetandread.widgets.floating_panels._rename_speaker_identity_in_file"
+            ) as mock_rename,
+            patch(
+                "meetandread.widgets.floating_panels._propagate_speaker_rename_to_signatures"
+            ) as mock_propagate,
+            patch(
+                "meetandread.widgets.floating_panels.QInputDialog.getText",
+                return_value=("Carol", True),
+            ),
+        ):
+            panel._on_identity_rename()
+            qapp.processEvents()
+
+        assert mock_rename.call_args_list == [
+            call(path, "Alice", "Carol") for path in transcript_paths
+        ]
+        mock_propagate.assert_called_once_with(
+            transcript_paths[0], "Alice", "Carol"
+        )
 
     def test_rename_cancel_no_mutation(
         self, settings_panel_on_identities, qapp
@@ -1408,7 +1441,7 @@ class TestIdentitiesRenameAction:
         ) as mock_input:
             mock_input.return_value = ("", False)  # Cancelled
             with patch(
-                "meetandread.speaker.identity_management.rename_identity"
+                "meetandread.widgets.floating_panels._rename_speaker_identity_in_file"
             ) as mock_rename:
                 panel._on_identity_rename()
                 mock_rename.assert_not_called()
@@ -1426,7 +1459,7 @@ class TestIdentitiesRenameAction:
         ) as mock_input:
             mock_input.return_value = ("  ", True)
             with patch(
-                "meetandread.speaker.identity_management.rename_identity"
+                "meetandread.widgets.floating_panels._rename_speaker_identity_in_file"
             ) as mock_rename:
                 with patch(
                     "meetandread.widgets.floating_panels.QMessageBox.warning"
@@ -1448,7 +1481,7 @@ class TestIdentitiesRenameAction:
         ) as mock_input:
             mock_input.return_value = ("Alice", True)
             with patch(
-                "meetandread.speaker.identity_management.rename_identity"
+                "meetandread.widgets.floating_panels._rename_speaker_identity_in_file"
             ) as mock_rename:
                 with patch(
                     "meetandread.widgets.floating_panels.QMessageBox.warning"
@@ -1470,7 +1503,7 @@ class TestIdentitiesRenameAction:
         ) as mock_input:
             mock_input.return_value = ("Bob", True)
             with patch(
-                "meetandread.speaker.identity_management.rename_identity"
+                "meetandread.widgets.floating_panels._rename_speaker_identity_in_file"
             ) as mock_rename:
                 with patch(
                     "meetandread.widgets.floating_panels.QMessageBox.warning"
@@ -1484,28 +1517,44 @@ class TestIdentitiesRenameAction:
     ):
         """Service error is shown as warning and UI refreshes."""
         panel = settings_panel_on_identities
-        _make_panel_with_identities(qapp, panel, ["Alice"])
+        transcript_path = Path("/tmp/first.md")
+        usage = {
+            "Alice": IdentityUsage(
+                identity_name="Alice",
+                recordings=[
+                    IdentityRecordingRef(
+                        path=transcript_path, recording_count=1
+                    )
+                ],
+            )
+        }
+        _make_panel_with_identities(qapp, panel, ["Alice"], usage)
         _select_identity(panel, "Alice", qapp)
 
-        with patch.object(
-            panel, "_get_identity_store_and_transcripts_dir"
-        ) as mock_get:
-            mock_store = MagicMock()
-            mock_get.return_value = (mock_store, Path("/tmp/t"))
-            with patch(
-                "meetandread.speaker.identity_management.rename_identity"
-            ) as mock_rename:
-                mock_rename.side_effect = RuntimeError("store locked")
-                with patch(
-                    "meetandread.widgets.floating_panels.QInputDialog.getText"
-                ) as mock_input:
-                    mock_input.return_value = ("Carol", True)
-                    with patch(
-                        "meetandread.widgets.floating_panels.QMessageBox.warning"
-                    ) as mock_warn:
-                        with patch.object(panel, "_refresh_identities"):
-                            panel._on_identity_rename()
-                            mock_warn.assert_called_once()
+        with (
+            patch(
+                "meetandread.audio.storage.paths.get_transcripts_dir",
+                return_value=Path("/tmp"),
+            ),
+            patch(
+                "meetandread.widgets.floating_panels._scan_identity_usage",
+                return_value=usage,
+            ),
+            patch(
+                "meetandread.widgets.floating_panels._rename_speaker_identity_in_file",
+                side_effect=RuntimeError("file locked"),
+            ),
+            patch(
+                "meetandread.widgets.floating_panels.QInputDialog.getText",
+                return_value=("Carol", True),
+            ),
+            patch(
+                "meetandread.widgets.floating_panels.QMessageBox.warning"
+            ) as mock_warn,
+            patch.object(panel, "_refresh_identities"),
+        ):
+            panel._on_identity_rename()
+            mock_warn.assert_called_once()
 
     def test_rename_no_selection_is_noop(
         self, settings_panel_on_identities, qapp
