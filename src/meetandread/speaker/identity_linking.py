@@ -16,7 +16,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from meetandread.utils.file_utils import atomic_write
 
@@ -34,11 +34,10 @@ def _norm_label(s: str) -> str:
 def _resolve_unknown_speaker_labels(md_path: Path) -> list[str]:
     try:
         content = md_path.read_text(encoding="utf-8")
-        marker = "\n---\n\n<!-- METADATA: "
-        idx = content.find(marker)
-        if idx < 0:
+        parsed = _parse_metadata_footer(content)
+        if parsed is None:
             return []
-        data = json.loads(content[idx + len(marker):].rstrip(" -->\n"))
+        _md_body, data, _footer_marker, _space_before_json = parsed
 
         labels: set[str] = set()
         for w in data.get("words", []):
@@ -50,13 +49,17 @@ def _resolve_unknown_speaker_labels(md_path: Path) -> list[str]:
         return []
 
 
-def _parse_metadata_footer(content: str) -> Optional[tuple[str, dict]]:
-    """Split a transcript file into (md_body, metadata_dict).
+def _parse_metadata_footer(
+    content: str,
+) -> Optional[tuple[str, dict, str, str]]:
+    """Split a transcript file into ``(md_body, data, footer_marker, space)``.
 
-    Returns None when no metadata footer is found or JSON is malformed.
+    Locates the metadata footer by its **last** occurrence and removes the
+    closing `` -->`` as an exact suffix.  Returns ``None`` when no footer is
+    found or the JSON is malformed.
     """
     footer_marker = "\n---\n\n<!-- METADATA: "
-    marker_idx = content.find(footer_marker)
+    marker_idx = content.rfind(footer_marker)
     if marker_idx == -1:
         return None
 
@@ -68,8 +71,10 @@ def _parse_metadata_footer(content: str) -> Optional[tuple[str, dict]]:
         after_marker = after_marker[1:]
 
     metadata_text = after_marker
-    if metadata_text.strip().endswith(" -->"):
-        metadata_text = metadata_text.strip()[:-len(" -->")]
+    if metadata_text.endswith("\n"):
+        metadata_text = metadata_text[: -len("\n")]
+    if metadata_text.endswith(" -->"):
+        metadata_text = metadata_text[: -len(" -->")]
 
     try:
         data = json.loads(metadata_text)
@@ -90,6 +95,17 @@ def _rebuild_file(
     return (
         md_body + footer_marker + space_before_json + updated_json + " -->\n"
     )
+
+
+def _replace_speaker_heading(md_body: str, old_label: str, new_label: str) -> str:
+    """Replace a ``**label**`` speaker heading line with ``**new_label**``.
+
+    The replacement is anchored to a line that consists solely of the bold
+    label (plus optional trailing whitespace), so bold mentions of the same
+    name inside segment body text are left untouched (issue #42).
+    """
+    pattern = rf"(?m)^\*\*{re.escape(old_label)}\*\*\s*$"
+    return re.sub(pattern, f"**{new_label}**", md_body)
 
 
 def _resolve_speaker_matches_key(
@@ -140,30 +156,90 @@ def _set_speaker_match(
         }
 
 
-def _propagate_to_signature_store(
-    md_path: Path, raw_label: str, identity_name: str
+def _resolve_signature_db(md_path: Path) -> Optional[Path]:
+    """Resolve the signature DB path, preferring one next to the transcript
+    and falling back to the default recordings dir.
+
+    Returns None when no database exists.
+    """
+    db_path = md_path.parent / "speaker_signatures.db"
+    if db_path.exists():
+        return db_path
+    try:
+        from meetandread.audio.storage.paths import get_recordings_dir
+        default_db = get_recordings_dir() / "speaker_signatures.db"
+        if default_db.exists():
+            return default_db
+    except Exception:
+        pass
+    return None
+
+
+def _propagate_signatures(
+    md_path: Path,
+    replacements: list[tuple[str, str]],
+    *,
+    verb: Literal["link", "rename"],
 ) -> None:
+    """Shared db-resolution + store interaction for signature propagation.
+
+    For each ``(old_name, new_name)`` pair, if a profile named ``old_name``
+    exists in the resolved store, re-save its embedding under ``new_name`` and
+    delete the old entry.  Best-effort: logs a warning and stops on store error.
+
+    PII-safe: only counts and the operation *verb* appear in log records —
+    never a Speaker name, a raw label, or a filesystem path.
+    """
     try:
         from meetandread.speaker.signatures import VoiceSignatureStore
     except ImportError:
-        logger.info("VoiceSignatureStore unavailable — skipping propagation")
+        logger.info("VoiceSignatureStore unavailable — skipping %s propagation", verb)
         return
 
-    db_path = md_path.parent / "speaker_signatures.db"
-    if not db_path.exists():
-        try:
-            from meetandread.audio.storage.paths import get_recordings_dir
-            default_db = get_recordings_dir() / "speaker_signatures.db"
-            if default_db.exists():
-                db_path = default_db
-            else:
-                logger.info("No signature database found — skipping propagation")
-                return
-        except Exception:
-            logger.info("No signature database found — skipping propagation")
-            return
+    db_path = _resolve_signature_db(md_path)
+    if db_path is None:
+        logger.info("No signature database found — skipping %s propagation", verb)
+        return
 
-    resolved_labels: list[str] = []
+    try:
+        with VoiceSignatureStore(db_path=str(db_path)) as store:
+            profiles = store.load_signatures()
+            profile_map = {p.name: p for p in profiles}
+            propagated = 0
+            for old_name, new_name in replacements:
+                old_profile = profile_map.get(old_name)
+                if old_profile is None:
+                    continue
+                store.save_signature(
+                    new_name,
+                    old_profile.embedding,
+                    averaged_from_segments=old_profile.num_samples,
+                )
+                store.delete_signature(old_name)
+                propagated += 1
+    except Exception as exc:
+        # Log only the exception class — the message could embed a path or name.
+        logger.warning(
+            "Failed to propagate %s signatures: %s", verb, type(exc).__name__
+        )
+        return
+
+    if propagated:
+        logger.info(
+            "Propagated %s to signature store (%d profile(s))", verb, propagated
+        )
+    else:
+        logger.info("No profiles matched for %s propagation", verb)
+
+
+def _propagate_link_to_signature_store(
+    md_path: Path, raw_label: str, identity_name: str
+) -> None:
+    """Link-path propagation: remap the raw label's embedding to *identity_name*.
+
+    For ``__unknown__``, every SPK label found in the transcript is remapped.
+    Delegates db-resolution + store interaction to ``_propagate_signatures``.
+    """
     if raw_label == "__unknown__":
         resolved_labels = _resolve_unknown_speaker_labels(md_path)
         if not resolved_labels:
@@ -171,32 +247,11 @@ def _propagate_to_signature_store(
                 "No SPK labels found in transcript for __unknown__ — skipping propagation"
             )
             return
+        replacements = [(label, identity_name) for label in resolved_labels]
     else:
-        resolved_labels = [raw_label]
+        replacements = [(raw_label, identity_name)]
 
-    try:
-        with VoiceSignatureStore(db_path=str(db_path)) as store:
-            profiles = store.load_signatures()
-            profile_map = {p.name: p for p in profiles}
-
-            for label in resolved_labels:
-                old_profile = profile_map.get(label)
-                if old_profile is None:
-                    logger.info(
-                        "Raw speaker '%s' not found in signature store — skipping", label
-                    )
-                    continue
-
-                store.save_signature(
-                    identity_name,
-                    old_profile.embedding,
-                    averaged_from_segments=old_profile.num_samples,
-                )
-                store.delete_signature(label)
-
-                logger.info("Propagated identity link to signature store")
-    except Exception as exc:
-        logger.warning("Failed to propagate identity link to signature store: %s", exc)
+    _propagate_signatures(md_path, replacements, verb="link")
 
 
 def link_identity(md_path: Path, raw_label: str, identity_name: str) -> None:
@@ -249,11 +304,7 @@ def link_identity(md_path: Path, raw_label: str, identity_name: str) -> None:
                 segments_updated += 1
 
     display_label = "Unknown Speaker" if raw_label == "__unknown__" else raw_label
-    updated_body = re.sub(
-        re.escape(f"**{display_label}**"),
-        f"**{identity_name}**",
-        md_body,
-    )
+    updated_body = _replace_speaker_heading(md_body, display_label, identity_name)
 
     if "speaker_matches" not in data:
         data["speaker_matches"] = {}
@@ -273,7 +324,7 @@ def link_identity(md_path: Path, raw_label: str, identity_name: str) -> None:
     atomic_write(md_path, _rebuild_file(updated_body, data, footer_marker, space_before_json))
 
     if raw_label != "__unknown__":
-        _propagate_to_signature_store(md_path, raw_label, identity_name)
+        _propagate_link_to_signature_store(md_path, raw_label, identity_name)
 
 
 def rename_identity(md_path: Path, old_name: str, new_name: str) -> None:
@@ -301,11 +352,7 @@ def rename_identity(md_path: Path, old_name: str, new_name: str) -> None:
             seg["speaker_id"] = new_name
             segments_updated += 1
 
-    updated_body = re.sub(
-        re.escape(f"**{old_name}**"),
-        f"**{new_name}**",
-        md_body,
-    )
+    updated_body = _replace_speaker_heading(md_body, old_name, new_name)
 
     atomic_write(md_path, _rebuild_file(updated_body, data, footer_marker, space_before_json))
 
@@ -313,58 +360,9 @@ def rename_identity(md_path: Path, old_name: str, new_name: str) -> None:
 def propagate_rename_to_signature_store(
     md_path: Path, old_name: str, new_name: str
 ) -> None:
-    """Propagate a speaker rename to the VoiceSignatureStore (best-effort).
+    """Rename-path propagation: re-save the old name's embedding under the new
+    name and delete the old entry.
 
-    If the old speaker name has a saved embedding, saves it under the new
-    name and deletes the old entry.
+    Delegates db-resolution + store interaction to ``_propagate_signatures``.
     """
-    try:
-        from meetandread.speaker.signatures import VoiceSignatureStore
-    except ImportError:
-        logger.warning(
-            "VoiceSignatureStore not available — skipping rename propagation"
-        )
-        return
-
-    db_path = md_path.parent / "speaker_signatures.db"
-    if not db_path.exists():
-        try:
-            from meetandread.audio.storage.paths import get_recordings_dir
-            default_db = get_recordings_dir() / "speaker_signatures.db"
-            if default_db.exists():
-                db_path = default_db
-            else:
-                logger.info(
-                    "No signature database found — speaker '%s' not in store",
-                    old_name,
-                )
-                return
-        except Exception:
-            return
-
-    with VoiceSignatureStore(db_path=str(db_path)) as store:
-        profiles = store.load_signatures()
-        old_profile = None
-        for profile in profiles:
-            if profile.name == old_name:
-                old_profile = profile
-                break
-
-        if old_profile is None:
-            logger.info(
-                "Speaker '%s' not found in signature store — no propagation needed",
-                old_name,
-            )
-            return
-
-        store.save_signature(
-            new_name,
-            old_profile.embedding,
-            averaged_from_segments=old_profile.num_samples,
-        )
-        store.delete_signature(old_name)
-
-        logger.info(
-            "Propagated rename '%s' -> '%s' to signature store at %s",
-            old_name, new_name, db_path,
-        )
+    _propagate_signatures(md_path, [(old_name, new_name)], verb="rename")

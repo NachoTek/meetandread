@@ -179,7 +179,7 @@ class TestLinkUnknownSpeaker:
         ]
         md_path = _make_transcript_md(tmp_path, words)
 
-        with patch("meetandread.speaker.identity_linking._propagate_to_signature_store") as mock_prop:
+        with patch("meetandread.speaker.identity_linking._propagate_link_to_signature_store") as mock_prop:
             link_identity(md_path, "__unknown__", "Eve")
             mock_prop.assert_not_called()
 

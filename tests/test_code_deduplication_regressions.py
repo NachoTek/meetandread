@@ -89,6 +89,19 @@ class TestMetadataFooterDedup:
             "Canonical parse_metadata_footer missing from identity_management.py"
         )
 
+    def test_identity_linking_has_single_footer_marker(self) -> None:
+        """identity_linking.py defines the metadata footer marker exactly once.
+
+        Before issue #43, ``_resolve_unknown_speaker_labels`` carried its own
+        inline copy of the marker + a character-set rstrip.  The marker must
+        appear in exactly one place — the module's own ``_parse_metadata_footer``.
+        """
+        source = _read("speaker/identity_linking.py")
+        count = source.count("<!-- METADATA")
+        assert count == 1, (
+            f"Expected exactly 1 '<!-- METADATA' in identity_linking.py, found {count}"
+        )
+
 
 # ===================================================================
 # T02: Cosine similarity centralization
@@ -186,6 +199,56 @@ class TestNormLabelDedup:
                 hits.append(str(py.relative_to(ROOT)))
         assert hits == [], (
             f"_norm_label found outside speaker/identity_linking.py: {hits}"
+        )
+
+
+# ===================================================================
+# Issue #44: Speaker rename wrappers eliminated from both panels
+# ===================================================================
+
+
+class TestRenameWrapperRemoval:
+    """Neither panel class defines its own rename/propagate helper.
+
+    Issue #40 extracted the logic into ``speaker.identity_linking``; issue #44
+    removes the one-line panel wrappers that were left as migration scaffolding.
+    Callers must invoke the canonical module functions directly.
+    """
+
+    @pytest.mark.parametrize("method", ["_rename_speaker_in_file", "_propagate_rename_to_signatures"])
+    def test_panels_define_no_rename_wrapper(self, method: str) -> None:
+        source = _read("widgets/floating_panels.py")
+        count = _count_funcdef(source, method)
+        assert count == 0, (
+            f"{method} is still defined in floating_panels.py ({count}x) — "
+            f"callers must use speaker.identity_linking directly"
+        )
+
+
+# ===================================================================
+# Issue #45: signature-propagation helpers deduplicated
+# ===================================================================
+
+
+class TestSignaturePropagationDedup:
+    """The link- and rename-propagators share one db-resolution + store-interaction
+    helper (issue #45).  These structural guards keep the shape from re-diverging.
+    """
+
+    def test_voice_signature_store_import_appears_once(self) -> None:
+        """The lazy VoiceSignatureStore import lives only in the shared helper."""
+        source = _read("speaker/identity_linking.py")
+        count = source.count("from meetandread.speaker.signatures import VoiceSignatureStore")
+        assert count == 1, (
+            f"Expected 1 VoiceSignatureStore import in identity_linking.py, found {count}"
+        )
+
+    def test_recordings_dir_resolver_appears_once(self) -> None:
+        """The recordings-dir fallback lives only in _resolve_signature_db."""
+        source = _read("speaker/identity_linking.py")
+        count = source.count("from meetandread.audio.storage.paths import get_recordings_dir")
+        assert count == 1, (
+            f"Expected 1 get_recordings_dir import in identity_linking.py, found {count}"
         )
 
 

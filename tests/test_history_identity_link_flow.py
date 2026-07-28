@@ -8,6 +8,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -281,6 +282,93 @@ class TestPIISafeLogging:
         assert any("malformed" in r.message.lower() or "metadata" in r.message.lower() for r in caplog.records)
 
 
+class TestRenamePIISafeLogging:
+    """issue #41: the rename-propagation path must not emit a Speaker identity
+    name, a raw speaker label, or a filesystem path — only counts and operation
+    labels, matching the link-path discipline.
+    """
+
+    def test_no_names_or_path_when_db_missing(self, tmp_path, caplog):
+        from meetandread.speaker.identity_linking import propagate_rename_to_signature_store
+        md = tmp_path / "t.md"
+        md.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+        # No db next to the transcript, and none at the default recordings dir.
+        with patch(
+            "meetandread.audio.storage.paths.get_recordings_dir",
+            return_value=tmp_path / "nodb",
+        ):
+            with caplog.at_level(logging.DEBUG, logger="meetandread.speaker.identity_linking"):
+                propagate_rename_to_signature_store(md, "SecretOld", "SecretNew")
+        for r in caplog.records:
+            msg = r.getMessage()
+            assert "SecretOld" not in msg, f"PII leak (old name): {msg!r}"
+            assert "SecretNew" not in msg, f"PII leak (new name): {msg!r}"
+            assert str(tmp_path) not in msg, f"Path leak: {msg!r}"
+
+    def test_no_names_or_path_when_profile_missing(self, tmp_path, caplog):
+        from meetandread.speaker.identity_linking import propagate_rename_to_signature_store
+        db = tmp_path / "speaker_signatures.db"
+        with VoiceSignatureStore(db_path=str(db)) as st:
+            st.save_signature("Other", np.random.randn(256).astype(np.float32))
+        md = tmp_path / "t.md"
+        md.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+        with caplog.at_level(logging.DEBUG, logger="meetandread.speaker.identity_linking"):
+            propagate_rename_to_signature_store(md, "SecretOld", "SecretNew")
+        for r in caplog.records:
+            msg = r.getMessage()
+            assert "SecretOld" not in msg, f"PII leak (old name): {msg!r}"
+            assert "SecretNew" not in msg, f"PII leak (new name): {msg!r}"
+            assert str(db) not in msg, f"Path leak: {msg!r}"
+
+    def test_no_names_or_path_on_successful_propagation(self, tmp_path, caplog):
+        from meetandread.speaker.identity_linking import propagate_rename_to_signature_store
+        db = tmp_path / "speaker_signatures.db"
+        with VoiceSignatureStore(db_path=str(db)) as st:
+            st.save_signature("SecretOld", np.random.randn(256).astype(np.float32))
+        md = tmp_path / "t.md"
+        md.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+        with caplog.at_level(logging.DEBUG, logger="meetandread.speaker.identity_linking"):
+            propagate_rename_to_signature_store(md, "SecretOld", "SecretNew")
+        for r in caplog.records:
+            msg = r.getMessage()
+            assert "SecretOld" not in msg, f"PII leak (old name): {msg!r}"
+            assert "SecretNew" not in msg, f"PII leak (new name): {msg!r}"
+            assert str(db) not in msg, f"Path leak: {msg!r}"
+        # Propagation still actually happened.
+        with VoiceSignatureStore(db_path=str(db)) as st:
+            names = [p.name for p in st.load_signatures()]
+            assert "SecretNew" in names
+            assert "SecretOld" not in names
+
+    def test_no_names_or_path_when_store_raises(self, tmp_path, caplog):
+        """An exception from the store must not leak names/paths via its message.
+
+        Only the exception class is logged (issue #41).
+        """
+        from meetandread.speaker.identity_linking import propagate_rename_to_signature_store
+        db = tmp_path / "speaker_signatures.db"
+        with VoiceSignatureStore(db_path=str(db)) as st:
+            st.save_signature("SecretOld", np.random.randn(256).astype(np.float32))
+        md = tmp_path / "t.md"
+        md.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+
+        # An exception whose message embeds both a path and a name.
+        leaky = OSError("disk failure at C:/secret/path saving SecretOld -> SecretNew")
+        with patch(
+            "meetandread.speaker.signatures.VoiceSignatureStore.load_signatures",
+            side_effect=leaky,
+        ):
+            with caplog.at_level(logging.DEBUG, logger="meetandread.speaker.identity_linking"):
+                propagate_rename_to_signature_store(md, "SecretOld", "SecretNew")
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warnings, "expected a warning when the store raises"
+        for msg in warnings:
+            assert "SecretOld" not in msg, f"PII leak (old name): {msg!r}"
+            assert "SecretNew" not in msg, f"PII leak (new name): {msg!r}"
+            assert "/secret/path" not in msg, f"Path leak: {msg!r}"
+            assert "OSError" in msg  # class name is the diagnostic
+
+
 # ---------------------------------------------------------------------------
 # Integration tests: _open_identity_link_dialog + anchor flow (T03)
 # ---------------------------------------------------------------------------
@@ -344,7 +432,7 @@ class TestOpenIdentityLinkDialogIntegration:
         mock_dialog.selected_identity_name.return_value = "Alice"
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog", return_value=mock_dialog), \
-             patch("meetandread.speaker.identity_linking._propagate_to_signature_store"):
+             patch("meetandread.speaker.identity_linking._propagate_link_to_signature_store"):
             result = _open_identity_link_dialog(md, "SPK_0", None)
 
         assert result is True
@@ -483,3 +571,146 @@ class TestSpeakerMatchesCaseMismatch:
 
         assert d["speaker_matches"]["spk0"]["identity_name"] == "Alice"
 
+
+class TestHeadingOnlyReplacement:
+    """Speaker-name replacement must touch only heading lines, never bold
+    mentions elsewhere in the transcript body (issue #42).
+
+    Both link and rename anchor the ``**Name**`` replacement to a line that is
+    a heading on its own, so a bold mention inside segment text is preserved.
+    """
+
+    def test_rename_leaves_bold_body_mention_untouched(self, tmp_path):
+        from meetandread.speaker.identity_linking import rename_identity
+        w = [
+            {"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "Alice"},
+            {"text": "Bye", "start_time": 0.5, "end_time": 1.0, "confidence": 85, "speaker_id": "Alice"},
+        ]
+        s = [{"start_time": 0.0, "end_time": 1.0, "speaker_id": "Alice"}]
+        md = _make_md(tmp_path, w, s)
+        # Inject a bold body mention of Alice that is NOT a heading line
+        content = md.read_text(encoding="utf-8")
+        content = content.replace(
+            "**Alice**\n\nHi Bye",
+            "**Alice**\n\nHi Bye\n\nEarlier, **Alice** mentioned something.",
+        )
+        md.write_text(content, encoding="utf-8")
+
+        rename_identity(md, "Alice", "Bob")
+
+        body = md.read_text(encoding="utf-8")
+        # Heading was updated
+        assert "\n**Bob**\n" in body
+        assert "\n**Alice**\n" not in body
+        # Bold mention inside body text is preserved
+        assert "**Alice** mentioned something" in body
+
+    def test_link_leaves_bold_body_mention_untouched(self, tmp_path):
+        from meetandread.speaker.identity_linking import link_identity
+        w = [{"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"}]
+        s = [{"start_time": 0.0, "end_time": 0.5, "speaker_id": "SPK_0"}]
+        md = _make_md(tmp_path, w, s)
+        # Inject a bold body mention of SPK_0 that is NOT a heading line
+        content = md.read_text(encoding="utf-8")
+        content = content.replace(
+            "**SPK_0**\n\nHi",
+            "**SPK_0**\n\nHi\n\nRefers to **SPK_0** explicitly.",
+        )
+        md.write_text(content, encoding="utf-8")
+
+        link_identity(md, "SPK_0", "Alice")
+
+        body = md.read_text(encoding="utf-8")
+        # Heading was updated
+        assert "\n**Alice**\n" in body
+        # Bold mention inside body text is preserved
+        assert "**SPK_0** explicitly" in body
+
+    def test_rename_still_updates_each_heading_line(self, tmp_path):
+        """Multiple heading lines for the same speaker are all updated."""
+        from meetandread.speaker.identity_linking import rename_identity
+        w = [
+            {"text": "Hi", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "Alice"},
+            {"text": "Yo", "start_time": 1.0, "end_time": 1.5, "confidence": 88, "speaker_id": "Bob"},
+            {"text": "Bye", "start_time": 2.0, "end_time": 2.5, "confidence": 85, "speaker_id": "Alice"},
+        ]
+        s = [
+            {"start_time": 0.0, "end_time": 0.5, "speaker_id": "Alice"},
+            {"start_time": 1.0, "end_time": 1.5, "speaker_id": "Bob"},
+            {"start_time": 2.0, "end_time": 2.5, "speaker_id": "Alice"},
+        ]
+        md = _make_md(tmp_path, w, s)
+
+        rename_identity(md, "Alice", "Carol")
+
+        body = md.read_text(encoding="utf-8")
+        # Both Alice headings become Carol; Bob stays
+        assert body.count("**Carol**") == 2
+        assert "**Bob**" in body
+        assert "**Alice**" not in body
+
+
+class TestFooterParsingCorrectness:
+    """issue #43: the private footer parser in identity_linking must locate the
+    footer by its LAST occurrence and remove the closing `` -->`` as an exact
+    suffix (not a character-set strip).
+    """
+
+    def test_uses_last_footer_occurrence(self):
+        from meetandread.speaker.identity_linking import _parse_metadata_footer
+        # An earlier metadata-like block in the body, then the real footer.
+        content = (
+            "# T\n\n"
+            "Some body.\n\n"
+            "---\n\n<!-- METADATA: {\"words\": [], \"fake\": true} -->\n\n"
+            "More body.\n\n"
+            "---\n\n<!-- METADATA: "
+            "{\"words\": [{\"speaker_id\": \"SPK_0\"}], \"real\": true} -->\n"
+        )
+        parsed = _parse_metadata_footer(content)
+        assert parsed is not None
+        md_body, data, _marker, _space = parsed
+        assert data.get("real") is True
+        assert data["words"][0]["speaker_id"] == "SPK_0"
+        assert "More body" in md_body
+        assert data.get("fake") is None
+
+    def test_suffix_removed_without_eating_data(self):
+        from meetandread.speaker.identity_linking import _parse_metadata_footer
+        # JSON values contain "-->" and trailing-dash chars that a character-set
+        # rstrip would corrupt; only the real closing " -->" suffix must go.
+        content = (
+            "# T\n\n**SPK_0**\n\nhi\n\n"
+            "---\n\n<!-- METADATA: {\"note\": \"see --> here\", \"x\": \"end-\"} -->\n"
+        )
+        parsed = _parse_metadata_footer(content)
+        assert parsed is not None
+        _body, data, _m, _s = parsed
+        assert data["note"] == "see --> here"
+        assert data["x"] == "end-"
+
+    def test_returns_reconstruction_4tuple(self):
+        from meetandread.speaker.identity_linking import _parse_metadata_footer
+        content = "# T\n\nhi\n\n---\n\n<!-- METADATA: {\"k\": 1} -->\n"
+        parsed = _parse_metadata_footer(content)
+        assert parsed is not None
+        assert len(parsed) == 4  # (md_body, data, footer_marker, space_before_json)
+        md_body, data, marker, space = parsed
+        assert md_body == "# T\n\nhi\n"
+        assert data == {"k": 1}
+        assert marker == "\n---\n\n<!-- METADATA: "
+        assert space == ""
+
+    def test_resolve_unknown_labels_reuses_module_parser(self, tmp_path):
+        """_resolve_unknown_speaker_labels has no inline footer parser of its own."""
+        from meetandread.speaker.identity_linking import _resolve_unknown_speaker_labels
+        content = (
+            "# T\n\n**SPK_0**\n\nhi\n\n"
+            "---\n\n<!-- METADATA: {\"words\": ["
+            "{\"speaker_id\": \"SPK_0\"}, {\"speaker_id\": \"SPK_1\"}, {\"speaker_id\": null}"
+            "]} -->\n"
+        )
+        p = tmp_path / "t.md"
+        p.write_text(content, encoding="utf-8")
+        labels = _resolve_unknown_speaker_labels(p)
+        assert labels == ["SPK_0", "SPK_1"]

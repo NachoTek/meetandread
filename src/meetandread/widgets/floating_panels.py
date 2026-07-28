@@ -27,8 +27,6 @@ from meetandread.hardware.detector import HardwareDetector
 from meetandread.hardware.recommender import ModelRecommender
 from meetandread.speaker.identity_linking import (
     link_identity as _link_speaker_identity_in_file,
-    rename_identity as _rename_speaker_identity_in_file,
-    propagate_rename_to_signature_store as _propagate_rename_to_signatures_fn,
 )
 
 
@@ -2411,16 +2409,6 @@ class FloatingTranscriptPanel(QWidget):
             self._history_viewer.setHtml(html)
         else:
             self._history_viewer.setPlainText("(Error refreshing after link)")
-
-    def _rename_speaker_in_file(
-        self, md_path: Path, old_name: str, new_name: str
-    ) -> None:
-        _rename_speaker_identity_in_file(md_path, old_name, new_name)
-
-    def _propagate_rename_to_signatures(
-        self, md_path: Path, old_name: str, new_name: str
-    ) -> None:
-        _propagate_rename_to_signatures_fn(md_path, old_name, new_name)
 
     def _rebuild_display(self) -> None:
         """Rebuild the entire text display from stored phrases."""
@@ -8666,16 +8654,6 @@ class FloatingSettingsPanel(QWidget):
             "playing" if was_playing else "paused",
             auto_loaded,
         )
-
-    def _rename_speaker_in_file(
-        self, md_path: Path, old_name: str, new_name: str
-    ) -> None:
-        _rename_speaker_identity_in_file(md_path, old_name, new_name)
-
-    def _propagate_rename_to_signatures(
-        self, md_path: Path, old_name: str, new_name: str
-    ) -> None:
-        _propagate_rename_to_signatures_fn(md_path, old_name, new_name)
 
     def _on_retranscribe_clicked(self) -> None:
         """Handle Re-transcribe button click — placeholder for S03 full retranscribe."""

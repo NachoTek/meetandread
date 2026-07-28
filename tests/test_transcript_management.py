@@ -15,6 +15,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from meetandread.speaker.identity_linking import (
+    propagate_rename_to_signature_store,
+    rename_identity,
+)
 from meetandread.transcription.engine import TranscriptionSuccess
 from meetandread.transcription.post_processor import (
     PostProcessJob,
@@ -570,12 +574,12 @@ class TestSpeakerRename:
             json_str = json_str.rstrip()[: -len(end_marker)]
         return json.loads(json_str)
 
-    # -- _rename_speaker_in_file tests ------------------------------------
+    # -- rename_identity tests --------------------------------------------
 
     def test_rename_updates_words_and_segments_in_metadata(
         self, panel, tmp_path: Path
     ) -> None:
-        """_rename_speaker_in_file must update speaker_id in words and segments."""
+        """rename_identity must update speaker_id in words and segments."""
         words = [
             {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
             {"text": "World", "start_time": 0.5, "end_time": 1.0, "confidence": 85, "speaker_id": "SPK_0"},
@@ -587,7 +591,7 @@ class TestSpeakerRename:
         ]
 
         md_path = self._make_transcript_md(tmp_path, words, segments)
-        panel._rename_speaker_in_file(md_path, "SPK_0", "Alice")
+        rename_identity(md_path, "SPK_0", "Alice")
 
         data = self._read_metadata(md_path)
 
@@ -603,7 +607,7 @@ class TestSpeakerRename:
     def test_rename_updates_markdown_body_speaker_labels(
         self, panel, tmp_path: Path
     ) -> None:
-        """_rename_speaker_in_file must update **SpeakerLabel** in markdown body."""
+        """rename_identity must update **SpeakerLabel** in markdown body."""
         words = [
             {"text": "Hello", "start_time": 0.0, "end_time": 0.5, "confidence": 90, "speaker_id": "SPK_0"},
             {"text": "Hi", "start_time": 1.0, "end_time": 1.5, "confidence": 88, "speaker_id": "SPK_1"},
@@ -614,7 +618,7 @@ class TestSpeakerRename:
         ]
 
         md_path = self._make_transcript_md(tmp_path, words, segments)
-        panel._rename_speaker_in_file(md_path, "SPK_0", "Alice")
+        rename_identity(md_path, "SPK_0", "Alice")
 
         content = md_path.read_text(encoding="utf-8")
         # Markdown body should have **Alice** instead of **SPK_0**
@@ -626,7 +630,7 @@ class TestSpeakerRename:
     def test_rename_propagate_to_signatures_saves_new_deletes_old(
         self, panel, tmp_path: Path
     ) -> None:
-        """_propagate_rename_to_signatures saves under new name and deletes old."""
+        """propagate_rename_to_signature_store saves under new name and deletes old."""
         import numpy as np
         from meetandread.speaker.signatures import VoiceSignatureStore
 
@@ -641,7 +645,7 @@ class TestSpeakerRename:
         md_path = tmp_path / "test_rec.md"
         md_path.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
 
-        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Alice")
+        propagate_rename_to_signature_store(md_path, "SPK_0", "Alice")
 
         with VoiceSignatureStore(db_path=str(db_path)) as store:
             profiles = store.load_signatures()
@@ -652,7 +656,7 @@ class TestSpeakerRename:
     def test_rename_propagate_handles_missing_speaker_gracefully(
         self, panel, tmp_path: Path
     ) -> None:
-        """_propagate_rename_to_signatures must not error when old_name is missing."""
+        """propagate_rename_to_signature_store must not error when old_name is missing."""
         import numpy as np
         from meetandread.speaker.signatures import VoiceSignatureStore
 
@@ -667,7 +671,7 @@ class TestSpeakerRename:
         md_path.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
 
         # Should not raise — SPK_0 is not in the store
-        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Alice")
+        propagate_rename_to_signature_store(md_path, "SPK_0", "Alice")
 
         # Verify no changes were made
         with VoiceSignatureStore(db_path=str(db_path)) as store:
@@ -678,12 +682,12 @@ class TestSpeakerRename:
     def test_rename_propagate_handles_no_db_gracefully(
         self, panel, tmp_path: Path
     ) -> None:
-        """_propagate_rename_to_signatures must not error when no DB exists."""
+        """propagate_rename_to_signature_store must not error when no DB exists."""
         md_path = tmp_path / "test_rec.md"
         md_path.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
 
         # Should not raise — no signature DB exists
-        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Alice")
+        propagate_rename_to_signature_store(md_path, "SPK_0", "Alice")
 
     def test_full_rename_flow_md_and_signatures(
         self, panel, tmp_path: Path
@@ -712,8 +716,8 @@ class TestSpeakerRename:
         md_path = self._make_transcript_md(tmp_path, words, segments)
 
         # Perform full rename
-        panel._rename_speaker_in_file(md_path, "SPK_0", "Bob")
-        panel._propagate_rename_to_signatures(md_path, "SPK_0", "Bob")
+        rename_identity(md_path, "SPK_0", "Bob")
+        propagate_rename_to_signature_store(md_path, "SPK_0", "Bob")
 
         # Verify .md metadata
         data = self._read_metadata(md_path)
