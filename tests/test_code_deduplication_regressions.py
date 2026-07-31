@@ -57,50 +57,63 @@ def _has_import_statement(source: str, module: str) -> bool:
 
 
 # ===================================================================
-# T01: Metadata footer parsing centralization
+# Issue #50: Transcript Footer parsing centralized in transcript_footer
 # ===================================================================
 
 
 class TestMetadataFooterDedup:
-    """Canonical ``parse_metadata_footer`` lives in identity_management only.
+    """Transcript Footer parsing and marker literals live only in the
+    canonical ``transcript_footer`` module.
 
-    identity_linking.py has a private _parse_metadata_footer that returns a
-    4-tuple (body, data, marker, space) needed for file reconstruction — it is
-    NOT a duplicate of the public canonical parser.
+    Issue #50 deleted the duplicate footer parsers, splitters, rebuilders,
+    marker constants, and the four-value parsing contract from the Speaker
+    identity modules.  These guards keep them from returning.
     """
 
-    def test_no_private_parse_metadata_footer_in_src(self) -> None:
-        """No ``def _parse_metadata_footer()`` in production code except identity_linking."""
+    def test_no_footer_parsers_in_speaker_modules(self) -> None:
+        """No footer parser/splitter/rebuilder defined anywhere under speaker/."""
+        forbidden = (
+            "parse_metadata_footer",
+            "split_metadata_footer",
+            "_parse_metadata_footer",
+            "_rebuild_transcript",
+            "_rebuild_file",
+        )
+        hits: list[str] = []
+        for py in _source_files("speaker/**/*.py"):
+            source = py.read_text(encoding="utf-8")
+            for name in forbidden:
+                if _count_funcdef(source, name):
+                    hits.append(f"{py.relative_to(ROOT)} defines {name}")
+        assert hits == [], (
+            f"Footer parser found in speaker modules: {hits}"
+        )
+
+    def test_no_footer_marker_literals_in_production_outside_canonical(self) -> None:
+        """The '<!-- METADATA' marker literal appears only in transcript_footer.py.
+
+        This is the acceptance guard for issue #50: Transcript Footer syntax
+        is owned by the canonical module alone (intentional test fixtures are
+        out of scope — this scans production source only).
+        """
         hits: list[str] = []
         for py in _source_files("**/*.py"):
-            source = py.read_text(encoding="utf-8")
-            if "identity_linking" in str(py):
+            if py.name == "transcript_footer.py":
                 continue
-            if _count_funcdef(source, "_parse_metadata_footer"):
+            source = py.read_text(encoding="utf-8")
+            if "<!-- METADATA" in source or "_FOOTER_MARKER" in source:
                 hits.append(str(py.relative_to(ROOT)))
         assert hits == [], (
-            f"Private _parse_metadata_footer found in production: {hits}"
+            f"Transcript Footer syntax found outside the canonical module: {hits}"
         )
 
-    def test_canonical_parse_metadata_footer_exists(self) -> None:
-        """Canonical public ``parse_metadata_footer`` exists in identity_management."""
-        source = _read("speaker/identity_management.py")
-        assert _count_funcdef(source, "parse_metadata_footer") >= 1, (
-            "Canonical parse_metadata_footer missing from identity_management.py"
-        )
-
-    def test_identity_linking_has_single_footer_marker(self) -> None:
-        """identity_linking.py defines the metadata footer marker exactly once.
-
-        Before issue #43, ``_resolve_unknown_speaker_labels`` carried its own
-        inline copy of the marker + a character-set rstrip.  The marker must
-        appear in exactly one place — the module's own ``_parse_metadata_footer``.
-        """
-        source = _read("speaker/identity_linking.py")
-        count = source.count("<!-- METADATA")
-        assert count == 1, (
-            f"Expected exactly 1 '<!-- METADATA' in identity_linking.py, found {count}"
-        )
+    def test_canonical_footer_module_exposes_four_operations(self) -> None:
+        """transcript_footer.py defines the four public operations."""
+        source = _read("transcription/transcript_footer.py")
+        for op in ("parse", "split", "join", "strip"):
+            assert _count_funcdef(source, op) >= 1, (
+                f"Canonical transcript_footer.{op} missing"
+            )
 
 
 # ===================================================================

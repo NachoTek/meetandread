@@ -651,55 +651,9 @@ class TestHeadingOnlyReplacement:
 
 
 class TestFooterParsingCorrectness:
-    """issue #43: the private footer parser in identity_linking must locate the
-    footer by its LAST occurrence and remove the closing `` -->`` as an exact
-    suffix (not a character-set strip).
+    """identity_linking resolves unknown speaker labels through the canonical
+    Transcript Footer parser — it has no inline footer parser of its own.
     """
-
-    def test_uses_last_footer_occurrence(self):
-        from meetandread.speaker.identity_linking import _parse_metadata_footer
-        # An earlier metadata-like block in the body, then the real footer.
-        content = (
-            "# T\n\n"
-            "Some body.\n\n"
-            "---\n\n<!-- METADATA: {\"words\": [], \"fake\": true} -->\n\n"
-            "More body.\n\n"
-            "---\n\n<!-- METADATA: "
-            "{\"words\": [{\"speaker_id\": \"SPK_0\"}], \"real\": true} -->\n"
-        )
-        parsed = _parse_metadata_footer(content)
-        assert parsed is not None
-        md_body, data, _marker, _space = parsed
-        assert data.get("real") is True
-        assert data["words"][0]["speaker_id"] == "SPK_0"
-        assert "More body" in md_body
-        assert data.get("fake") is None
-
-    def test_suffix_removed_without_eating_data(self):
-        from meetandread.speaker.identity_linking import _parse_metadata_footer
-        # JSON values contain "-->" and trailing-dash chars that a character-set
-        # rstrip would corrupt; only the real closing " -->" suffix must go.
-        content = (
-            "# T\n\n**SPK_0**\n\nhi\n\n"
-            "---\n\n<!-- METADATA: {\"note\": \"see --> here\", \"x\": \"end-\"} -->\n"
-        )
-        parsed = _parse_metadata_footer(content)
-        assert parsed is not None
-        _body, data, _m, _s = parsed
-        assert data["note"] == "see --> here"
-        assert data["x"] == "end-"
-
-    def test_returns_reconstruction_4tuple(self):
-        from meetandread.speaker.identity_linking import _parse_metadata_footer
-        content = "# T\n\nhi\n\n---\n\n<!-- METADATA: {\"k\": 1} -->\n"
-        parsed = _parse_metadata_footer(content)
-        assert parsed is not None
-        assert len(parsed) == 4  # (md_body, data, footer_marker, space_before_json)
-        md_body, data, marker, space = parsed
-        assert md_body == "# T\n\nhi\n"
-        assert data == {"k": 1}
-        assert marker == "\n---\n\n<!-- METADATA: "
-        assert space == ""
 
     def test_resolve_unknown_labels_reuses_module_parser(self, tmp_path):
         """_resolve_unknown_speaker_labels has no inline footer parser of its own."""

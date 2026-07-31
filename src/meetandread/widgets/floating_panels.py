@@ -22,6 +22,7 @@ import html as _html_module
 import re
 import time
 
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.confidence import get_confidence_color, get_confidence_legend
 from meetandread.hardware.detector import HardwareDetector
 from meetandread.hardware.recommender import ModelRecommender
@@ -754,9 +755,8 @@ def _open_identity_link_dialog(
         # Parse speaker_matches from the transcript metadata
     speaker_matches: dict = {}
     try:
-        from meetandread.speaker.identity_management import parse_metadata_footer
         content = md_path.read_text(encoding="utf-8")
-        data = parse_metadata_footer(content)
+        data = transcript_footer.parse(content)
         if data is not None:
             speaker_matches = data.get("speaker_matches") or {}
     except OSError:
@@ -785,7 +785,6 @@ def _open_identity_link_dialog(
     transcript_identity_names: set = set()
     try:
         from meetandread.audio.storage.paths import get_transcripts_dir
-        from meetandread.speaker.identity_management import parse_metadata_footer
 
         transcripts_dir = get_transcripts_dir()
         if transcripts_dir.is_dir():
@@ -794,7 +793,7 @@ def _open_identity_link_dialog(
                     tcontent = tmd_path.read_text(encoding="utf-8")
                 except OSError:
                     continue
-                tdata = parse_metadata_footer(tcontent)
+                tdata = transcript_footer.parse(tcontent)
                 if tdata is None:
                     continue
                 for _label, match_info in tdata.get("speaker_matches", {}).items():
@@ -1610,10 +1609,7 @@ class FloatingTranscriptPanel(QWidget):
             except OSError as exc:
                 self._history_viewer.setPlainText(f"(Error reading file: {exc})")
                 return
-            from meetandread.speaker.identity_management import _FOOTER_MARKER
-            marker_idx = content.rfind(_FOOTER_MARKER)
-            if marker_idx != -1:
-                content = content[:marker_idx]
+            content = transcript_footer.strip(content)
             self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
 
     # ------------------------------------------------------------------
@@ -2244,10 +2240,7 @@ class FloatingTranscriptPanel(QWidget):
                     content = md_path.read_text(encoding="utf-8")
                 except OSError:
                     content = ""
-                from meetandread.speaker.identity_management import _FOOTER_MARKER
-                marker_idx = content.rfind(_FOOTER_MARKER)
-                if marker_idx != -1:
-                    content = content[:marker_idx]
+                content = transcript_footer.strip(content)
                 self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
         else:
             self._history_viewer.clear()
@@ -2289,10 +2282,7 @@ class FloatingTranscriptPanel(QWidget):
         except OSError as exc:
             return f"(error reading file: {exc})"
 
-        from meetandread.speaker.identity_management import _FOOTER_MARKER
-        marker_idx = content.rfind(_FOOTER_MARKER)
-        if marker_idx != -1:
-            content = content[:marker_idx]
+        content = transcript_footer.strip(content)
         return content.strip()
 
     # ------------------------------------------------------------------
@@ -2319,8 +2309,7 @@ class FloatingTranscriptPanel(QWidget):
             return None
 
         # Split markdown body from JSON footer
-        from meetandread.speaker.identity_management import split_metadata_footer
-        split_result = split_metadata_footer(content)
+        split_result = transcript_footer.split(content)
         if split_result is None:
             return None
         md_body = _strip_confidence_percentages(split_result[0])
@@ -6292,7 +6281,6 @@ class FloatingSettingsPanel(QWidget):
         # that were linked through the history dialog but don't have embeddings yet.
         try:
             from meetandread.audio.storage.paths import get_transcripts_dir
-            from meetandread.speaker.identity_management import parse_metadata_footer
 
             transcripts_dir = get_transcripts_dir()
             if transcripts_dir.is_dir():
@@ -6303,7 +6291,7 @@ class FloatingSettingsPanel(QWidget):
                         content = md_path.read_text(encoding="utf-8")
                     except OSError:
                         continue
-                    data = parse_metadata_footer(content)
+                    data = transcript_footer.parse(content)
                     if data is None:
                         continue
                     for _label, match_info in data.get("speaker_matches", {}).items():
@@ -7092,10 +7080,7 @@ class FloatingSettingsPanel(QWidget):
             except OSError as exc:
                 self._history_viewer.setPlainText(f"(Error reading file: {exc})")
                 return
-            from meetandread.speaker.identity_management import _FOOTER_MARKER
-            marker_idx = content.rfind(_FOOTER_MARKER)
-            if marker_idx != -1:
-                content = content[:marker_idx]
+            content = transcript_footer.strip(content)
             self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
 
     # ------------------------------------------------------------------
@@ -7806,10 +7791,7 @@ class FloatingSettingsPanel(QWidget):
         except OSError as exc:
             return f"(error reading file: {exc})"
 
-        from meetandread.speaker.identity_management import _FOOTER_MARKER
-        marker_idx = content.rfind(_FOOTER_MARKER)
-        if marker_idx != -1:
-            content = content[:marker_idx]
+        content = transcript_footer.strip(content)
         return content.strip()
 
     @staticmethod
@@ -7875,8 +7857,7 @@ class FloatingSettingsPanel(QWidget):
             self._cached_timed_words = []
             return self._cached_timed_words
 
-        from meetandread.speaker.identity_management import parse_metadata_footer
-        data = parse_metadata_footer(content)
+        data = transcript_footer.parse(content)
         if data is None:
             self._cached_timed_words = []
             return self._cached_timed_words
@@ -8042,8 +8023,7 @@ class FloatingSettingsPanel(QWidget):
             logger.error("Failed to read transcript for highlighting: %s: %s", md_path, exc)
             return None
 
-        from meetandread.speaker.identity_management import parse_metadata_footer
-        data = parse_metadata_footer(content)
+        data = transcript_footer.parse(content)
         if data is None:
             return None
 
@@ -8143,8 +8123,7 @@ class FloatingSettingsPanel(QWidget):
             logger.error("Failed to read transcript for rendering: %s: %s", md_path, exc)
             return None
 
-        from meetandread.speaker.identity_management import split_metadata_footer
-        split_result = split_metadata_footer(content)
+        split_result = transcript_footer.split(content)
         if split_result is None:
             return None
         md_body = _strip_confidence_percentages(split_result[0])
@@ -9020,10 +8999,7 @@ class FloatingSettingsPanel(QWidget):
                     content = md_path.read_text(encoding="utf-8")
                 except OSError:
                     content = ""
-                from meetandread.speaker.identity_management import _FOOTER_MARKER
-                marker_idx = content.rfind(_FOOTER_MARKER)
-                if marker_idx != -1:
-                    content = content[:marker_idx]
+                content = transcript_footer.strip(content)
                 self._history_viewer.setMarkdown(_strip_confidence_percentages(content))
         else:
             self._history_viewer.clear()

@@ -34,6 +34,7 @@ from meetandread.audio.capture import FakeAudioModule  # noqa: E402
 from meetandread.audio.hotplug import DeviceEvent, DeviceEventType, WindowsDeviceMonitor  # noqa: E402
 from meetandread.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
+from meetandread.transcription import transcript_footer  # noqa: E402
 from meetandread.transcription.post_processor import PostProcessingQueue  # noqa: E402
 from meetandread.config.manager import ConfigManager  # noqa: E402
 
@@ -1572,18 +1573,11 @@ class RecordingController:
                 return
 
             content = transcript_path.read_text(encoding="utf-8")
-            footer_marker = "\n---\n\n<!-- METADATA: "
-            marker_idx = content.find(footer_marker)
-            if marker_idx == -1:
+            split_result = transcript_footer.split(content)
+            if split_result is None:
                 logger.warning("Cannot compute WER: no metadata footer in %s", transcript_path)
                 return
-
-            # Parse metadata JSON
-            import json
-            metadata_text = content[marker_idx + len(footer_marker):]
-            if metadata_text.strip().endswith(" -->"):
-                metadata_text = metadata_text.strip()[:-len(" -->")]
-            data = json.loads(metadata_text)
+            md_body, data = split_result
 
             # Extract post-processed words
             postproc_words = data.get("words", [])
@@ -1601,13 +1595,10 @@ class RecordingController:
                 len(postproc_words),
             )
 
-            # Append WER to the metadata and rewrite the file
+            # Append WER to the metadata and rewrite the file through the
+            # canonical Transcript Footer join so body and footer stay in sync.
             data["wer"] = wer_value
-
-            # Rebuild the file: markdown body + updated metadata footer
-            md_body = content[:marker_idx]
-            updated_json = json.dumps(data, indent=2)
-            new_content = md_body + footer_marker + updated_json + " -->\n"
+            new_content = transcript_footer.join(md_body, data)
             from meetandread.utils.file_utils import atomic_write
             atomic_write(transcript_path, new_content)
 

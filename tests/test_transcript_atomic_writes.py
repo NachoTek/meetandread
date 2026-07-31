@@ -1,4 +1,4 @@
-"""Regression tests proving transcript metadata write call sites use atomic_write.
+"""Regression tests proving Transcript Footer write call sites use atomic_write.
 
 Covers T02 must-haves:
 - TranscriptStore.save_to_file uses atomic_write (not open('w'))
@@ -7,11 +7,10 @@ Covers T02 must-haves:
 - FloatingTranscriptPanel helpers that rewrite metadata use atomic_write
 - RecordingController auto-WER metadata append uses atomic_write
 - Atomic failure leaves previous content intact (negative tests)
-- Existing footer/body semantics preserved after migration
+- Existing Transcript Footer/body semantics preserved after migration
 - Unrelated metadata keys survive writes
 """
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -19,14 +18,13 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from meetandread.transcription import transcript_footer
 from meetandread.utils.file_utils import atomic_write
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_FOOTER_MARKER = "\n---\n\n<!-- METADATA: "
 
 
 def _write_transcript_md(
@@ -64,21 +62,15 @@ def _write_transcript_md(
         metadata.update(extra_metadata)
 
     md_body = "# Transcript\n\n**SPK_0**\n\nHello\n\n"
-    content = md_body + _FOOTER_MARKER + json.dumps(metadata, indent=2) + " -->\n"
-    path.write_text(content, encoding="utf-8")
+    path.write_text(transcript_footer.join(md_body, metadata), encoding="utf-8")
     return path
 
 
 def _parse_metadata(path: Path) -> Dict[str, Any]:
-    """Extract and parse JSON metadata from a transcript .md file."""
-    content = path.read_text(encoding="utf-8")
-    marker = "<!-- METADATA: "
-    idx = content.find(marker)
-    assert idx != -1, "No metadata footer found"
-    json_str = content[idx + len(marker):]
-    if json_str.rstrip().endswith(" -->"):
-        json_str = json_str.rstrip()[: -len(" -->")]
-    return json.loads(json_str)
+    """Decode the Transcript Footer metadata from a transcript .md file."""
+    metadata = transcript_footer.parse(path.read_text(encoding="utf-8"))
+    assert metadata is not None, "No Transcript Footer found"
+    return metadata
 
 
 # ===================================================================
@@ -104,7 +96,7 @@ class TestTranscriptStoreAtomicWrite:
 
         assert dest.exists()
         content = dest.read_text(encoding="utf-8")
-        assert "<!-- METADATA:" in content
+        assert transcript_footer.parse(content) is not None
         assert "Hello" in content
 
     def test_save_preserves_metadata_footer(self, tmp_path: Path) -> None:

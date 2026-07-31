@@ -20,7 +20,6 @@ lifecycle semantics:
 * Supports cancellation via a ``threading.Event``.
 """
 
-import json
 import logging
 import shutil
 import threading
@@ -35,6 +34,7 @@ from meetandread.transcription.engine import (
     TranscriptionSegment,
 )
 from meetandread.speaker.models import SpeakerMatch
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.transcript_store import TranscriptStore, Word
 from meetandread.audio.utils import load_wav_as_float32_mono
 
@@ -238,21 +238,13 @@ class RetranscribeRunner:
 
         try:
             content = original_transcript_path.read_text(encoding="utf-8")
-            marker = "\n---\n\n<!-- METADATA: "
-            idx = content.find(marker)
-            if idx < 0:
+            data = transcript_footer.parse(content)
+            if data is None:
                 return
-            metadata_text = content[idx + len(marker):]
-            if not metadata_text.strip().endswith(" -->"):
-                return
-            metadata_text = metadata_text.strip()[: -len(" -->")]
-
-            import json
-            data = json.loads(metadata_text)
             original_time = data.get("recording_start_time")
             if original_time:
                 store.set_recording_start_time(dt.fromisoformat(original_time))
-        except (json.JSONDecodeError, OSError, ValueError):
+        except (OSError, ValueError):
             pass
 
     # -- Engine caching (mirrors PostProcessingQueue) --------------------
@@ -722,18 +714,8 @@ class RetranscribeRunner:
         except OSError:
             return {}
 
-        footer_marker = "\n---\n\n<!-- METADATA:"
-        marker_idx = content.find(footer_marker)
-        if marker_idx == -1:
-            return {}
-
-        metadata_text = content[marker_idx + len(footer_marker):]
-        if metadata_text.strip().endswith(" -->"):
-            metadata_text = metadata_text.strip()[:-len(" -->")]
-
-        try:
-            data = json.loads(metadata_text)
-        except json.JSONDecodeError:
+        data = transcript_footer.parse(content)
+        if data is None:
             return {}
 
         identities: Dict[str, str] = {}

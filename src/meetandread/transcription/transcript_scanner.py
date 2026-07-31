@@ -1,17 +1,11 @@
 """Transcript scanner for recording metadata.
 
-Scans the recordings directory for saved .md transcript files, parses the
-embedded JSON metadata footer, and returns structured RecordingMeta objects
-for browsing and display in the History tab.
-
-METADATA FORMAT (written by TranscriptStore.save_to_file):
-    Markdown content
-    ...
-    ---
-    <!-- METADATA: { "recording_start_time": "...", "word_count": N, "words": [...] } -->
+Scans the recordings directory for saved .md transcript files, reads each
+Transcript Footer through the canonical ``transcript_footer`` module, and
+returns structured RecordingMeta objects for browsing and display in the
+Library.
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +13,7 @@ from typing import List, Optional
 
 from meetandread.audio.storage.paths import get_recordings_dir
 from meetandread.playback.bookmark import Bookmark, _parse_bookmark_entry
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.retranscribe import RetranscribeRunner
 
 logger = logging.getLogger(__name__)
@@ -52,8 +47,8 @@ class RecordingMeta:
 def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
     """Parse a transcript .md file and extract recording metadata.
 
-    Reads the file, locates the ``<!-- METADATA: ... -->`` footer, parses
-    the embedded JSON, and builds a RecordingMeta.
+    Reads the file, decodes its Transcript Footer through the canonical
+    ``transcript_footer.parse`` operation, and builds a RecordingMeta.
 
     Args:
         md_path: Path to a saved transcript .md file.
@@ -68,42 +63,9 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
         logger.warning("Cannot read transcript file %s: %s", md_path, exc)
         return None
 
-    # Find the metadata footer — may span multiple lines when json.dumps(indent=2)
-    # Format: <!-- METADATA: { ... JSON ... } -->
-    prefix = "<!-- METADATA: "
-    suffix = " -->"
-    metadata_start: Optional[int] = None
-    metadata_end: Optional[int] = None
-
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if metadata_start is None and line.strip().startswith(prefix):
-            metadata_start = i
-        if metadata_start is not None and line.strip().endswith(suffix):
-            metadata_end = i
-            break
-
-    if metadata_start is None or metadata_end is None:
+    data = transcript_footer.parse(text)
+    if data is None:
         logger.warning("No metadata footer found in %s", md_path)
-        return None
-
-    # Reconstruct the metadata block and strip the prefix/suffix markers
-    block = "\n".join(lines[metadata_start : metadata_end + 1])
-
-    # Strip prefix from first line content
-    prefix_idx = block.index(prefix)
-    json_str = block[prefix_idx + len(prefix) :]
-
-    # Strip suffix from last part
-    if json_str.rstrip().endswith(suffix):
-        # Find the last occurrence of suffix
-        json_str = json_str.rstrip()
-        json_str = json_str[: -len(suffix)]
-
-    try:
-        data = json.loads(json_str)
-    except json.JSONDecodeError as exc:
-        logger.warning("Malformed metadata JSON in %s: %s", md_path, exc)
         return None
 
     # Extract fields

@@ -12,6 +12,10 @@ _Avoid_: Session, capture, transcript (as a synonym)
 The primary output of a Recording — a formatted Markdown document with speaker-labeled text. Immediately available as a speaker-unlabeled Live Transcript when recording stops, then automatically improved in-place by post-processing (better accuracy and speaker identification) during idle time.
 _Avoid_: Output, document, notes, final transcript
 
+**Transcript Footer**:
+The JSON metadata block appended to a Transcript's Markdown file, carrying its machine-readable data — words (with timing, confidence, and speaker_id), segments, speaker_matches, and recording_start_time. The machine-readable twin of the Markdown body: the body is for humans to read, the footer is for the system to read back. Written and read through one canonical format, owned by `transcript_footer`.
+_Avoid_: footer, metadata block, metadata section, trailer
+
 **Live Transcript**:
 The speaker-unlabeled text captured during a Recording and saved when recording stops. Available immediately, but accuracy and speaker identification are improved in-place by background post-processing. From the user's perspective, the Transcript simply gets better over time.
 _Avoid_: Draft transcript, raw transcript, interim transcript

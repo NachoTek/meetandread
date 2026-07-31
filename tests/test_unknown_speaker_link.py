@@ -79,9 +79,9 @@ def _make_transcript_md(
 
 def _read_metadata(md_path: Path) -> dict:
     """Parse metadata from a transcript .md file."""
-    from meetandread.speaker.identity_management import parse_metadata_footer
+    from meetandread.transcription import transcript_footer
     content = md_path.read_text(encoding="utf-8")
-    result = parse_metadata_footer(content)
+    result = transcript_footer.parse(content)
     if result is not None:
         return result
     raise ValueError("No metadata footer found")
@@ -89,9 +89,9 @@ def _read_metadata(md_path: Path) -> dict:
 
 def _read_body(md_path: Path) -> str:
     """Read the markdown body (before metadata footer)."""
-    from meetandread.speaker.identity_management import split_metadata_footer
+    from meetandread.transcription import transcript_footer
     content = md_path.read_text(encoding="utf-8")
-    split_result = split_metadata_footer(content)
+    split_result = transcript_footer.split(content)
     assert split_result is not None, "No metadata footer found"
     return split_result[0]
 

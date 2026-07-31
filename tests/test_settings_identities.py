@@ -24,11 +24,11 @@ from meetandread.speaker.identity_management import (
     RenameError,
     delete_identity,
     merge_identities,
-    parse_metadata_footer,
     rename_identity,
     replace_speaker_label_in_file,
     scan_identity_usage,
 )
+from meetandread.transcription import transcript_footer
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ from meetandread.speaker.identity_management import (
 def _parse_metadata(md_path: Path) -> Dict[str, Any]:
     """Parse the metadata footer from a transcript .md file."""
     content = md_path.read_text(encoding="utf-8")
-    data = parse_metadata_footer(content)
+    data = transcript_footer.parse(content)
     assert data is not None, "No metadata footer found"
     return data
 
@@ -149,30 +149,32 @@ class TestDataclasses:
 
 
 # ---------------------------------------------------------------------------
-# parse_metadata_footer tests
+# Footer ownership guard (issue #50)
 # ---------------------------------------------------------------------------
 
 
-class TestParseMetadataFooter:
-    def test_valid_footer(self):
-        data = {"words": [], "segments": []}
-        content = (
-            "# Transcript\n\n**SPK_0**\n\nHi\n\n"
-            "---\n\n<!-- METADATA: "
-            + json.dumps(data)
-            + " -->\n"
+class TestIdentityManagementHasNoFooterParser:
+    """identity_management owns no Transcript Footer parser of its own.
+
+    Footer parsing lives in the canonical ``transcript_footer`` module; the
+    local ``parse_metadata_footer``/``split_metadata_footer`` helpers were
+    deleted and must not return.
+    """
+
+    def test_no_parse_metadata_footer_symbol(self):
+        import meetandread.speaker.identity_management as im
+
+        assert not hasattr(im, "parse_metadata_footer")
+        assert not hasattr(im, "split_metadata_footer")
+
+    def test_no_footer_marker_literals(self):
+        import inspect
+        import meetandread.speaker.identity_management as im
+
+        src = inspect.getsource(im)
+        assert "<!-- METADATA" not in src, (
+            "identity_management.py must not carry footer marker literals"
         )
-        result = parse_metadata_footer(content)
-        assert result is not None
-        assert result["words"] == []
-
-    def test_no_footer(self):
-        content = "# Transcript\n\n**SPK_0**\n\nHi\n"
-        assert parse_metadata_footer(content) is None
-
-    def test_malformed_json(self):
-        content = "# T\n\n---\n\n<!-- METADATA: {bad json} -->\n"
-        assert parse_metadata_footer(content) is None
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +342,13 @@ class TestReplaceSpeakerLabelInFile:
     def test_raises_on_missing_footer(self, tmp_path):
         p = tmp_path / "bare.md"
         p.write_text("# Bare\n\n**Alice**\n\nHi\n", encoding="utf-8")
-        with pytest.raises(IdentityManagementError, match="No metadata footer"):
+        with pytest.raises(IdentityManagementError, match="No usable Transcript Footer"):
             replace_speaker_label_in_file(p, "Alice", "Carol")
 
     def test_raises_on_malformed_json(self, tmp_path):
         p = tmp_path / "bad.md"
         p.write_text("# T\n\n---\n\n<!-- METADATA: {bad} -->\n", encoding="utf-8")
-        with pytest.raises(IdentityManagementError, match="Malformed metadata"):
+        with pytest.raises(IdentityManagementError, match="No usable Transcript Footer"):
             replace_speaker_label_in_file(p, "Alice", "Carol")
 
     def test_returns_zero_when_label_not_found(self, tmp_path):

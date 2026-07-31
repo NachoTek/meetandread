@@ -12,12 +12,12 @@ The module-level functions in floating_panels.py (the UI adapters) call into
 these and handle dialog lifecycle.
 """
 
-import json
 import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
+from meetandread.transcription import transcript_footer
 from meetandread.utils.file_utils import atomic_write
 
 logger = logging.getLogger(__name__)
@@ -34,10 +34,9 @@ def _norm_label(s: str) -> str:
 def _resolve_unknown_speaker_labels(md_path: Path) -> list[str]:
     try:
         content = md_path.read_text(encoding="utf-8")
-        parsed = _parse_metadata_footer(content)
-        if parsed is None:
+        data = transcript_footer.parse(content)
+        if data is None:
             return []
-        _md_body, data, _footer_marker, _space_before_json = parsed
 
         labels: set[str] = set()
         for w in data.get("words", []):
@@ -47,54 +46,6 @@ def _resolve_unknown_speaker_labels(md_path: Path) -> list[str]:
         return sorted(labels)
     except Exception:
         return []
-
-
-def _parse_metadata_footer(
-    content: str,
-) -> Optional[tuple[str, dict, str, str]]:
-    """Split a transcript file into ``(md_body, data, footer_marker, space)``.
-
-    Locates the metadata footer by its **last** occurrence and removes the
-    closing `` -->`` as an exact suffix.  Returns ``None`` when no footer is
-    found or the JSON is malformed.
-    """
-    footer_marker = "\n---\n\n<!-- METADATA: "
-    marker_idx = content.rfind(footer_marker)
-    if marker_idx == -1:
-        return None
-
-    md_body = content[:marker_idx]
-    after_marker = content[marker_idx + len(footer_marker):]
-    space_before_json = ""
-    if after_marker.startswith(" "):
-        space_before_json = " "
-        after_marker = after_marker[1:]
-
-    metadata_text = after_marker
-    if metadata_text.endswith("\n"):
-        metadata_text = metadata_text[: -len("\n")]
-    if metadata_text.endswith(" -->"):
-        metadata_text = metadata_text[: -len(" -->")]
-
-    try:
-        data = json.loads(metadata_text)
-    except json.JSONDecodeError:
-        logger.warning("Malformed metadata — leaving file unchanged")
-        return None
-
-    return md_body, data, footer_marker, space_before_json
-
-
-def _rebuild_file(
-    md_body: str,
-    data: dict,
-    footer_marker: str,
-    space_before_json: str,
-) -> str:
-    updated_json = json.dumps(data, indent=2)
-    return (
-        md_body + footer_marker + space_before_json + updated_json + " -->\n"
-    )
 
 
 def _replace_speaker_heading(md_body: str, old_label: str, new_label: str) -> str:
@@ -278,12 +229,12 @@ def link_identity(md_path: Path, raw_label: str, identity_name: str) -> None:
         return
 
     content = md_path.read_text(encoding="utf-8")
-    parsed = _parse_metadata_footer(content)
-    if parsed is None:
+    split_result = transcript_footer.split(content)
+    if split_result is None:
         logger.warning("No metadata footer found — cannot link identity")
         return
 
-    md_body, data, footer_marker, space_before_json = parsed
+    md_body, data = split_result
 
     matching_label = None if raw_label == "__unknown__" else raw_label
 
@@ -321,7 +272,7 @@ def link_identity(md_path: Path, raw_label: str, identity_name: str) -> None:
 
     _dedup_speaker_matches_keys(sm, actual_key)
 
-    atomic_write(md_path, _rebuild_file(updated_body, data, footer_marker, space_before_json))
+    atomic_write(md_path, transcript_footer.join(updated_body, data))
 
     if raw_label != "__unknown__":
         _propagate_link_to_signature_store(md_path, raw_label, identity_name)
@@ -334,11 +285,11 @@ def rename_identity(md_path: Path, old_name: str, new_name: str) -> None:
     markdown body speaker labels from *old_name* to *new_name*.
     """
     content = md_path.read_text(encoding="utf-8")
-    parsed = _parse_metadata_footer(content)
-    if parsed is None:
+    split_result = transcript_footer.split(content)
+    if split_result is None:
         raise ValueError(f"No metadata footer found in {md_path}")
 
-    md_body, data, footer_marker, space_before_json = parsed
+    md_body, data = split_result
 
     words_updated = 0
     for word in data.get("words", []):
@@ -354,7 +305,7 @@ def rename_identity(md_path: Path, old_name: str, new_name: str) -> None:
 
     updated_body = _replace_speaker_heading(md_body, old_name, new_name)
 
-    atomic_write(md_path, _rebuild_file(updated_body, data, footer_marker, space_before_json))
+    atomic_write(md_path, transcript_footer.join(updated_body, data))
 
 
 def propagate_rename_to_signature_store(

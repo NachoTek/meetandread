@@ -20,6 +20,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from meetandread.recording.controller import RecordingController
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.transcript_store import TranscriptStore, Word
 from meetandread.speaker.models import (
     DiarizationResult,
@@ -34,13 +35,10 @@ from meetandread.speaker.models import (
 # ---------------------------------------------------------------------------
 
 def _parse_metadata_footer(md_path: Path) -> Dict[str, Any]:
-    """Read a transcript .md file and return the parsed JSON metadata dict."""
-    text = md_path.read_text(encoding="utf-8")
-    prefix = "<!-- METADATA: "
-    suffix = " -->"
-    start = text.index(prefix) + len(prefix)
-    end = text.rindex(suffix)
-    return json.loads(text[start:end])
+    """Read a transcript .md file and return the decoded Transcript Footer metadata."""
+    metadata = transcript_footer.parse(md_path.read_text(encoding="utf-8"))
+    assert metadata is not None, "No Transcript Footer found"
+    return metadata
 
 
 def _make_controller_with_store(tmp_path: Path) -> RecordingController:

@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 
 from meetandread.config.models import AppSettings  # noqa: E402
 from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment  # noqa: E402
+from meetandread.transcription import transcript_footer  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
 from meetandread.audio.utils import load_wav_as_float32_mono  # noqa: E402
 
@@ -794,18 +795,15 @@ class PostProcessingQueue:
         Returns:
             The speaker_matches dict, or None if not found.
         """
-        import json as _json
-
         try:
             content = transcript_path.read_text(encoding="utf-8")
-            marker = "\n---\n\n<!-- METADATA: "
-            idx = content.find(marker)
-            if idx < 0:
-                return None
-            data = _json.loads(content[idx + len(marker) :].rstrip(" -->\n"))
-            return data.get("speaker_matches")
-        except (json.JSONDecodeError, OSError, ValueError):
+        except OSError:
             return None
+
+        data = transcript_footer.parse(content)
+        if data is None:
+            return None
+        return data.get("speaker_matches")
 
     def _save_post_processed_transcript(
         self, job: PostProcessJob, store: TranscriptStore,
@@ -861,23 +859,15 @@ class PostProcessingQueue:
 
         try:
             content = original_path.read_text(encoding="utf-8")
-            marker = "\n---\n\n<!-- METADATA: "
-            idx = content.find(marker)
-            if idx < 0:
+            data = transcript_footer.parse(content)
+            if data is None:
                 return
-            metadata_text = content[idx + len(marker):]
-            if not metadata_text.strip().endswith(" -->"):
-                return
-            metadata_text = metadata_text.strip()[: -len(" -->")]
-
-            import json
-            data = json.loads(metadata_text)
             original_time = data.get("recording_start_time")
             if original_time:
                 store.set_recording_start_time(
                     dt.fromisoformat(original_time)
                 )
-        except (json.JSONDecodeError, OSError, ValueError):
+        except (OSError, ValueError):
             pass
     
     def _update_progress(self, job: PostProcessJob, progress: int) -> None:

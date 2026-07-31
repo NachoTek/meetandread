@@ -1,9 +1,9 @@
-"""Bookmark metadata service for History playback.
+"""Bookmark metadata service for Library playback.
 
-Manages bookmark reads/writes on transcript metadata footers using the
-same footer marker/rebuild pattern as identity_management.  Bookmarks
-are stored as JSON objects with ``name``, ``position_ms``, and
-``created_at``; ``created_at`` is the stable id for deletion.
+Manages bookmark reads/writes on the Transcript Footer through the canonical
+``transcript_footer`` interface.  Bookmarks are stored as JSON objects with
+``name``, ``position_ms``, and ``created_at``; ``created_at`` is the stable
+id for deletion.
 
 PII constraint: bookmark names are user content.  This module's logger
 messages use transcript stem, bookmark count, and position only — never
@@ -19,15 +19,9 @@ from pathlib import Path
 from meetandread.utils.file_utils import atomic_write
 from typing import Any, Dict, List, Optional
 
-from meetandread.speaker.identity_management import (
-    parse_metadata_footer as _parse_metadata_footer,
-    split_metadata_footer as _split_metadata_footer,
-    _rebuild_transcript,
-)
+from meetandread.transcription import transcript_footer
 
 logger = logging.getLogger(__name__)
-
-# Metadata footer parsing delegated to identity_management
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +110,7 @@ def _read_transcript(path: Path) -> tuple[str, Dict[str, Any]]:
             f"Cannot read transcript {path.name}: {exc}"
         ) from exc
 
-    result = _split_metadata_footer(content)
+    result = transcript_footer.split(content)
     if result is None:
         raise BookmarkError(f"No metadata footer in {path.name}")
 
@@ -124,8 +118,8 @@ def _read_transcript(path: Path) -> tuple[str, Dict[str, Any]]:
 
 
 def _write_transcript(path: Path, md_body: str, metadata: Dict[str, Any]) -> None:
-    """Rebuild and write a transcript file atomically."""
-    new_content = _rebuild_transcript(md_body, metadata)
+    """Rebuild and write a transcript file atomically through canonical join."""
+    new_content = transcript_footer.join(md_body, metadata)
     atomic_write(path, new_content)
 
 
@@ -243,7 +237,7 @@ class BookmarkManager:
                 f"Cannot read transcript {self._path.name}: {exc}"
             ) from exc
 
-        data = _parse_metadata_footer(content)
+        data = transcript_footer.parse(content)
         if data is None:
             raise BookmarkError(f"No metadata footer in {self._path.name}")
 

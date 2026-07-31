@@ -11,6 +11,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
 
+from meetandread.transcription import transcript_footer
 from meetandread.utils.file_utils import atomic_write
 
 
@@ -340,7 +341,9 @@ class TranscriptStore:
     ) -> None:
         """Save transcript to a file.
 
-        Saves as markdown with embedded JSON metadata.
+        Builds the Markdown body and structured Recording metadata, then joins
+        them through the canonical Transcript Footer operation so the writer
+        shares one source of truth with every reader.
 
         Args:
             path: Path to save the transcript.
@@ -348,17 +351,9 @@ class TranscriptStore:
                 to identity match dicts (or ``None`` for unmatched).
                 Passed through to :meth:`to_dict`.
         """
-        markdown = self.to_markdown(include_confidence=False)
+        body = self.to_markdown(include_confidence=False)
         data = self.to_dict(speaker_matches=speaker_matches)
-
-        import json
-        content = (
-            markdown
-            + "\n\n---\n\n"
-            + "<!-- METADATA: "
-            + json.dumps(data, indent=2)
-            + " -->\n"
-        )
+        content = transcript_footer.join(body, data)
         atomic_write(path, content)
     
     def _create_segment(self, words: List[Word]) -> Segment:

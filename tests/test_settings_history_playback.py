@@ -21,7 +21,6 @@ except Exception:
         allow_module_level=True,
     )
 
-import json
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock, PropertyMock
@@ -33,6 +32,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QPointF
 
 from meetandread.widgets.floating_panels import FloatingSettingsPanel
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.transcript_scanner import RecordingMeta
 
 # Mark this module as requiring real Qt widgets - these tests
@@ -60,10 +60,9 @@ def _make_meta(path: str, recording_time: str = "2026-01-15T10:30:00",
 
 
 def _write_transcript(path: Path, body: str, metadata: dict) -> None:
-    """Write a transcript .md file with metadata footer."""
+    """Write a transcript .md file with a canonical metadata footer."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    footer = f"\n---\n\n<!-- METADATA: {json.dumps(metadata)} -->\n"
-    path.write_text(body + footer, encoding="utf-8")
+    path.write_text(transcript_footer.join(body, metadata), encoding="utf-8")
 
 
 def _make_mock_helper(audio_available=True, last_error=None, status_text="Ready"):

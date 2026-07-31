@@ -968,19 +968,17 @@ class TestMalformedInputsIntegration:
 
 
 class TestFooterMarkerCollision:
-    """Regression tests for rfind-based footer lookup in replace_speaker_label_in_file.
+    """Regression tests for last-footer lookup in replace_speaker_label_in_file.
 
-    Proves that body text containing a metadata marker string before the real
-    canonical footer does NOT cause the replacement to read/update the wrong
-    section.  Uses the canonical _FOOTER_MARKER from identity_management.
+    Proves that body text containing an earlier footer before the real canonical
+    footer does NOT cause the replacement to read/update the wrong section.
+    The fake footer is built with the canonical ``transcript_footer.join``.
     """
 
     def test_body_contains_footer_marker_uses_real_footer(self, tmp_path: Path) -> None:
-        """Body text with an early _FOOTER_MARKER must not shadow the real footer."""
-        from meetandread.speaker.identity_management import (
-            _FOOTER_MARKER,
-            replace_speaker_label_in_file,
-        )
+        """Body text with an earlier footer must not shadow the real footer."""
+        from meetandread.speaker.identity_management import replace_speaker_label_in_file
+        from meetandread.transcription import transcript_footer
 
         # Build metadata with SPK_0 words
         real_meta = {
@@ -992,28 +990,25 @@ class TestFooterMarkerCollision:
             ],
         }
 
-        # Body contains an early marker-like string (e.g. user discussed the format)
+        # Body contains an earlier canonical footer (e.g. user discussed the format)
         body = (
             "# Transcript\n\n"
             "**SPK_0**\n\n"
-            "This is the format: marker is like"
-            f"{_FOOTER_MARKER}early_fake_json }} -->\n\n"
-            "Some more body text\n"
+            "This is the format:\n\n"
+            + transcript_footer.join("discarded", {"words": [], "fake": "early_fake_json"})
+            + "Some more body text\n"
         )
 
         # Real footer at the end
-        content = body + _FOOTER_MARKER + json.dumps(real_meta) + " -->\n"
-
         p = tmp_path / "collision.md"
-        p.write_text(content, encoding="utf-8")
+        p.write_text(transcript_footer.join(body, real_meta), encoding="utf-8")
 
         count = replace_speaker_label_in_file(p, "SPK_0", "Alice")
         assert count == 1, f"Expected 1 word replacement, got {count}"
 
         # Verify the real footer was updated, not the body fake
         updated = p.read_text(encoding="utf-8")
-        from meetandread.speaker.identity_management import parse_metadata_footer
-        data = parse_metadata_footer(updated)
+        data = transcript_footer.parse(updated)
         assert data is not None, "Metadata footer should be parseable"
         assert data["words"][0]["speaker_id"] == "Alice", "Real footer word should be updated"
         assert data["segments"][0]["speaker_id"] == "Alice", "Real footer segment should be updated"
@@ -1034,11 +1029,9 @@ class TestFooterMarkerCollision:
         assert data["words"][2]["speaker_id"] == "SPK_1", "SPK_1 untouched"
 
     def test_multiple_body_markers_last_footer_wins(self, tmp_path: Path) -> None:
-        """Multiple marker-like strings in body — only real footer at end is used."""
-        from meetandread.speaker.identity_management import (
-            _FOOTER_MARKER,
-            replace_speaker_label_in_file,
-        )
+        """Multiple earlier footers in body — only real footer at end is used."""
+        from meetandread.speaker.identity_management import replace_speaker_label_in_file
+        from meetandread.transcription import transcript_footer
 
         real_meta = {
             "words": [
@@ -1049,22 +1042,19 @@ class TestFooterMarkerCollision:
             ],
         }
 
-        # Two fake markers in the body, then the real one
+        # Two fake footers in the body, then the real one
         body = (
             "# Transcript\n\n"
-            f"Fake1{_FOOTER_MARKER}fake1 }} -->\n\n"
-            f"Fake2{_FOOTER_MARKER}fake2 }} -->\n\n"
+            + "Fake1" + transcript_footer.join("d1", {"fake": "fake1"}) + "\n"
+            + "Fake2" + transcript_footer.join("d2", {"fake": "fake2"}) + "\n"
             "**SPK_0**\n\nWord\n"
         )
-        content = body + _FOOTER_MARKER + json.dumps(real_meta) + " -->\n"
-
         p = tmp_path / "multi_collision.md"
-        p.write_text(content, encoding="utf-8")
+        p.write_text(transcript_footer.join(body, real_meta), encoding="utf-8")
 
         count = replace_speaker_label_in_file(p, "SPK_0", "Alice")
         assert count == 1
 
-        from meetandread.speaker.identity_management import parse_metadata_footer
-        data = parse_metadata_footer(p.read_text(encoding="utf-8"))
+        data = transcript_footer.parse(p.read_text(encoding="utf-8"))
         assert data is not None
         assert data["words"][0]["speaker_id"] == "Alice"

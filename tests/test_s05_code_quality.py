@@ -1,11 +1,10 @@
-"""S05 code-quality guard: executable contract for no-print, no-assert, no-footer-find.
+"""S05 code-quality guard: executable contract for no-print, no-assert.
 
 Uses Python AST and source inspection over src/meetandread only.
 Guards that:
   1. No executable ast.Call to builtin print() in production source.
   2. No ast.Assert nodes in production source.
-  3. No usage of content.find(_FOOTER_MARKER) — must use rfind per T01 fix.
-  4. No silent ``except Exception: pass`` in S05-touched files.
+  3. No silent ``except Exception: pass`` in S05-touched files.
 """
 
 from __future__ import annotations
@@ -91,23 +90,6 @@ def _find_asserts(tree: ast.Module) -> List[int]:
     return [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Assert)]
 
 
-def _find_footer_find_usage(filepath: Path) -> List[Tuple[int, str]]:
-    """Find lines using .find( with _FOOTER_MARKER (the pre-T01 bug pattern).
-
-    The correct pattern is .rfind(_FOOTER_MARKER).  A plain .find(
-    would locate the *first* occurrence in the file body, which could be
-    a false marker embedded in transcript content.
-    """
-    hits: List[Tuple[int, str]] = []
-    source = filepath.read_text(encoding="utf-8")
-    for i, line in enumerate(source.splitlines(), 1):
-        # Match .find( preceded by any text and followed by _FOOTER_MARKER
-        # but NOT .rfind(
-        if "_FOOTER_MARKER" in line and ".find(" in line and ".rfind(" not in line:
-            hits.append((i, line.strip()))
-    return hits
-
-
 def _find_silent_broad_except(tree: ast.Module) -> List[Tuple[int, str]]:
     """Return (lineno, except_clause_text) for bare ``except Exception: pass``."""
     hits: List[Tuple[int, str]] = []
@@ -171,38 +153,7 @@ class TestNoRuntimeAssert:
 
 
 # ---------------------------------------------------------------------------
-# Test 3: No content.find(_FOOTER_MARKER) — must use rfind
-# ---------------------------------------------------------------------------
-
-
-class TestFooterFindGuard:
-    """Source guard: no usage of .find(_FOOTER_MARKER) (must use .rfind)."""
-
-    def test_no_footer_find_in_identity_management(self):
-        fp = SRC_ROOT / "speaker" / "identity_management.py"
-        assert fp.exists(), f"Expected file not found: {fp}"
-        hits = _find_footer_find_usage(fp)
-        assert not hits, (
-            "Found .find(_FOOTER_MARKER) — use .rfind(_FOOTER_MARKER) instead "
-            "to match canonical parse_metadata_footer behavior:\n"
-            + "\n".join(f"  line {ln}: {text}" for ln, text in hits)
-        )
-
-    def test_no_footer_find_anywhere_in_src(self):
-        """Check all production source for the footer-find bug pattern."""
-        violations: List[str] = []
-        for fp in _collect_py_files(SRC_ROOT):
-            for lineno, text in _find_footer_find_usage(fp):
-                violations.append(f"{fp.relative_to(SRC_ROOT.parent.parent)}:{lineno}: {text}")
-
-        assert not violations, (
-            "Found .find(_FOOTER_MARKER) — use .rfind(_FOOTER_MARKER) instead:\n"
-            + "\n".join(f"  {v}" for v in violations)
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 4: No silent ``except Exception: pass`` in S05-touched files
+# Test 3: No silent ``except Exception: pass`` in S05-touched files
 # ---------------------------------------------------------------------------
 
 

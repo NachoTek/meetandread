@@ -11,7 +11,6 @@ identity names.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -20,15 +19,10 @@ from typing import Any, Collection, Dict, List, Optional, Sequence
 
 import numpy as np
 
+from meetandread.transcription import transcript_footer
 from meetandread.utils.file_utils import atomic_write
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Metadata footer markers (must match TranscriptStore.save_to_file)
-# ---------------------------------------------------------------------------
-_FOOTER_MARKER = "\n---\n\n<!-- METADATA: "
-_FOOTER_END = " -->\n"
 
 
 # ---------------------------------------------------------------------------
@@ -118,83 +112,6 @@ class PruneSummary:
 
 
 # ---------------------------------------------------------------------------
-# Metadata parsing helpers
-# ---------------------------------------------------------------------------
-
-
-def parse_metadata_footer(content: str) -> Optional[Dict[str, Any]]:
-    """Extract the JSON metadata dict from a transcript file's content.
-
-    Uses the **last** footer marker (rfind) so that body text or an
-    earlier malformed marker cannot shadow the real footer written by
-    TranscriptStore.save_to_file.
-
-    Returns None if the footer is missing, has no closing marker, or
-    contains malformed JSON.
-    """
-    # Use rfind to locate the LAST footer marker -- the real one written
-    # by save_to_file.  Body text may legitimately contain an earlier
-    # marker string (e.g. a transcript discussing the format).
-    marker_idx = content.rfind(_FOOTER_MARKER)
-    if marker_idx == -1:
-        return None
-
-    after_marker = content[marker_idx + len(_FOOTER_MARKER) :]
-
-    # Find the closing --> using rfind as well so inner " -->" in JSON
-    # string values do not truncate the parse prematurely.
-    end_idx = after_marker.rfind(" -->")
-    if end_idx == -1:
-        return None
-
-    metadata_text = after_marker[:end_idx]
-
-    try:
-        return json.loads(metadata_text)  # type: ignore[no-any-return]
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-
-def split_metadata_footer(content: str) -> Optional[tuple[str, Dict[str, Any]]]:
-    """Split a transcript into (markdown_body, metadata_dict).
-
-    Uses the same rfind-based logic as :func:`parse_metadata_footer` to
-    locate the **last** footer marker.  Returns None if the footer is
-    missing, has no closing marker, or contains malformed JSON.
-
-    Callers that need both the body (for rewriting) and the metadata
-    should prefer this over calling :func:`parse_metadata_footer` and
-    then re-scanning the content.
-    """
-    marker_idx = content.rfind(_FOOTER_MARKER)
-    if marker_idx == -1:
-        return None
-
-    md_body = content[:marker_idx]
-    after_marker = content[marker_idx + len(_FOOTER_MARKER) :]
-
-    end_idx = after_marker.rfind(" -->")
-    if end_idx == -1:
-        return None
-
-    metadata_text = after_marker[:end_idx]
-
-    try:
-        data = json.loads(metadata_text)  # type: ignore[no-any-return]
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-    return md_body, data
-
-
-def _rebuild_transcript(
-    md_body: str, metadata: Dict[str, Any]
-) -> str:
-    """Rebuild a transcript file from markdown body and metadata dict."""
-    return md_body + _FOOTER_MARKER + json.dumps(metadata, indent=2) + " -->\n"
-
-
-# ---------------------------------------------------------------------------
 # Scan identity usage
 # ---------------------------------------------------------------------------
 
@@ -244,7 +161,7 @@ def scan_identity_usage(
             skipped_count += 1
             continue
 
-        data = parse_metadata_footer(content)
+        data = transcript_footer.parse(content)
         if data is None:
             skipped_count += 1
             continue
@@ -321,28 +238,12 @@ def replace_speaker_label_in_file(
     """
     content = md_path.read_text(encoding="utf-8")
 
-    marker_idx = content.rfind(_FOOTER_MARKER)
-    if marker_idx == -1:
+    split_result = transcript_footer.split(content)
+    if split_result is None:
         raise IdentityManagementError(
-            f"No metadata footer in {md_path} — cannot rewrite"
+            f"No usable Transcript Footer in {md_path} — cannot rewrite"
         )
-
-    md_body = content[:marker_idx]
-    after_marker = content[marker_idx + len(_FOOTER_MARKER) :]
-    metadata_text = after_marker
-    if metadata_text.strip().endswith(" -->"):
-        metadata_text = metadata_text.strip()[: -len(" -->")]
-    else:
-        end_idx = metadata_text.rfind(" -->")
-        if end_idx != -1:
-            metadata_text = metadata_text[:end_idx]
-
-    try:
-        data = json.loads(metadata_text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise IdentityManagementError(
-            f"Malformed metadata in {md_path} — cannot rewrite"
-        ) from exc
+    md_body, data = split_result
 
     # Replace in words — exact match only
     words_replaced = 0
@@ -370,8 +271,7 @@ def replace_speaker_label_in_file(
         md_body,
     )
 
-    new_content = _rebuild_transcript(updated_body, data)
-    atomic_write(md_path, new_content)
+    atomic_write(md_path, transcript_footer.join(updated_body, data))
     return words_replaced
 
 
@@ -391,7 +291,7 @@ def _find_transcripts_with_label(
             content = md_path.read_text(encoding="utf-8")
         except OSError:
             continue
-        data = parse_metadata_footer(content)
+        data = transcript_footer.parse(content)
         if data is None:
             continue
         # Check words for exact match
