@@ -2232,6 +2232,12 @@ class FloatingTranscriptPanel(QWidget):
 
         # Refresh the viewer content
         if md_path is not None and md_path.exists():
+            # Re-extract timed words from the updated transcript file —
+            # the cached timestamps are stale after accept/reject replaces
+            # the .md on disk (#21).
+            self._reset_highlight_state()
+            self._extract_timed_words(md_path)
+
             html = self._render_history_transcript(md_path)
             if html is not None:
                 self._history_viewer.setHtml(html)
@@ -8991,6 +8997,13 @@ class FloatingSettingsPanel(QWidget):
             self._reselect_history_item(md_path)
 
         if md_path is not None and md_path.exists():
+            # Re-extract timed words from the updated transcript file —
+            # the cached timestamps are stale after accept/reject replaces
+            # the .md on disk. Without this, the highlight uses old word
+            # timing and races ahead or lags behind the audio (#21).
+            self._reset_highlight_state()
+            self._extract_timed_words(md_path)
+
             html = self._render_history_transcript(md_path)
             if html is not None:
                 self._history_viewer.setHtml(html)

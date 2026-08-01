@@ -396,7 +396,7 @@ class RetranscribeRunner:
                 "%s %s with model %s (%d samples)",
                 self.SIDECAR_TAG.capitalize(), audio_path, model_size, len(audio),
             )
-            segments = engine.transcribe_chunk(audio)
+            segments = engine.transcribe_chunk(audio, word_level=True)
             self._notify_progress(80)
 
             # Unwrap typed result (M019 changed transcribe_chunk to return

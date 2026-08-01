@@ -497,7 +497,7 @@ class PostProcessingQueue:
                 "Transcribing %d samples with %s model for job %s...",
                 len(audio_data), job.model_size, job.job_id,
             )
-            segments = engine.transcribe_chunk(audio_data)
+            segments = engine.transcribe_chunk(audio_data, word_level=True)
             self._update_progress(job, 80)
 
             # Unwrap typed result (M019 changed transcribe_chunk to return
