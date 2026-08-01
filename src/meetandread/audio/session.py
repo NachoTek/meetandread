@@ -319,8 +319,9 @@ class AudioSourceWrapper:
         self.source.start()
     
     def stop(self) -> None:
-        """Stop the underlying source."""
+        """Stop the underlying source and clean up resources."""
         self.source.stop()
+        self._resampler = None
     
     def is_running(self) -> bool:
         """Check if source is running."""
