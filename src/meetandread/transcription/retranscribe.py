@@ -282,9 +282,18 @@ class RetranscribeRunner:
     @staticmethod
     def _create_transcript_from_segments(
         segments: list[TranscriptionSegment],
-        audio_duration: float = 0.0,
     ) -> TranscriptStore:
-        """Build a TranscriptStore from Whisper transcription segments."""
+        """Build a TranscriptStore from Whisper transcription segments.
+
+        Splits multi-word Whisper tokens into individual words, dividing each
+        segment's real ``[start, end]`` evenly across its words.
+
+        Timestamps are taken verbatim from Whisper. They are never stretched
+        to fill the audio duration: stretching embedded silence into the word
+        spans made the playback highlight drift ahead of the audio during
+        pauses (issue #21). Real timestamps keep the silence as gaps that the
+        highlighter holds on.
+        """
         store = TranscriptStore()
         store.start_recording()
 
@@ -343,16 +352,10 @@ class RetranscribeRunner:
                         )
                     )
 
-        # Rescale timestamps if Whisper's reported duration is significantly
-        # shorter than the actual audio duration.  Without this, words cluster
-        # at the start and the highlighter skips large gaps during playback.
-        if words and audio_duration > 0:
-            whisper_end = max(w.end_time for w in words)
-            if whisper_end > 0 and whisper_end < audio_duration * 0.8:
-                scale = audio_duration / whisper_end
-                for w in words:
-                    w.start_time = w.start_time * scale
-                    w.end_time = w.end_time * scale
+        # NOTE: timestamps are never rescaled to fill the audio duration.
+        # Stretching word spans across trailing silence caused the playback
+        # highlight to drift during pauses (issue #21). Real Whisper timestamps
+        # keep the silence as gaps that the highlighter holds on.
 
         if words:
             store.add_words(words)
@@ -393,7 +396,7 @@ class RetranscribeRunner:
                 "%s %s with model %s (%d samples)",
                 self.SIDECAR_TAG.capitalize(), audio_path, model_size, len(audio),
             )
-            segments = engine.transcribe_chunk(audio)
+            segments = engine.transcribe_chunk(audio, word_level=True)
             self._notify_progress(80)
 
             # Unwrap typed result (M019 changed transcribe_chunk to return
@@ -410,10 +413,7 @@ class RetranscribeRunner:
                 logger.info("%s cancelled after transcription", self.SIDECAR_TAG.capitalize())
                 return
 
-            audio_duration = len(audio) / 16000.0
-            store = self._create_transcript_from_segments(
-                segments, audio_duration=audio_duration,
-            )
+            store = self._create_transcript_from_segments(segments)
             self._notify_progress(85)
 
             # Run speaker diarization on the audio (R025)

@@ -1,7 +1,46 @@
 """Shared test fixtures for the meetandread test suite."""
-import pytest
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QTimer
+import importlib
+import sys
+import types
+
+
+def _ensure_stub_if_missing(name: str, **attrs) -> None:
+    """Stub a native backend module when the real one cannot be imported.
+
+    The app targets Windows-only native backends (WASAPI/PortAudio via
+    ``sounddevice``). Importing the app eagerly imports ``sounddevice`` at
+    module top-level, so on platforms where PortAudio is unavailable test
+    collection fails before any fixture runs. This stubs only ``sounddevice``
+    when it genuinely fails to import, keeping the pure-Python layers
+    (timestamp producers, the highlight consumer, footer parsing, ...) testable
+    everywhere. Other native backends (``pyaudiowpatch``, ``sherpa_onnx``,
+    ``webrtcvad``, ``comtypes``, ``pywhispercpp``) are already imported
+    gracefully by the app, so they are deliberately NOT stubbed here — stubbing
+    them would mask their absence and flip feature flags in the tests that
+    exercise them. On Windows (where the real library is installed) nothing is
+    stubbed.
+    """
+    try:
+        importlib.import_module(name)
+    except Exception:
+        stub = types.ModuleType(name)
+        for key, value in attrs.items():
+            setattr(stub, key, value)
+        sys.modules[name] = stub
+
+
+_ensure_stub_if_missing(
+    "sounddevice",
+    InputStream=type("InputStream", (), {}),
+    query_devices=lambda *a, **k: [],
+    query_host_apis=lambda *a, **k: [],
+    CallbackFlags=type("CallbackFlags", (), {}),
+)
+
+
+import pytest  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import QTimer  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

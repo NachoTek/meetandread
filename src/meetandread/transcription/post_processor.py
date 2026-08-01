@@ -497,7 +497,7 @@ class PostProcessingQueue:
                 "Transcribing %d samples with %s model for job %s...",
                 len(audio_data), job.model_size, job.job_id,
             )
-            segments = engine.transcribe_chunk(audio_data)
+            segments = engine.transcribe_chunk(audio_data, word_level=True)
             self._update_progress(job, 80)
 
             # Unwrap typed result (M019 changed transcribe_chunk to return
@@ -517,8 +517,7 @@ class PostProcessingQueue:
                 return
             
             # Create post-processed transcript
-            audio_duration = len(audio_data) / 16000.0  # 16kHz sample rate
-            enhanced_store = self._create_post_processed_transcript(segments, audio_duration)
+            enhanced_store = self._create_post_processed_transcript(segments)
             self._update_progress(job, 85)
 
             # Transfer speaker labels from realtime transcript to post-processed words.
@@ -658,18 +657,21 @@ class PostProcessingQueue:
     def _create_post_processed_transcript(
         self,
         segments: List[TranscriptionSegment],
-        audio_duration: float = 0.0,
     ) -> TranscriptStore:
         """Create TranscriptStore from transcription segments.
-        
-        Splits multi-word Whisper tokens into individual words and rescales
-        timestamps when Whisper's reported duration is significantly shorter
-        than the actual audio duration.
+
+        Splits multi-word Whisper tokens into individual words, dividing each
+        segment's real ``[start, end]`` evenly across its words.
+
+        Timestamps are taken verbatim from Whisper. They are never stretched
+        to fill the audio duration: previously the words were linearly rescaled
+        when Whisper under-reported the duration, but that embedded silence
+        into the word spans and made the playback highlight drift ahead of the
+        audio during pauses (issue #21). Real timestamps preserve inter-word
+        and trailing silence as gaps, which the highlighter holds on.
 
         Args:
             segments: Transcription segments from Whisper
-            audio_duration: Actual audio duration in seconds (0 = unknown).
-                Used to rescale Whisper timestamps when they under-report.
         
         Returns:
             TranscriptStore with words
@@ -724,20 +726,6 @@ class PostProcessingQueue:
                         speaker_id=None
                     )
                     words.append(word)
-        
-        # Rescale timestamps if Whisper's reported duration is significantly
-        # shorter than the actual audio duration. This happens when Whisper's
-        # timestamps don't cover the full audio (common with smaller models or
-        # compressed speech). We proportionally stretch the timestamps to fill
-        # the actual audio duration.
-        if words and audio_duration > 0:
-            whisper_end = max(w.end_time for w in words)
-            # Only rescale if Whisper reports less than 80% of the actual duration
-            if whisper_end > 0 and whisper_end < audio_duration * 0.8:
-                scale = audio_duration / whisper_end
-                for w in words:
-                    w.start_time = w.start_time * scale
-                    w.end_time = w.end_time * scale
         
         if words:
             store.add_words(words)

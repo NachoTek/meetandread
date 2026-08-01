@@ -387,7 +387,7 @@ class WhisperTranscriptionEngine:
         # Cap at 95% (never claim 100% without real probabilities)
         return min(95, base_confidence)
     
-    def transcribe_chunk(self, audio_np: np.ndarray) -> TranscriptionResult:
+    def transcribe_chunk(self, audio_np: np.ndarray, word_level: bool = False) -> TranscriptionResult:
         """Transcribe an audio chunk.
 
         Uses whisper.cpp with extract_probability=True for real confidence
@@ -395,6 +395,11 @@ class WhisperTranscriptionEngine:
 
         Args:
             audio_np: Audio samples as float32 numpy array (mono, 16kHz)
+            word_level: If True, forces whisper.cpp to split at word
+                boundaries (max_len=1 + split_on_word) so each returned
+                segment is a single word with its own real timestamp from
+                Whisper's cross-attention alignment.  Use for offline
+                post-processing; leave False for real-time (performance).
 
         Returns:
             TranscriptionSuccess with segments (possibly empty for silence),
@@ -418,11 +423,15 @@ class WhisperTranscriptionEngine:
             # extract_probability=True: real confidence from token log-probs
             #   (geometric mean of per-token probabilities for each segment)
             # token_timestamps=True: accurate start/end timestamps
-            result = self._model.transcribe(
-                temp_path,
+            # word_level: one segment per word with real per-word timestamps
+            transcribe_kwargs = dict(
                 extract_probability=True,
                 token_timestamps=True,
             )
+            if word_level:
+                transcribe_kwargs["max_len"] = 1
+                transcribe_kwargs["split_on_word"] = True
+            result = self._model.transcribe(temp_path, **transcribe_kwargs)
 
             if not result:
                 return TranscriptionSuccess(segments=[])
@@ -444,9 +453,14 @@ class WhisperTranscriptionEngine:
                 else:
                     confidence = self._estimate_confidence(text)
 
-                # Timestamps from whisper.cpp (in milliseconds, convert to seconds)
-                start = seg.t0 / 1000.0 if hasattr(seg, 't0') and seg.t0 else 0.0
-                end = seg.t1 / 1000.0 if hasattr(seg, 't1') and seg.t1 else 0.0
+                # Timestamps from whisper.cpp are in centiseconds (10ms units).
+                # pywhispercpp's to_timestamp() confirms: msec = t * 10.
+                # So seconds = t / 100, NOT t / 1000.
+                # Dividing by 1000 compressed timestamps 10x, causing the
+                # playback highlight to race ahead and speaker tagging to
+                # collapse to one speaker (issue #21).
+                start = seg.t0 / 100.0 if hasattr(seg, 't0') and seg.t0 else 0.0
+                end = seg.t1 / 100.0 if hasattr(seg, 't1') and seg.t1 else 0.0
 
                 # Build word info (single word per segment when max_len=1)
                 word = WordInfo(
