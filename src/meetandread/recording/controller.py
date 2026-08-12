@@ -994,6 +994,36 @@ class RecordingController:
                 "cancel_post_processing error (non-fatal): %s", exc,
             )
 
+    def is_post_processing_pending(self, transcript_path: Path) -> bool:
+        """Return True if Post-processing is still in flight for a Recording.
+
+        Façade over the Post-processing queue used by the History view to
+        decide whether to show the 'Post Processing pending' status instead
+        of the Live Transcript preview (issue #12).
+
+        A Recording's transcript .md shares its stem with the queued job's
+        audio file, so the queue matches by stem. Returns False when
+        Post-processing is disabled (no queue), already complete, failed,
+        or the query itself errors — in all those cases the History view
+        renders whatever transcript text is available.
+
+        Args:
+            transcript_path: Path to the Recording's transcript .md file.
+
+        Returns:
+            True if a PENDING or RUNNING Post-processing job targets this
+            Recording.
+        """
+        if self._post_processor is None:
+            return False
+        try:
+            return self._post_processor.has_pending_job_for_audio(transcript_path)
+        except Exception as exc:
+            logger.warning(
+                "is_post_processing_pending error (non-fatal): %s", exc,
+            )
+            return False
+
     def _run_diarization_for_postprocess(self, wav_path: Path) -> "DiarizationResult":
         """Run diarization in the context of post-processing.
 

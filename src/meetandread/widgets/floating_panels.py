@@ -6974,6 +6974,41 @@ class FloatingSettingsPanel(QWidget):
             return display_text, italic
         return display_text
 
+    @staticmethod
+    def _history_detail_status(md_path: Path, controller: object) -> Optional[str]:
+        """Return a status message when a transcript isn't ready to display.
+
+        Replaces the fragile Live Transcript preview in the History detail
+        view (issue #12). While Post-processing is still in flight for a
+        Recording, the detail viewer shows the returned status message
+        instead of the un-post-processed text; once Post-processing
+        completes the caller renders the full speaker-labeled transcript.
+
+        Args:
+            md_path: Path to the Recording's transcript .md file.
+            controller: Optional RecordingController (or object exposing
+                ``is_post_processing_pending(md_path)``). May be None when
+                the panel is constructed standalone (e.g. in tests).
+
+        Returns:
+            ``'Post Processing pending...'`` when Post-processing is in
+            flight for this Recording, otherwise ``None`` to render the
+            transcript normally.
+        """
+        if controller is None:
+            return None
+        check = getattr(controller, "is_post_processing_pending", None)
+        if not callable(check):
+            return None
+        try:
+            if check(md_path):
+                return "Post Processing pending..."
+        except Exception as exc:
+            logger.warning(
+                "history_detail_status check failed (non-fatal): %s", exc,
+            )
+        return None
+
     def _populate_history_list(self, recordings: list) -> None:
         """Populate the history QListWidget from a list of RecordingMeta.
 
@@ -7066,6 +7101,22 @@ class FloatingSettingsPanel(QWidget):
 
         self._current_history_md_path = md_path
         self._history_detail_header.show()
+
+        # Issue #12: while Post-processing is in flight for this Recording,
+        # show a 'Post Processing pending' status instead of the fragile
+        # Live Transcript preview. Once Post-processing completes,
+        # ``history_data_changed`` re-invokes this handler and renders the
+        # full speaker-labeled transcript.
+        pending_status = self._history_detail_status(md_path, self._controller)
+        if pending_status is not None:
+            self._history_detail_header.hide()
+            self._reset_highlight_state()
+            self._bookmark_manager = None
+            self._bookmark_items = []
+            self._refresh_bookmark_combo()
+            self._update_playback_for_no_audio()
+            self._history_viewer.setPlainText(pending_status)
+            return
 
         # Reset highlight state and extract timed words for the new transcript
         self._reset_highlight_state()

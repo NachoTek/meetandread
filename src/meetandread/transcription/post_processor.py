@@ -294,6 +294,34 @@ class PostProcessingQueue:
         """
         with self._jobs_lock:
             return list(self._jobs.values())
+
+    _PENDING_STATUSES = (
+        PostProcessStatus.PENDING,
+        PostProcessStatus.RUNNING,
+    )
+
+    def has_pending_job_for_audio(self, audio_path: Path) -> bool:
+        """Return True if a PENDING or RUNNING job targets *audio_path*.
+
+        Used by the History view to decide whether a Recording's
+        Post-processing is still in flight. Matching is by file stem so a
+        Recording's WAV (in ``recordings/``) is recognised even when the
+        caller passes an equivalently-stemmed path from another directory
+        (e.g. the transcript's companion path).
+
+        Args:
+            audio_path: Path to the recorded audio file (or a stem-matched
+                companion).
+
+        Returns:
+            True if a non-terminal job for this Recording exists.
+        """
+        target_stem = audio_path.stem
+        with self._jobs_lock:
+            for job in self._jobs.values():
+                if job.status in self._PENDING_STATUSES and job.audio_file.stem == target_stem:
+                    return True
+            return False
     
     def cancel_job(self, job_id: str, reason: str = "") -> bool:
         """Request cancellation of a specific job.
