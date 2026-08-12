@@ -35,7 +35,7 @@ from meetandread.audio.hotplug import DeviceEvent, DeviceEventType, WindowsDevic
 from meetandread.transcription.accumulating_processor import AccumulatingTranscriptionProcessor, SegmentResult  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
 from meetandread.transcription import transcript_footer  # noqa: E402
-from meetandread.transcription.post_processor import PostProcessingQueue  # noqa: E402
+from meetandread.transcription.post_processor import PostProcessingQueue, PostProcessStatus  # noqa: E402
 from meetandread.config.manager import ConfigManager  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -994,50 +994,47 @@ class RecordingController:
                 "cancel_post_processing error (non-fatal): %s", exc,
             )
 
-    def is_post_processing_pending(self, transcript_path: Path) -> bool:
-        """Return True if Post-processing is still in flight for a Recording.
+    def get_post_processing_state(self, transcript_path: Path) -> Optional[PostProcessStatus]:
+        """Return the Post-processing lifecycle state of a Recording.
 
-        Façade over the Post-processing queue used by the History view to
-        decide whether to show the 'Post Processing pending' status instead
-        of the Live Transcript preview (issue #12).
+        Façade over the Post-processing queue used by the History list to
+        label each row (issue #19). Returns the job's ``PostProcessStatus``
+        (PENDING / RUNNING / COMPLETED / FAILED / CANCELLED), or ``None``
+        when there is no job for this Recording (not scheduled this session,
+        or Post-processing is disabled).
 
-        A Recording's transcript .md shares its stem with the queued job's
-        audio file, so the queue matches by stem. Returns False when
-        Post-processing is disabled (no queue), already complete, failed,
-        or the query itself errors — in all those cases the History view
-        renders whatever transcript text is available.
+        ``None`` lets the History view fall back to a speaker-count based
+        label ('Manual Action Required' when no speakers, else complete).
 
         Args:
             transcript_path: Path to the Recording's transcript .md file.
 
         Returns:
-            True if a PENDING or RUNNING Post-processing job targets this
-            Recording.
+            The job status, or ``None``.
         """
         if self._post_processor is None:
-            return False
+            return None
         try:
-            return self._post_processor.has_pending_job_for_audio(transcript_path)
+            return self._post_processor.get_status_for_audio(transcript_path)
         except Exception as exc:
             logger.warning(
-                "is_post_processing_pending error (non-fatal): %s", exc,
+                "get_post_processing_state error (non-fatal): %s", exc,
             )
-            return False
+            return None
 
     def get_post_processing_progress(self, transcript_path: Path) -> Optional[int]:
         """Return Post-processing progress percent (0-100) for a Recording.
 
-        Façade over the Post-processing queue used by the History view to
-        render 'Post Processing pending... NN%' (issue #12 follow-up).
-        Returns ``None`` when Post-processing is not in flight for this
-        Recording (disabled, complete, failed, cancelled) or the query
-        errors — in all those cases the History view renders normally.
+        Façade over the Post-processing queue used by the History list to
+        render 'Processing NN%'. Returns ``None`` when Post-processing is
+        not in flight for this Recording (disabled, complete, failed,
+        cancelled) or the query errors.
 
         Args:
             transcript_path: Path to the Recording's transcript .md file.
 
         Returns:
-            Progress percent 0-100, or ``None`` when not pending.
+            Progress percent 0-100, or ``None`` when not in flight.
         """
         if self._post_processor is None:
             return None

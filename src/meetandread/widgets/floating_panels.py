@@ -23,6 +23,7 @@ import re
 import time
 
 from meetandread.transcription import transcript_footer
+from meetandread.transcription.post_processor import PostProcessStatus
 from meetandread.transcription.confidence import get_confidence_color, get_confidence_legend
 from meetandread.hardware.detector import HardwareDetector
 from meetandread.hardware.recommender import ModelRecommender
@@ -3522,6 +3523,24 @@ class _HistoryRowWidget(QWidget):
     # Public API for hover/selection visibility
     # ------------------------------------------------------------------
 
+    def update_display_text(self, display_text: str, italic: bool = False) -> None:
+        """Update the row's label text and italic styling in place.
+
+        Used by the live Post-processing progress timer to refresh the
+        per-row lifecycle label (e.g. 'Processing NN%') without rebuilding
+        the whole list.
+        """
+        self._label.setText(display_text)
+        font = self._label.font()
+        if font.italic() != italic:
+            font.setItalic(italic)
+            self._label.setFont(font)
+        # Italic rows use a dimmer colour to read as 'in progress'; reset to
+        # default styling when no longer italic.
+        self._label.setStyleSheet(
+            "color: rgba(255, 255, 255, 140);" if italic else ""
+        )
+
     def show_actions(self) -> None:
         """Reveal the inline Re-transcribe and Delete buttons."""
         self._retranscribe_btn.show()
@@ -3591,6 +3610,9 @@ class FloatingSettingsPanel(QWidget):
     _NAV_PERFORMANCE = 1
     _NAV_HISTORY = 2
     _NAV_IDENTITIES = 3
+
+    # Post-processing states considered 'live' (drive the row-progress timer).
+    _LIVE_POST_PROCESS_STATES = (PostProcessStatus.PENDING, PostProcessStatus.RUNNING)
 
     def __init__(self, parent: Optional[QWidget] = None,
                  controller: object = None, tray_manager: object = None,
@@ -4607,10 +4629,13 @@ class FloatingSettingsPanel(QWidget):
         self._bookmark_manager: Optional[object] = None  # BookmarkManager
         self._bookmark_items: List[tuple] = []  # [(created_at, position_ms), ...]
 
-        # Live progress polling timer for the 'Post Processing pending' status
-        # (issue #12). Created lazily; started while a pending Recording is
-        # selected, stopped on completion or when another item is selected.
-        self._post_process_progress_timer: Optional[QTimer] = None
+        # Live progress polling for per-row Post-processing lifecycle labels
+        # (issue #19). Created lazily; started while any visible Recording is
+        # Queued/Processing, stopped when none remain.
+        self._history_progress_timer: Optional[QTimer] = None
+        # RecordingMeta for each row, parallel to _history_row_widgets, so the
+        # progress tick can rebuild a row's label without re-scanning disk.
+        self._history_recordings: list = []
 
         detail_header_layout.addStretch()
 
@@ -6950,17 +6975,28 @@ class FloatingSettingsPanel(QWidget):
     def _build_history_display_text(
         meta,  # RecordingMeta — avoids circular import at class level
         return_italic: bool = False,
+        post_process_status: Optional[PostProcessStatus] = None,
+        post_process_progress: Optional[int] = None,
     ):
         """Build the display text for a history list item.
 
-        When speaker_count == 0 and word_count > 0, appends an italic
-        '(processing speakers...)' indicator to signal pending
-        post-processing. Empty recordings show '(Empty recording)'.
+        Renders the per-Recording Post-processing lifecycle label (issue #19):
+
+        - job RUNNING        -> 'Processing NN%' (live, italic)
+        - job PENDING        -> 'Queued' (italic)
+        - job FAILED         -> 'Failed' (italic)
+        - job CANCELLED      -> 'Manual Action Required' (italic)
+        - no job, no speakers -> 'Manual Action Required' (italic) — stalled,
+          needs manual re-transcribe. Replaces the old '(processing speakers)'.
+        - no job, has speakers -> 'N speakers' (complete, not italic)
+        - empty recording    -> '(Empty recording)'
 
         Args:
             meta: RecordingMeta for the item.
-            return_italic: If True, return (text, is_italic) tuple
-                instead of just the text string.
+            return_italic: If True, return (text, is_italic) tuple.
+            post_process_status: Optional PostProcessStatus for this Recording.
+            post_process_progress: Optional progress percent (0-100); only
+                meaningful when status is RUNNING.
 
         Returns:
             str or (str, bool) — display text, or text + italic flag.
@@ -6985,102 +7021,57 @@ class FloatingSettingsPanel(QWidget):
             display_label = display_date
 
         italic = False
-        if meta.word_count == 0:
-            display_text = f"{display_label} | (Empty recording)"
+        if post_process_status == PostProcessStatus.RUNNING:
+            pct = int(post_process_progress) if post_process_progress is not None else 0
+            tail = f"Processing {pct}%"
+            italic = True
+        elif post_process_status == PostProcessStatus.PENDING:
+            tail = "Queued"
+            italic = True
+        elif post_process_status == PostProcessStatus.FAILED:
+            tail = "Failed"
+            italic = True
+        elif post_process_status == PostProcessStatus.CANCELLED:
+            tail = "Manual Action Required"
+            italic = True
+        elif meta.word_count == 0:
+            tail = "(Empty recording)"
         elif meta.speaker_count == 0:
-            display_text = (
-                f"{display_label} | {meta.word_count} words"
-                f" | (processing speakers...)"
-            )
+            # No job this session and no speakers — stalled unless the user
+            # manually re-transcribes. Replaces '(processing speakers)'.
+            tail = "Manual Action Required"
             italic = True
         else:
             spk = "speaker" if meta.speaker_count == 1 else "speakers"
-            display_text = (
-                f"{display_label} | {meta.word_count} words"
-                f" | {meta.speaker_count} {spk}"
-            )
+            tail = f"{meta.speaker_count} {spk}"
+
+        if meta.word_count == 0 and post_process_status is None:
+            display_text = f"{display_label} | {tail}"
+        else:
+            display_text = f"{display_label} | {meta.word_count} words | {tail}"
 
         if return_italic:
             return display_text, italic
         return display_text
 
-    @staticmethod
-    def _history_detail_status(md_path: Path, controller: object) -> Optional[str]:
-        """Return a status message when a transcript isn't ready to display.
+    # Polling cadence for live 'Processing NN%' updates on history rows.
+    _HISTORY_PROGRESS_INTERVAL_MS = 1000
 
-        Replaces the fragile Live Transcript preview in the History detail
-        view (issue #12). While Post-processing is still in flight for a
-        Recording, the detail viewer shows the returned status message
-        instead of the un-post-processed text; once Post-processing
-        completes the caller renders the full speaker-labeled transcript.
-
-        Args:
-            md_path: Path to the Recording's transcript .md file.
-            controller: Optional RecordingController (or object exposing
-                ``is_post_processing_pending(md_path)``). May be None when
-                the panel is constructed standalone (e.g. in tests).
-
-        Returns:
-            ``'Post Processing pending...'`` when Post-processing is in
-            flight for this Recording, otherwise ``None`` to render the
-            transcript normally.
-        """
+    def _post_processing_state(self, md_path: Path) -> Optional[PostProcessStatus]:
+        """Best-effort Post-processing lifecycle state for *md_path*."""
+        controller = self._controller
         if controller is None:
             return None
-        check = getattr(controller, "is_post_processing_pending", None)
-        if not callable(check):
+        getter = getattr(controller, "get_post_processing_state", None)
+        if not callable(getter):
             return None
         try:
-            if check(md_path):
-                return "Post Processing pending..."
+            return getter(md_path)
         except Exception as exc:
             logger.warning(
-                "history_detail_status check failed (non-fatal): %s", exc,
+                "post_processing_state read failed (non-fatal): %s", exc,
             )
-        return None
-
-    @staticmethod
-    def _format_post_processing_status(progress: Optional[int]) -> str:
-        """Format the History detail pending-status text for a progress value.
-
-        Args:
-            progress: Progress percent 0-100 from the controller, or ``None``
-                when no progress has been reported yet.
-
-        Returns:
-            ``'Post Processing pending... NN%'`` when progress is known,
-            otherwise ``'Post Processing pending...'``.
-        """
-        if progress is None:
-            return "Post Processing pending..."
-        return f"Post Processing pending... {int(progress)}%"
-
-    # Polling cadence for the live 'Post Processing pending... NN%' status.
-    _POST_PROCESS_PROGRESS_INTERVAL_MS = 1000
-
-    def _show_post_processing_pending(self, md_path: Path) -> None:
-        """Render the pending status (with current progress) and poll live.
-
-        Hides the action header (Re-transcribe/Delete aren't useful while a
-        Recording is still being Post-processed), resets highlight/bookmark/
-        playback state, shows the status text, and starts a QTimer that
-        refreshes the percentage every second.
-        """
-        self._history_detail_header.hide()
-        self._reset_highlight_state()
-        self._bookmark_manager = None
-        self._bookmark_items = []
-        self._refresh_bookmark_combo()
-        self._update_playback_for_no_audio()
-        self._history_viewer.setPlainText(
-            self._format_post_processing_status(
-                self._post_processing_progress(md_path)
-            )
-        )
-        self._ensure_post_process_progress_timer()
-        self._post_process_progress_timer.start(
-            self._POST_PROCESS_PROGRESS_INTERVAL_MS
-        )
+            return None
 
     def _post_processing_progress(self, md_path: Path) -> Optional[int]:
         """Best-effort Post-processing progress percent for *md_path*."""
@@ -7098,36 +7089,50 @@ class FloatingSettingsPanel(QWidget):
             )
             return None
 
-    def _ensure_post_process_progress_timer(self) -> None:
-        """Create the progress-polling QTimer on first use."""
-        if self._post_process_progress_timer is None:
+    def _ensure_history_progress_timer(self) -> None:
+        """Create the row-progress QTimer on first use."""
+        if self._history_progress_timer is None:
             timer = QTimer(self)
             timer.setTimerType(Qt.TimerType.PreciseTimer)
-            timer.timeout.connect(self._on_post_process_progress_tick)
-            self._post_process_progress_timer = timer
+            timer.timeout.connect(self._on_history_progress_tick)
+            self._history_progress_timer = timer
 
-    def _stop_post_process_progress_timer(self) -> None:
-        """Stop the progress-polling timer if it is running."""
-        if self._post_process_progress_timer is not None:
-            self._post_process_progress_timer.stop()
+    def _maybe_start_history_progress_timer(self) -> None:
+        """Start live row updates if any visible recording is still in flight."""
+        if any(
+            self._post_processing_state(meta.path) in self._LIVE_POST_PROCESS_STATES
+            for meta in self._history_recordings
+        ):
+            self._ensure_history_progress_timer()
+            if not self._history_progress_timer.isActive():
+                self._history_progress_timer.start(
+                    self._HISTORY_PROGRESS_INTERVAL_MS
+                )
+        elif self._history_progress_timer is not None:
+            self._history_progress_timer.stop()
 
-    def _on_post_process_progress_tick(self) -> None:
-        """Refresh the pending percentage, or stop polling once complete."""
-        md_path = self._current_history_md_path
-        if md_path is None:
-            self._stop_post_process_progress_timer()
-            return
-        # If Post-processing just completed, stop polling and leave the viewer
-        # untouched — the completion-driven refresh_history_if_visible will
-        # re-render the full transcript.
-        if self._history_detail_status(md_path, self._controller) is None:
-            self._stop_post_process_progress_timer()
-            return
-        self._history_viewer.setPlainText(
-            self._format_post_processing_status(
-                self._post_processing_progress(md_path)
+    def _on_history_progress_tick(self) -> None:
+        """Refresh each row's lifecycle label/progress; stop when none in flight."""
+        any_live = False
+        for idx, meta in enumerate(self._history_recordings):
+            status = self._post_processing_state(meta.path)
+            progress = (
+                self._post_processing_progress(meta.path)
+                if status == PostProcessStatus.RUNNING
+                else None
             )
-        )
+            row_widget = self._history_row_widgets.get(idx)
+            if row_widget is None:
+                continue
+            display_text, italic = self._build_history_display_text(
+                meta, return_italic=True,
+                post_process_status=status, post_process_progress=progress,
+            )
+            row_widget.update_display_text(display_text, italic=italic)
+            if status in self._LIVE_POST_PROCESS_STATES:
+                any_live = True
+        if not any_live and self._history_progress_timer is not None:
+            self._history_progress_timer.stop()
 
     def _populate_history_list(self, recordings: list) -> None:
         """Populate the history QListWidget from a list of RecordingMeta.
@@ -7142,10 +7147,18 @@ class FloatingSettingsPanel(QWidget):
         self._history_list.clear()
         self._history_row_widgets.clear()
         self._hovered_history_row = -1
+        self._history_recordings = list(recordings)
 
         for meta in recordings:
+            status = self._post_processing_state(meta.path)
+            progress = (
+                self._post_processing_progress(meta.path)
+                if status == PostProcessStatus.RUNNING
+                else None
+            )
             display_text, is_italic = self._build_history_display_text(
                 meta, return_italic=True,
+                post_process_status=status, post_process_progress=progress,
             )
 
             path_str = str(meta.path)
@@ -7165,6 +7178,10 @@ class FloatingSettingsPanel(QWidget):
             self._history_list.setItemWidget(item, row_widget)
             row_index = self._history_list.row(item)
             self._history_row_widgets[row_index] = row_widget
+
+        # Drive live 'Processing NN%' / 'Queued' updates while any row is
+        # still in flight (issue #19 — real-time status, no manual refresh).
+        self._maybe_start_history_progress_timer()
 
     def _on_history_current_item_changed(self, current, previous) -> None:
         """Update inline action button visibility when list selection changes."""
@@ -7222,18 +7239,6 @@ class FloatingSettingsPanel(QWidget):
         self._current_history_md_path = md_path
         self._history_detail_header.show()
 
-        # Issue #12: while Post-processing is in flight for this Recording,
-        # show a 'Post Processing pending... NN%' status instead of the
-        # fragile Live Transcript preview. Once Post-processing completes,
-        # ``history_data_changed`` re-invokes this handler (see
-        # refresh_history_if_visible) and renders the full speaker-labeled
-        # transcript.
-        if self._history_detail_status(md_path, self._controller) is not None:
-            self._show_post_processing_pending(md_path)
-            return
-
-        # Not pending — stop any live progress polling and render normally.
-        self._stop_post_process_progress_timer()
         # Reset highlight state and extract timed words for the new transcript
         self._reset_highlight_state()
         self._extract_timed_words(md_path)

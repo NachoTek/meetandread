@@ -300,20 +300,37 @@ class PostProcessingQueue:
         PostProcessStatus.RUNNING,
     )
 
+    def get_status_for_audio(self, audio_path: Path) -> Optional[PostProcessStatus]:
+        """Return the Post-processing job status for a Recording, if any.
+
+        Used by the History list to pick a per-row lifecycle label
+        (Queued / Processing / Failed / Manual Action Required / complete).
+        Matching is by file stem so a Recording's WAV (in ``recordings/``) is
+        recognised via its transcript companion path.
+
+        When both a non-terminal (PENDING/RUNNING) and a terminal job exist
+        for the same stem, the live one wins so an in-flight re-attempt is
+        not masked by a stale FAILED entry.
+
+        Returns ``None`` when no job targets this Recording.
+        """
+        target_stem = audio_path.stem
+        with self._jobs_lock:
+            terminal: Optional[PostProcessStatus] = None
+            for job in self._jobs.values():
+                if job.audio_file.stem != target_stem:
+                    continue
+                if job.status in self._PENDING_STATUSES:
+                    return job.status
+                terminal = job.status
+            return terminal
+
     def get_progress_for_audio(self, audio_path: Path) -> Optional[int]:
-        """Return the progress percent (0-100) of the in-flight job for *audio_path*.
+        """Return the progress percent (0-100) of the in-flight job, or None.
 
-        Used by the History view to render a 'Post Processing pending... NN%'
-        status. Matching is by file stem (see ``has_pending_job_for_audio``).
-
-        Args:
-            audio_path: Path to the recorded audio file (or a stem-matched
-                companion).
-
-        Returns:
-            The pending/running job's progress percent, or ``None`` when no
-            PENDING/RUNNING job targets this Recording (complete, failed,
-            cancelled, or never scheduled).
+        Returns the PENDING/RUNNING job's progress percent, or ``None`` when
+        no in-flight job targets this Recording (complete, failed, cancelled,
+        or never scheduled).
         """
         target_stem = audio_path.stem
         with self._jobs_lock:
@@ -321,14 +338,6 @@ class PostProcessingQueue:
                 if job.status in self._PENDING_STATUSES and job.audio_file.stem == target_stem:
                     return job.progress
             return None
-
-    def has_pending_job_for_audio(self, audio_path: Path) -> bool:
-        """Return True if a PENDING or RUNNING job targets *audio_path*.
-
-        Delegates to ``get_progress_for_audio`` so the pending-decision and
-        the progress-value stay consistent by construction.
-        """
-        return self.get_progress_for_audio(audio_path) is not None
     
     def cancel_job(self, job_id: str, reason: str = "") -> bool:
         """Request cancellation of a specific job.

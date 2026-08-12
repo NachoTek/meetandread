@@ -55,22 +55,22 @@ class TestHistoryDisplayText:
     """Verify display text generation for history items."""
 
     def test_no_speakers_includes_indicator(self):
-        """Items with speaker_count==0 and word_count>0 should show indicator."""
+        """No-speaker recordings with no in-flight job show 'Manual Action Required'."""
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
 
         meta = _make_meta(speaker_count=0, speakers=[])
         text = FloatingSettingsPanel._build_history_display_text(meta)
-        assert "processing speakers" in text.lower(), (
-            f"Expected 'processing speakers' in text, got: {text}"
+        assert "manual action required" in text.lower(), (
+            f"Expected 'Manual Action Required' in text, got: {text}"
         )
 
     def test_has_speakers_no_indicator(self):
-        """Items with speaker_count>0 should NOT show the indicator."""
+        """Items with speaker_count>0 should NOT show the manual-action indicator."""
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
 
         meta = _make_meta(speaker_count=3)
         text = FloatingSettingsPanel._build_history_display_text(meta)
-        assert "processing speakers" not in text.lower(), (
+        assert "manual action required" not in text.lower(), (
             f"Unexpected indicator in text: {text}"
         )
 
@@ -83,7 +83,7 @@ class TestHistoryDisplayText:
         assert "3 speakers" in text
 
     def test_empty_recording_no_speaker_indicator(self):
-        """Empty recordings (word_count==0) show 'Empty recording', not speaker indicator."""
+        """Empty recordings (word_count==0) show 'Empty recording', not the manual-action indicator."""
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
 
         meta = _make_meta(word_count=0, speaker_count=0, speakers=[])
@@ -91,7 +91,7 @@ class TestHistoryDisplayText:
         assert "empty recording" in text.lower(), (
             f"Expected 'Empty recording' in text, got: {text}"
         )
-        assert "processing speakers" not in text.lower()
+        assert "manual action required" not in text.lower()
 
     def test_one_speaker_shows_singular(self):
         """Items with 1 speaker should show '1 speaker' (singular)."""
@@ -126,7 +126,7 @@ class TestHistoryDisplayText:
         assert italic is False
 
     def test_renamed_recording_keeps_indicator(self):
-        """Custom-named recording with no speakers still shows indicator."""
+        """Custom-named recording with no speakers still shows the manual-action indicator."""
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
 
         meta = _make_meta(
@@ -135,4 +135,4 @@ class TestHistoryDisplayText:
             speakers=[],
         )
         text = FloatingSettingsPanel._build_history_display_text(meta)
-        assert "processing speakers" in text.lower()
+        assert "manual action required" in text.lower()
