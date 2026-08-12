@@ -20,6 +20,10 @@ _Avoid_: footer, metadata block, metadata section, trailer
 The speaker-unlabeled text captured during a Recording and saved when recording stops. Available immediately, but accuracy and speaker identification are improved in-place by background post-processing. From the user's perspective, the Transcript simply gets better over time.
 _Avoid_: Draft transcript, raw transcript, interim transcript
 
+**Post-processing**:
+The automatic background activity that turns a Live Transcript into the full Transcript. Re-transcribes the Recording's audio with a stronger Whisper model and applies speaker diarization, overwriting the canonical transcript file in place. Runs while idle after a recording stops; several Recordings may queue and are processed one at a time.
+_Avoid_: Enhancement, refinement, finalization, second pass
+
 **Audio**:
 The raw captured sound of a Recording, stored as a WAV file. It is the input material from which the Transcript is derived, not an end product in itself.
 _Avoid_: Recording (as a synonym — a Recording contains Audio), sound file
