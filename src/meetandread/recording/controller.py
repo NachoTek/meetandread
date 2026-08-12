@@ -1024,6 +1024,31 @@ class RecordingController:
             )
             return False
 
+    def get_post_processing_progress(self, transcript_path: Path) -> Optional[int]:
+        """Return Post-processing progress percent (0-100) for a Recording.
+
+        Façade over the Post-processing queue used by the History view to
+        render 'Post Processing pending... NN%' (issue #12 follow-up).
+        Returns ``None`` when Post-processing is not in flight for this
+        Recording (disabled, complete, failed, cancelled) or the query
+        errors — in all those cases the History view renders normally.
+
+        Args:
+            transcript_path: Path to the Recording's transcript .md file.
+
+        Returns:
+            Progress percent 0-100, or ``None`` when not pending.
+        """
+        if self._post_processor is None:
+            return None
+        try:
+            return self._post_processor.get_progress_for_audio(transcript_path)
+        except Exception as exc:
+            logger.warning(
+                "get_post_processing_progress error (non-fatal): %s", exc,
+            )
+            return None
+
     def _run_diarization_for_postprocess(self, wav_path: Path) -> "DiarizationResult":
         """Run diarization in the context of post-processing.
 

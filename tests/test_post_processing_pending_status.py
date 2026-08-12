@@ -257,3 +257,171 @@ class TestHistoryDetailStatusHelper:
         md_path = tmp_path / "transcripts" / "recording-x.md"
 
         assert FloatingSettingsPanel._history_detail_status(md_path, controller) is None
+
+
+# ---------------------------------------------------------------------------
+# Slice 4: PostProcessingQueue.get_progress_for_audio
+# ---------------------------------------------------------------------------
+
+
+class TestPostProcessingQueueProgressQuery:
+    """Verify the queue's progress query used to render the percentage."""
+
+    def test_pending_job_returns_its_progress(self, tmp_path):
+        audio = tmp_path / "recording-x.wav"
+        queue = _new_queue()
+        job = _make_job(audio, status=PostProcessStatus.PENDING)
+        job.progress = 25
+        queue._jobs["job-1"] = job
+
+        assert queue.get_progress_for_audio(audio) == 25
+
+    def test_running_job_returns_its_progress(self, tmp_path):
+        audio = tmp_path / "recording-x.wav"
+        queue = _new_queue()
+        job = _make_job(audio, status=PostProcessStatus.RUNNING)
+        job.progress = 80
+        queue._jobs["job-1"] = job
+
+        assert queue.get_progress_for_audio(audio) == 80
+
+    def test_zero_progress_returned_for_fresh_pending_job(self, tmp_path):
+        """A just-queued job reports 0%, which is distinct from 'no job'."""
+        audio = tmp_path / "recording-x.wav"
+        queue = _new_queue()
+        queue._jobs["job-1"] = _make_job(audio, status=PostProcessStatus.PENDING)
+
+        assert queue.get_progress_for_audio(audio) == 0
+
+    def test_completed_job_returns_none(self, tmp_path):
+        audio = tmp_path / "recording-x.wav"
+        queue = _new_queue()
+        queue._jobs["job-1"] = _make_job(audio, status=PostProcessStatus.COMPLETED)
+
+        assert queue.get_progress_for_audio(audio) is None
+
+    def test_failed_job_returns_none(self, tmp_path):
+        audio = tmp_path / "recording-x.wav"
+        queue = _new_queue()
+        queue._jobs["job-1"] = _make_job(audio, status=PostProcessStatus.FAILED)
+
+        assert queue.get_progress_for_audio(audio) is None
+
+    def test_no_jobs_returns_none(self, tmp_path):
+        queue = _new_queue()
+        assert queue.get_progress_for_audio(tmp_path / "any.wav") is None
+
+    def test_match_by_stem(self, tmp_path):
+        stored = tmp_path / "recordings" / "recording-2026-08-12-090000.wav"
+        probe = tmp_path / "transcripts" / "recording-2026-08-12-090000.wav"
+        queue = _new_queue()
+        job = _make_job(stored, status=PostProcessStatus.RUNNING)
+        job.progress = 45
+        queue._jobs["job-1"] = job
+
+        assert queue.get_progress_for_audio(probe) == 45
+
+    def test_has_pending_delegates_to_progress_query(self, tmp_path):
+        """has_pending_job_for_audio stays consistent with get_progress_for_audio."""
+        audio = tmp_path / "recording-x.wav"
+        queue = _new_queue()
+        job = _make_job(audio, status=PostProcessStatus.RUNNING)
+        job.progress = 60
+        queue._jobs["job-1"] = job
+
+        pending = queue.has_pending_job_for_audio(audio)
+        progress = queue.get_progress_for_audio(audio)
+        assert pending is True
+        assert progress == 60
+        # consistency: progress is not None iff pending is True
+        assert (progress is not None) == pending
+
+
+# ---------------------------------------------------------------------------
+# Slice 5: RecordingController.get_post_processing_progress
+# ---------------------------------------------------------------------------
+
+
+class TestRecordingControllerProgressCheck:
+    """Verify the controller façade for progress percentage."""
+
+    def test_returns_progress_when_queue_reports_pending(self, tmp_path):
+        queue = MagicMock()
+        queue.get_progress_for_audio.return_value = 42
+        ctrl = _make_controller_with_queue(queue)
+
+        md_path = tmp_path / "transcripts" / "recording-x.md"
+        assert ctrl.get_post_processing_progress(md_path) == 42
+
+    def test_returns_none_when_queue_reports_none(self, tmp_path):
+        queue = MagicMock()
+        queue.get_progress_for_audio.return_value = None
+        ctrl = _make_controller_with_queue(queue)
+
+        md_path = tmp_path / "transcripts" / "recording-x.md"
+        assert ctrl.get_post_processing_progress(md_path) is None
+
+    def test_returns_none_when_post_processing_disabled(self, tmp_path):
+        """A None queue (post-processing disabled) reports no progress."""
+        ctrl = _make_controller_with_queue(None)
+        md_path = tmp_path / "transcripts" / "recording-x.md"
+        assert ctrl.get_post_processing_progress(md_path) is None
+
+    def test_returns_none_when_queue_raises(self, tmp_path):
+        queue = MagicMock()
+        queue.get_progress_for_audio.side_effect = RuntimeError("boom")
+        ctrl = _make_controller_with_queue(queue)
+
+        md_path = tmp_path / "transcripts" / "recording-x.md"
+        assert ctrl.get_post_processing_progress(md_path) is None
+
+    def test_delegates_transcript_path_to_queue(self, tmp_path):
+        queue = MagicMock()
+        queue.get_progress_for_audio.return_value = None
+        ctrl = _make_controller_with_queue(queue)
+
+        md_path = tmp_path / "transcripts" / "recording-2026-08-12-090000.md"
+        ctrl.get_post_processing_progress(md_path)
+        queue.get_progress_for_audio.assert_called_once_with(md_path)
+
+
+# ---------------------------------------------------------------------------
+# Slice 6: FloatingSettingsPanel._format_post_processing_status
+# ---------------------------------------------------------------------------
+
+
+class TestFormatPostProcessingStatus:
+    """Verify the pure helper that formats the pending status text."""
+
+    def test_known_progress_appends_percentage(self):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        assert (
+            FloatingSettingsPanel._format_post_processing_status(45)
+            == "Post Processing pending... 45%"
+        )
+
+    def test_zero_progress_appends_zero(self):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        assert (
+            FloatingSettingsPanel._format_post_processing_status(0)
+            == "Post Processing pending... 0%"
+        )
+
+    def test_none_progress_omits_percentage(self):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        assert (
+            FloatingSettingsPanel._format_post_processing_status(None)
+            == "Post Processing pending..."
+        )
+
+    def test_full_progress_still_pending(self):
+        """100% may be reported before the completion refresh re-renders."""
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        assert (
+            FloatingSettingsPanel._format_post_processing_status(100)
+            == "Post Processing pending... 100%"
+        )

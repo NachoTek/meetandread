@@ -300,28 +300,35 @@ class PostProcessingQueue:
         PostProcessStatus.RUNNING,
     )
 
-    def has_pending_job_for_audio(self, audio_path: Path) -> bool:
-        """Return True if a PENDING or RUNNING job targets *audio_path*.
+    def get_progress_for_audio(self, audio_path: Path) -> Optional[int]:
+        """Return the progress percent (0-100) of the in-flight job for *audio_path*.
 
-        Used by the History view to decide whether a Recording's
-        Post-processing is still in flight. Matching is by file stem so a
-        Recording's WAV (in ``recordings/``) is recognised even when the
-        caller passes an equivalently-stemmed path from another directory
-        (e.g. the transcript's companion path).
+        Used by the History view to render a 'Post Processing pending... NN%'
+        status. Matching is by file stem (see ``has_pending_job_for_audio``).
 
         Args:
             audio_path: Path to the recorded audio file (or a stem-matched
                 companion).
 
         Returns:
-            True if a non-terminal job for this Recording exists.
+            The pending/running job's progress percent, or ``None`` when no
+            PENDING/RUNNING job targets this Recording (complete, failed,
+            cancelled, or never scheduled).
         """
         target_stem = audio_path.stem
         with self._jobs_lock:
             for job in self._jobs.values():
                 if job.status in self._PENDING_STATUSES and job.audio_file.stem == target_stem:
-                    return True
-            return False
+                    return job.progress
+            return None
+
+    def has_pending_job_for_audio(self, audio_path: Path) -> bool:
+        """Return True if a PENDING or RUNNING job targets *audio_path*.
+
+        Delegates to ``get_progress_for_audio`` so the pending-decision and
+        the progress-value stay consistent by construction.
+        """
+        return self.get_progress_for_audio(audio_path) is not None
     
     def cancel_job(self, job_id: str, reason: str = "") -> bool:
         """Request cancellation of a specific job.

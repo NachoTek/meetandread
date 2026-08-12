@@ -4607,6 +4607,11 @@ class FloatingSettingsPanel(QWidget):
         self._bookmark_manager: Optional[object] = None  # BookmarkManager
         self._bookmark_items: List[tuple] = []  # [(created_at, position_ms), ...]
 
+        # Live progress polling timer for the 'Post Processing pending' status
+        # (issue #12). Created lazily; started while a pending Recording is
+        # selected, stopped on completion or when another item is selected.
+        self._post_process_progress_timer: Optional[QTimer] = None
+
         detail_header_layout.addStretch()
 
         self._history_detail_header.hide()
@@ -6892,10 +6897,35 @@ class FloatingSettingsPanel(QWidget):
         if self._content_stack.currentIndex() == self._NAV_HISTORY:
             # Re-render the currently-viewed transcript (speaker labels
             # may have been added by post-processing diarization).
+            #
+            # _refresh_history() clears and rebuilds the list, which drops
+            # the Qt current-item selection. Look the item up by its stored
+            # transcript path instead of relying on currentItem(), otherwise
+            # the viewer stays stuck on the previous render (e.g. the
+            # 'Post Processing pending' placeholder) after completion.
             if self._current_history_md_path:
-                current = self._history_list.currentItem()
+                current = self._find_history_item_by_path(
+                    self._current_history_md_path
+                )
                 if current is not None:
+                    self._history_list.setCurrentItem(current)
                     self._on_history_item_clicked(current)
+
+    def _find_history_item_by_path(
+        self, md_path: Path
+    ) -> Optional[QListWidgetItem]:
+        """Return the history list item whose stored path matches *md_path*.
+
+        Items store their transcript path in ``UserRole`` (see
+        ``_populate_history_list``). Returns None when no match is found
+        (e.g. the recording was deleted during refresh).
+        """
+        target = str(md_path)
+        for i in range(self._history_list.count()):
+            item = self._history_list.item(i)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == target:
+                return item
+        return None
 
     def refresh_identities_if_visible(self) -> None:
         """Refresh the identities list after speaker pinning or cross-view mutations.
@@ -7009,6 +7039,96 @@ class FloatingSettingsPanel(QWidget):
             )
         return None
 
+    @staticmethod
+    def _format_post_processing_status(progress: Optional[int]) -> str:
+        """Format the History detail pending-status text for a progress value.
+
+        Args:
+            progress: Progress percent 0-100 from the controller, or ``None``
+                when no progress has been reported yet.
+
+        Returns:
+            ``'Post Processing pending... NN%'`` when progress is known,
+            otherwise ``'Post Processing pending...'``.
+        """
+        if progress is None:
+            return "Post Processing pending..."
+        return f"Post Processing pending... {int(progress)}%"
+
+    # Polling cadence for the live 'Post Processing pending... NN%' status.
+    _POST_PROCESS_PROGRESS_INTERVAL_MS = 1000
+
+    def _show_post_processing_pending(self, md_path: Path) -> None:
+        """Render the pending status (with current progress) and poll live.
+
+        Hides the action header (Re-transcribe/Delete aren't useful while a
+        Recording is still being Post-processed), resets highlight/bookmark/
+        playback state, shows the status text, and starts a QTimer that
+        refreshes the percentage every second.
+        """
+        self._history_detail_header.hide()
+        self._reset_highlight_state()
+        self._bookmark_manager = None
+        self._bookmark_items = []
+        self._refresh_bookmark_combo()
+        self._update_playback_for_no_audio()
+        self._history_viewer.setPlainText(
+            self._format_post_processing_status(
+                self._post_processing_progress(md_path)
+            )
+        )
+        self._ensure_post_process_progress_timer()
+        self._post_process_progress_timer.start(
+            self._POST_PROCESS_PROGRESS_INTERVAL_MS
+        )
+
+    def _post_processing_progress(self, md_path: Path) -> Optional[int]:
+        """Best-effort Post-processing progress percent for *md_path*."""
+        controller = self._controller
+        if controller is None:
+            return None
+        getter = getattr(controller, "get_post_processing_progress", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(md_path)
+        except Exception as exc:
+            logger.warning(
+                "post_processing_progress read failed (non-fatal): %s", exc,
+            )
+            return None
+
+    def _ensure_post_process_progress_timer(self) -> None:
+        """Create the progress-polling QTimer on first use."""
+        if self._post_process_progress_timer is None:
+            timer = QTimer(self)
+            timer.setTimerType(Qt.TimerType.PreciseTimer)
+            timer.timeout.connect(self._on_post_process_progress_tick)
+            self._post_process_progress_timer = timer
+
+    def _stop_post_process_progress_timer(self) -> None:
+        """Stop the progress-polling timer if it is running."""
+        if self._post_process_progress_timer is not None:
+            self._post_process_progress_timer.stop()
+
+    def _on_post_process_progress_tick(self) -> None:
+        """Refresh the pending percentage, or stop polling once complete."""
+        md_path = self._current_history_md_path
+        if md_path is None:
+            self._stop_post_process_progress_timer()
+            return
+        # If Post-processing just completed, stop polling and leave the viewer
+        # untouched — the completion-driven refresh_history_if_visible will
+        # re-render the full transcript.
+        if self._history_detail_status(md_path, self._controller) is None:
+            self._stop_post_process_progress_timer()
+            return
+        self._history_viewer.setPlainText(
+            self._format_post_processing_status(
+                self._post_processing_progress(md_path)
+            )
+        )
+
     def _populate_history_list(self, recordings: list) -> None:
         """Populate the history QListWidget from a list of RecordingMeta.
 
@@ -7103,21 +7223,17 @@ class FloatingSettingsPanel(QWidget):
         self._history_detail_header.show()
 
         # Issue #12: while Post-processing is in flight for this Recording,
-        # show a 'Post Processing pending' status instead of the fragile
-        # Live Transcript preview. Once Post-processing completes,
-        # ``history_data_changed`` re-invokes this handler and renders the
-        # full speaker-labeled transcript.
-        pending_status = self._history_detail_status(md_path, self._controller)
-        if pending_status is not None:
-            self._history_detail_header.hide()
-            self._reset_highlight_state()
-            self._bookmark_manager = None
-            self._bookmark_items = []
-            self._refresh_bookmark_combo()
-            self._update_playback_for_no_audio()
-            self._history_viewer.setPlainText(pending_status)
+        # show a 'Post Processing pending... NN%' status instead of the
+        # fragile Live Transcript preview. Once Post-processing completes,
+        # ``history_data_changed`` re-invokes this handler (see
+        # refresh_history_if_visible) and renders the full speaker-labeled
+        # transcript.
+        if self._history_detail_status(md_path, self._controller) is not None:
+            self._show_post_processing_pending(md_path)
             return
 
+        # Not pending — stop any live progress polling and render normally.
+        self._stop_post_process_progress_timer()
         # Reset highlight state and extract timed words for the new transcript
         self._reset_highlight_state()
         self._extract_timed_words(md_path)
