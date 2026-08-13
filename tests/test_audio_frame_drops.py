@@ -190,7 +190,7 @@ class TestPyAudioWPatchSourceDropCounting:
             s.channels = 2
             s.dtype = "float32"
             s._lock = threading.Lock()
-            return s
+            yield s
 
     def test_initial_count_is_zero(self, src):
         assert src.get_frames_dropped() == 0
