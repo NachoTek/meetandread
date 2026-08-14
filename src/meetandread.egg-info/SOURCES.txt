@@ -47,6 +47,7 @@ src/meetandread/recording/controller.py
 src/meetandread/recording/management.py
 src/meetandread/speaker/__init__.py
 src/meetandread/speaker/diarizer.py
+src/meetandread/speaker/identity_linking.py
 src/meetandread/speaker/identity_management.py
 src/meetandread/speaker/model_downloader.py
 src/meetandread/speaker/models.py
@@ -60,6 +61,7 @@ src/meetandread/transcription/engine.py
 src/meetandread/transcription/local_agreement.py
 src/meetandread/transcription/post_processor.py
 src/meetandread/transcription/retranscribe.py
+src/meetandread/transcription/transcript_footer.py
 src/meetandread/transcription/transcript_scanner.py
 src/meetandread/transcription/transcript_store.py
 src/meetandread/transcription/vad.py
@@ -88,12 +90,14 @@ tests/test_audio_session_consumer_guard.py
 tests/test_audio_session_denoising.py
 tests/test_audio_session_source_swap.py
 tests/test_audio_source_selection.py
+tests/test_audio_source_wrapper_resampler_cleanup.py
 tests/test_audio_storage.py
 tests/test_audio_utils.py
 tests/test_auto_scroll.py
 tests/test_benchmark_accuracy.py
 tests/test_benchmark_cancel.py
 tests/test_benchmark_model_selector.py
+tests/test_bookmark_footer.py
 tests/test_bookmark_manager.py
 tests/test_cc_overlay.py
 tests/test_cleanup_queue_autoprune.py
@@ -114,6 +118,8 @@ tests/test_history_playback_controller.py
 tests/test_history_transcript_highlighting.py
 tests/test_hotplug_reconnection_lifecycle.py
 tests/test_hotplug_recovery_integration.py
+tests/test_identity_linking_footer.py
+tests/test_identity_management_footer.py
 tests/test_integration_failure_injection.py
 tests/test_integration_hotplug_stress.py
 tests/test_integration_sustained_load.py
@@ -121,7 +127,6 @@ tests/test_live_speaker_names.py
 tests/test_main_widget_hotplug_notifications.py
 tests/test_main_widget_retry_flow.py
 tests/test_main_widget_shutdown.py
-tests/test_metadata_footer_parser.py
 tests/test_model_downloader_checksums.py
 tests/test_noisy_diarization_validation.py
 tests/test_offscreen_recovery.py
@@ -129,7 +134,10 @@ tests/test_packaging_consistency.py
 tests/test_panel_resize.py
 tests/test_performance.py
 tests/test_post_processing_indicator.py
+tests/test_post_processing_pending_status.py
+tests/test_post_processor_footer.py
 tests/test_recommender_models.py
+tests/test_recording_controller_footer.py
 tests/test_recording_controller_hotplug.py
 tests/test_recording_controller_noisy_audio_e2e.py
 tests/test_recording_controller_retry.py
@@ -143,6 +151,7 @@ tests/test_recording_waveform.py
 tests/test_recovery_thread_safety.py
 tests/test_resource_warnings.py
 tests/test_retranscribe.py
+tests/test_retranscribe_footer.py
 tests/test_s05_code_quality.py
 tests/test_s06_lint_regression.py
 tests/test_settings_denoising_toggle.py
@@ -162,9 +171,13 @@ tests/test_system_audio.py
 tests/test_theme.py
 tests/test_transcript_accuracy.py
 tests/test_transcript_atomic_writes.py
+tests/test_transcript_footer.py
 tests/test_transcript_management.py
+tests/test_transcript_persistence_footer.py
 tests/test_transcript_scanner.py
+tests/test_transcript_scanner_footer.py
 tests/test_transcript_speaker_matches.py
+tests/test_transcript_timestamp_drift.py
 tests/test_transcription_engine.py
 tests/test_transcription_no_duplication.py
 tests/test_transcription_pipeline.py
