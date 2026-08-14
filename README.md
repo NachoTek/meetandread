@@ -192,13 +192,32 @@ src/meetandread/
 ```bash
 # Install dev dependencies
 pip install -e ".[dev]"
+```
 
-# Run tests
-python -m pytest
+### Running tests
 
-# Run tests (excluding slow benchmarks)
-python -m pytest -m "not slow"
+MeetAndRead is a Windows app — its audio stack (`sounddevice`/PortAudio, WASAPI loopback via `pyaudiowpatch`) targets **Windows native binaries** that a Linux/WSL process cannot load. The suite therefore runs in two layers (see [ADR 0001](docs/adr/0001-test-execution-topology.md)):
 
+| Layer | Command | What it covers |
+|---|---|---|
+| **Pure logic** | `make test` | Footer parsing, state machines, UI helpers — no native deps. Runs under your shell's `python3`. |
+| **Native / integration** | `make test-windows` | The authoritative full pass, incl. real audio + CLI subprocess tests. Runs under the Windows venv (`.venv/Scripts/python.exe`) via WSL interop. |
+
+On WSL, `make test` is the fast feedback loop; `make test-windows` is the gate that matches production. `windows`-marked tests auto-skip off-Windows, so the logic layer stays green without the native libs. More targets: `make test-native` (Windows-native subset only), `make test-unit` (logic layer, verbose). If `make` isn't installed, run the pytest commands directly, e.g. `.venv/Scripts/python.exe -m pytest`.
+
+### Pre-push hook
+
+A versioned pre-push hook (`.githooks/pre-push`) runs the full suite under the Windows venv before allowing a push. Activate it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Override the interpreter with `WIN_PY=...`. Use `git push --no-verify` only for content-free pushes (e.g. branch deletions) — never to paper over a real test failure.
+
+### Building
+
+```bash
 # Build portable executable
 pip install pyinstaller
 pyinstaller meetandread.spec --noconfirm
