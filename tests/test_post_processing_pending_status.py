@@ -1,21 +1,23 @@
-"""Tests for per-Recording Post-processing lifecycle status (issue #19).
+"""Tests for per-Recording Post-processing lifecycle status (issues #19, #62).
 
-The History list shows each Recording's Post-processing lifecycle state
-(Queued / Processing NN% / Failed / Manual Action Required / complete) as a
-per-row label, replacing the misleading static '(processing speakers)' text.
-The lower transcript viewer keeps showing the Live Transcript so a recent
-Recording is readable even when the Post-processor is backed up.
+The Library's History list shows each Recording's Post-processing state as
+a per-row color-coded status pill (Queued / Processing NN% / Completed /
+Failed / Not post-processed) with a tooltip.  The conflated 'Manual Action
+Required' label is gone: a Recording with no Outcome is Stalled and is
+re-queued automatically when its Audio exists and Post-processing is
+enabled.
 
-Three seams are covered here:
+Four seams are covered here:
 
 1. ``PostProcessingQueue.get_status_for_audio`` / ``get_progress_for_audio`` —
    the queue reports a Recording's job status and progress.
 2. ``RecordingController.get_post_processing_state`` /
-   ``get_post_processing_progress`` — controller façades over the queue,
-   tolerant of a disabled (None) queue.
+   ``get_post_processing_progress`` / ``requeue_stalled_recordings`` —
+   controller façades over the queue, tolerant of a disabled (None) queue.
 3. ``FloatingSettingsPanel._build_history_display_text`` — pure helper mapping
-   (meta, status, progress) to the per-row label, mirroring the existing
-   static-helper test pattern (runs without a display context).
+   (meta, status) to the row's text (label + words + speaker count).
+4. ``FloatingSettingsPanel._build_history_status_pill`` — pure helper mapping
+   (meta, status, outcome, post-processing-enabled) to the row's pill.
 """
 
 from pathlib import Path
@@ -198,6 +200,30 @@ class TestRecordingControllerStateCheck:
         queue.get_status_for_audio.assert_called_once_with(md_path)
 
 
+class TestRecordingControllerRequeueFaçade:
+    """Verify the controller façade over the Stalled requeue scan (issue #62)."""
+
+    def test_requeue_delegates_to_queue(self):
+        queue = MagicMock()
+        queue.requeue_stalled_recordings.return_value = 3
+        ctrl = _make_controller_with_queue(queue)
+
+        assert ctrl.requeue_stalled_recordings() == 3
+        queue.requeue_stalled_recordings.assert_called_once_with()
+
+    def test_requeue_returns_zero_when_post_processing_disabled(self):
+        ctrl = _make_controller_with_queue(None)
+
+        assert ctrl.requeue_stalled_recordings() == 0
+
+    def test_requeue_returns_zero_when_queue_raises(self):
+        queue = MagicMock()
+        queue.requeue_stalled_recordings.side_effect = RuntimeError("boom")
+        ctrl = _make_controller_with_queue(queue)
+
+        assert ctrl.requeue_stalled_recordings() == 0
+
+
 # ---------------------------------------------------------------------------
 # Slice 3: FloatingSettingsPanel._build_history_display_text lifecycle labels
 # ---------------------------------------------------------------------------
@@ -211,6 +237,7 @@ def _make_meta(
     recording_time: str = "2026-01-01T12:00:00",
     duration_seconds: float = 60.0,
     wav_exists: bool = True,
+    outcome=None,
 ):
     from meetandread.transcription.transcript_scanner import RecordingMeta
 
@@ -222,70 +249,36 @@ def _make_meta(
         speakers=speakers or [f"SPK_{i}" for i in range(speaker_count)],
         duration_seconds=duration_seconds,
         wav_exists=wav_exists,
+        post_process_outcome=outcome,
+    )
+
+
+def _completed_outcome():
+    from meetandread.transcription import transcript_footer
+    from meetandread.transcription.transcript_footer import PostProcessOutcome
+
+    return PostProcessOutcome(
+        status=transcript_footer.STATUS_COMPLETED,
+        attempted_at="2026-08-14T10:00:00",
+    )
+
+
+def _failed_outcome(stage=None, error="boom"):
+    from meetandread.transcription import transcript_footer
+    from meetandread.transcription.transcript_footer import PostProcessOutcome
+
+    return PostProcessOutcome(
+        status=transcript_footer.STATUS_FAILED,
+        stage=stage or transcript_footer.STAGE_TRANSCRIBE,
+        error=error,
+        attempted_at="2026-08-14T10:00:00",
     )
 
 
 class TestHistoryLifecycleDisplay:
-    """Verify the per-row lifecycle labels from issue #19."""
+    """Verify the per-row display text (label + words + speaker count)."""
 
-    def test_running_shows_processing_percent(self):
-        from meetandread.widgets.floating_panels import FloatingSettingsPanel
-
-        meta = _make_meta(speaker_count=0, speakers=[])
-        text, italic = FloatingSettingsPanel._build_history_display_text(
-            meta, return_italic=True,
-            post_process_status=PostProcessStatus.RUNNING, post_process_progress=45,
-        )
-        assert "Processing 45%" in text
-        assert italic is True
-
-    def test_pending_shows_queued(self):
-        from meetandread.widgets.floating_panels import FloatingSettingsPanel
-
-        meta = _make_meta(speaker_count=0, speakers=[])
-        text, italic = FloatingSettingsPanel._build_history_display_text(
-            meta, return_italic=True,
-            post_process_status=PostProcessStatus.PENDING,
-        )
-        assert "Queued" in text
-        assert italic is True
-
-    def test_failed_shows_failed(self):
-        from meetandread.widgets.floating_panels import FloatingSettingsPanel
-
-        meta = _make_meta(speaker_count=0, speakers=[])
-        text, italic = FloatingSettingsPanel._build_history_display_text(
-            meta, return_italic=True,
-            post_process_status=PostProcessStatus.FAILED,
-        )
-        assert "Failed" in text
-        assert italic is True
-
-    def test_cancelled_shows_manual_action_required(self):
-        from meetandread.widgets.floating_panels import FloatingSettingsPanel
-
-        meta = _make_meta(speaker_count=0, speakers=[])
-        text, italic = FloatingSettingsPanel._build_history_display_text(
-            meta, return_italic=True,
-            post_process_status=PostProcessStatus.CANCELLED,
-        )
-        assert "Manual Action Required" in text
-        assert italic is True
-
-    def test_no_job_no_speakers_shows_manual_action_required(self):
-        """Replaces the old '(processing speakers)' for stalled recordings."""
-        from meetandread.widgets.floating_panels import FloatingSettingsPanel
-
-        meta = _make_meta(speaker_count=0, speakers=[])
-        text, italic = FloatingSettingsPanel._build_history_display_text(
-            meta, return_italic=True, post_process_status=None,
-        )
-        assert "Manual Action Required" in text
-        assert "processing speakers" not in text.lower()
-        assert italic is True
-
-    def test_completed_via_speakers_shows_count(self):
-        """A Recording with speakers is complete — shows speaker count."""
+    def test_has_speakers_shows_count(self):
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
 
         meta = _make_meta(speaker_count=3)
@@ -295,17 +288,24 @@ class TestHistoryLifecycleDisplay:
         assert "3 speakers" in text
         assert italic is False
 
-    def test_completed_job_falls_through_to_speakers(self):
-        """An explicit COMPLETED job also shows the speaker count."""
+    def test_one_speaker_singular(self):
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
 
-        meta = _make_meta(speaker_count=2)
-        text, italic = FloatingSettingsPanel._build_history_display_text(
-            meta, return_italic=True,
-            post_process_status=PostProcessStatus.COMPLETED,
+        meta = _make_meta(speaker_count=1, speakers=["SPK_0"])
+        text, _ = FloatingSettingsPanel._build_history_display_text(
+            meta, return_italic=True, post_process_status=None,
         )
-        assert "2 speakers" in text
-        assert italic is False
+        assert "1 speaker" in text
+
+    def test_zero_speakers_shows_words_only(self):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, _ = FloatingSettingsPanel._build_history_display_text(
+            meta, return_italic=True, post_process_status=None,
+        )
+        assert "words" in text
+        assert "speaker" not in text
 
     def test_empty_recording_shows_empty_label(self):
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
@@ -317,12 +317,150 @@ class TestHistoryLifecycleDisplay:
         assert "empty recording" in text.lower()
         assert italic is False
 
-    def test_running_progress_defaults_to_zero_when_unknown(self):
+    def test_live_job_keeps_row_italic(self):
         from meetandread.widgets.floating_panels import FloatingSettingsPanel
 
         meta = _make_meta(speaker_count=0, speakers=[])
-        text, _ = FloatingSettingsPanel._build_history_display_text(
-            meta, return_italic=True,
-            post_process_status=PostProcessStatus.RUNNING, post_process_progress=None,
+        _, italic = FloatingSettingsPanel._build_history_display_text(
+            meta, return_italic=True, post_process_status=PostProcessStatus.RUNNING,
         )
-        assert "Processing 0%" in text
+        assert italic is True
+
+    def test_no_manual_action_required_anywhere(self):
+        """'Manual Action Required' is removed from the UI entirely (issue #62)."""
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        for status in (None, PostProcessStatus.PENDING, PostProcessStatus.RUNNING,
+                       PostProcessStatus.FAILED, PostProcessStatus.CANCELLED):
+            meta = _make_meta(speaker_count=0, speakers=[])
+            text, _ = FloatingSettingsPanel._build_history_display_text(
+                meta, return_italic=True, post_process_status=status,
+            )
+            assert "manual action" not in text.lower(), text
+            pill_text, _, _ = FloatingSettingsPanel._build_history_status_pill(
+                meta, post_process_status=status,
+            )
+            assert "manual action" not in pill_text.lower(), pill_text
+
+
+# ---------------------------------------------------------------------------
+# Slice 4: FloatingSettingsPanel._build_history_status_pill (issue #62)
+# ---------------------------------------------------------------------------
+
+
+class TestHistoryStatusPill:
+    """Verify the per-row status pill mapping (text, kind, tooltip)."""
+
+    def _pill(self, meta, **kwargs):
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+
+        return FloatingSettingsPanel._build_history_status_pill(meta, **kwargs)
+
+    def test_running_shows_processing_percent(self):
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, kind, tooltip = self._pill(
+            meta, post_process_status=PostProcessStatus.RUNNING,
+            post_process_progress=45,
+        )
+        assert "Processing 45%" == text
+        assert kind == "processing"
+        assert tooltip
+
+    def test_pending_shows_queued(self):
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, kind, _ = self._pill(meta, post_process_status=PostProcessStatus.PENDING)
+        assert text == "Queued"
+        assert kind == "queued"
+
+    def test_completed_with_speakers_is_green(self):
+        meta = _make_meta(speaker_count=2, outcome=_completed_outcome())
+        text, kind, tooltip = self._pill(meta)
+        assert text == "Completed"
+        assert kind == "completed"
+        assert "successful" in tooltip.lower()
+
+    def test_completed_zero_speakers_is_yellow(self):
+        meta = _make_meta(speaker_count=0, speakers=[], outcome=_completed_outcome())
+        text, kind, tooltip = self._pill(meta)
+        assert text == "Completed"
+        assert kind == "completed-warning"
+        assert "speakers not identified" in tooltip.lower()
+
+    def test_failed_outcome_is_red_with_stage_tooltip(self):
+        meta = _make_meta(
+            speaker_count=0, speakers=[],
+            outcome=_failed_outcome(
+                stage="engine-load", error="torch not available",
+            ),
+        )
+        text, kind, tooltip = self._pill(meta)
+        assert text == "Failed"
+        assert kind == "failed"
+        assert "model loading" in tooltip.lower()
+        assert "torch not available" in tooltip
+
+    def test_failed_outcome_audio_missing(self):
+        meta = _make_meta(
+            speaker_count=0, speakers=[],
+            outcome=_failed_outcome(stage="audio-missing", error="Audio file missing"),
+        )
+        text, kind, tooltip = self._pill(meta)
+        assert text == "Failed"
+        assert kind == "failed"
+        assert "audio file missing" in tooltip.lower()
+
+    def test_stalled_with_post_processing_disabled_is_red_not_post_processed(self):
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, kind, tooltip = self._pill(
+            meta, post_process_status=None, post_processing_enabled=False,
+        )
+        assert text == "Completed"
+        assert kind == "not-post-processed"
+        assert "not post-processed" in tooltip.lower()
+
+    def test_stalled_with_post_processing_enabled_is_queued(self):
+        """Stalled recordings are re-queued automatically when enabled."""
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, kind, _ = self._pill(
+            meta, post_process_status=None, post_processing_enabled=True,
+        )
+        assert text == "Queued"
+        assert kind == "queued"
+
+    def test_stalled_unknown_enabled_is_not_post_processed(self):
+        """Without a controller, assume not post-processed (conservative)."""
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, kind, _ = self._pill(
+            meta, post_process_status=None, post_processing_enabled=None,
+        )
+        assert kind == "not-post-processed"
+
+    def test_live_failed_job_without_outcome_is_failed(self):
+        """In-session failure shows Failed even before the footer re-scan."""
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, kind, tooltip = self._pill(
+            meta, post_process_status=PostProcessStatus.FAILED,
+            post_processing_enabled=True,
+        )
+        assert text == "Failed"
+        assert kind == "failed"
+
+    def test_cancelled_job_shows_as_stalled_flow_not_cancelled(self):
+        """CANCELLED no longer appears in the UI; the Recording is re-queued."""
+        meta = _make_meta(speaker_count=0, speakers=[])
+        text, kind, _ = self._pill(
+            meta, post_process_status=PostProcessStatus.CANCELLED,
+            post_processing_enabled=True,
+        )
+        assert "cancel" not in text.lower()
+        assert kind == "queued"
+
+    def test_live_job_wins_over_outcome(self):
+        """An in-flight re-attempt takes precedence over a stored Outcome."""
+        meta = _make_meta(speaker_count=2, outcome=_completed_outcome())
+        text, kind, _ = self._pill(
+            meta, post_process_status=PostProcessStatus.RUNNING,
+            post_process_progress=30,
+        )
+        assert text == "Processing 30%"
+        assert kind == "processing"

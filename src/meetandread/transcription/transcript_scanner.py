@@ -15,6 +15,7 @@ from meetandread.audio.storage.paths import get_recordings_dir
 from meetandread.playback.bookmark import Bookmark, _parse_bookmark_entry
 from meetandread.transcription import transcript_footer
 from meetandread.transcription.retranscribe import RetranscribeRunner
+from meetandread.transcription.transcript_footer import PostProcessOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,9 @@ class RecordingMeta:
         duration_seconds: Derived from max end_time across all words (0.0 if none)
         wav_exists: Whether a corresponding .wav file exists
         bookmarks: List of Bookmark objects parsed from metadata (default empty)
+        post_process_outcome: The durable Post-processing Outcome decoded from
+            the Transcript Footer, or ``None`` when the Recording is Stalled
+            (no Outcome recorded).
     """
 
     path: Path
@@ -42,6 +46,7 @@ class RecordingMeta:
     duration_seconds: float
     wav_exists: bool
     bookmarks: List[Bookmark] = field(default_factory=list)
+    post_process_outcome: Optional[PostProcessOutcome] = None
 
 
 def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
@@ -112,6 +117,11 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
             if bm is not None:
                 bookmarks.append(bm)
 
+    # Decode the durable Post-processing Outcome (None = Stalled).
+    post_process_outcome = transcript_footer.outcome_from_block(
+        data.get(transcript_footer.OUTCOME_KEY)
+    )
+
     return RecordingMeta(
         path=md_path,
         recording_time=recording_time,
@@ -121,6 +131,7 @@ def parse_metadata(md_path: Path) -> Optional[RecordingMeta]:
         duration_seconds=max_end_time,
         wav_exists=wav_exists,
         bookmarks=bookmarks,
+        post_process_outcome=post_process_outcome,
     )
 
 

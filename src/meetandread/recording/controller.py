@@ -997,14 +997,14 @@ class RecordingController:
     def get_post_processing_state(self, transcript_path: Path) -> Optional[PostProcessStatus]:
         """Return the Post-processing lifecycle state of a Recording.
 
-        Façade over the Post-processing queue used by the History list to
-        label each row (issue #19). Returns the job's ``PostProcessStatus``
-        (PENDING / RUNNING / COMPLETED / FAILED / CANCELLED), or ``None``
-        when there is no job for this Recording (not scheduled this session,
-        or Post-processing is disabled).
+        Façade over the Post-processing queue used by the Library rows to
+        pick a per-row status pill (issue #62). Returns the job's
+        ``PostProcessStatus`` (PENDING / RUNNING / COMPLETED / FAILED /
+        CANCELLED), or ``None`` when there is no job for this Recording
+        (not scheduled this session, or Post-processing is disabled).
 
-        ``None`` lets the History view fall back to a speaker-count based
-        label ('Manual Action Required' when no speakers, else complete).
+        ``None`` lets the Library fall back to the durable Post-processing
+        Outcome carried in the Transcript Footer.
 
         Args:
             transcript_path: Path to the Recording's transcript .md file.
@@ -1045,6 +1045,29 @@ class RecordingController:
                 "get_post_processing_progress error (non-fatal): %s", exc,
             )
             return None
+
+    def requeue_stalled_recordings(self) -> int:
+        """Scan the Library and re-queue Stalled recordings (issue #62).
+
+        Façade over the Post-processing queue.  The queue reads its live
+        settings object, so recordings blocked because Post-processing was
+        disabled become re-queued as soon as it is enabled.  The queue also
+        runs this scan itself at startup and after each job completes; this
+        façade exists for callers that change Post-processing settings.
+
+        Returns:
+            The number of recordings re-queued, or 0 when Post-processing
+            is disabled (no queue) or the scan errors.
+        """
+        if self._post_processor is None:
+            return 0
+        try:
+            return self._post_processor.requeue_stalled_recordings()
+        except Exception as exc:
+            logger.warning(
+                "requeue_stalled_recordings error (non-fatal): %s", exc,
+            )
+            return 0
 
     def _run_diarization_for_postprocess(self, wav_path: Path) -> "DiarizationResult":
         """Run diarization in the context of post-processing.

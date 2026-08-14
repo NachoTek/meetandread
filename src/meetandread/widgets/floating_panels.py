@@ -86,6 +86,7 @@ from meetandread.widgets.theme import (  # noqa: E402
     aetheric_history_list_css, aetheric_history_viewer_css,
     aetheric_history_splitter_css, aetheric_history_header_css,
     aetheric_history_action_button_css,
+    aetheric_status_pill_css,
     aetheric_playback_toolbar_css,
     aetheric_cc_overlay_css,
     AETHERIC_RED,
@@ -3483,6 +3484,14 @@ class _HistoryRowWidget(QWidget):
             self._label.setStyleSheet("color: rgba(255, 255, 255, 140);")
         layout.addWidget(self._label, stretch=1)
 
+        # Post-processing status pill (issue #62): color-coded, tooltip on
+        # hover, and mouse-transparent so row clicks pass through.
+        self._status_pill = QLabel("")
+        self._status_pill.setObjectName("AethericStatusPill")
+        self._status_pill.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._status_pill.hide()
+        layout.addWidget(self._status_pill)
+
         p = current_palette()
         btn_css = aetheric_history_action_button_css(p)
 
@@ -3540,6 +3549,22 @@ class _HistoryRowWidget(QWidget):
         self._label.setStyleSheet(
             "color: rgba(255, 255, 255, 140);" if italic else ""
         )
+
+    def set_status_pill(self, pill_text: str, pill_kind: str, tooltip: str) -> None:
+        """Update the row's Post-processing status pill in place.
+
+        ``pill_kind`` selects the colour via ``aetheric_status_pill_css``
+        (completed / completed-warning / not-post-processed / failed /
+        queued / processing).  An empty ``pill_text`` hides the pill.
+        """
+        if not pill_text:
+            self._status_pill.hide()
+            return
+        self._status_pill.setText(pill_text)
+        self._status_pill.setToolTip(tooltip)
+        self._status_pill.setStyleSheet(aetheric_status_pill_css(pill_kind))
+        self._status_pill.adjustSize()
+        self._status_pill.show()
 
     def show_actions(self) -> None:
         """Reveal the inline Re-transcribe and Delete buttons."""
@@ -6980,16 +7005,13 @@ class FloatingSettingsPanel(QWidget):
     ):
         """Build the display text for a history list item.
 
-        Renders the per-Recording Post-processing lifecycle label (issue #19):
+        The row shows the recording label, word count, and speaker count;
+        the Post-processing lifecycle lives in the per-row status pill
+        (``_build_history_status_pill``), not in this text.
 
-        - job RUNNING        -> 'Processing NN%' (live, italic)
-        - job PENDING        -> 'Queued' (italic)
-        - job FAILED         -> 'Failed' (italic)
-        - job CANCELLED      -> 'Manual Action Required' (italic)
-        - no job, no speakers -> 'Manual Action Required' (italic) — stalled,
-          needs manual re-transcribe. Replaces the old '(processing speakers)'.
-        - no job, has speakers -> 'N speakers' (complete, not italic)
         - empty recording    -> '(Empty recording)'
+        - speakers > 0       -> 'N words | M speakers'
+        - no speakers        -> 'N words'
 
         Args:
             meta: RecordingMeta for the item.
@@ -7020,39 +7042,85 @@ class FloatingSettingsPanel(QWidget):
         else:
             display_label = display_date
 
-        italic = False
-        if post_process_status == PostProcessStatus.RUNNING:
-            pct = int(post_process_progress) if post_process_progress is not None else 0
-            tail = f"Processing {pct}%"
-            italic = True
-        elif post_process_status == PostProcessStatus.PENDING:
-            tail = "Queued"
-            italic = True
-        elif post_process_status == PostProcessStatus.FAILED:
-            tail = "Failed"
-            italic = True
-        elif post_process_status == PostProcessStatus.CANCELLED:
-            tail = "Manual Action Required"
-            italic = True
-        elif meta.word_count == 0:
-            tail = "(Empty recording)"
-        elif meta.speaker_count == 0:
-            # No job this session and no speakers — stalled unless the user
-            # manually re-transcribes. Replaces '(processing speakers)'.
-            tail = "Manual Action Required"
-            italic = True
-        else:
-            spk = "speaker" if meta.speaker_count == 1 else "speakers"
-            tail = f"{meta.speaker_count} {spk}"
+        italic = post_process_status in (PostProcessStatus.PENDING, PostProcessStatus.RUNNING)
 
-        if meta.word_count == 0 and post_process_status is None:
-            display_text = f"{display_label} | {tail}"
+        if meta.word_count == 0:
+            display_text = f"{display_label} | (Empty recording)"
+        elif meta.speaker_count > 0:
+            spk = "speaker" if meta.speaker_count == 1 else "speakers"
+            display_text = (
+                f"{display_label} | {meta.word_count} words | "
+                f"{meta.speaker_count} {spk}"
+            )
         else:
-            display_text = f"{display_label} | {meta.word_count} words | {tail}"
+            display_text = f"{display_label} | {meta.word_count} words"
 
         if return_italic:
             return display_text, italic
         return display_text
+
+    # Human-readable labels for the Outcome stages (footer owns the tokens).
+    _OUTCOME_STAGE_LABELS = {
+        "engine-load": "Model loading",
+        "transcribe": "Transcription",
+        "diarize": "Speaker identification",
+        "dependency": "Dependencies",
+        "audio-missing": "Audio file missing",
+    }
+
+    @classmethod
+    def _build_history_status_pill(
+        cls,
+        meta,  # RecordingMeta — avoids circular import at class level
+        post_process_status: Optional[PostProcessStatus] = None,
+        post_process_progress: Optional[int] = None,
+        post_processing_enabled: Optional[bool] = None,
+    ):
+        """Build the per-row Post-processing status pill (issue #62).
+
+        Maps the Recording's live job state and durable Post-processing
+        Outcome to ``(pill_text, pill_kind, tooltip)``.  ``pill_kind`` is
+        one of ``completed`` / ``completed-warning`` / ``not-post-processed``
+        / ``failed`` / ``queued`` / ``processing`` and drives the pill
+        colour (see ``aetheric_status_pill_css``).
+
+        Priority: live job state first (an in-flight re-attempt must not be
+        masked by a stored Outcome), then the Outcome, then the Stalled
+        fallbacks derived at display time (Post-processing disabled ->
+        'Not post-processed' red; enabled -> queued for the requeue scan).
+        """
+        # Live job states drive the pill while a job is in flight.
+        if post_process_status == PostProcessStatus.RUNNING:
+            pct = int(post_process_progress) if post_process_progress is not None else 0
+            return f"Processing {pct}%", "processing", "Post processing in progress"
+        if post_process_status == PostProcessStatus.PENDING:
+            return "Queued", "queued", "Queued for post processing"
+        if post_process_status == PostProcessStatus.FAILED:
+            # In-session failure; the durable Outcome lands on the next scan.
+            return "Failed", "failed", "Post processing failed"
+
+        outcome = getattr(meta, "post_process_outcome", None)
+        if outcome is not None:
+            from meetandread.transcription import transcript_footer
+
+            if outcome.status == transcript_footer.STATUS_COMPLETED:
+                if meta.speaker_count > 0:
+                    return "Completed", "completed", "Post processing successful"
+                # Zero-speaker completions are legitimate results.
+                return "Completed", "completed-warning", "Speakers not identified"
+            stage_label = cls._OUTCOME_STAGE_LABELS.get(
+                outcome.stage, outcome.stage or "Post processing"
+            )
+            tooltip = f"Post processing failed — {stage_label}"
+            if outcome.error:
+                tooltip += f": {outcome.error}"
+            return "Failed", "failed", tooltip
+
+        # No Outcome: Stalled. CANCELLED jobs land here too (no Outcome is
+        # written on cancellation) and are re-queued by the scan.
+        if post_processing_enabled is False or post_processing_enabled is None:
+            return "Completed", "not-post-processed", "Not post-processed"
+        return "Queued", "queued", "Queued for post processing"
 
     # Polling cadence for live 'Processing NN%' updates on history rows.
     _HISTORY_PROGRESS_INTERVAL_MS = 1000
@@ -7089,6 +7157,25 @@ class FloatingSettingsPanel(QWidget):
             )
             return None
 
+    def _post_processing_enabled(self) -> Optional[bool]:
+        """Whether Post-processing is enabled in current settings.
+
+        Read at display time for the 'Not post-processed' pill (issue #62):
+        a Recording with no Outcome and Post-processing disabled shows red;
+        enabling Post-processing turns such rows Stalled and the requeue
+        scan picks them up.  Returns ``None`` when settings cannot be read
+        (treated as disabled by the pill builder).
+        """
+        try:
+            from meetandread.config import get_config
+
+            return bool(get_config("transcription.enable_postprocessing"))
+        except Exception as exc:
+            logger.debug(
+                "post_processing_enabled read failed (non-fatal): %s", exc,
+            )
+            return None
+
     def _ensure_history_progress_timer(self) -> None:
         """Create the row-progress QTimer on first use."""
         if self._history_progress_timer is None:
@@ -7112,8 +7199,9 @@ class FloatingSettingsPanel(QWidget):
             self._history_progress_timer.stop()
 
     def _on_history_progress_tick(self) -> None:
-        """Refresh each row's lifecycle label/progress; stop when none in flight."""
+        """Refresh each row's lifecycle pill/progress; stop when none in flight."""
         any_live = False
+        pp_enabled = self._post_processing_enabled()
         for idx, meta in enumerate(self._history_recordings):
             status = self._post_processing_state(meta.path)
             progress = (
@@ -7129,6 +7217,12 @@ class FloatingSettingsPanel(QWidget):
                 post_process_status=status, post_process_progress=progress,
             )
             row_widget.update_display_text(display_text, italic=italic)
+            pill_text, pill_kind, tooltip = self._build_history_status_pill(
+                meta,
+                post_process_status=status, post_process_progress=progress,
+                post_processing_enabled=pp_enabled,
+            )
+            row_widget.set_status_pill(pill_text, pill_kind, tooltip)
             if status in self._LIVE_POST_PROCESS_STATES:
                 any_live = True
         if not any_live and self._history_progress_timer is not None:
@@ -7148,6 +7242,7 @@ class FloatingSettingsPanel(QWidget):
         self._history_row_widgets.clear()
         self._hovered_history_row = -1
         self._history_recordings = list(recordings)
+        pp_enabled = self._post_processing_enabled()
 
         for meta in recordings:
             status = self._post_processing_state(meta.path)
@@ -7159,6 +7254,11 @@ class FloatingSettingsPanel(QWidget):
             display_text, is_italic = self._build_history_display_text(
                 meta, return_italic=True,
                 post_process_status=status, post_process_progress=progress,
+            )
+            pill_text, pill_kind, pill_tooltip = self._build_history_status_pill(
+                meta,
+                post_process_status=status, post_process_progress=progress,
+                post_processing_enabled=pp_enabled,
             )
 
             path_str = str(meta.path)
@@ -7175,6 +7275,7 @@ class FloatingSettingsPanel(QWidget):
                 parent=self._history_list.viewport(),
                 italic=is_italic,
             )
+            row_widget.set_status_pill(pill_text, pill_kind, pill_tooltip)
             self._history_list.setItemWidget(item, row_widget)
             row_index = self._history_list.row(item)
             self._history_row_widgets[row_index] = row_widget

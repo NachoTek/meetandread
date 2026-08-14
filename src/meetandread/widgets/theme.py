@@ -1537,3 +1537,37 @@ def aetheric_playback_toolbar_css(p: ThemePalette) -> Dict[str, str]:
             }}
         """,
     }
+
+
+# ---------------------------------------------------------------------------
+# Post-processing status pill (issue #62)
+# ---------------------------------------------------------------------------
+
+# Fixed status colours (read on the dark history list regardless of theme).
+_PILL_COLORS = {
+    "completed": "#3fb950",            # green — success, speakers identified
+    "completed-warning": "#d29922",    # yellow — success, zero speakers
+    "not-post-processed": "#f85149",   # red — never post-processed
+    "failed": "#f85149",               # red — post-processing failed
+    "queued": "#8b949e",               # neutral — waiting in queue
+    "processing": "#58a6ff",           # blue — running now
+}
+
+
+def aetheric_status_pill_css(kind: str) -> str:
+    """QSS for a History-row Post-processing status pill.
+
+    Args:
+        kind: One of ``completed`` / ``completed-warning`` /
+            ``not-post-processed`` / ``failed`` / ``queued`` / ``processing``.
+            Unknown kinds fall back to the neutral queued colour.
+
+    Returns:
+        QSS string styling a QLabel as a colour-coded status pill.
+    """
+    color = _PILL_COLORS.get(kind, _PILL_COLORS["queued"])
+    return (
+        f"QLabel {{ background-color: {color}; color: #ffffff;"
+        " border-radius: 7px; padding: 1px 8px; font-size: 10px;"
+        " font-weight: bold; }}"
+    )

@@ -19,6 +19,7 @@ from meetandread.speaker.identity_linking import (
     propagate_rename_to_signature_store,
     rename_identity,
 )
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.engine import TranscriptionSuccess
 from meetandread.transcription.post_processor import (
     PostProcessJob,
@@ -910,6 +911,7 @@ class TestPostProcessingQueueIdleWait:
         ppq = PostProcessingQueue(
             settings=settings,
             is_recording_callback=is_recording,
+            auto_requeue_stalled=False,
         )
         job = _make_job(tmp_path)
         # Patch _process_job so we can observe when it fires
@@ -951,6 +953,7 @@ class TestPostProcessingQueueIdleWait:
         ppq = PostProcessingQueue(
             settings=settings,
             is_recording_callback=is_recording,
+            auto_requeue_stalled=False,
         )
         job = _make_job(tmp_path)
 
@@ -973,12 +976,57 @@ class TestPostProcessingQueueIdleWait:
         finally:
             ppq.stop()
 
+    def test_cancelled_while_queued_is_unpersisted(self, tmp_path, monkeypatch) -> None:
+        """A job cancelled while queued leaves the persisted queue file.
+
+        Otherwise its stem reads as persisted-queued for the rest of the
+        session and blocks the Stalled requeue scan (issue #62).
+        """
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        from meetandread.audio.storage import paths as paths_mod
+
+        data = tmp_path / "queue-data"
+        data.mkdir()
+        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
+
+        ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
+        job = _make_job(tmp_path)
+        job.cancel_requested = True  # cancelled before the worker dequeues it
+
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+
+        ppq.start()
+        try:
+            # Persist after start so pending-job recovery does not re-enqueue
+            # a fresh (uncancelled) copy of the job ahead of this one.
+            ppq._persist_job(job)
+            ppq._job_queue.put(job)
+
+            deadline = time.time() + 3.0
+            while (
+                ppq.get_job_status(job.job_id).status
+                != PostProcessStatus.CANCELLED
+                and time.time() < deadline
+            ):
+                time.sleep(0.05)
+            assert (
+                ppq.get_job_status(job.job_id).status == PostProcessStatus.CANCELLED
+            )
+        finally:
+            ppq.stop()
+
+        entries = ppq._read_queue_file()
+        assert all(e.get("job_id") != job.job_id for e in entries)
+
     def test_no_idle_wait_when_callback_is_none(self, tmp_path: Path) -> None:
         """Without is_recording_callback, jobs process immediately."""
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
 
-        ppq = PostProcessingQueue(settings=settings)
+        ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
 
         process_called = threading.Event()
         original_process = ppq._process_job
@@ -1085,7 +1133,7 @@ class TestPostProcessingQueueCancellation:
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
 
-        ppq = PostProcessingQueue(settings=settings)
+        ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
         job = _make_job(tmp_path)
 
         # Register and cancel before worker picks it up
@@ -1295,7 +1343,7 @@ class TestPostProcessingQueueNegative:
     def test_missing_wav_fails_gracefully(
         self, mock_load_audio, mock_engine, tmp_path: Path
     ) -> None:
-        """When _load_audio_file raises, job status becomes FAILED."""
+        """A missing audio file fails the job with an audio-missing Outcome."""
         mock_load_audio.side_effect = FileNotFoundError("wav not found")
         mock_eng = MagicMock()
         mock_engine.return_value = mock_eng
@@ -1312,7 +1360,15 @@ class TestPostProcessingQueueNegative:
         ppq._process_job(job)
 
         assert job.status == PostProcessStatus.FAILED
-        assert "wav not found" in job.error
+        assert "missing" in job.error.lower()
+        md_path = tmp_path / f"{job.audio_file.stem}.md"
+        outcome = (
+            transcript_footer.read_post_process_outcome(md_path.read_text(encoding="utf-8"))
+            if md_path.exists()
+            else None
+        )
+        if outcome is not None:
+            assert outcome.stage == transcript_footer.STAGE_AUDIO_MISSING
 
     def test_clear_completed_jobs_removes_terminal(self, tmp_path: Path) -> None:
         """clear_completed_jobs removes COMPLETED, FAILED, and CANCELLED."""

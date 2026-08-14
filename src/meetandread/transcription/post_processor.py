@@ -52,9 +52,10 @@ import queue
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, List, Callable, Dict, Any
+from typing import Optional, List, Callable, Dict, Any, Set
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ logger = logging.getLogger(__name__)
 from meetandread.config.models import AppSettings  # noqa: E402
 from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment  # noqa: E402
 from meetandread.transcription import transcript_footer  # noqa: E402
+from meetandread.transcription.transcript_footer import PostProcessOutcome  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
 from meetandread.audio.utils import load_wav_as_float32_mono  # noqa: E402
 
@@ -75,10 +77,23 @@ class PostProcessStatus(Enum):
     CANCELLED = auto()    # Cancelled by caller
 
 
+class PostProcessFailure(Exception):
+    """A post-processing failure tagged with its failing stage.
+
+    The stage is one of the Transcript Footer Outcome stages (see
+    ``transcript_footer``); it is written into the Recording's Failed
+    Outcome so the Library can explain *where* Post-processing broke.
+    """
+
+    def __init__(self, stage: str, message: str):
+        super().__init__(message)
+        self.stage = stage
+
+
 @dataclass
 class PostProcessJob:
     """A single post-processing job.
-    
+
     Attributes:
         job_id: Unique identifier for this job
         audio_file: Path to the audio file to transcribe
@@ -92,6 +107,8 @@ class PostProcessJob:
         cancel_requested: True when cancellation has been requested
         cancel_reason: Optional reason string for the cancellation
         diarization_error: Warning/error from diarization step (non-fatal)
+        attempted_at: ISO timestamp captured when the job started running;
+            recorded in the durable Post-processing Outcome
     """
     job_id: str
     audio_file: Path
@@ -105,6 +122,7 @@ class PostProcessJob:
     cancel_requested: bool = False
     cancel_reason: Optional[str] = None
     diarization_error: Optional[str] = None
+    attempted_at: Optional[str] = None
 
 
 class PostProcessingQueue:
@@ -143,9 +161,10 @@ class PostProcessingQueue:
         apply_speaker_labels_callback: Optional[
             Callable[[TranscriptStore, Any], None]
         ] = None,
+        auto_requeue_stalled: bool = True,
     ):
         """Initialize the post-processing queue.
-        
+
         Args:
             settings: Application settings containing model configuration
             on_progress: Callback(job_id, progress_pct) for progress updates
@@ -161,6 +180,11 @@ class PostProcessingQueue:
                 diarization_result) that applies speaker labels to a
                 transcript store. Called with the diarization result after
                 stronger-model transcription completes.
+            auto_requeue_stalled: When True (default), the queue scans the
+                Library for Stalled recordings (no Post-processing Outcome)
+                at startup — after pending-job recovery — and again each time
+                a job reaches a terminal state, re-queuing those whose Audio
+                still exists while Post-processing is enabled (issue #62).
         """
         self._settings = settings
         self._on_progress = on_progress
@@ -168,35 +192,43 @@ class PostProcessingQueue:
         self._is_recording_callback = is_recording_callback
         self._diarize_callback = diarize_callback
         self._apply_speaker_labels_callback = apply_speaker_labels_callback
-        
+        self._auto_requeue_stalled = auto_requeue_stalled
+
         # Job queue
         self._job_queue: queue.Queue[PostProcessJob] = queue.Queue()
         self._jobs: Dict[str, PostProcessJob] = {}
         self._jobs_lock = threading.Lock()
-        
+
         # Worker thread
         self._worker_thread: Optional[threading.Thread] = None
         self._is_running = False
         self._stop_event = threading.Event()
-        
+
         # Engine cache - one engine per model size
         self._engines: Dict[str, WhisperTranscriptionEngine] = {}
         self._engines_lock = threading.Lock()
-        
+
         # Currently running job (for cancel_current_job)
         self._current_job: Optional[PostProcessJob] = None
         self._current_job_lock = threading.Lock()
-        
+
+        # Stalled-requeue scans (startup + after each terminal job)
+        self._requeue_lock = threading.Lock()
+        # Recording stems whose Outcome could not be written (unusable
+        # Transcript Footer). Quarantined for this session so the requeue
+        # scan cannot hot-loop an unwritable transcript.
+        self._no_outcome_stems: Set[str] = set()
+
         # Queue persistence
         from meetandread.audio.storage.paths import get_data_dir
         self._queue_file = get_data_dir() / "post_processing_queue.json"
         self._queue_file_lock = threading.Lock()  # serialises read-modify-write
-    
+
     def start(self) -> None:
         """Start the background worker thread."""
         if self._is_running:
             return
-        
+
         self._is_running = True
         self._stop_event.clear()
         self._worker_thread = threading.Thread(
@@ -206,9 +238,13 @@ class PostProcessingQueue:
         )
         self._worker_thread.start()
         logger.info("PostProcessingQueue worker started")
-        
-        # Recover any persisted pending jobs
+
+        # Recover any persisted pending jobs, then re-queue Stalled
+        # recordings (no Outcome) — recovery first so the scan sees the
+        # recovered jobs and does not double-enqueue them.
         self._recover_pending_jobs()
+        if self._auto_requeue_stalled:
+            self.requeue_stalled_recordings()
     
     def stop(self) -> None:
         """Stop the background worker thread."""
@@ -227,7 +263,7 @@ class PostProcessingQueue:
     def schedule_post_process(
         self,
         audio_file: Path,
-        realtime_transcript: TranscriptStore,
+        realtime_transcript: Optional[TranscriptStore],
         output_dir: Path,
         model_size: Optional[str] = None
     ) -> PostProcessJob:
@@ -235,7 +271,9 @@ class PostProcessingQueue:
         
         Args:
             audio_file: Path to the recorded audio file
-            realtime_transcript: The real-time transcript for comparison
+            realtime_transcript: The real-time transcript for comparison, or
+                ``None`` when the Recording has none (a re-queued Stalled
+                Recording is post-processed from its Audio alone)
             output_dir: Directory to save the enhanced transcript
             model_size: Model size for post-processing (default from settings)
         
@@ -303,10 +341,11 @@ class PostProcessingQueue:
     def get_status_for_audio(self, audio_path: Path) -> Optional[PostProcessStatus]:
         """Return the Post-processing job status for a Recording, if any.
 
-        Used by the History list to pick a per-row lifecycle label
-        (Queued / Processing / Failed / Manual Action Required / complete).
-        Matching is by file stem so a Recording's WAV (in ``recordings/``) is
-        recognised via its transcript companion path.
+        Used by the Library rows to pick a per-row status pill
+        (Queued / Processing NN% / Failed; terminal states fall back to
+        the durable Outcome in the Transcript Footer).  Matching is by
+        file stem so a Recording's WAV (in ``recordings/``) is recognised
+        via its transcript companion path.
 
         When both a non-terminal (PENDING/RUNNING) and a terminal job exist
         for the same stem, the live one wins so an in-flight re-attempt is
@@ -418,6 +457,7 @@ class PostProcessingQueue:
                 logger.info(
                     "Job %s skipped (cancelled while queued)", job.job_id
                 )
+                self._finalize_terminal_job(job)
                 continue
             
             # Idle-wait gate: if an is_recording_callback is provided and
@@ -445,6 +485,7 @@ class PostProcessingQueue:
                     logger.info(
                         "Job %s cancelled during idle-wait", job.job_id
                     )
+                    self._finalize_terminal_job(job)
                     continue
                 
                 if waited:
@@ -462,45 +503,93 @@ class PostProcessingQueue:
                 with self._current_job_lock:
                     if self._current_job is job:
                         self._current_job = None
-                # Remove from persistent queue regardless of outcome
-                if job.status in (
-                    PostProcessStatus.COMPLETED,
-                    PostProcessStatus.FAILED,
-                    PostProcessStatus.CANCELLED,
-                ):
-                    self._unpersist_job(job.job_id)
+                self._finalize_terminal_job(job)
+
+    def _finalize_terminal_job(self, job: PostProcessJob) -> None:
+        """Handle a job that just reached a terminal state.
+
+        Removes its persisted entry (so the stem no longer reads as
+        queued to the Stalled requeue scan) and fires the drain-until-empty
+        requeue hook.
+        """
+        if job.status in (
+            PostProcessStatus.COMPLETED,
+            PostProcessStatus.FAILED,
+            PostProcessStatus.CANCELLED,
+        ):
+            self._unpersist_job(job.job_id)
+            self._on_job_terminal(job)
+
+    def _on_job_terminal(self, job: PostProcessJob) -> None:
+        """Drain-until-empty hook fired after a job reaches a terminal state.
+
+        Re-runs the Stalled requeue scan: any recording that became
+        requeueable (e.g. a Cancelled job's Recording) is scheduled again,
+        and each of those jobs will fire this hook on completion until a
+        scan enqueues nothing.
+        """
+        if not self._auto_requeue_stalled:
+            return
+        if not self._is_running or self._stop_event.is_set():
+            return
+        try:
+            self.requeue_stalled_recordings()
+        except Exception as exc:
+            logger.warning("Stalled-requeue scan failed (non-fatal): %s", exc)
     
     def _process_job(self, job: PostProcessJob) -> None:
         """Process a single post-processing job.
-        
+
+        On a terminal transition the job's durable Post-processing Outcome
+        is written into the Recording's Transcript Footer: Completed (even
+        for zero-speaker results) or Failed with the failing stage and
+        reason.  A cancelled job writes no Outcome — the Recording stays
+        Stalled and is picked up by the requeue scan.
+
         Args:
             job: The job to process
         """
         logger.info("Processing job %s with model %s", job.job_id, job.model_size)
-        
+
+        transcript_path: Optional[Path] = None
         try:
             # ---- Checkpoint: not cancelled ----
             if job.cancel_requested:
                 job.status = PostProcessStatus.CANCELLED
                 logger.info("Job %s cancelled before start", job.job_id)
                 return
-            
-            # Update status
+
+            # Update status; stamp the attempt time recorded in the Outcome.
             job.status = PostProcessStatus.RUNNING
+            job.attempted_at = datetime.now().isoformat()
             self._update_progress(job, 10)
-            
+
+            # A Recording without its Audio can never be post-processed.
+            if not job.audio_file.exists():
+                raise PostProcessFailure(
+                    transcript_footer.STAGE_AUDIO_MISSING,
+                    f"Audio file missing: {job.audio_file.name}",
+                )
+
             # Load or get engine
             logger.info("Job %s: loading engine for model %s", job.job_id, job.model_size)
-            engine = self._get_or_create_engine(job.model_size)
+            try:
+                engine = self._get_or_create_engine(job.model_size)
+            except PostProcessFailure:
+                raise
+            except Exception as exc:
+                raise PostProcessFailure(
+                    transcript_footer.STAGE_ENGINE_LOAD, str(exc)
+                ) from exc
             logger.info("Job %s: engine loaded", job.job_id)
             self._update_progress(job, 15)
-            
+
             # ---- Checkpoint: not cancelled ----
             if job.cancel_requested:
                 job.status = PostProcessStatus.CANCELLED
                 logger.info("Job %s cancelled after engine load", job.job_id)
                 return
-            
+
             # ---- Diarization step (optional, before transcription) ----
             diarization_result = None
             if self._diarize_callback is not None:
@@ -525,41 +614,48 @@ class PostProcessingQueue:
                         job.job_id, exc,
                     )
                     self._update_progress(job, 25)
-            
+
             # ---- Checkpoint: not cancelled ----
             if job.cancel_requested:
                 job.status = PostProcessStatus.CANCELLED
                 logger.info("Job %s cancelled after diarization", job.job_id)
                 return
-            
-            # Read audio file
-            audio_data = self._load_audio_file(job.audio_file)
-            self._update_progress(job, 35)
-            
-            # Transcribe with stronger model
-            logger.info(
-                "Transcribing %d samples with %s model for job %s...",
-                len(audio_data), job.model_size, job.job_id,
-            )
-            segments = engine.transcribe_chunk(audio_data, word_level=True)
+
+            # Read audio file and transcribe with the stronger model.
+            try:
+                audio_data = self._load_audio_file(job.audio_file)
+                self._update_progress(job, 35)
+
+                logger.info(
+                    "Transcribing %d samples with %s model for job %s...",
+                    len(audio_data), job.model_size, job.job_id,
+                )
+                segments = engine.transcribe_chunk(audio_data, word_level=True)
+            except PostProcessFailure:
+                raise
+            except Exception as exc:
+                raise PostProcessFailure(
+                    transcript_footer.STAGE_TRANSCRIBE, str(exc)
+                ) from exc
             self._update_progress(job, 80)
 
             # Unwrap typed result (M019 changed transcribe_chunk to return
             # TranscriptionSuccess | TranscriptionError instead of raw segments)
             from meetandread.transcription.engine import TranscriptionError
             if isinstance(segments, TranscriptionError):
-                raise RuntimeError(
+                raise PostProcessFailure(
+                    transcript_footer.STAGE_TRANSCRIBE,
                     f"Post-processing transcription failed: "
-                    f"{segments.error_type}: {segments.message}"
+                    f"{segments.error_type}: {segments.message}",
                 )
             segments = segments.segments
-            
+
             # ---- Checkpoint: not cancelled ----
             if job.cancel_requested:
                 job.status = PostProcessStatus.CANCELLED
                 logger.info("Job %s cancelled after transcription", job.job_id)
                 return
-            
+
             # Create post-processed transcript
             enhanced_store = self._create_post_processed_transcript(segments)
             self._update_progress(job, 85)
@@ -570,7 +666,7 @@ class PostProcessingQueue:
             # stronger model but no speaker info.  Merge by time overlap.
             if job.realtime_transcript:
                 self._transfer_speaker_labels(job.realtime_transcript, enhanced_store)
-            
+
             # Apply diarization speaker labels if diarization ran successfully.
             if diarization_result is not None and self._apply_speaker_labels_callback is not None:
                 try:
@@ -621,7 +717,17 @@ class PostProcessingQueue:
                 job, enhanced_store, speaker_matches=speaker_matches,
             )
             self._update_progress(job, 100)
-            
+
+            # Write the durable Completed Outcome.  A zero-speaker result is
+            # a legitimate completion, not a failure.
+            self._write_outcome(
+                transcript_path,
+                PostProcessOutcome(
+                    status=transcript_footer.STATUS_COMPLETED,
+                    attempted_at=job.attempted_at,
+                ),
+            )
+
             # Mark complete
             job.status = PostProcessStatus.COMPLETED
             job.result = {
@@ -634,21 +740,41 @@ class PostProcessingQueue:
                 "model_used": job.model_size,
                 "diarization_result": diarization_result,
             }
-            
+
             logger.info(
                 "Job %s completed. Transcript: %s", job.job_id, transcript_path
             )
-            
+
             # Notify completion
             if self._on_complete:
                 self._on_complete(job.job_id, job.result)
-                
+
         except Exception as e:
             job.status = PostProcessStatus.FAILED
             job.error = str(e)
             logger.error(
                 "Job %s failed: %s", job.job_id, e, exc_info=True,
             )
+
+            # Write the durable Failed Outcome with the failing stage.
+            failed_outcome_path = (
+                transcript_path
+                if transcript_path is not None
+                else job.output_dir / f"{job.audio_file.stem}.md"
+            )
+            stage = getattr(
+                e, "stage", transcript_footer.STAGE_TRANSCRIBE,
+            )
+            self._write_outcome(
+                failed_outcome_path,
+                PostProcessOutcome(
+                    status=transcript_footer.STATUS_FAILED,
+                    attempted_at=job.attempted_at or datetime.now().isoformat(),
+                    stage=stage,
+                    error=str(e),
+                ),
+            )
+
             # Notify completion even on failure so UI can update
             if self._on_complete:
                 try:
@@ -662,6 +788,37 @@ class PostProcessingQueue:
                         "job_id=%s",
                         job.job_id,
                     )
+
+    def _write_outcome(
+        self, transcript_path: Optional[Path], outcome: PostProcessOutcome
+    ) -> None:
+        """Write a durable Post-processing Outcome into a Transcript Footer.
+
+        A Recording whose Outcome cannot be written (missing file or no
+        usable Transcript Footer) is quarantined for this session so the
+        Stalled requeue scan cannot repeatedly re-run Post-processing that
+        can never record its result.
+        """
+        if transcript_path is None:
+            return
+        written = False
+        try:
+            written = transcript_footer.write_post_process_outcome(
+                transcript_path, outcome
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to write Post-processing Outcome to %s: %s",
+                transcript_path, exc,
+            )
+        if written:
+            return
+        self._no_outcome_stems.add(transcript_path.stem)
+        logger.error(
+            "Cannot write Post-processing Outcome — no usable Transcript "
+            "Footer in %s (recording quarantined from requeue this session)",
+            transcript_path,
+        )
 
     def _get_or_create_engine(self, model_size: str) -> WhisperTranscriptionEngine:
         """Get cached engine or create new one.
@@ -1046,3 +1203,110 @@ class PostProcessingQueue:
             logger.info(
                 "Recovery complete: %d re-queued, %d dropped", recovered, dropped,
             )
+
+    # ------------------------------------------------------------------
+    # Stalled requeue (issue #62)
+    # ------------------------------------------------------------------
+
+    def requeue_stalled_recordings(self) -> int:
+        """Scan the Library and re-queue Stalled recordings.
+
+        A Stalled recording has no Post-processing Outcome — Post-processing
+        never ran, was lost, or was interrupted.  Per recording:
+
+        * Outcome present            → nothing to do.
+        * Audio gone                 → write a Failed (audio-missing) Outcome
+          so the row surfaces as Failed instead of lingering as a zombie.
+        * otherwise, when Post-processing and Speakers are enabled (current
+          settings, read live) and no live or persisted job targets it →
+          schedule a fresh post-processing job.
+
+        Runs at startup (after pending-job recovery) and after each job
+        reaches a terminal state; each re-queued job re-triggers the scan on
+        its own completion, draining until a scan enqueues nothing.
+
+        Returns:
+            The number of recordings re-queued.
+        """
+        with self._requeue_lock:
+            from meetandread.transcription.transcript_scanner import scan_recordings
+
+            try:
+                recordings = scan_recordings()
+            except Exception as exc:
+                logger.warning("Stalled scan could not read Library: %s", exc)
+                return 0
+
+            requeued = 0
+            for meta in recordings:
+                if meta.post_process_outcome is not None:
+                    continue
+                stem = meta.path.stem
+                if not meta.wav_exists:
+                    # No Outcome and the Audio is gone: Post-processing can
+                    # never run. Record the Failed Outcome durably.
+                    self._write_outcome(
+                        meta.path,
+                        PostProcessOutcome(
+                            status=transcript_footer.STATUS_FAILED,
+                            attempted_at=datetime.now().isoformat(),
+                            stage=transcript_footer.STAGE_AUDIO_MISSING,
+                            error="Audio file missing",
+                        ),
+                    )
+                    continue
+                if not self._should_requeue_recording(meta):
+                    continue
+                from meetandread.audio.storage.paths import get_recordings_dir
+
+                wav_path = get_recordings_dir() / f"{stem}.wav"
+                self.schedule_post_process(
+                    audio_file=wav_path,
+                    realtime_transcript=None,
+                    output_dir=meta.path.parent,
+                )
+                requeued += 1
+                logger.info(
+                    "Stalled requeue: scheduled post-processing for %s", stem,
+                )
+            if requeued:
+                logger.info("Stalled requeue scan: %d recording(s) re-queued", requeued)
+            return requeued
+
+    def _should_requeue_recording(self, meta) -> bool:
+        """Return True when a Stalled RecordingMeta should be re-queued.
+
+        Predicate (issue #62): no Outcome ∧ Audio still exists ∧
+        Post-processing enabled ∧ Speakers enabled ∧ not already queued or
+        in-flight (live in-memory job or persisted queue entry).
+        """
+        if meta.post_process_outcome is not None:
+            return False
+        if not meta.wav_exists:
+            return False
+        stem = meta.path.stem
+        if stem in self._no_outcome_stems:
+            return False
+        settings = self._settings
+        if not getattr(settings, "transcription", None):
+            return False
+        if not (
+            settings.transcription.enable_postprocessing
+            and settings.speaker.enabled
+        ):
+            return False
+        return not self._has_queued_job_for_stem(stem)
+
+    def _has_queued_job_for_stem(self, stem: str) -> bool:
+        """True when a live (in-memory) or persisted job targets *stem*."""
+        with self._jobs_lock:
+            for job in self._jobs.values():
+                if (
+                    job.status in self._PENDING_STATUSES
+                    and job.audio_file.stem == stem
+                ):
+                    return True
+        for entry in self._read_queue_file():
+            if Path(entry.get("audio_file", "")).stem == stem:
+                return True
+        return False
