@@ -160,3 +160,48 @@ class TestStalledPillIndicator:
         _, kind, tooltip = FloatingSettingsPanel._build_history_status_pill(meta)
         assert kind == "completed-warning"
         assert "Speakers not identified" in tooltip
+
+
+# ---------------------------------------------------------------------------
+# Test: the pill QSS is valid Qt stylesheet syntax
+# ---------------------------------------------------------------------------
+
+class TestPillStylesheetParses:
+    """Every pill kind must produce QSS Qt can actually parse.
+
+    Regression: the pill CSS factory ended in ``}}`` — the f-string's
+    ``{{`` escaping does not apply to the concatenated plain-string tail,
+    so the sheet carried a stray brace and Qt logged "Could not parse
+    stylesheet" for every Library row (issue #62).
+    """
+
+    def test_all_pill_kinds_parse(self):
+        from PyQt6.QtCore import QtMsgType, qInstallMessageHandler
+        from PyQt6.QtWidgets import QLabel
+
+        from meetandread.widgets.theme import aetheric_status_pill_css
+
+        messages: list[str] = []
+
+        def _record(msg_type, context, message):
+            if msg_type != QtMsgType.QtDebugMsg:
+                messages.append(message)
+
+        previous = qInstallMessageHandler(_record)
+        try:
+            for kind in (
+                "completed",
+                "completed-warning",
+                "not-post-processed",
+                "failed",
+                "queued",
+                "processing",
+            ):
+                label = QLabel(kind)
+                label.setObjectName("AethericStatusPill")
+                label.setStyleSheet(aetheric_status_pill_css(kind))
+        finally:
+            qInstallMessageHandler(previous)
+
+        parse_failures = [m for m in messages if "parse stylesheet" in m]
+        assert not parse_failures, parse_failures

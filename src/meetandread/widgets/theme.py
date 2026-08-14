@@ -1569,5 +1569,5 @@ def aetheric_status_pill_css(kind: str) -> str:
     return (
         f"QLabel {{ background-color: {color}; color: #ffffff;"
         " border-radius: 7px; padding: 1px 8px; font-size: 10px;"
-        " font-weight: bold; }}"
+        " font-weight: bold; }"
     )
