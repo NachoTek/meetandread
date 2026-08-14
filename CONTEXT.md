@@ -13,7 +13,7 @@ The primary output of a Recording — a formatted Markdown document with speaker
 _Avoid_: Output, document, notes, final transcript
 
 **Transcript Footer**:
-The JSON metadata block appended to a Transcript's Markdown file, carrying its machine-readable data — words (with timing, confidence, and speaker_id), segments, speaker_matches, and recording_start_time. The machine-readable twin of the Markdown body: the body is for humans to read, the footer is for the system to read back. Written and read through one canonical format, owned by `transcript_footer`.
+The JSON metadata block appended to a Transcript's Markdown file, carrying its machine-readable data — words (with timing, confidence, and speaker_id), segments, speaker_matches, recording_start_time, and the Post-processing Outcome. The machine-readable twin of the Markdown body: the body is for humans to read, the footer is for the system to read back. Written and read through one canonical format, owned by `transcript_footer`.
 _Avoid_: footer, metadata block, metadata section, trailer
 
 **Live Transcript**:
@@ -23,6 +23,14 @@ _Avoid_: Draft transcript, raw transcript, interim transcript
 **Post-processing**:
 The automatic background activity that turns a Live Transcript into the full Transcript. Re-transcribes the Recording's audio with a stronger Whisper model and applies speaker diarization, overwriting the canonical transcript file in place. Runs while idle after a recording stops; several Recordings may queue and are processed one at a time.
 _Avoid_: Enhancement, refinement, finalization, second pass
+
+**Post-processing Outcome**:
+The durable terminal result of Post-processing for a Recording — Completed (it ran to completion, including zero-speaker results) or Failed (it errored, with the failing stage and reason). Carried in the Transcript Footer so it lives and dies with the Recording.
+_Avoid_: Status (ambiguous with the in-flight job state), cancellation state
+
+**Stalled**:
+A Recording with no recorded Post-processing Outcome — Post-processing never ran, was lost, or was interrupted. Automatically re-queued for Post-processing when its Audio still exists and Post-processing is enabled.
+_Avoid_: Manual Action Required (as a state name), stuck, incomplete
 
 **Audio**:
 The raw captured sound of a Recording, stored as a WAV file. It is the input material from which the Transcript is derived, not an end product in itself.
