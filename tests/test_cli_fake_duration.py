@@ -13,6 +13,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# These tests spawn the CLI as a subprocess, which imports ``sounddevice`` and
+# needs the real PortAudio library. Marked `windows` so the authoritative pass
+# runs them under the Windows venv (ADR 0001) and they skip off-Windows.
+pytestmark = pytest.mark.windows
+
 
 def generate_test_wav(path: Path, duration_seconds: float, sample_rate: int = 16000) -> None:
     """Generate a sine wave WAV file of specified duration.

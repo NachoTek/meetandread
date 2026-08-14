@@ -91,3 +91,23 @@ def _cleanup_qtimers():
                 pass
             timer.stop()
             timer.deleteLater()
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip ``windows``-marked tests when not running on Windows (ADR 0001).
+
+    Tests flagged ``@pytest.mark.windows`` require the real Windows native
+    audio stack (PortAudio / ``pyaudiowpatch``) and must run under the Windows
+    interpreter (``.venv/Scripts/python.exe`` via WSL interop). Off-Windows they
+    are skipped rather than erroring on a missing native library — the WSL Linux
+    logic-layer run stays green. On Windows (``sys.platform == 'win32'``) they
+    run normally.
+    """
+    if sys.platform == "win32":
+        return
+    skip = pytest.mark.skip(
+        reason="windows-only \u2014 run under .venv/Scripts/python.exe (ADR 0001)"
+    )
+    for item in items:
+        if "windows" in item.keywords:
+            item.add_marker(skip)

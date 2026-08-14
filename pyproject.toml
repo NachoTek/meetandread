@@ -64,6 +64,7 @@ pythonpath = ["src"]
 markers = [
     "slow: marks tests as slow (requires model download, deselect with '-m \"not slow\"')",
     "requires_qt_widgets: mark tests that require real Qt widgets and a display context",
+    "windows: tests that require the real Windows native audio stack (PortAudio/pyaudiowpatch); run under .venv/Scripts/python.exe, see ADR 0001",
 ]
 
 [tool.flake8]
