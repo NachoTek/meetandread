@@ -2232,14 +2232,10 @@ class FloatingTranscriptPanel(QWidget):
         if md_path is not None:
             self._reselect_history_item(md_path)
 
-        # Refresh the viewer content
+        # Refresh the viewer content.  The viewer always re-renders from
+        # the .md on disk, so a transcript replaced by accept/reject (#21)
+        # is picked up without any cached-timestamp invalidation.
         if md_path is not None and md_path.exists():
-            # Re-extract timed words from the updated transcript file —
-            # the cached timestamps are stale after accept/reject replaces
-            # the .md on disk (#21).
-            self._reset_highlight_state()
-            self._extract_timed_words(md_path)
-
             html = self._render_history_transcript(md_path)
             if html is not None:
                 self._history_viewer.setHtml(html)
