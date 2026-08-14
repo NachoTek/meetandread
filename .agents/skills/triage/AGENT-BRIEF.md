@@ -6,6 +6,10 @@ The brief states **what the agent should do**, which stretches to both surfaces:
 
 ## Principles
 
+### The brief owns the branch
+
+`/implement` commits to the current branch without creating or switching branches itself, so every brief must name the feature branch where the work belongs. Tickets from one triage session share a single branch (per `/to-tickets`), created from `main` and left unpushed. See "Branch setup for agent briefs" in SKILL.md.
+
 ### Durability over precision
 
 The issue may sit in `ready-for-agent` for days or weeks. The codebase will change in the meantime. Write the brief so it stays useful even as files are renamed, moved, or refactored.
@@ -41,6 +45,7 @@ State what is out of scope. This prevents the agent from gold-plating or making 
 ```markdown
 ## Agent Brief
 
+**Branch:** `feat/<n>-<slug>` — commit all work here. Not pushed; PR opens after all tickets land.
 **Category:** bug / enhancement
 **Summary:** one-line description of what needs to happen
 
