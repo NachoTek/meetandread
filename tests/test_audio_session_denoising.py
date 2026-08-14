@@ -1072,6 +1072,13 @@ class TestControllerDenoisingWiring:
                 "meetandread.recording.controller.AccumulatingTranscriptionProcessor",
                 mock_processor_class,
             ),
+            # A real PostProcessingQueue.start() would run the Stalled
+            # requeue scan against the real Library (issue #62) — mock it
+            # so transcription-enabled controller tests stay hermetic.
+            _patch(
+                "meetandread.recording.controller.PostProcessingQueue",
+                MagicMock(name="PostProcessingQueue"),
+            ),
             _patch(
                 "meetandread.config.manager.SettingsPersistence",
                 lambda config_dir=None: SettingsPersistence(config_dir=_tmp_config),

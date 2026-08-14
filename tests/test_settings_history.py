@@ -478,7 +478,9 @@ class TestSettingsExtractTranscriptBody:
 
     def test_valid_file_extracts_body(self, tmp_path):
         md_path = tmp_path / "body.md"
-        md_path.write_text("Line one\nLine two\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+        md_path.write_text(
+            "Line one\nLine two\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8"
+        )
         result = FloatingSettingsPanel._extract_transcript_body(md_path)
         assert "Line one" in result
         assert "Line two" in result
