@@ -275,12 +275,17 @@ class PostProcessOutcome:
         stage: The failing stage — required for ``failed`` Outcomes, absent
             for ``completed`` ones.
         error: The failure message — present for ``failed`` Outcomes only.
+        dependency: Registry name of the Tier-2 feature dependency whose
+            absence caused a ``dependency``-stage failure (issue #61), or
+            ``None``.  Repair conversion matches this name against the
+            dependency registry.
     """
 
     status: str
     attempted_at: str
     stage: Optional[str] = None
     error: Optional[str] = None
+    dependency: Optional[str] = None
 
     def to_block(self) -> Dict[str, Any]:
         """Encode as the canonical ``post_process`` metadata block."""
@@ -292,6 +297,8 @@ class PostProcessOutcome:
             block["stage"] = self.stage
         if self.error is not None:
             block["error"] = self.error
+        if self.dependency is not None:
+            block["dependency"] = self.dependency
         return block
 
 
@@ -316,11 +323,15 @@ def outcome_from_block(block: Any) -> Optional[PostProcessOutcome]:
     error = block.get("error")
     if not isinstance(error, str):
         error = None
+    dependency = block.get("dependency")
+    if not isinstance(dependency, str):
+        dependency = None
     return PostProcessOutcome(
         status=status,
         attempted_at=attempted_at,
         stage=stage,
         error=error,
+        dependency=dependency,
     )
 
 

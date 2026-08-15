@@ -87,11 +87,17 @@ class PostProcessFailure(Exception):
     The stage is one of the Transcript Footer Outcome stages (see
     ``transcript_footer``); it is written into the Recording's Failed
     Outcome so the Library can explain *where* Post-processing broke.
+
+    ``dependency`` names the Tier-2 feature dependency whose absence
+    caused a ``dependency``-stage failure (issue #61), when known — it
+    flows into the Outcome so startup repair conversion can match it
+    against the dependency registry.
     """
 
-    def __init__(self, stage: str, message: str):
+    def __init__(self, stage: str, message: str, dependency: Optional[str] = None):
         super().__init__(message)
         self.stage = stage
+        self.dependency = dependency
 
 
 class _JobPreempted(Exception):
@@ -314,8 +320,10 @@ class PostProcessingQueue:
     def start(self) -> None:
         """Start the background worker thread.
 
-        Also recovers any persisted pending jobs and re-queues Stalled
-        recordings — recovery first so the scan sees the recovered jobs
+        Also recovers any persisted pending jobs, converts dependency-
+        failed recordings back to Stalled when their dependency now
+        imports cleanly (issue #61), and re-queues Stalled recordings —
+        in that order, so the scan sees the recovered and converted jobs
         and does not double-enqueue them.  Startup-only concerns: callers
         that just need the worker alive mid-session use
         ``_ensure_started`` (no recovery — a persisted job may still be
@@ -324,6 +332,7 @@ class PostProcessingQueue:
         self._start_worker()
         self._recover_pending_jobs()
         if self._auto_requeue_stalled:
+            self.requeue_dependency_failed_recordings()
             self.requeue_stalled_recordings()
 
     def _start_worker(self) -> None:
@@ -827,13 +836,17 @@ class PostProcessingQueue:
                     )
                     diarization_result = self._diarize_callback(job.audio_file)
                     self._update_progress(job, 25)
-                except ImportError:
-                    job.diarization_error = "diarization dependencies not available"
-                    logger.warning(
-                        "Job %s: diarization skipped — %s",
-                        job.job_id, job.diarization_error,
-                    )
-                    self._update_progress(job, 25)
+                except ImportError as exc:
+                    # A missing feature dependency (issue #61) is a hard
+                    # failure — never a silent zero-speaker completion.
+                    # The callback raises ImportErrors whose message is the
+                    # registry's guidance vocabulary; dependency_name (when
+                    # present) names the dependency for repair conversion.
+                    raise PostProcessFailure(
+                        transcript_footer.STAGE_DEPENDENCY,
+                        str(exc) or "diarization dependencies not available",
+                        dependency=getattr(exc, "dependency_name", None),
+                    ) from exc
                 except Exception as exc:
                     job.diarization_error = str(exc)
                     logger.warning(
@@ -994,6 +1007,7 @@ class PostProcessingQueue:
                     attempted_at=job.attempted_at or datetime.now().isoformat(),
                     stage=stage,
                     error=str(e),
+                    dependency=getattr(e, "dependency", None),
                 ),
             )
 
@@ -1505,8 +1519,95 @@ class PostProcessingQueue:
             )
 
     # ------------------------------------------------------------------
-    # Stalled requeue (issue #62)
+    # Stalled requeue (issue #62) + dependency repair conversion (#61)
     # ------------------------------------------------------------------
+
+    def requeue_dependency_failed_recordings(self) -> int:
+        """Convert Failed (dependency) Outcomes back to Stalled (issue #61).
+
+        Runs at startup BEFORE ``requeue_stalled_recordings``.  A Failed
+        (``dependency``) Outcome means Post-processing could not run
+        because a Tier-2 feature dependency was missing.  When that
+        dependency now imports cleanly, the Outcome is cleared — the
+        Recording becomes Stalled and the subsequent Stalled scan
+        re-queues it through the normal queue.  Still-broken dependencies
+        leave every Failed row untouched, so there is no requeue loop.
+
+        Conversion fires only when the import actually passes; a row names
+        the dependency it failed on (Outcome ``dependency``) and is
+        converted only when THAT dependency is repaired.  Rows without a
+        named dependency convert only when every registered dependency
+        imports cleanly (conservative).
+
+        Returns:
+            The number of Outcomes cleared (recordings now Stalled).
+        """
+        from meetandread.dependencies import (
+            FEATURE_DEPENDENCIES,
+            is_dependency_available,
+        )
+
+        repaired = {
+            dep.name
+            for dep in FEATURE_DEPENDENCIES
+            if is_dependency_available(dep)
+        }
+        if not repaired:
+            return 0
+
+        from meetandread.transcription.transcript_scanner import scan_recordings
+
+        with self._requeue_lock:
+            try:
+                recordings = scan_recordings()
+            except Exception as exc:
+                logger.warning(
+                    "Dependency-repair scan could not read Library: %s", exc
+                )
+                return 0
+
+            cleared = 0
+            for meta in recordings:
+                outcome = meta.post_process_outcome
+                if outcome is None:
+                    continue
+                if (
+                    outcome.status != transcript_footer.STATUS_FAILED
+                    or outcome.stage != transcript_footer.STAGE_DEPENDENCY
+                ):
+                    continue
+                if not self._dependency_outcome_repaired(
+                    outcome, repaired, total=len(FEATURE_DEPENDENCIES)
+                ):
+                    continue
+                if transcript_footer.clear_post_process_outcome(meta.path):
+                    cleared += 1
+                    logger.info(
+                        "Dependency repair: cleared Failed (dependency) "
+                        "Outcome for %s — Stalled scan will re-queue it",
+                        meta.path.stem,
+                    )
+            if cleared:
+                logger.info(
+                    "Dependency repair: %d recording(s) returned to Stalled",
+                    cleared,
+                )
+            return cleared
+
+    @staticmethod
+    def _dependency_outcome_repaired(
+        outcome: PostProcessOutcome, repaired_names: Set[str], total: int
+    ) -> bool:
+        """True when the dependency that failed *outcome* now imports.
+
+        Loop-safety core (issue #61): conversion requires a passing
+        import of the exact dependency the Outcome names.  ``total`` is
+        the number of registered dependencies; an Outcome without a
+        name converts only when every one of them imports cleanly.
+        """
+        if outcome.dependency is not None:
+            return outcome.dependency in repaired_names
+        return len(repaired_names) == total
 
     def requeue_stalled_recordings(self) -> int:
         """Scan the Library and re-queue Stalled recordings.

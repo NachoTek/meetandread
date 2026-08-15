@@ -519,13 +519,17 @@ class TestRequeueScan:
         assert count2 == 0  # second scan sees the now-PENDING job
 
     def test_startup_scan_runs_after_recovery(self, dirs):
-        """start() recovers persisted jobs first, then scans for Stalled."""
+        """start(): recover → dependency-repair conversion → Stalled scan."""
         transcripts, recordings, _ = dirs
         queue = PostProcessingQueue(AppSettings())
         calls: list[str] = []
 
         with patch.object(
             queue, "_recover_pending_jobs", side_effect=lambda: calls.append("recover")
+        ), patch.object(
+            queue,
+            "requeue_dependency_failed_recordings",
+            side_effect=lambda: calls.append("convert"),
         ), patch.object(
             queue,
             "requeue_stalled_recordings",
@@ -536,7 +540,7 @@ class TestRequeueScan:
             finally:
                 queue.stop()
 
-        assert calls == ["recover", "scan"]
+        assert calls == ["recover", "convert", "scan"]
 
     def test_terminal_transition_triggers_scan(self, dirs):
         transcripts, recordings, _ = dirs

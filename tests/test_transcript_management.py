@@ -1221,17 +1221,24 @@ class TestPostProcessingQueueDiarization:
 
     @patch.object(PostProcessingQueue, "_get_or_create_engine")
     @patch.object(PostProcessingQueue, "_load_audio_file")
-    def test_diarization_import_error_continues(
+    def test_diarization_import_error_fails_with_dependency_stage(
         self, mock_load_audio, mock_engine, tmp_path: Path
     ) -> None:
-        """ImportError from diarize callback is caught; transcription proceeds."""
+        """ImportError from diarize callback is a Failed (dependency) Outcome.
+
+        Issue #61: a missing feature dependency must never degrade into a
+        zero-speaker completion — the job fails with the dependency stage
+        and the registry vocabulary in the error.
+        """
         import numpy as np
+
+        from meetandread.dependencies import SHERPA_ONNX, dependency_error
 
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
 
         def diarize_raise_import(wav_path):
-            raise ImportError("sherpa-onnx not installed")
+            raise dependency_error(SHERPA_ONNX)
 
         ppq = PostProcessingQueue(
             settings=settings,
@@ -1239,6 +1246,13 @@ class TestPostProcessingQueueDiarization:
         )
 
         job = _make_job(tmp_path)
+        from tests.footer_test_helpers import write_transcript
+
+        write_transcript(
+            tmp_path / f"{job.audio_file.stem}.md",
+            "# Transcript\n\nlive words",
+            {"recording_start_time": "2026-08-14T09:00:00", "word_count": 2},
+        )
 
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
         mock_eng = MagicMock()
@@ -1247,11 +1261,17 @@ class TestPostProcessingQueueDiarization:
 
         ppq._process_job(job)
 
-        # Transcription should still complete
-        assert job.status == PostProcessStatus.COMPLETED
-        # But diarization_error should be recorded
-        assert job.diarization_error is not None
-        assert "not available" in job.diarization_error
+        # The job fails with the dependency stage — transcription does
+        # NOT silently complete with zero speakers.
+        assert job.status == PostProcessStatus.FAILED
+        assert job.error_stage == transcript_footer.STAGE_DEPENDENCY
+        assert SHERPA_ONNX.name in (job.error or "")
+        outcome = transcript_footer.read_post_process_outcome(
+            (tmp_path / (job.audio_file.stem + ".md")).read_text(encoding="utf-8")
+        )
+        assert outcome is not None
+        assert outcome.stage == transcript_footer.STAGE_DEPENDENCY
+        assert outcome.dependency == SHERPA_ONNX.name
 
     @patch.object(PostProcessingQueue, "_get_or_create_engine")
     @patch.object(PostProcessingQueue, "_load_audio_file")

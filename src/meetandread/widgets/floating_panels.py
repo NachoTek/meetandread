@@ -126,14 +126,23 @@ class _ToastWidget(QFrame):
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(4)
 
+        # Title row: title label, stretch, optional dismiss (×) button.
+        self._title_row = QHBoxLayout()
+        self._title_row.setSpacing(4)
+
         self.title_label = QLabel(title)
         self.title_label.setObjectName("toast-title")
+        self._title_row.addWidget(self.title_label)
+        self._title_row.addStretch()
+
+        self._dismiss_btn: Optional[QPushButton] = None
+        layout.addLayout(self._title_row)
+
         self.message_label = QLabel(message)
         self.message_label.setObjectName("toast-message")
         self.message_label.setWordWrap(True)
         self.message_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
-        layout.addWidget(self.title_label)
         layout.addWidget(self.message_label)
         self._layout = layout
         self._action_button: Optional[QPushButton] = None
@@ -187,6 +196,58 @@ class _ToastWidget(QFrame):
         self._action_button.clicked.connect(lambda _checked=False, action=callback: action())
         self.adjustSize()
 
+    def set_dismissable(
+        self,
+        on_dismissed: Optional[Callable[[], None]],
+    ) -> None:
+        """Attach or remove a small × button that dismisses the toast.
+
+        Used for banners that persist until the user closes them (issue #61
+        dependency banner); regular toasts pass ``None`` and show no button.
+        """
+        if self._dismiss_btn is not None:
+            try:
+                self._dismiss_btn.clicked.disconnect()
+            except TypeError:
+                pass
+
+        if on_dismissed is None:
+            if self._dismiss_btn is not None:
+                self._dismiss_btn.setParent(None)
+                self._dismiss_btn.deleteLater()
+                self._dismiss_btn = None
+            self.adjustSize()
+            return
+
+        if self._dismiss_btn is None:
+            self._dismiss_btn = QPushButton("×", self)
+            self._dismiss_btn.setObjectName("toast-dismiss")
+            self._dismiss_btn.setFixedSize(18, 18)
+            self._dismiss_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._dismiss_btn.setToolTip("Dismiss")
+            self._dismiss_btn.setAccessibleName("Dismiss notification")
+            self._dismiss_btn.setStyleSheet(
+                """
+                QPushButton#toast-dismiss {
+                    color: rgba(255, 255, 255, 140);
+                    background: transparent;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+                QPushButton#toast-dismiss:hover {
+                    color: #ff5545;
+                    background: rgba(255, 85, 69, 40);
+                }
+                """
+            )
+            self._title_row.addWidget(self._dismiss_btn)
+        self._dismiss_btn.clicked.connect(
+            lambda _checked=False, dismiss=on_dismissed: dismiss()
+        )
+        self.adjustSize()
+
 
 class ToastManager(QObject):
     """Manage lightweight, replaceable toast notifications.
@@ -211,8 +272,14 @@ class ToastManager(QObject):
         duration_ms: int = 8000,
         action_label: Optional[str] = None,
         action_callback: Optional[Callable[[], None]] = None,
+        dismissable: bool = False,
     ) -> _ToastWidget:
-        """Show or replace a toast by ID and optionally auto-dismiss it."""
+        """Show or replace a toast by ID and optionally auto-dismiss it.
+
+        ``dismissable=True`` renders a × button so the user can close the
+        toast manually (used by banners that persist until dismissed,
+        e.g. the dependency banner of issue #61).
+        """
         if not toast_id:
             toast_id = "default"
         toast = self._toasts.get(toast_id)
@@ -223,6 +290,9 @@ class ToastManager(QObject):
             toast.update_content(title, message)
 
         toast.set_action(action_label, action_callback)
+        toast.set_dismissable(
+            (lambda tid=toast_id: self.dismiss(tid)) if dismissable else None
+        )
         toast.adjustSize()
         self.reposition()
         toast.show()
@@ -3745,6 +3815,7 @@ class FloatingSettingsPanel(QWidget):
     _NAV_PERFORMANCE = 1
     _NAV_HISTORY = 2
     _NAV_IDENTITIES = 3
+    _NAV_DIAGNOSTICS = 4
 
     # Post-processing states considered 'live' (drive the row-progress timer).
     _LIVE_POST_PROCESS_STATES = (PostProcessStatus.PENDING, PostProcessStatus.RUNNING)
@@ -3911,6 +3982,18 @@ class FloatingSettingsPanel(QWidget):
         self._nav_identities_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_IDENTITIES))
         sidebar_layout.addWidget(self._nav_identities_btn)
         self._nav_buttons.append(self._nav_identities_btn)
+
+        # Diagnostics nav — issue #61 wires the dependency health view
+        self._nav_diagnostics_btn = QPushButton("🩺  Diagnostics")
+        self._nav_diagnostics_btn.setObjectName("AethericNavButton")
+        self._nav_diagnostics_btn.setCheckable(True)
+        self._nav_diagnostics_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._nav_diagnostics_btn.setToolTip("Feature dependency health and fixes")
+        self._nav_diagnostics_btn.setAccessibleName("Diagnostics tab")
+        self._nav_diagnostics_btn.setProperty("nav_id", "diagnostics")
+        self._nav_diagnostics_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_DIAGNOSTICS))
+        sidebar_layout.addWidget(self._nav_diagnostics_btn)
+        self._nav_buttons.append(self._nav_diagnostics_btn)
 
         sidebar_layout.addStretch()
 
@@ -4968,6 +5051,37 @@ class FloatingSettingsPanel(QWidget):
         identities_layout.addWidget(self._identities_splitter)
         self._content_stack.addWidget(self._wrap_settings_page_for_scroll(identities_page, "identities"))
 
+        # ------------------------------------------------------------------
+        # Diagnostics page (issue #61) — Tier-2 feature dependency health
+        # ------------------------------------------------------------------
+        diagnostics_page = QWidget()
+        diagnostics_page.setObjectName("AethericDiagnosticsPage")
+        diagnostics_layout = QVBoxLayout(diagnostics_page)
+        diagnostics_layout.setContentsMargins(6, 8, 6, 6)
+        diagnostics_layout.setSpacing(8)
+
+        self._diagnostics_intro_label = QLabel(
+            "These optional components power extra features. meetandread "
+            "keeps recording and transcribing live when one is missing — "
+            "post-processing for the affected feature resumes once it is "
+            "repaired, and recordings that failed because of it are "
+            "re-queued automatically."
+        )
+        self._diagnostics_intro_label.setObjectName("AethericDiagnosticsIntro")
+        self._diagnostics_intro_label.setWordWrap(True)
+        diagnostics_layout.addWidget(self._diagnostics_intro_label)
+
+        self._diagnostics_rows_container = QWidget()
+        self._diagnostics_rows_layout = QVBoxLayout(self._diagnostics_rows_container)
+        self._diagnostics_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._diagnostics_rows_layout.setSpacing(10)
+        diagnostics_layout.addWidget(self._diagnostics_rows_container)
+        diagnostics_layout.addStretch()
+
+        self._content_stack.addWidget(
+            self._wrap_settings_page_for_scroll(diagnostics_page, "diagnostics")
+        )
+
         # -- Identities state attributes --
         self._identity_usage: Dict[str, Any] = {}  # name -> IdentityUsage
         self._identity_profile_names: List[str] = []  # sorted identity names
@@ -5700,8 +5814,112 @@ class FloatingSettingsPanel(QWidget):
         if page_index == self._NAV_IDENTITIES:
             self._refresh_identities()
 
+        # Refresh Diagnostics when navigating to it (issue #61)
+        if page_index == self._NAV_DIAGNOSTICS:
+            self._refresh_diagnostics()
+
         nav_id = self._nav_buttons[page_index].property("nav_id") if page_index < len(self._nav_buttons) else "?"
         logger.info("Settings nav changed to '%s' (index %d)", nav_id, page_index)
+
+    # ------------------------------------------------------------------
+    # Diagnostics — Tier-2 feature dependency health (issue #61)
+    # ------------------------------------------------------------------
+
+    def open_diagnostics(self) -> None:
+        """Show the shell on the Diagnostics page (banner action, #61)."""
+        self.show_panel()
+        self._on_nav_clicked(self._NAV_DIAGNOSTICS)
+
+    def _refresh_diagnostics(self) -> None:
+        """Rebuild dependency rows from the Tier-2 registry.
+
+        Registry-driven: appending a ``FeatureDependency`` is all it takes
+        for a new entry to appear here.  The resolution text shown is the
+        registry's — the same vocabulary embedded in dependency-stage
+        Failed-row details.
+        """
+        from meetandread.dependencies import check_feature_dependencies
+
+        # Drop previous rows (statuses can change between sessions).
+        while self._diagnostics_rows_layout.count():
+            item = self._diagnostics_rows_layout.takeAt(0)
+            stale = item.widget()
+            if stale is not None:
+                stale.setParent(None)
+                stale.deleteLater()
+
+        try:
+            statuses = check_feature_dependencies()
+        except Exception:
+            logger.exception("Diagnostics dependency check failed")
+            return
+
+        for status in statuses:
+            self._diagnostics_rows_layout.addWidget(
+                self._build_diagnostics_row(status)
+            )
+
+    def _build_diagnostics_row(self, status) -> QFrame:
+        """One dependency row: name, status, powered feature, fix."""
+        dep = status.dependency
+
+        row = QFrame()
+        row.setObjectName("AethericDiagnosticsRow")
+        row_layout = QVBoxLayout(row)
+        row_layout.setContentsMargins(8, 8, 8, 8)
+        row_layout.setSpacing(2)
+        row.setStyleSheet(
+            """
+            QFrame#AethericDiagnosticsRow {
+                background: rgba(255, 255, 255, 10);
+                border: 1px solid rgba(255, 255, 255, 26);
+                border-radius: 8px;
+            }
+            """
+        )
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        name_label = QLabel(dep.name)
+        name_label.setObjectName("AethericDiagnosticsName")
+        name_label.setStyleSheet(
+            "font-weight: 700; color: #f3f4f6; font-size: 13px;"
+        )
+        name_label.setAccessibleName(f"diagnostic-name-{dep.name}")
+        header.addWidget(name_label)
+        header.addStretch()
+
+        status_label = QLabel("Available" if status.available else "Missing")
+        status_label.setObjectName("AethericDiagnosticsStatus")
+        status_label.setStyleSheet(
+            "font-weight: 700; font-size: 12px; padding: 1px 8px;"
+            " border-radius: 7px;"
+            + (
+                "background: rgba(74, 222, 128, 36); color: #4ade80;"
+                if status.available
+                else "background: rgba(255, 85, 69, 46); color: #ff8a7a;"
+            )
+        )
+        status_label.setAccessibleName(f"diagnostic-status-{dep.name}")
+        header.addWidget(status_label)
+
+        row_layout.addLayout(header)
+
+        feature_label = QLabel(f"Powers: {dep.feature}")
+        feature_label.setObjectName("AethericDiagnosticsFeature")
+        feature_label.setStyleSheet("color: rgba(243, 244, 246, 190); font-size: 12px;")
+        feature_label.setAccessibleName(f"diagnostic-feature-{dep.name}")
+        row_layout.addWidget(feature_label)
+
+        resolution_label = QLabel(dep.resolution_text())
+        resolution_label.setObjectName("AethericDiagnosticsResolution")
+        resolution_label.setWordWrap(True)
+        resolution_label.setStyleSheet("color: rgba(255, 209, 102, 220); font-size: 12px;")
+        resolution_label.setAccessibleName(f"diagnostic-resolution-{dep.name}")
+        row_layout.addWidget(resolution_label)
+
+        return row
 
     def _start_resource_monitor(self) -> None:
         """Start the ResourceMonitor if not already running."""

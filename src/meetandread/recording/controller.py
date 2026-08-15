@@ -37,6 +37,7 @@ from meetandread.transcription.transcript_store import TranscriptStore, Word  # 
 from meetandread.transcription import transcript_footer  # noqa: E402
 from meetandread.transcription.post_processor import PostProcessingQueue, PostProcessStatus  # noqa: E402
 from meetandread.config.manager import ConfigManager  # noqa: E402
+from meetandread import dependencies as feature_dependencies  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -1293,12 +1294,11 @@ class RecordingController:
             from meetandread.speaker.diarizer import Diarizer
             from meetandread.speaker.signatures import VoiceSignatureStore
             from meetandread.audio.storage.paths import get_recordings_dir
-        except ImportError:
-            logger.warning(
-                "sherpa-onnx not installed - speaker diarization skipped. "
-                "Install sherpa-onnx to enable speaker identification."
-            )
-            return None
+        except ImportError as exc:
+            # Broken install: surface the registry's guidance vocabulary.
+            raise feature_dependencies.dependency_error(
+                feature_dependencies.SHERPA_ONNX
+            ) from exc
 
         try:
             settings = self._config_manager.get_settings()
@@ -1307,6 +1307,18 @@ class RecordingController:
             if not speaker_cfg.enabled:
                 logger.info("Speaker diarization disabled in settings - skipped")
                 return None
+
+            # Tier-2 gate (issue #61): a missing feature dependency is a
+            # Failed (dependency) Outcome — never a silent zero-speaker
+            # completion.  The ImportError carries the registry's message
+            # and dependency name for repair conversion.  Called through
+            # the module so tests patch one seam regardless of platform.
+            if not feature_dependencies.is_dependency_available(
+                feature_dependencies.SHERPA_ONNX
+            ):
+                raise feature_dependencies.dependency_error(
+                    feature_dependencies.SHERPA_ONNX
+                )
 
             logger.info("Running speaker diarization on %s (post-process)", wav_path.name)
 
@@ -1381,6 +1393,11 @@ class RecordingController:
 
             return result
 
+        except ImportError:
+            # A dependency failure escapes (issue #61): the queue's worker
+            # maps it to a Failed (dependency) Outcome.  It must never be
+            # swallowed into the degraded zero-speaker path below.
+            raise
         except Exception as exc:
             logger.error(
                 "Speaker diarization error for %s: %s",

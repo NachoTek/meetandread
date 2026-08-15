@@ -71,3 +71,7 @@ _Avoid_: Scrub, reprocess, upgrade
 **Retry**:
 A user-initiated re-run of Post-processing for a Failed Recording, using the current default Post-processing settings. Distinct from Re-transcribe: no model picker and no sidecar — the canonical Transcript is overwritten in place. Scheduled at the front of the queue; preempts a running job (after confirmation) so it runs first. A failed Retry surfaces actively; success is quiet.
 _Avoid_: Re-transcribe (different intent — model comparison), reprocess, rerun
+
+**Feature Dependency**:
+An optional installable component that powers a feature (e.g. sherpa-onnx powers Speaker identification). Checked in two tiers at startup: critical dependencies are fatal when missing; Feature Dependencies degrade instead — a dismissible banner and the Diagnostics view explain what is missing and how to fix it, and Post-processing fails with a Failed (dependency) Outcome rather than silently completing without the feature. Once the dependency imports cleanly again, dependency-failed Recordings return to Stalled and are re-queued automatically at startup.
+_Avoid_: Plugin, extension, requirement (as a synonym)

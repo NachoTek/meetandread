@@ -236,6 +236,7 @@ to avoid clipping issues and enable proper text rendering.
         self._frame_drop_toast_id = "frame-drops"
         self._frame_drop_toast_reminder_seconds = 60.0
         self._recovery_toast_id = "recording-device-recovery"
+        self._dependency_toast_id = "feature-dependency-degraded"
         self.toast_manager = ToastManager(self, self)
 
         # WASAPI start retry state (T02)
@@ -1348,7 +1349,49 @@ to avoid clipping issues and enable proper text rendering.
                 else:
                     ensure_on_screen(self._floating_settings_panel)
                 self._floating_settings_panel.show_panel()
-    
+
+    def maybe_show_dependency_banner(self):
+        """Show a dismissible banner when Tier-2 dependencies are missing.
+
+        Issue #61: a missing feature dependency (e.g. sherpa-onnx powers
+        Speaker identification) is non-blocking — recording with Live
+        Transcript works — but the user must know a feature is degraded
+        and how to reach Diagnostics.  Shown once at startup; the banner
+        persists until dismissed or the user opens Diagnostics.
+        """
+        from meetandread.dependencies import unresolved_dependencies
+
+        try:
+            unresolved = unresolved_dependencies()
+        except Exception:
+            logging.exception("Dependency banner check failed")
+            return
+        if not unresolved:
+            return
+
+        features = " and ".join(s.dependency.feature for s in unresolved)
+        names = ", ".join(s.dependency.name for s in unresolved)
+        self.toast_manager.show(
+            self._dependency_toast_id,
+            "Optional feature unavailable",
+            f"{features} is unavailable — {names} is missing. "
+            f"Recording and live transcript keep working. "
+            f"Open Settings → Diagnostics for how to fix it.",
+            duration_ms=0,  # stays until dismissed
+            action_label="Open Diagnostics",
+            action_callback=self.open_diagnostics,
+            dismissable=True,
+        )
+
+    def open_diagnostics(self):
+        """Open the Settings panel on the Diagnostics page (issue #61)."""
+        panel = self._floating_settings_panel
+        if panel is None:
+            return
+        if not panel.isVisible():
+            self._toggle_settings_panel()
+        panel.open_diagnostics()
+
     def toggle_recording(self):
         """Toggle recording state via controller."""
         if not self._controller.is_recording():
