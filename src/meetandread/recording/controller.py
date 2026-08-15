@@ -339,6 +339,24 @@ class RecordingController:
         with self._state_lock:
             return self._state == ControllerState.RECORDING
 
+    def is_post_processing_gated(self) -> bool:
+        """True while a Recording is starting or active (thread-safe).
+
+        Wired as the Post-processing queue's idle-wait gate.  STARTING
+        (and RETRYING) count as busy so the gate is closed BEFORE the
+        record-start preemption request fires — otherwise a just-preempted
+        job can be re-dequeued before the RECORDING state lands and,
+        being shielded, run un-preemptibly through the whole recording
+        (issue #63).  STOPPING and ERROR leave the gate open: a failed
+        start or a stop in progress must let parked jobs resume.
+        """
+        with self._state_lock:
+            return self._state in (
+                ControllerState.STARTING,
+                ControllerState.RETRYING,
+                ControllerState.RECORDING,
+            )
+
     def is_busy(self) -> bool:
         """Check if controller is busy (starting, retrying, stopping, etc.)."""
         with self._state_lock:
@@ -787,6 +805,11 @@ class RecordingController:
                 is_recoverable=True
             )
 
+        # Clear any previous error
+        self.clear_error()
+        self._set_state(ControllerState.STARTING)
+        logger.debug("Starting recording...")
+
         # Preempt any in-flight post-processing from a previous recording
         # (ADR-0002, issue #63): the live Recording always outranks
         # background work, so the running job steps aside cooperatively —
@@ -796,16 +819,15 @@ class RecordingController:
         # cancellation would have discarded completed diarization work, but
         # preemption keeps the job alive; only partial transcription
         # progress is redone.  Queued (not running) jobs are unaffected —
-        # the queue's idle-wait gate already defers them until recording
-        # stops.  Done before _init_transcription replaces the queue, and
-        # only once the start has passed validation so an aborted start
-        # never discards a running job's progress.
+        # the queue's idle-wait gate defers them until recording stops.
+        #
+        # The state is STARTING *before* this request so the gate (see
+        # is_post_processing_gated) is already closed: otherwise the
+        # worker could re-dequeue the just-preempted job during the model
+        # load below and — shielded — run it un-preemptibly through the
+        # whole recording.  A start that fails later sets ERROR, which
+        # reopens the gate and the parked job resumes.
         self.preempt_post_processing(reason="new recording starting")
-
-        # Clear any previous error
-        self.clear_error()
-        self._set_state(ControllerState.STARTING)
-        logger.debug("Starting recording...")
 
         try:
             # Initialize transcription if enabled
@@ -1621,18 +1643,10 @@ class RecordingController:
             self._transcription_processor.on_result = self._on_phrase_result
             logger.debug("Transcription result callback wired")
 
-            # Initialize post-processing queue (for after recording stops)
-            if settings.transcription.enable_postprocessing:
-                logger.debug("Initializing post-processing queue")
-                self._post_processor = PostProcessingQueue(
-                    settings=settings,
-                    on_progress=self._on_post_process_progress,
-                    on_complete=self._on_post_process_complete_callback,
-                    is_recording_callback=lambda: self.is_recording(),
-                    diarize_callback=self._run_diarization_for_postprocess,
-                    apply_speaker_labels_callback=lambda store, result: self._apply_speaker_labels(result, store),
-                )
-                self._post_processor.start()
+            # Initialize post-processing queue (for after recording stops).
+            # One queue for the controller's lifetime — see
+            # _ensure_post_processor for why it must never be replaced.
+            self._ensure_post_processor(settings)
 
             return None
 
@@ -1643,6 +1657,35 @@ class RecordingController:
                 message=f"Failed to initialize transcription: {e}",
                 is_recoverable=True
             )
+
+    def _ensure_post_processor(self, settings) -> None:
+        """Create the Post-processing queue once; reuse it every recording.
+
+        The queue's worker, engine cache, preemption state, and pending-job
+        persistence must survive record-start — which preempts the running
+        job back into THIS queue (issue #63, ADR-0002).  Replacing the
+        queue per recording would discard the loaded engines and start a
+        second worker whose pending-job recovery re-enqueues the previous
+        queue's still-persisted (preempted) job as a fresh unshielded
+        copy, defeating the preemption and double-processing the job.
+
+        ConfigManager hands out one live settings object, so the queue's
+        held reference stays current without refreshing.
+        """
+        if not settings.transcription.enable_postprocessing:
+            return
+        if self._post_processor is not None:
+            return
+        logger.debug("Initializing post-processing queue")
+        self._post_processor = PostProcessingQueue(
+            settings=settings,
+            on_progress=self._on_post_process_progress,
+            on_complete=self._on_post_process_complete_callback,
+            is_recording_callback=self.is_post_processing_gated,
+            diarize_callback=self._run_diarization_for_postprocess,
+            apply_speaker_labels_callback=lambda store, result: self._apply_speaker_labels(result, store),
+        )
+        self._post_processor.start()
 
     def _on_phrase_result(self, result: SegmentResult) -> None:
         """Handle segment result from accumulating transcription processor.

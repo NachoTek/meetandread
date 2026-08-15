@@ -312,7 +312,22 @@ class PostProcessingQueue:
         self._queue_file_lock = threading.Lock()  # serialises read-modify-write
 
     def start(self) -> None:
-        """Start the background worker thread."""
+        """Start the background worker thread.
+
+        Also recovers any persisted pending jobs and re-queues Stalled
+        recordings — recovery first so the scan sees the recovered jobs
+        and does not double-enqueue them.  Startup-only concerns: callers
+        that just need the worker alive mid-session use
+        ``_ensure_started`` (no recovery — a persisted job may still be
+        live in the queue, and recovering it would duplicate it).
+        """
+        self._start_worker()
+        self._recover_pending_jobs()
+        if self._auto_requeue_stalled:
+            self.requeue_stalled_recordings()
+
+    def _start_worker(self) -> None:
+        """Spawn the worker thread exactly once (no recovery/scan)."""
         if self._is_running:
             return
 
@@ -326,12 +341,9 @@ class PostProcessingQueue:
         self._worker_thread.start()
         logger.info("PostProcessingQueue worker started")
 
-        # Recover any persisted pending jobs, then re-queue Stalled
-        # recordings (no Outcome) — recovery first so the scan sees the
-        # recovered jobs and does not double-enqueue them.
-        self._recover_pending_jobs()
-        if self._auto_requeue_stalled:
-            self.requeue_stalled_recordings()
+    def _ensure_started(self) -> None:
+        """Ensure the worker is running without running startup recovery."""
+        self._start_worker()
     
     def stop(self) -> None:
         """Stop the background worker thread."""
@@ -405,10 +417,10 @@ class PostProcessingQueue:
             "Scheduled post-processing job %s with model %s", job.job_id, model_size
         )
         
-        # Ensure worker is running
-        if not self._is_running:
-            self.start()
-        
+        # Ensure worker is running (no recovery: the just-persisted job is
+        # live in the queue, and recovering it would duplicate it).
+        self._ensure_started()
+
         return job
     
     def get_job_status(self, job_id: str) -> Optional[PostProcessJob]:
@@ -648,6 +660,23 @@ class PostProcessingQueue:
                 continue
 
             if job is None:
+                continue
+
+            # Re-check the gate with the job held: it may have closed in
+            # the window between the pre-dequeue check and this dequeue
+            # (e.g. record-start just preempted the previous job, issue
+            # #63).  Park the job at the front-lane TAIL — behind any
+            # Retry already waiting there — and go back to waiting; a
+            # shielded re-run could never be preempted again.
+            if (
+                self._is_recording_callback is not None
+                and self._is_recording_callback()
+            ):
+                self._job_queue.put_front(job)
+                logger.info(
+                    "Job %s parked: recording became active before start",
+                    job.job_id,
+                )
                 continue
 
             # Check if job was already cancelled while queued
@@ -1417,6 +1446,20 @@ class PostProcessingQueue:
         recovered = 0
         dropped = 0
         for entry in entries:
+            job_id = entry.get("job_id", "")
+            # A persisted job may still be live this session (queued,
+            # running, or preempted back into the queue).  Recovering it
+            # would create a duplicate object under the same ID and break
+            # preempt/cancel lookups (issue #63).
+            with self._jobs_lock:
+                already_live = job_id in self._jobs
+            if already_live:
+                logger.debug(
+                    "Recovery: job %s already live this session — skipped",
+                    job_id,
+                )
+                continue
+
             audio_path = Path(entry.get("audio_file", ""))
             if not audio_path.exists():
                 logger.info(

@@ -18,9 +18,13 @@ RecordingController façades over the Post-processing queue:
   user_initiated) surfacing actively in the UI.
 """
 
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from meetandread.recording.controller import (
     ControllerState,
@@ -211,6 +215,195 @@ class TestStartPreemptsRunningJob:
         ctrl.start({"mic"})
 
         assert queue.preempt_calls == []
+
+
+# ---------------------------------------------------------------------------
+# The idle gate must be closed BEFORE the preempt request (issue #63)
+# ---------------------------------------------------------------------------
+
+
+class TestIsPostProcessingGate:
+    """is_post_processing_gated is the queue's idle-wait gate predicate.
+
+    STARTING (and RETRYING) must count as busy: the preempt request fires
+    after the state leaves IDLE, so the gate has to be closed by then or
+    the just-preempted job is re-dequeued and — being shielded — runs
+    un-preemptibly through the whole recording.
+    """
+
+    @pytest.mark.parametrize(
+        "state,busy",
+        [
+            (ControllerState.STARTING, True),
+            (ControllerState.RETRYING, True),
+            (ControllerState.RECORDING, True),
+            (ControllerState.IDLE, False),
+            (ControllerState.STOPPING, False),
+            (ControllerState.ERROR, False),
+        ],
+    )
+    def test_gate_covers_starting_and_recording(self, state, busy):
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._state = state
+
+        assert ctrl.is_post_processing_gated() is busy
+
+    def test_gate_is_thread_safe_snapshot(self):
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._state = ControllerState.RECORDING
+        ctrl.is_post_processing_gated()  # must not raise under lock churn
+
+
+class TestPostProcessorQueuePersistsAcrossRecordings:
+    """_ensure_post_processor reuses one queue for the controller's life.
+
+    Replacing the queue per recording would (a) discard the loaded engine
+    cache, and (b) start() a second worker whose pending-job recovery
+    re-enqueues the previous queue's still-persisted (preempted) job as a
+    fresh unshielded copy — defeating record-start preemption (issue #63).
+    """
+
+    def _settings(self, enabled=True):
+        settings = MagicMock()
+        settings.transcription.enable_postprocessing = enabled
+        settings.transcription.postprocess_model_size = "base"
+        return settings
+
+    def test_created_once_and_reused(self, tmp_path, monkeypatch):
+        from meetandread.audio.storage import paths as paths_mod
+
+        data = tmp_path / "queue-data"
+        data.mkdir()
+        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
+
+        ctrl = RecordingController(enable_transcription=False)
+        ctrl._ensure_post_processor(self._settings())
+        first = ctrl._post_processor
+        try:
+            assert first is not None
+
+            ctrl._ensure_post_processor(self._settings())
+
+            assert ctrl._post_processor is first
+        finally:
+            if ctrl._post_processor:
+                ctrl._post_processor.stop()
+
+    def test_not_created_when_post_processing_disabled(self):
+        ctrl = RecordingController(enable_transcription=False)
+
+        ctrl._ensure_post_processor(self._settings(enabled=False))
+
+        assert ctrl._post_processor is None
+
+    def test_existing_fake_queue_is_not_replaced(self):
+        """A queue injected by callers/tests survives re-initialization."""
+        ctrl = RecordingController(enable_transcription=False)
+        fake = MagicMock()
+        ctrl._post_processor = fake
+
+        ctrl._ensure_post_processor(self._settings())
+
+        assert ctrl._post_processor is fake
+        fake.start.assert_not_called()
+
+
+class TestRecordStartPreemptsEndToEnd:
+    """Record-start preemption against a REAL queue + worker (issue #63).
+
+    Reproduces the production wiring: the queue's idle gate is the
+    controller's gate predicate, the job runs on the queue's worker, and
+    the preempt request arrives from the controller.  The preempted job
+    must park while the recording is live and complete afterwards without
+    user intervention — no queue replacement, no unshielded recovery copy.
+    """
+
+    def test_preempted_job_parks_while_recording_and_completes_after(
+        self, tmp_path, monkeypatch
+    ):
+        import numpy as np
+
+        from meetandread.transcription.post_processor import (
+            PostProcessingQueue,
+            PostProcessStatus,
+        )
+        from tests.test_post_processing_preempt import (
+            FakeEngine,
+            _wait_for,
+            _window_samples,
+        )
+        from meetandread.audio.storage import paths as paths_mod
+
+        data = tmp_path / "queue-data"
+        data.mkdir()
+        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
+
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        ctrl = RecordingController(enable_transcription=False)
+        windows = 2
+        first_window_started = threading.Event()
+        release_first_window = threading.Event()
+
+        def on_chunk(index):
+            if index == 1:
+                # Hold the first window open until the test has fired the
+                # preempt request — otherwise the faked job finishes before
+                # preemption can arrive.
+                first_window_started.set()
+                assert release_first_window.wait(timeout=10)
+
+        queue = PostProcessingQueue(
+            settings=settings,
+            is_recording_callback=ctrl.is_post_processing_gated,
+            auto_requeue_stalled=False,
+        )
+        engine = FakeEngine(on_chunk=on_chunk)
+        queue._engines["base"] = engine
+        queue._load_audio_file = lambda path: np.zeros(
+            windows * _window_samples(queue), dtype=np.float32
+        )
+        ctrl._post_processor = queue
+
+        audio = tmp_path / "recording-x.wav"
+        audio.write_bytes(b"RIFF")
+        job = queue.schedule_post_process(audio, None, tmp_path)
+
+        queue.start()
+        try:
+            assert first_window_started.wait(timeout=10), "job never started"
+
+            # Simulate the post-validation part of start(): gate closes
+            # (STARTING), preempt fires, recording goes live.
+            ctrl._state = ControllerState.STARTING
+            ctrl.preempt_post_processing(reason="new recording starting")
+            ctrl._state = ControllerState.RECORDING
+            release_first_window.set()
+
+            # The job steps aside at the next cooperative checkpoint.
+            assert _wait_for(
+                lambda: job.status == PostProcessStatus.PENDING
+            ), f"job was not preempted: {job.status}"
+            assert job.shielded is True
+            partial_windows = len(engine.calls)
+            assert partial_windows >= 1
+
+            # While the recording is live the parked job must NOT re-run.
+            time.sleep(0.6)
+            assert job.status == PostProcessStatus.PENDING
+            assert len(engine.calls) == partial_windows
+
+            # Recording ends — the parked job finishes on its own.
+            ctrl._state = ControllerState.IDLE
+            assert _wait_for(
+                lambda: job.status == PostProcessStatus.COMPLETED
+            ), f"job did not complete after recording: {job.status}"
+            # Partial progress was redone: full re-run after the partial.
+            assert len(engine.calls) == partial_windows + windows
+        finally:
+            ctrl._state = ControllerState.IDLE
+            queue.stop()
 
 
 # ---------------------------------------------------------------------------

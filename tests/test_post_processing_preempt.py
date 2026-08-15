@@ -624,3 +624,53 @@ class TestWorkerPreemptionEndToEnd:
         finally:
             release_second_run.set()
             queue.stop()
+
+    def test_job_dequeued_just_before_gate_close_is_parked(
+        self, tmp_path, monkeypatch
+    ):
+        """A job popped while the gate is closing waits, un-processed.
+
+        Race hardening for record-start preemption (issue #63): the gate
+        may close between the worker's pre-dequeue check and the dequeue
+        itself.  The worker must re-check with the job held and park it at
+        the front-lane tail (behind any waiting Retry) instead of running
+        it — a shielded re-run could never be preempted again.
+        """
+        audio = tmp_path / "recording-a.wav"
+        audio.write_bytes(b"RIFF")
+
+        class FlappyGate:
+            """Open for exactly the first check, closed ever after."""
+
+            def __init__(self):
+                self.calls = 0
+                self.lock = threading.Lock()
+
+            def __call__(self):
+                with self.lock:
+                    self.calls += 1
+                    return self.calls > 1
+
+        gate = FlappyGate()
+        queue = _make_queue(tmp_path, monkeypatch, is_recording=gate)
+        windows = 2
+        engine = FakeEngine()
+        queue._engines["base"] = engine
+        queue._load_audio_file = lambda path: np.zeros(
+            windows * _window_samples(queue), dtype=np.float32
+        )
+
+        job = queue.schedule_post_process(audio, None, tmp_path)
+        try:
+            # First gate check passes (open), the post-dequeue re-check
+            # sees it closed → the job parks instead of processing.
+            assert _wait_for(lambda: gate.calls >= 3), "gate never re-checked"
+            time.sleep(0.4)
+
+            assert job.status == PostProcessStatus.PENDING
+            assert engine.calls == []
+            assert not queue.get_status_for_audio(audio) == (
+                PostProcessStatus.RUNNING
+            )
+        finally:
+            queue.stop()

@@ -900,6 +900,20 @@ class TestSpeakerRename:
 class TestPostProcessingQueueIdleWait:
     """Verify the queue defers processing while is_recording_callback is True."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_queue_file(self, tmp_path, monkeypatch):
+        """Keep the persisted queue file out of the real app data dir.
+
+        ``start()`` runs pending-job recovery against ``get_data_dir()``;
+        without this, stale entries from real app usage (or crashed runs)
+        leak into the test as extra recovered jobs.
+        """
+        from meetandread.audio.storage import paths as paths_mod
+
+        data = tmp_path / "queue-data"
+        data.mkdir(exist_ok=True)
+        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
+
     def test_idle_wait_delays_processing_until_not_recording(self, tmp_path: Path) -> None:
         """Job stays deferred while is_recording_callback returns True."""
         settings = MagicMock()
@@ -985,12 +999,7 @@ class TestPostProcessingQueueIdleWait:
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
 
-        from meetandread.audio.storage import paths as paths_mod
-
-        data = tmp_path / "queue-data"
-        data.mkdir()
-        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
-
+        # Queue file isolation comes from the class's autouse fixture.
         ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
         job = _make_job(tmp_path)
         job.cancel_requested = True  # cancelled before the worker dequeues it
@@ -1128,10 +1137,16 @@ class TestPostProcessingQueueCancellation:
         result = ppq.cancel_current_job()
         assert result is False
 
-    def test_cancelled_job_skipped_in_worker(self, tmp_path: Path) -> None:
+    def test_cancelled_job_skipped_in_worker(self, tmp_path: Path, monkeypatch) -> None:
         """A job cancelled while queued is skipped by the worker loop."""
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
+
+        from meetandread.audio.storage import paths as paths_mod
+
+        data = tmp_path / "queue-data"
+        data.mkdir()
+        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
 
         ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
         job = _make_job(tmp_path)
