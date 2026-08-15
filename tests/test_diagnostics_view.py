@@ -15,10 +15,15 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+from PyQt6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QLabel,
+    QPushButton,
+    QWidget,
+)
 
-import meetandread.dependencies as deps
-from meetandread.dependencies import (
+import meetandread.dependencies as deps  # noqa: E402
+from meetandread.dependencies import (  # noqa: E402
     SHERPA_ONNX,
     DependencyStatus,
     FeatureDependency,
@@ -170,7 +175,9 @@ class TestDependencyBanner:
 
         assert widget.toast_manager.shown == []
 
-    def test_banner_action_opens_diagnostics(self, qapp, monkeypatch):
+    def test_banner_action_opens_diagnostics_and_dismisses_banner(
+        self, qapp, monkeypatch
+    ):
         monkeypatch.setattr(
             deps,
             "unresolved_dependencies",
@@ -185,6 +192,11 @@ class TestDependencyBanner:
         widget.toast_manager.shown[0]["action_callback"]()
 
         panel.open_diagnostics.assert_called_once()
+        # Acting on the banner dismisses it — the user is looking at the
+        # fix it pointed at.
+        assert widget.toast_manager.dismissed == [
+            "feature-dependency-degraded"
+        ]
 
     def test_open_diagnostics_shows_panel_when_hidden(self, qapp):
         widget = _minimal_widget()
@@ -198,6 +210,9 @@ class TestDependencyBanner:
 
         assert toggled == [True]
         panel.open_diagnostics.assert_called_once()
+        assert widget.toast_manager.dismissed == [
+            "feature-dependency-degraded"
+        ]
 
 
 # ---------------------------------------------------------------------------

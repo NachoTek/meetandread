@@ -14,12 +14,12 @@ import pytest
 from meetandread import dependencies as deps
 from meetandread.dependencies import (
     SHERPA_ONNX,
+    DependencyError,
     DependencyStatus,
     FeatureDependency,
     check_feature_dependencies,
     dependency_error,
     dependency_failure_message,
-    find_dependency,
     is_dependency_available,
     reset_availability_cache,
     unresolved_dependencies,
@@ -45,11 +45,6 @@ class TestRegistry:
     def test_entries_are_immutable(self):
         with pytest.raises(Exception):
             setattr(SHERPA_ONNX, "name", "other")
-
-    def test_find_dependency_by_name_and_module(self):
-        assert find_dependency("sherpa-onnx") is SHERPA_ONNX
-        assert find_dependency("sherpa_onnx") is SHERPA_ONNX
-        assert find_dependency("nope") is None
 
 
 class TestResolutionText:
@@ -150,9 +145,10 @@ class TestCheckFeatureDependencies:
 class TestDependencyError:
     def test_error_carries_failure_message_and_dependency_name(self):
         error = dependency_error(SHERPA_ONNX)
+        assert isinstance(error, DependencyError)
         assert isinstance(error, ImportError)
         assert str(error) == dependency_failure_message(SHERPA_ONNX)
-        assert getattr(error, "dependency_name") == SHERPA_ONNX.name
+        assert error.dependency_name == SHERPA_ONNX.name
 
     def test_status_dataclass_round_trip(self):
         status = DependencyStatus(dependency=SHERPA_ONNX, available=False)

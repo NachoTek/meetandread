@@ -167,6 +167,26 @@ class TestControllerDiarizationCallback:
             is None
         )
 
+    def test_broken_internal_import_propagates_unattributed(
+        self, tmp_path, monkeypatch
+    ):
+        """A failing *internal* import (broken install, not sherpa-onnx)
+        propagates its original message — never misattributed to
+        sherpa-onnx's vocabulary."""
+        controller = self._bare_controller()
+        settings = AppSettings()
+        settings.speaker.enabled = True
+        controller._config_manager = Mock()
+        controller._config_manager.get_settings.return_value = settings
+
+        with patch.dict(
+            "sys.modules", {"meetandread.speaker.diarizer": None}
+        ):
+            with pytest.raises(ImportError) as excinfo:
+                controller._run_diarization_for_postprocess(tmp_path / "x.wav")
+
+        assert SHERPA_ONNX.name not in str(excinfo.value)
+
 
 class TestPostProcessFailureCarriesDependency:
     def test_failure_defaults_to_no_dependency(self):

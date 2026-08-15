@@ -26,7 +26,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -138,14 +138,6 @@ def unresolved_dependencies() -> List[DependencyStatus]:
     ]
 
 
-def find_dependency(name_or_module: str) -> Optional[FeatureDependency]:
-    """Look up a registered dependency by display name or module name."""
-    for dep in FEATURE_DEPENDENCIES:
-        if name_or_module in (dep.name, dep.module):
-            return dep
-    return None
-
-
 def dependency_failure_message(dep: FeatureDependency) -> str:
     """The single guidance vocabulary for a missing dependency.
 
@@ -159,14 +151,20 @@ def dependency_failure_message(dep: FeatureDependency) -> str:
     )
 
 
-def dependency_error(dep: FeatureDependency) -> ImportError:
-    """An ImportError carrying the registry message and dependency name.
+class DependencyError(ImportError):
+    """An ImportError naming the missing Tier-2 dependency.
 
     The queue's diarization step treats an ImportError from the diarize
-    callback as a dependency failure; the ``dependency_name`` attribute
-    lets the Failed Outcome name the exact dependency for repair
-    conversion.  Keep in sync with ``PostProcessFailure.dependency``.
+    callback as a dependency failure; this subclass lets the Failed
+    Outcome name the exact dependency (``dependency_name``) for repair
+    conversion instead of relying on a duck-typed attribute.
     """
-    error = ImportError(dependency_failure_message(dep))
-    setattr(error, "dependency_name", dep.name)
-    return error
+
+    def __init__(self, dep: FeatureDependency):
+        super().__init__(dependency_failure_message(dep))
+        self.dependency_name = dep.name
+
+
+def dependency_error(dep: FeatureDependency) -> DependencyError:
+    """Build the ImportError raised when *dep* is missing."""
+    return DependencyError(dep)

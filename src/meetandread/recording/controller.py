@@ -1294,11 +1294,10 @@ class RecordingController:
             from meetandread.speaker.diarizer import Diarizer
             from meetandread.speaker.signatures import VoiceSignatureStore
             from meetandread.audio.storage.paths import get_recordings_dir
-        except ImportError as exc:
-            # Broken install: surface the registry's guidance vocabulary.
-            raise feature_dependencies.dependency_error(
-                feature_dependencies.SHERPA_ONNX
-            ) from exc
+        except ImportError:
+            # Broken install: the original error propagates — the queue
+            # maps it to a Failed (dependency) Outcome unattributed.
+            raise
 
         try:
             settings = self._config_manager.get_settings()

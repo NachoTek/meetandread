@@ -1384,10 +1384,15 @@ to avoid clipping issues and enable proper text rendering.
         )
 
     def open_diagnostics(self):
-        """Open the Settings panel on the Diagnostics page (issue #61)."""
+        """Open the Settings panel on the Diagnostics page (issue #61).
+
+        Acting on the dependency banner dismisses it — the user is now
+        looking at the fix it pointed at.
+        """
         panel = self._floating_settings_panel
         if panel is None:
             return
+        self.toast_manager.dismiss(self._dependency_toast_id)
         if not panel.isVisible():
             self._toggle_settings_panel()
         panel.open_diagnostics()

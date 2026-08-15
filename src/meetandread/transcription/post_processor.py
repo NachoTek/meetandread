@@ -1557,6 +1557,8 @@ class PostProcessingQueue:
 
         from meetandread.transcription.transcript_scanner import scan_recordings
 
+        all_repaired = len(repaired) == len(FEATURE_DEPENDENCIES)
+
         with self._requeue_lock:
             try:
                 recordings = scan_recordings()
@@ -1576,9 +1578,15 @@ class PostProcessingQueue:
                     or outcome.stage != transcript_footer.STAGE_DEPENDENCY
                 ):
                     continue
-                if not self._dependency_outcome_repaired(
-                    outcome, repaired, total=len(FEATURE_DEPENDENCIES)
-                ):
+                # Loop-safety core: convert only when the import actually
+                # passes for the dependency the Outcome names; an Outcome
+                # without a name converts only when every registered
+                # dependency imports cleanly (conservative).
+                if outcome.dependency is not None:
+                    repaired_now = outcome.dependency in repaired
+                else:
+                    repaired_now = all_repaired
+                if not repaired_now:
                     continue
                 if transcript_footer.clear_post_process_outcome(meta.path):
                     cleared += 1
@@ -1593,21 +1601,6 @@ class PostProcessingQueue:
                     cleared,
                 )
             return cleared
-
-    @staticmethod
-    def _dependency_outcome_repaired(
-        outcome: PostProcessOutcome, repaired_names: Set[str], total: int
-    ) -> bool:
-        """True when the dependency that failed *outcome* now imports.
-
-        Loop-safety core (issue #61): conversion requires a passing
-        import of the exact dependency the Outcome names.  ``total`` is
-        the number of registered dependencies; an Outcome without a
-        name converts only when every one of them imports cleanly.
-        """
-        if outcome.dependency is not None:
-            return outcome.dependency in repaired_names
-        return len(repaired_names) == total
 
     def requeue_stalled_recordings(self) -> int:
         """Scan the Library and re-queue Stalled recordings.
