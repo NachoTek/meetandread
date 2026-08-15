@@ -1249,6 +1249,35 @@ class RecordingController:
             )
             return None
 
+    def initialize_post_processing(self) -> None:
+        """Create and start the Post-processing queue at app startup.
+
+        Before this existed the queue was created on the first
+        record-start, so Stalled Recordings (no Outcome) showed a
+        'Queued' pill while nothing was scheduled and nothing ran until
+        the user recorded (QA on #62).  ``PostProcessingQueue.start()``
+        runs pending-job recovery, dependency-repair conversion, and the
+        Stalled requeue scan — the Recording gate keeps jobs parked
+        while a Recording is active, and record-start preempts a running
+        job (issue #63), so starting early is safe.
+
+        No-op when transcription is disabled, Post-processing is
+        disabled in settings, or the queue already exists.  Failures are
+        logged and swallowed — startup must never block on this.
+        """
+        if not self.enable_transcription:
+            return
+        if self._post_processor is not None:
+            return
+        try:
+            settings = self._config_manager.get_settings()
+            self._ensure_post_processor(settings)
+        except Exception as exc:
+            logger.warning(
+                "Post-processing startup initialization failed "
+                "(non-fatal): %s", exc,
+            )
+
     def requeue_stalled_recordings(self) -> int:
         """Scan the Library and re-queue Stalled recordings (issue #62).
 

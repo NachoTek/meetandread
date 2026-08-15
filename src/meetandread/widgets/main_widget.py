@@ -1350,6 +1350,18 @@ to avoid clipping issues and enable proper text rendering.
                     ensure_on_screen(self._floating_settings_panel)
                 self._floating_settings_panel.show_panel()
 
+    def initialize_post_processing(self):
+        """Start Post-processing at app startup (delegates to controller).
+
+        main() calls this once the widget exists so Stalled Recordings
+        and dependency-repaired ones flow through the queue while the
+        app idles — instead of waiting for the first record-start.
+        """
+        try:
+            self._controller.initialize_post_processing()
+        except Exception:
+            logging.exception("Post-processing startup failed (non-fatal)")
+
     def maybe_show_dependency_banner(self):
         """Show a dismissible banner when Tier-2 dependencies are missing.
 

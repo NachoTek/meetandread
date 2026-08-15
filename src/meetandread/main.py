@@ -404,6 +404,15 @@ def main():
     # Create and show the main widget
     widget = MeetAndReadWidget()
     _widget_holder[0] = widget  # Enable signal handlers to reach the widget
+
+    # Start Post-processing at app startup: pending-job recovery,
+    # dependency-repair conversion, and the Stalled requeue scan run
+    # while the app idles instead of waiting for the first record-start
+    # (issues #61/#62 — 'Queued' rows must process automatically).
+    try:
+        widget.initialize_post_processing()
+    except Exception as e:
+        logger.warning("Post-processing startup initialization failed: %s", e)
     
     # Create and wire system tray icon manager
     from meetandread.widgets.tray_icon import TrayIconManager

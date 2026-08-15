@@ -5093,6 +5093,11 @@ class FloatingSettingsPanel(QWidget):
         self._retranscribe_original_html: Optional[str] = None
         self._is_retranscribing: bool = False
         self._is_comparison_mode: bool = False
+        # Live re-transcribe progress overlay (QA bug: progress was only
+        # logged).  Target row + last percent, rendered as a processing
+        # pill while the RetranscribeRunner is in flight.
+        self._retranscribe_target_md: Optional[Path] = None
+        self._retranscribe_pct: int = 0
 
         # Connect Qt-safe retranscribe signals to GUI-thread handlers
         self._retranscribe_progress_sig.connect(self._on_retranscribe_progress_gui)
@@ -7539,11 +7544,17 @@ class FloatingSettingsPanel(QWidget):
                 post_process_status=status, post_process_progress=progress,
             )
             row_widget.update_display_text(display_text, italic=italic)
-            pill_text, pill_kind, tooltip = self._build_history_status_pill(
-                meta,
-                post_process_status=status, post_process_progress=progress,
-                post_processing_enabled=pp_enabled,
-            )
+            overlay = self._retranscribe_overlay(meta)
+            if overlay is not None:
+                # A re-transcription in flight owns this row's pill; the
+                # post-processing tick must not clobber it.
+                pill_text, pill_kind, tooltip = overlay
+            else:
+                pill_text, pill_kind, tooltip = self._build_history_status_pill(
+                    meta,
+                    post_process_status=status, post_process_progress=progress,
+                    post_processing_enabled=pp_enabled,
+                )
             row_widget.set_status_pill(pill_text, pill_kind, tooltip)
             row_widget.set_retry_visible(pill_kind == "failed")
             if status in self._LIVE_POST_PROCESS_STATES:
@@ -7578,11 +7589,18 @@ class FloatingSettingsPanel(QWidget):
                 meta, return_italic=True,
                 post_process_status=status, post_process_progress=progress,
             )
-            pill_text, pill_kind, pill_tooltip = self._build_history_status_pill(
-                meta,
-                post_process_status=status, post_process_progress=progress,
-                post_processing_enabled=pp_enabled,
-            )
+            overlay = self._retranscribe_overlay(meta)
+            if overlay is not None:
+                pill_text, pill_kind, pill_tooltip = overlay
+            else:
+                pill_text, pill_kind, pill_tooltip = (
+                    self._build_history_status_pill(
+                        meta,
+                        post_process_status=status,
+                        post_process_progress=progress,
+                        post_processing_enabled=pp_enabled,
+                    )
+                )
 
             path_str = str(meta.path)
             item = QListWidgetItem("")  # Text rendered by _HistoryRowWidget; empty here to avoid double-render shadow
@@ -9449,6 +9467,9 @@ class FloatingSettingsPanel(QWidget):
         self._retranscribe_model_size = model_size
         self._is_retranscribing = True
         self._is_comparison_mode = False
+        self._retranscribe_target_md = md_path
+        self._retranscribe_pct = 0
+        self._update_retranscribe_row()
 
         self._retranscribe_original_html = self._history_viewer.toHtml()
 
@@ -9468,6 +9489,7 @@ class FloatingSettingsPanel(QWidget):
             self._is_comparison_mode = False
             self._retranscribe_runner = None
             self._retranscribe_sidecar_path = None
+            self._clear_retranscribe_progress()
             parent = self.parent() if self.parent() else self
             QMessageBox.warning(
                 parent,
@@ -9483,8 +9505,53 @@ class FloatingSettingsPanel(QWidget):
         self._retranscribe_progress_sig.emit(pct)
 
     def _on_retranscribe_progress_gui(self, pct: int) -> None:
-        """GUI-thread handler for retranscribe progress updates."""
-        logger.debug("Retranscribe progress: %d%%", pct)
+        """GUI-thread handler for retranscribe progress updates.
+
+        Surfaces the progress on the target row's status pill (QA bug:
+        this handler previously only logged, so a running re-transcribe
+        was invisible).
+        """
+        self._retranscribe_pct = int(pct)
+        self._update_retranscribe_row()
+
+    def _clear_retranscribe_progress(self) -> None:
+        """Drop the progress overlay; the row re-renders from its Outcome."""
+        self._retranscribe_target_md = None
+        self._retranscribe_pct = 0
+
+    def _update_retranscribe_row(self) -> None:
+        """Repaint the re-transcribing row's pill with the live percent."""
+        md = self._retranscribe_target_md
+        if md is None:
+            return
+        row_widget = self._history_row_widget_for_md(md)
+        if row_widget is not None:
+            row_widget.set_status_pill(
+                f"Re-transcribing {self._retranscribe_pct}%",
+                "processing",
+                "Re-transcription in progress",
+            )
+            row_widget.set_retry_visible(False)
+
+    def _history_row_widget_for_md(self, md_path: Path):
+        """Return the row widget for a transcript path, if listed."""
+        for idx, meta in enumerate(self._history_recordings):
+            if meta.path == md_path:
+                return self._history_row_widgets.get(idx)
+        return None
+
+    def _retranscribe_overlay(self, meta) -> Optional[tuple]:
+        """Live 'Re-transcribing NN%' pill for the row being re-transcribed."""
+        if (
+            self._retranscribe_target_md is not None
+            and meta.path == self._retranscribe_target_md
+        ):
+            return (
+                f"Re-transcribing {self._retranscribe_pct}%",
+                "processing",
+                "Re-transcription in progress",
+            )
+        return None
 
     def _on_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """RetranscribeRunner completion callback (background thread).
@@ -9500,6 +9567,7 @@ class FloatingSettingsPanel(QWidget):
     def _handle_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """Process retranscribe completion on the GUI thread."""
         self._is_retranscribing = False
+        self._clear_retranscribe_progress()
 
         if error:
             parent = self.parent() if self.parent() else self
