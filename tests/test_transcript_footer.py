@@ -71,6 +71,7 @@ class TestPublicInterface:
         "outcome_from_block",
         "read_post_process_outcome",
         "write_post_process_outcome",
+        "clear_post_process_outcome",
     }
 
     def test_all_exports_are_core_plus_outcome_operations(self):

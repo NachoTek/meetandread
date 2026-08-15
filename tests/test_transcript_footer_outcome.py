@@ -198,3 +198,70 @@ class TestWriteOutcomeToFile:
         ok = transcript_footer.write_post_process_outcome(md, _completed())
 
         assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# clear_post_process_outcome: file-level removal (issue #63 — Retry)
+# ---------------------------------------------------------------------------
+
+
+class TestClearOutcomeFromFile:
+    """``clear_post_process_outcome`` removes only the post_process block."""
+
+    def test_clear_then_read_returns_none(self, tmp_path):
+        md = write_transcript(
+            tmp_path / "recording.md",
+            "# Transcript\n\nHello world.",
+            {"post_process": _failed().to_block(), "word_count": 2},
+        )
+
+        ok = transcript_footer.clear_post_process_outcome(md)
+
+        assert ok is True
+        assert transcript_footer.read_post_process_outcome(
+            md.read_text(encoding="utf-8")
+        ) is None
+
+    def test_clear_preserves_body_and_other_metadata(self, tmp_path):
+        body = "# Transcript\n\nHello world."
+        metadata = {
+            "recording_start_time": "2026-08-14T09:00:00",
+            "word_count": 2,
+            "speaker_matches": {"SPK_0": {"identity_name": "Alice"}},
+            "post_process": _failed().to_block(),
+        }
+        md = write_transcript(tmp_path / "recording.md", body, metadata)
+
+        transcript_footer.clear_post_process_outcome(md)
+
+        split = transcript_footer.split(md.read_text(encoding="utf-8"))
+        assert split is not None
+        new_body, new_metadata = split
+        assert new_body == body
+        assert new_metadata["recording_start_time"] == "2026-08-14T09:00:00"
+        assert new_metadata["speaker_matches"] == metadata["speaker_matches"]
+        assert "post_process" not in new_metadata
+
+    def test_clear_without_existing_outcome_is_false(self, tmp_path):
+        md = write_transcript(
+            tmp_path / "recording.md", "# Transcript", {"word_count": 0},
+        )
+
+        ok = transcript_footer.clear_post_process_outcome(md)
+
+        assert ok is False
+
+    def test_clear_returns_false_when_file_missing(self, tmp_path):
+        missing = tmp_path / "nope.md"
+
+        ok = transcript_footer.clear_post_process_outcome(missing)
+
+        assert ok is False
+
+    def test_clear_returns_false_without_footer(self, tmp_path):
+        md = tmp_path / "bare.md"
+        md.write_text("# Just markdown\n", encoding="utf-8")
+
+        ok = transcript_footer.clear_post_process_outcome(md)
+
+        assert ok is False

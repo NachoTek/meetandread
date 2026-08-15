@@ -37,6 +37,10 @@ This module also owns the format of the Post-processing Outcome block — the
     Write or replace the Outcome block in a Transcript file, preserving the
     Markdown body and every other metadata field.
 
+``clear_post_process_outcome``
+    Remove the Outcome block from a Transcript file, preserving the Markdown
+    body and every other metadata field.
+
 The Transcript Footer is introduced by a Markdown horizontal rule on its own
 line, followed by a blank line and an HTML comment labelled ``METADATA``.
 Parsing selects the **last** such Transcript Footer, so body text that merely
@@ -65,6 +69,7 @@ __all__ = [
     "outcome_from_block",
     "read_post_process_outcome",
     "write_post_process_outcome",
+    "clear_post_process_outcome",
 ]
 
 
@@ -348,6 +353,31 @@ def write_post_process_outcome(path: Path, outcome: PostProcessOutcome) -> bool:
         return False
     body, metadata = parts
     metadata[OUTCOME_KEY] = outcome.to_block()
+    try:
+        atomic_write(Path(path), join(body, metadata))
+    except OSError:
+        return False
+    return True
+
+
+def clear_post_process_outcome(path: Path) -> bool:
+    """Remove the Outcome block from a Transcript file.
+
+    The Markdown body and every other metadata field are preserved
+    byte-for-byte; only the ``post_process`` block is removed.  Returns
+    ``True`` when an Outcome was removed, ``False`` when the file is
+    missing, has no usable Transcript Footer, or carried no Outcome.
+    """
+    try:
+        content = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    parts = split(content)
+    if parts is None:
+        return False
+    body, metadata = parts
+    if metadata.pop(OUTCOME_KEY, None) is None:
+        return False
     try:
         atomic_write(Path(path), join(body, metadata))
     except OSError:

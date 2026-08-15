@@ -32,6 +32,10 @@ _Avoid_: Status (ambiguous with the in-flight job state), cancellation state
 A Recording with no recorded Post-processing Outcome — Post-processing never ran, was lost, or was interrupted. Automatically re-queued for Post-processing when its Audio still exists and Post-processing is enabled.
 _Avoid_: Manual Action Required (as a state name), stuck, incomplete
 
+**Preempt**:
+The cooperative interruption of a running Post-processing job by a higher-priority action (starting a live Recording, or a user-initiated Retry). The job steps aside within one transcription segment, returns to the front of the queue — it is not cancelled — and is shielded from further preemption until it completes. Partial transcription progress is redone, not resumed.
+_Avoid_: Cancel (terminal — discards the job), pause, abort
+
 **Audio**:
 The raw captured sound of a Recording, stored as a WAV file. It is the input material from which the Transcript is derived, not an end product in itself.
 _Avoid_: Recording (as a synonym — a Recording contains Audio), sound file
@@ -63,3 +67,7 @@ _Avoid_: Device loss, dropout, failure
 **Re-transcribe**:
 A user-initiated re-transcription of a Recording's audio with a different (typically stronger) Whisper model. Produces a sidecar Transcript alongside the original so the user can compare both versions side-by-side and choose which to keep. The discarded version is then removed.
 _Avoid_: Scrub, reprocess, upgrade
+
+**Retry**:
+A user-initiated re-run of Post-processing for a Failed Recording, using the current default Post-processing settings. Distinct from Re-transcribe: no model picker and no sidecar — the canonical Transcript is overwritten in place. Scheduled at the front of the queue; preempts a running job (after confirmation) so it runs first. A failed Retry surfaces actively; success is quiet.
+_Avoid_: Re-transcribe (different intent — model comparison), reprocess, rerun

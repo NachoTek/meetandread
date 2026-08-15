@@ -33,7 +33,7 @@ from meetandread.recording import RecordingController, ControllerState
 from meetandread.recording.controller import RecoveryOutcome
 from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config
-from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog
+from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog, PostProcessFailureDialog
 from meetandread.widgets.theme import context_menu_css, current_palette
 
 
@@ -1164,6 +1164,7 @@ to avoid clipping issues and enable proper text rendering.
             logging.info("Post-processing complete! Job: %s, transcript: %s", job_id, transcript_path)
         else:
             logging.warning("Post-processing job %s completed with failure (no transcript)", job_id)
+            self._maybe_show_post_process_failure(job_id)
 
         # Update Performance tab WER display (Settings panel)
         if self._floating_settings_panel:
@@ -1173,6 +1174,34 @@ to avoid clipping issues and enable proper text rendering.
         # Notify that history data changed — post-processing may change word/speaker counts
         # Always emit, even on failure, so the "(processing speakers...)" indicator clears
         self.history_data_changed.emit()
+
+    def _maybe_show_post_process_failure(self, job_id) -> None:
+        """Surface a failed user-initiated Retry actively (issue #63).
+
+        A failed Retry pops a dialog showing the stage and error with
+        copyable details (for reporting); the row's Failed pill updates
+        via the ordinary history refresh.  Background (auto-requeued)
+        failures never raise dialogs — rows update only.  Success is quiet.
+        """
+        getter = getattr(self._controller, "get_post_process_failure", None)
+        if not callable(getter):
+            return
+        try:
+            failure = getter(job_id)
+        except Exception as exc:
+            logging.warning("Post-process failure probe failed: %s", exc)
+            return
+        if not failure or not failure.get("user_initiated"):
+            return
+
+        dialog = PostProcessFailureDialog(
+            self,
+            stage=failure.get("stage"),
+            error=failure.get("error", ""),
+            transcript_path=failure.get("transcript_path", ""),
+        )
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
 
     def _reset_frame_drop_toast_state(self) -> None:
         """Reset per-recording frame-drop toast throttling state."""

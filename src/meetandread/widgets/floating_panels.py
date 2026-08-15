@@ -410,6 +410,93 @@ def _strip_confidence_percentages(text: str) -> str:
     return re.sub(r" \(\d{1,3}%\)", "", text)
 
 
+# Human-readable labels for the Post-processing Outcome stages (the
+# Transcript Footer owns the machine tokens; see transcript_footer).
+_POST_PROCESS_STAGE_LABELS = {
+    "engine-load": "Model loading",
+    "transcribe": "Transcription",
+    "diarize": "Speaker identification",
+    "dependency": "Dependencies",
+    "audio-missing": "Audio file missing",
+}
+
+
+# ---------------------------------------------------------------------------
+# PostProcessFailureDialog — active failure notice for a failed Retry (#63)
+# ---------------------------------------------------------------------------
+
+class PostProcessFailureDialog(QDialog):
+    """Active failure dialog for a failed user-initiated Retry (issue #63).
+
+    Shows the failing stage, the error message, and copyable details (for
+    reporting).  Success is quiet; only failures of user-initiated jobs
+    surface here — background (auto-requeued) jobs update rows only.
+    """
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        stage: Optional[str] = None,
+        error: str = "",
+        transcript_path: str = "",
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Post-processing failed")
+        self.setModal(False)
+        self.setMinimumWidth(460)
+        self._error_text = error
+        self._transcript_path = transcript_path
+
+        p = current_palette()
+        self.setStyleSheet(dialog_css(p))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        stage_name = _POST_PROCESS_STAGE_LABELS.get(
+            stage or "", "Post-processing"
+        )
+        self._stage_label = QLabel(f"Stage: {stage_name}")
+        self._stage_label.setStyleSheet(
+            f"font-weight: bold; color: {p.danger}; font-size: 13px;"
+        )
+        layout.addWidget(self._stage_label)
+
+        self._details = QTextEdit()
+        self._details.setReadOnly(True)
+        self._details.setPlainText(self.details_text())
+        self._details.setMinimumHeight(120)
+        layout.addWidget(self._details)
+
+        btn_box = QDialogButtonBox()
+        copy_btn = btn_box.addButton(
+            "Copy details", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        copy_btn.clicked.connect(self._copy_details)
+        close_btn = btn_box.addButton(
+            QDialogButtonBox.StandardButton.Close
+        )
+        close_btn.clicked.connect(self.accept)
+        btn_box.setStyleSheet(action_button_css(p, "dialog"))
+        layout.addWidget(btn_box)
+
+    def details_text(self) -> str:
+        """The full report text shown in the details area / clipboard."""
+        stage = self._stage_label.text().removeprefix("Stage: ")
+        lines = ["Post-processing failed", f"Stage: {stage}"]
+        if self._error_text:
+            lines.append(f"Error: {self._error_text}")
+        if self._transcript_path:
+            lines.append(f"Transcript: {self._transcript_path}")
+        return "\n".join(lines)
+
+    def _copy_details(self) -> None:
+        """Copy the full failure details to the clipboard for reporting."""
+        QApplication.clipboard().setText(self.details_text())
+
+
 # ---------------------------------------------------------------------------
 # FallbackConfirmationDialog — mic-only fallback confirmation for system audio failure
 # ---------------------------------------------------------------------------
@@ -3491,6 +3578,23 @@ class _HistoryRowWidget(QWidget):
         p = current_palette()
         btn_css = aetheric_history_action_button_css(p)
 
+        # Inline Retry button (issue #63): always visible on Failed rows —
+        # next to the Failed pill — unlike the hover-reveal actions below.
+        # Not registered with show_actions/hide_actions; visibility is
+        # driven by set_retry_visible().
+        self._retry_btn = QPushButton("↻ Retry")
+        self._retry_btn.setObjectName("AethericHistoryActionButton")
+        self._retry_btn.setProperty("action", "retry")
+        self._retry_btn.setFixedHeight(26)
+        self._retry_btn.setMinimumWidth(50)
+        self._retry_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._retry_btn.setToolTip("Retry post-processing with default settings")
+        self._retry_btn.setAccessibleName("Retry post-processing")
+        self._retry_btn.setStyleSheet(btn_css)
+        self._retry_btn.hide()
+        self._retry_btn.clicked.connect(self._on_retry)
+        layout.addWidget(self._retry_btn)
+
         # Inline Re-transcribe button
         self._retranscribe_btn = QPushButton("🔄 Re-transcribe")
         self._retranscribe_btn.setObjectName("AethericHistoryActionButton")
@@ -3521,6 +3625,7 @@ class _HistoryRowWidget(QWidget):
 
         # Disable buttons when there's no path
         if not path:
+            self._retry_btn.setEnabled(False)
             self._retranscribe_btn.setEnabled(False)
             self._delete_btn.setEnabled(False)
 
@@ -3562,6 +3667,10 @@ class _HistoryRowWidget(QWidget):
         self._status_pill.adjustSize()
         self._status_pill.show()
 
+    def set_retry_visible(self, visible: bool) -> None:
+        """Show or hide the always-on Retry affordance (Failed rows only)."""
+        self._retry_btn.setVisible(visible)
+
     def show_actions(self) -> None:
         """Reveal the inline Re-transcribe and Delete buttons."""
         self._retranscribe_btn.show()
@@ -3579,6 +3688,11 @@ class _HistoryRowWidget(QWidget):
     # ------------------------------------------------------------------
     # Button handlers — route to existing panel handlers
     # ------------------------------------------------------------------
+
+    def _on_retry(self) -> None:
+        """Set current item and delegate to the panel's Retry handler."""
+        self._panel._history_list.setCurrentItem(self._item)
+        self._panel._on_retry_post_processing(self._item)
 
     def _on_retranscribe(self) -> None:
         """Set current item and delegate to panel's existing retranscribe handler."""
@@ -7056,13 +7170,7 @@ class FloatingSettingsPanel(QWidget):
         return display_text
 
     # Human-readable labels for the Outcome stages (footer owns the tokens).
-    _OUTCOME_STAGE_LABELS = {
-        "engine-load": "Model loading",
-        "transcribe": "Transcription",
-        "diarize": "Speaker identification",
-        "dependency": "Dependencies",
-        "audio-missing": "Audio file missing",
-    }
+    _OUTCOME_STAGE_LABELS = _POST_PROCESS_STAGE_LABELS
 
     @classmethod
     def _build_history_status_pill(
@@ -7219,6 +7327,7 @@ class FloatingSettingsPanel(QWidget):
                 post_processing_enabled=pp_enabled,
             )
             row_widget.set_status_pill(pill_text, pill_kind, tooltip)
+            row_widget.set_retry_visible(pill_kind == "failed")
             if status in self._LIVE_POST_PROCESS_STATES:
                 any_live = True
         if not any_live and self._history_progress_timer is not None:
@@ -7272,6 +7381,8 @@ class FloatingSettingsPanel(QWidget):
                 italic=is_italic,
             )
             row_widget.set_status_pill(pill_text, pill_kind, pill_tooltip)
+            # The Retry affordance sits next to the Failed pill (issue #63).
+            row_widget.set_retry_visible(pill_kind == "failed")
             self._history_list.setItemWidget(item, row_widget)
             row_index = self._history_list.row(item)
             self._history_row_widgets[row_index] = row_widget
@@ -7304,12 +7415,90 @@ class FloatingSettingsPanel(QWidget):
             else:
                 widget.hide_actions()
 
-    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
-        """Load and display the transcript for the clicked history item.
+    def _on_retry_post_processing(self, item: QListWidgetItem) -> None:
+        """Retry Post-processing for a Failed Recording (issue #63).
 
-        Also loads companion audio via the playback helper, updating
-        toolbar control enabled/disabled state and status text.
+        Distinct from Re-transcribe: no model picker, no sidecar — the
+        recording is re-enqueued with default Post-processing settings and
+        the transcript is overwritten in place.
+
+        * A live job for this Recording means a re-attempt is already in
+          flight — ignore the click.
+        * If another Post-processing job is currently RUNNING, confirm the
+          interruption first ("interrupt the current post-processing job
+          and run this retry first?"); an idle queue runs the Retry
+          immediately with no dialog.
+        * A successful Retry is quiet (the row returns to normal); a failed
+          one surfaces an active failure dialog.
         """
+        controller = self._controller
+        if controller is None:
+            return
+
+        md_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+        md_path = Path(md_path_str)
+
+        # A re-attempt for this Recording is already queued or running.
+        state = self._post_processing_state(md_path)
+        if state in self._LIVE_POST_PROCESS_STATES:
+            return
+
+        if self._is_post_processing_running_safe():
+            parent = self.parent() if self.parent() else self
+            reply = QMessageBox.question(
+                parent,
+                "Retry post-processing?",
+                "A post-processing job is currently running.\n\n"
+                "Interrupt the current post-processing job and run this "
+                "retry first?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        retry = getattr(controller, "retry_post_processing", None)
+        if not callable(retry):
+            return
+        try:
+            job_id = retry(md_path)
+        except Exception as exc:
+            logger.error("Retry post-processing failed: %s", exc, exc_info=True)
+            job_id = None
+
+        if job_id is None:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.information(
+                parent,
+                "Cannot Retry",
+                "Could not schedule the retry.\n\n"
+                "A job for this recording may already be in flight, "
+                "Post-processing may be disabled, or the recording's "
+                "audio file is missing.",
+            )
+            return
+
+        self._refresh_history()
+
+    def _is_post_processing_running_safe(self) -> bool:
+        """Best-effort probe: is any Post-processing job RUNNING?"""
+        controller = self._controller
+        if controller is None:
+            return False
+        probe = getattr(controller, "is_post_processing_running", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe())
+        except Exception as exc:
+            logger.warning(
+                "is_post_processing_running probe failed (non-fatal): %s", exc,
+            )
+            return False
+
+    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
         if self._is_comparison_mode:
             self._hide_retranscribe_accept_reject()
 

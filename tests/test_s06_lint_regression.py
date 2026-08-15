@@ -39,25 +39,15 @@ S06_TOUCHED_FILES: List[str] = [
 # Allowlists — noqa suppressions that are intentionally kept
 # ---------------------------------------------------------------------------
 
-# {relative_path: {line_number: reason}}
-NOQA_ALLOWLIST: Dict[str, Dict[int, str]] = {
+# {relative_path: {stripped_source_line: reason}}
+# Keyed by the suppression's source line (not its line number) so the
+# allowlist survives edits that shift lines within a file.
+NOQA_ALLOWLIST: Dict[str, Dict[str, str]] = {
     "widgets/floating_panels.py": {
-        # Intentional f-string using only escaped braces for Qt CSS template.
-        5323: "F541 — CSS template with only escaped braces, kept for clarity",
-        # Method call incorrectly flagged by stale noqa; kept as documentation
-        # until a future cleanup removes the comment itself.
-        7551: "F841 — stale suppression on method call (harmless comment)",
-        # Variable `name` parameter bound by add() signature; suppression
-        # incorrect but harmless - future cleanup will remove.
-        7735: "F841 — stale suppression (parameter used in signature)",
         # Intentional redefinition in ``if __name__ == "__main__":`` block.
-        9211: "F811 — intentional redefinition in standalone test block",
-        # Duplicate import in conditional block for standalone execution.
-        9395: "F811 — guarded import in __main__ block",
-        # Duplicate import in conditional block for standalone execution.
-        9677: "F811 — guarded import in __main__ block",
-        # Duplicate import in conditional block for standalone execution.
-        9707: "F811 — guarded import in __main__ block",
+        "from PyQt6.QtWidgets import QApplication  # noqa: F811": (
+            "F811 — intentional redefinition in standalone test block"
+        ),
     },
 }
 
@@ -187,7 +177,7 @@ class TestNoStaleNoqaSuppressions:
             rel = str(fp.relative_to(SRC_ROOT)).replace(os.sep, "/")
             allowed = NOQA_ALLOWLIST.get(rel, {})
             for lineno, code, text in _find_noqa_comments(fp):
-                if lineno in allowed:
+                if text in allowed:
                     continue
                 violations.append(f"{rel}:{lineno}: {code} — {text}")
         assert not violations, (

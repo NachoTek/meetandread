@@ -48,9 +48,9 @@ Usage:
 
 import logging
 import threading
-import queue
 import json
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum, auto
@@ -61,7 +61,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 from meetandread.config.models import AppSettings  # noqa: E402
-from meetandread.transcription.engine import WhisperTranscriptionEngine, TranscriptionSegment  # noqa: E402
+from meetandread.transcription.engine import (  # noqa: E402
+    TranscriptionError,
+    TranscriptionSegment,
+    WhisperTranscriptionEngine,
+)
 from meetandread.transcription import transcript_footer  # noqa: E402
 from meetandread.transcription.transcript_footer import PostProcessOutcome  # noqa: E402
 from meetandread.transcription.transcript_store import TranscriptStore, Word  # noqa: E402
@@ -90,6 +94,63 @@ class PostProcessFailure(Exception):
         self.stage = stage
 
 
+class _JobPreempted(Exception):
+    """Internal control flow: the running job was preempted mid-stage.
+
+    Raised by the preemptible transcription wrapper (and stage-boundary
+    checkpoints) when ``job.preempt_requested`` is honored.  The job is NOT
+    terminal — the worker returns it to the front of the queue, shielded
+    from re-preemption until it completes (ADR-0002).
+    """
+
+
+class _JobCancelled(Exception):
+    """Internal control flow: the running job was cancelled mid-stage.
+
+    Raised when ``job.cancel_requested`` is honored between transcription
+    segments.  Cancellation stays terminal (issue #62 semantics).
+    """
+
+
+class _PendingJobQueue:
+    """Pending post-processing jobs with a priority front lane.
+
+    Normal jobs are appended to the back lane (FIFO).  Preempted jobs and
+    user-initiated Retries enter the front lane, which always drains before
+    the back lane.  Within a lane order is FIFO, so a Retry enqueued while a
+    job is being preempted runs ahead of the preempted job when it re-enters
+    the front lane afterwards.
+    """
+
+    def __init__(self) -> None:
+        self._front: "deque[PostProcessJob]" = deque()
+        self._back: "deque[PostProcessJob]" = deque()
+        self._cond = threading.Condition()
+
+    def put(self, job: "PostProcessJob") -> None:
+        """Append *job* to the back lane (normal scheduling)."""
+        with self._cond:
+            self._back.append(job)
+            self._cond.notify()
+
+    def put_front(self, job: "PostProcessJob") -> None:
+        """Append *job* to the front lane (preempted job / Retry)."""
+        with self._cond:
+            self._front.append(job)
+            self._cond.notify()
+
+    def get(self, timeout: float) -> Optional["PostProcessJob"]:
+        """Pop the next job (front lane first), or ``None`` on timeout."""
+        with self._cond:
+            if not (self._front or self._back):
+                self._cond.wait(timeout)
+            if self._front:
+                return self._front.popleft()
+            if self._back:
+                return self._back.popleft()
+            return None
+
+
 @dataclass
 class PostProcessJob:
     """A single post-processing job.
@@ -104,8 +165,19 @@ class PostProcessJob:
         progress: Progress percentage (0-100)
         result: Result data after completion
         error: Error message if failed
+        error_stage: Failing Outcome stage recorded alongside ``error``
         cancel_requested: True when cancellation has been requested
         cancel_reason: Optional reason string for the cancellation
+        preempt_requested: True when preemption has been requested (the job
+            will step aside at the next cooperative checkpoint and return to
+            the front of the queue — not terminal, ADR-0002)
+        preempt_reason: Optional reason string for the preemption
+        shielded: True once the job has been preempted; a shielded job
+            refuses further preemption until it completes so a fast-failing
+            Retry cannot starve a long job
+        user_initiated: True when the job was scheduled by an explicit user
+            action (Retry) rather than automatically; a failed
+            user-initiated job surfaces actively in the UI
         diarization_error: Warning/error from diarization step (non-fatal)
         attempted_at: ISO timestamp captured when the job started running;
             recorded in the durable Post-processing Outcome
@@ -119,8 +191,13 @@ class PostProcessJob:
     progress: int = 0
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    error_stage: Optional[str] = None
     cancel_requested: bool = False
     cancel_reason: Optional[str] = None
+    preempt_requested: bool = False
+    preempt_reason: Optional[str] = None
+    shielded: bool = False
+    user_initiated: bool = False
     diarization_error: Optional[str] = None
     attempted_at: Optional[str] = None
 
@@ -142,7 +219,7 @@ class PostProcessingQueue:
         job = queue.schedule_post_process(
             audio_file=wav_path,
             realtime_transcript=transcript_store,
-            output_dir=output_dir
+            output_dir=output_path
         )
         
         # Check status later
@@ -150,7 +227,16 @@ class PostProcessingQueue:
         if status.status == PostProcessStatus.COMPLETED:
             print(f"Transcript: {status.result['transcript_path']}")
     """
-    
+
+    #: Transcription window length for the preemptible engine wrapper.
+    #: Whisper natively processes ~30s windows; the wrapper feeds the engine
+    #: one window at a time so a preempt/cancel request is honored between
+    #: segments (within one window, ADR-0002) instead of after the whole
+    #: recording.
+    TRANSCRIBE_WINDOW_SECONDS: float = 30.0
+
+    _SAMPLE_RATE = 16000
+
     def __init__(
         self,
         settings: AppSettings,
@@ -194,8 +280,9 @@ class PostProcessingQueue:
         self._apply_speaker_labels_callback = apply_speaker_labels_callback
         self._auto_requeue_stalled = auto_requeue_stalled
 
-        # Job queue
-        self._job_queue: queue.Queue[PostProcessJob] = queue.Queue()
+        # Job queue: front lane (preempted jobs, Retries) drains before the
+        # back lane of normally scheduled jobs.
+        self._job_queue: _PendingJobQueue = _PendingJobQueue()
         self._jobs: Dict[str, PostProcessJob] = {}
         self._jobs_lock = threading.Lock()
 
@@ -265,10 +352,13 @@ class PostProcessingQueue:
         audio_file: Path,
         realtime_transcript: Optional[TranscriptStore],
         output_dir: Path,
-        model_size: Optional[str] = None
+        model_size: Optional[str] = None,
+        *,
+        front: bool = False,
+        user_initiated: bool = False,
     ) -> PostProcessJob:
         """Schedule a post-processing job.
-        
+
         Args:
             audio_file: Path to the recorded audio file
             realtime_transcript: The real-time transcript for comparison, or
@@ -276,31 +366,40 @@ class PostProcessingQueue:
                 Recording is post-processed from its Audio alone)
             output_dir: Directory to save the enhanced transcript
             model_size: Model size for post-processing (default from settings)
-        
+            front: When True the job enters the queue's front lane, ahead of
+                all normally scheduled jobs (a user-initiated Retry, or a
+                job whose preemption caused this one — ADR-0002)
+            user_initiated: True when scheduled by an explicit user action
+                (Retry); failures of such jobs surface actively in the UI
+
         Returns:
             The scheduled job
         """
         import uuid
-        
+
         # Use configured post-process model or default
         if model_size is None:
             model_size = self._settings.transcription.postprocess_model_size
             if not model_size or model_size == "auto":
                 # Default to base for post-processing if not set
                 model_size = "base"
-        
+
         job = PostProcessJob(
             job_id=str(uuid.uuid4())[:8],
             audio_file=audio_file,
             realtime_transcript=realtime_transcript,
             output_dir=output_dir,
-            model_size=model_size
+            model_size=model_size,
+            user_initiated=user_initiated,
         )
-        
+
         with self._jobs_lock:
             self._jobs[job.job_id] = job
-        
-        self._job_queue.put(job)
+
+        if front:
+            self._job_queue.put_front(job)
+        else:
+            self._job_queue.put(job)
         self._persist_job(job)
         logger.info(
             "Scheduled post-processing job %s with model %s", job.job_id, model_size
@@ -436,21 +535,121 @@ class PostProcessingQueue:
             return False
         
         return self.cancel_job(job.job_id, reason)
+
+    def preempt_job(self, job_id: str, reason: str = "") -> bool:
+        """Request preemption of a running job (ADR-0002, issue #63).
+
+        Preemption is cooperative: the flag is honored at the next
+        checkpoint — per-segment inside the transcription loop, or at a
+        stage boundary — and the job then returns to the FRONT of the queue
+        (not terminal) shielded from re-preemption until it completes.
+
+        Refused (returns False) when the job is not RUNNING, is already
+        shielded, is unknown, or is terminal.
+
+        Args:
+            job_id: The job ID to preempt.
+            reason: Optional reason for the preemption.
+
+        Returns:
+            True if the job is RUNNING, unshielded, and the preempt request
+            was recorded; False otherwise.
+        """
+        with self._jobs_lock:
+            job = self._jobs.get(job_id)
+
+        if job is None:
+            logger.debug("preempt_job: unknown job_id %s", job_id)
+            return False
+
+        if job.status != PostProcessStatus.RUNNING:
+            logger.debug(
+                "preempt_job: job %s not RUNNING (%s) — nothing to preempt",
+                job_id, job.status.name,
+            )
+            return False
+
+        if job.shielded:
+            logger.info(
+                "preempt_job: job %s is shielded until it completes — refused",
+                job_id,
+            )
+            return False
+
+        job.preempt_requested = True
+        job.preempt_reason = reason or "preempted"
+        logger.info(
+            "Job %s preemption requested: %s", job_id, job.preempt_reason,
+        )
+        return True
+
+    def preempt_current_job(self, reason: str = "") -> bool:
+        """Request preemption of the currently running job.
+
+        Args:
+            reason: Optional reason for the preemption.
+
+        Returns:
+            True if a running, unshielded job was found and the preempt
+            request was recorded.
+        """
+        with self._current_job_lock:
+            job = self._current_job
+
+        if job is None:
+            return False
+
+        return self.preempt_job(job.job_id, reason)
+
+    def is_job_running(self) -> bool:
+        """True while any job is RUNNING (drives the Retry confirm dialog)."""
+        with self._jobs_lock:
+            return any(
+                job.status == PostProcessStatus.RUNNING
+                for job in self._jobs.values()
+            )
     
     def _worker_loop(self) -> None:
         """Background worker thread that processes jobs."""
         logger.info("Post-processing worker loop started")
-        
+
         while self._is_running and not self._stop_event.is_set():
+            # Idle-wait gate: if an is_recording_callback is provided and
+            # recording is still active, hold off dequeuing ANY job.  The
+            # gate is checked before the dequeue (not while holding a popped
+            # job) so a front-lane job scheduled while the gate is closed —
+            # e.g. a Retry — still drains first once it opens.
+            if self._is_recording_callback is not None:
+                waited = False
+                while (
+                    self._is_running
+                    and not self._stop_event.is_set()
+                    and self._is_recording_callback()
+                ):
+                    if not waited:
+                        logger.info(
+                            "Idle-wait: recording active, deferring dequeue"
+                        )
+                        waited = True
+                    self._stop_event.wait(timeout=0.5)
+
+                if not self._is_running or self._stop_event.is_set():
+                    break
+
+                if waited:
+                    logger.info("Idle-wait ended, dequeuing jobs")
+
             try:
-                # Get job with timeout to allow checking stop_event
+                # Get job with timeout to allow checking stop_event.
+                # Returns None on timeout (front lane drains first).
                 job = self._job_queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
             except Exception as e:
                 logger.error("Error in post-processing worker loop: %s", e)
                 continue
-            
+
+            if job is None:
+                continue
+
             # Check if job was already cancelled while queued
             if job.cancel_requested:
                 job.status = PostProcessStatus.CANCELLED
@@ -459,51 +658,34 @@ class PostProcessingQueue:
                 )
                 self._finalize_terminal_job(job)
                 continue
-            
-            # Idle-wait gate: if an is_recording_callback is provided and
-            # recording is still active, wait for it to become idle before
-            # processing.  This prevents post-processing from consuming CPU
-            # while a new recording is starting.
-            if self._is_recording_callback is not None:
-                waited = False
-                while (
-                    self._is_running
-                    and not self._stop_event.is_set()
-                    and not job.cancel_requested
-                    and self._is_recording_callback()
-                ):
-                    if not waited:
-                        logger.info(
-                            "Job %s idle-wait: recording active, deferring start",
-                            job.job_id,
-                        )
-                        waited = True
-                    self._stop_event.wait(timeout=0.5)
-                
-                if job.cancel_requested:
-                    job.status = PostProcessStatus.CANCELLED
-                    logger.info(
-                        "Job %s cancelled during idle-wait", job.job_id
-                    )
-                    self._finalize_terminal_job(job)
-                    continue
-                
-                if waited:
-                    logger.info(
-                        "Job %s idle-wait ended, proceeding", job.job_id
-                    )
-            
-            # Track current job for cancel_current_job()
+
+            # Track current job for cancel/preempt_current_job()
             with self._current_job_lock:
                 self._current_job = job
-            
+
             try:
                 self._process_job(job)
             finally:
                 with self._current_job_lock:
                     if self._current_job is job:
                         self._current_job = None
-                self._finalize_terminal_job(job)
+                if job.status == PostProcessStatus.PENDING:
+                    # The job was preempted mid-run (ADR-0002): return it to
+                    # the front of the queue, shielded from re-preemption
+                    # until it completes.  Not terminal — no Outcome is
+                    # written and the requeue scan is not triggered.
+                    job.preempt_requested = False
+                    job.preempt_reason = None
+                    job.shielded = True
+                    job.progress = 0
+                    self._job_queue.put_front(job)
+                    logger.info(
+                        "Job %s preempted — returned to front of queue "
+                        "(shielded, progress redone)",
+                        job.job_id,
+                    )
+                else:
+                    self._finalize_terminal_job(job)
 
     def _finalize_terminal_job(self, job: PostProcessJob) -> None:
         """Handle a job that just reached a terminal state.
@@ -537,6 +719,24 @@ class PostProcessingQueue:
         except Exception as exc:
             logger.warning("Stalled-requeue scan failed (non-fatal): %s", exc)
     
+    def _checkpoint(self, job: PostProcessJob, where: str) -> bool:
+        """Cooperative cancel/preempt checkpoint; True when job should abort.
+
+        Called at stage boundaries (and per-segment inside the transcription
+        wrapper via its flag checks).  A cancel request marks the job
+        CANCELLED (terminal); a preempt request marks it PENDING — the
+        worker returns it to the front of the queue, shielded (ADR-0002).
+        """
+        if job.cancel_requested:
+            job.status = PostProcessStatus.CANCELLED
+            logger.info("Job %s cancelled %s", job.job_id, where)
+            return True
+        if job.preempt_requested:
+            job.status = PostProcessStatus.PENDING
+            logger.info("Job %s preempted %s", job.job_id, where)
+            return True
+        return False
+
     def _process_job(self, job: PostProcessJob) -> None:
         """Process a single post-processing job.
 
@@ -544,7 +744,9 @@ class PostProcessingQueue:
         is written into the Recording's Transcript Footer: Completed (even
         for zero-speaker results) or Failed with the failing stage and
         reason.  A cancelled job writes no Outcome — the Recording stays
-        Stalled and is picked up by the requeue scan.
+        Stalled and is picked up by the requeue scan.  A preempted job is
+        NOT terminal: no Outcome is written and the worker returns it to
+        the front of the queue, shielded (ADR-0002).
 
         Args:
             job: The job to process
@@ -553,10 +755,8 @@ class PostProcessingQueue:
 
         transcript_path: Optional[Path] = None
         try:
-            # ---- Checkpoint: not cancelled ----
-            if job.cancel_requested:
-                job.status = PostProcessStatus.CANCELLED
-                logger.info("Job %s cancelled before start", job.job_id)
+            # ---- Checkpoint ----
+            if self._checkpoint(job, "before start"):
                 return
 
             # Update status; stamp the attempt time recorded in the Outcome.
@@ -584,10 +784,8 @@ class PostProcessingQueue:
             logger.info("Job %s: engine loaded", job.job_id)
             self._update_progress(job, 15)
 
-            # ---- Checkpoint: not cancelled ----
-            if job.cancel_requested:
-                job.status = PostProcessStatus.CANCELLED
-                logger.info("Job %s cancelled after engine load", job.job_id)
+            # ---- Checkpoint ----
+            if self._checkpoint(job, "after engine load"):
                 return
 
             # ---- Diarization step (optional, before transcription) ----
@@ -615,45 +813,28 @@ class PostProcessingQueue:
                     )
                     self._update_progress(job, 25)
 
-            # ---- Checkpoint: not cancelled ----
-            if job.cancel_requested:
-                job.status = PostProcessStatus.CANCELLED
-                logger.info("Job %s cancelled after diarization", job.job_id)
+            # ---- Checkpoint ----
+            if self._checkpoint(job, "after diarization"):
                 return
 
-            # Read audio file and transcribe with the stronger model.
+            # Read audio file, then transcribe with the stronger model —
+            # window-by-window so preempt/cancel requests are honored
+            # between segments (ADR-0002), not only at stage boundaries.
             try:
                 audio_data = self._load_audio_file(job.audio_file)
-                self._update_progress(job, 35)
-
-                logger.info(
-                    "Transcribing %d samples with %s model for job %s...",
-                    len(audio_data), job.model_size, job.job_id,
-                )
-                segments = engine.transcribe_chunk(audio_data, word_level=True)
             except PostProcessFailure:
                 raise
             except Exception as exc:
                 raise PostProcessFailure(
                     transcript_footer.STAGE_TRANSCRIBE, str(exc)
                 ) from exc
+            self._update_progress(job, 35)
+
+            segments = self._transcribe_audio_segmented(engine, audio_data, job)
             self._update_progress(job, 80)
 
-            # Unwrap typed result (M019 changed transcribe_chunk to return
-            # TranscriptionSuccess | TranscriptionError instead of raw segments)
-            from meetandread.transcription.engine import TranscriptionError
-            if isinstance(segments, TranscriptionError):
-                raise PostProcessFailure(
-                    transcript_footer.STAGE_TRANSCRIBE,
-                    f"Post-processing transcription failed: "
-                    f"{segments.error_type}: {segments.message}",
-                )
-            segments = segments.segments
-
-            # ---- Checkpoint: not cancelled ----
-            if job.cancel_requested:
-                job.status = PostProcessStatus.CANCELLED
-                logger.info("Job %s cancelled after transcription", job.job_id)
+            # ---- Checkpoint ----
+            if self._checkpoint(job, "after transcription"):
                 return
 
             # Create post-processed transcript
@@ -677,13 +858,8 @@ class PostProcessingQueue:
                         job.job_id, exc, exc_info=True,
                     )
 
-            # ---- Checkpoint: not cancelled before save ----
-            if job.cancel_requested:
-                job.status = PostProcessStatus.CANCELLED
-                logger.info(
-                    "Job %s cancelled before save — transcript NOT overwritten",
-                    job.job_id,
-                )
+            # ---- Checkpoint: before save (transcript NOT overwritten) ----
+            if self._checkpoint(job, "before save — transcript NOT overwritten"):
                 return
 
             self._update_progress(job, 90)
@@ -749,6 +925,22 @@ class PostProcessingQueue:
             if self._on_complete:
                 self._on_complete(job.job_id, job.result)
 
+        except _JobPreempted:
+            # Not terminal (ADR-0002): the worker returns the job to the
+            # front of the queue, shielded; no Outcome is written.
+            job.status = PostProcessStatus.PENDING
+            logger.info(
+                "Job %s preempted mid-transcription — partial progress "
+                "discarded, job re-queued at the front",
+                job.job_id,
+            )
+            return
+
+        except _JobCancelled:
+            job.status = PostProcessStatus.CANCELLED
+            logger.info("Job %s cancelled mid-transcription", job.job_id)
+            return
+
         except Exception as e:
             job.status = PostProcessStatus.FAILED
             job.error = str(e)
@@ -765,6 +957,7 @@ class PostProcessingQueue:
             stage = getattr(
                 e, "stage", transcript_footer.STAGE_TRANSCRIBE,
             )
+            job.error_stage = stage
             self._write_outcome(
                 failed_outcome_path,
                 PostProcessOutcome(
@@ -788,6 +981,70 @@ class PostProcessingQueue:
                         "job_id=%s",
                         job.job_id,
                     )
+
+    def _transcribe_audio_segmented(
+        self,
+        engine: WhisperTranscriptionEngine,
+        audio_data: np.ndarray,
+        job: PostProcessJob,
+    ) -> List[TranscriptionSegment]:
+        """Transcribe audio window-by-window, honoring preempt/cancel.
+
+        This is the preemptible engine wrapper (ADR-0002): instead of one
+        blocking call over the whole recording, the audio is fed to the
+        engine in ``TRANSCRIBE_WINDOW_SECONDS`` windows and the job's
+        preempt/cancel flags are checked between segments.  A preempt stops
+        transcription within one window; a preempted job re-runs every
+        window (partial progress is redone, not resumed).
+
+        Window-relative timestamps from the engine are offset back into
+        whole-audio time.  Progress advances across the 35–80% band that
+        ``_process_job`` reserves for transcription.
+
+        Raises:
+            _JobPreempted: the preempt flag was honored between windows.
+            _JobCancelled: the cancel flag was honored between windows.
+            PostProcessFailure: the engine failed on a window.
+        """
+        total = len(audio_data)
+        if total == 0:
+            return []
+
+        window = int(self.TRANSCRIBE_WINDOW_SECONDS * self._SAMPLE_RATE)
+        segments: List[TranscriptionSegment] = []
+        for start in range(0, total, window):
+            if job.preempt_requested:
+                raise _JobPreempted()
+            if job.cancel_requested:
+                raise _JobCancelled()
+
+            chunk = audio_data[start:start + window]
+            try:
+                result = engine.transcribe_chunk(chunk, word_level=True)
+            except Exception as exc:
+                raise PostProcessFailure(
+                    transcript_footer.STAGE_TRANSCRIBE, str(exc)
+                ) from exc
+            if isinstance(result, TranscriptionError):
+                raise PostProcessFailure(
+                    transcript_footer.STAGE_TRANSCRIBE,
+                    f"Post-processing transcription failed: "
+                    f"{result.error_type}: {result.message}",
+                )
+
+            # Offset window-relative timestamps into whole-audio time.
+            offset = start / self._SAMPLE_RATE
+            for segment in result.segments:
+                segment.start += offset
+                segment.end += offset
+                for word_info in segment.words or []:
+                    word_info.start += offset
+                    word_info.end += offset
+            segments.extend(result.segments)
+
+            done = start + len(chunk)
+            self._update_progress(job, 35 + int(45 * min(1.0, done / total)))
+        return segments
 
     def _write_outcome(
         self, transcript_path: Optional[Path], outcome: PostProcessOutcome
