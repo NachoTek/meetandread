@@ -30,6 +30,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QUrl
 
 from meetandread.widgets.floating_panels import FloatingSettingsPanel
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.transcript_scanner import RecordingMeta
 
 # Mark this module as requiring real Qt widgets - these tests
@@ -479,7 +480,7 @@ class TestSettingsExtractTranscriptBody:
     def test_valid_file_extracts_body(self, tmp_path):
         md_path = tmp_path / "body.md"
         md_path.write_text(
-            "Line one\nLine two\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8"
+            transcript_footer.join("Line one\nLine two", {}), encoding="utf-8"
         )
         result = FloatingSettingsPanel._extract_transcript_body(md_path)
         assert "Line one" in result
