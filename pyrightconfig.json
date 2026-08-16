@@ -1,0 +1,7 @@
+{
+  "include": ["src", "tests"],
+  "exclude": ["**/__pycache__", ".venv", "build", "dist", "*.egg-info"],
+  "pythonVersion": "3.10",
+  "pythonPlatform": "Windows",
+  "extraPaths": ["src", ".venv/Lib/site-packages"]
+}
