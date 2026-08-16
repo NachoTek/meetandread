@@ -33,7 +33,7 @@ from meetandread.recording import RecordingController, ControllerState
 from meetandread.recording.controller import RecoveryOutcome
 from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config
-from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog
+from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog, PostProcessFailureDialog
 from meetandread.widgets.theme import context_menu_css, current_palette
 
 
@@ -236,6 +236,7 @@ to avoid clipping issues and enable proper text rendering.
         self._frame_drop_toast_id = "frame-drops"
         self._frame_drop_toast_reminder_seconds = 60.0
         self._recovery_toast_id = "recording-device-recovery"
+        self._dependency_toast_id = "feature-dependency-degraded"
         self.toast_manager = ToastManager(self, self)
 
         # WASAPI start retry state (T02)
@@ -1164,6 +1165,7 @@ to avoid clipping issues and enable proper text rendering.
             logging.info("Post-processing complete! Job: %s, transcript: %s", job_id, transcript_path)
         else:
             logging.warning("Post-processing job %s completed with failure (no transcript)", job_id)
+            self._maybe_show_post_process_failure(job_id)
 
         # Update Performance tab WER display (Settings panel)
         if self._floating_settings_panel:
@@ -1173,6 +1175,34 @@ to avoid clipping issues and enable proper text rendering.
         # Notify that history data changed — post-processing may change word/speaker counts
         # Always emit, even on failure, so the "(processing speakers...)" indicator clears
         self.history_data_changed.emit()
+
+    def _maybe_show_post_process_failure(self, job_id) -> None:
+        """Surface a failed user-initiated Retry actively (issue #63).
+
+        A failed Retry pops a dialog showing the stage and error with
+        copyable details (for reporting); the row's Failed pill updates
+        via the ordinary history refresh.  Background (auto-requeued)
+        failures never raise dialogs — rows update only.  Success is quiet.
+        """
+        getter = getattr(self._controller, "get_post_process_failure", None)
+        if not callable(getter):
+            return
+        try:
+            failure = getter(job_id)
+        except Exception as exc:
+            logging.warning("Post-process failure probe failed: %s", exc)
+            return
+        if not failure or not failure.get("user_initiated"):
+            return
+
+        dialog = PostProcessFailureDialog(
+            self,
+            stage=failure.get("stage"),
+            error=failure.get("error", ""),
+            transcript_path=failure.get("transcript_path", ""),
+        )
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
 
     def _reset_frame_drop_toast_state(self) -> None:
         """Reset per-recording frame-drop toast throttling state."""
@@ -1319,7 +1349,66 @@ to avoid clipping issues and enable proper text rendering.
                 else:
                     ensure_on_screen(self._floating_settings_panel)
                 self._floating_settings_panel.show_panel()
-    
+
+    def initialize_post_processing(self):
+        """Start Post-processing at app startup (delegates to controller).
+
+        main() calls this once the widget exists so Stalled Recordings
+        and dependency-repaired ones flow through the queue while the
+        app idles — instead of waiting for the first record-start.
+        """
+        try:
+            self._controller.initialize_post_processing()
+        except Exception:
+            logging.exception("Post-processing startup failed (non-fatal)")
+
+    def maybe_show_dependency_banner(self):
+        """Show a dismissible banner when Tier-2 dependencies are missing.
+
+        Issue #61: a missing feature dependency (e.g. sherpa-onnx powers
+        Speaker identification) is non-blocking — recording with Live
+        Transcript works — but the user must know a feature is degraded
+        and how to reach Diagnostics.  Shown once at startup; the banner
+        persists until dismissed or the user opens Diagnostics.
+        """
+        from meetandread.dependencies import unresolved_dependencies
+
+        try:
+            unresolved = unresolved_dependencies()
+        except Exception:
+            logging.exception("Dependency banner check failed")
+            return
+        if not unresolved:
+            return
+
+        features = " and ".join(s.dependency.feature for s in unresolved)
+        names = ", ".join(s.dependency.name for s in unresolved)
+        self.toast_manager.show(
+            self._dependency_toast_id,
+            "Optional feature unavailable",
+            f"{features} is unavailable — {names} is missing. "
+            f"Recording and live transcript keep working. "
+            f"Open Settings → Diagnostics for how to fix it.",
+            duration_ms=0,  # stays until dismissed
+            action_label="Open Diagnostics",
+            action_callback=self.open_diagnostics,
+            dismissable=True,
+        )
+
+    def open_diagnostics(self):
+        """Open the Settings panel on the Diagnostics page (issue #61).
+
+        Acting on the dependency banner dismisses it — the user is now
+        looking at the fix it pointed at.
+        """
+        panel = self._floating_settings_panel
+        if panel is None:
+            return
+        self.toast_manager.dismiss(self._dependency_toast_id)
+        if not panel.isVisible():
+            self._toggle_settings_panel()
+        panel.open_diagnostics()
+
     def toggle_recording(self):
         """Toggle recording state via controller."""
         if not self._controller.is_recording():

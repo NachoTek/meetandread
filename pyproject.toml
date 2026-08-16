@@ -33,7 +33,13 @@ dependencies = [
     "comtypes>=1.2.0",
     "pyaudiowpatch>=0.2.12",
     "pywhispercpp>=1.3.0",
-    "sherpa-onnx>=1.10.0",
+    # Pinned pair (#67): sherpa-onnx >=1.13 ships slim wheels whose native
+    # DLLs (onnxruntime.dll, c-api) live in the companion sherpa-onnx-core
+    # package — exact-matching versions, installed beside the pyd. Without
+    # core, the pyd resolves onnxruntime.dll from System32 (here a stale
+    # 1.17.1) and any native call dies with an ORT API-version fatal.
+    "sherpa-onnx==1.13.5",
+    "sherpa-onnx-core==1.13.5",
     "psutil>=5.9.0",
     "webrtcvad-wheels>=2.0.14",
 ]

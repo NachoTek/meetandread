@@ -190,12 +190,46 @@ class RetranscribeRunner:
         Overwrites *transcript_path* with the sidecar content and deletes
         the sidecar file.
 
+        The canonical's Post-processing Outcome survives the promotion:
+        it is re-written into the promoted footer, or — when the
+        canonical carried none — a Completed Outcome is written.  An
+        accepted re-transcribe is the user's explicit, terminal choice;
+        without an Outcome the Recording would read as Stalled and the
+        requeue scan would overwrite the accepted transcript with the
+        Post-processing output (QA on #62: completed → queued after
+        accept).
+
         Returns the (now-updated) canonical transcript path.
         """
         sidecar = cls._sidecar_path(transcript_path, model_size)
         if not sidecar.exists():
             raise FileNotFoundError(f"Sidecar not found: {sidecar}")
+
+        try:
+            canonical_outcome = transcript_footer.read_post_process_outcome(
+                transcript_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            canonical_outcome = None
+
         shutil.move(str(sidecar), str(transcript_path))
+
+        outcome = canonical_outcome
+        if outcome is None:
+            from datetime import datetime as _dt
+
+            outcome = transcript_footer.PostProcessOutcome(
+                status=transcript_footer.STATUS_COMPLETED,
+                attempted_at=_dt.now().isoformat(),
+            )
+        if not transcript_footer.write_post_process_outcome(
+            transcript_path, outcome
+        ):
+            logger.debug(
+                "Accepted %s promoted without an Outcome (no usable footer "
+                "in the sidecar): %s",
+                cls.SIDECAR_TAG, transcript_path,
+            )
         logger.info(
             "Accepted %s: %s → %s", cls.SIDECAR_TAG, sidecar, transcript_path
         )

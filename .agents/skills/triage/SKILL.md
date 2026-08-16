@@ -76,7 +76,7 @@ Show counts and a one-line summary per item. Let the maintainer pick.
 4. **Grill (if needed).** If the request needs fleshing out, run the `/grilling` and `/domain-modeling` skills together — grill it into shape one question at a time, sharpening domain terms and updating `CONTEXT.md`/ADRs inline as decisions land.
 
 5. **Apply the outcome:**
-   - `ready-for-agent` — post an agent brief comment ([AGENT-BRIEF.md](AGENT-BRIEF.md)).
+   - `ready-for-agent` — set up the feature branch (see below), then post an agent brief comment ([AGENT-BRIEF.md](AGENT-BRIEF.md)).
    - `ready-for-human` — same structure as an agent brief, but note why it can't be delegated (judgment calls, external access, design decisions, manual testing).
    - `needs-info` — post triage notes (template below).
    - `wontfix` — close, with the comment depending on *why*:
@@ -84,6 +84,19 @@ Show counts and a one-line summary per item. Let the maintainer pick.
      - **Rejected (bug)** — polite explanation, then close.
      - **Rejected (enhancement)** — write to `.out-of-scope/`, link to it from a comment, then close ([OUT-OF-SCOPE.md](OUT-OF-SCOPE.md)).
    - `needs-triage` — apply the role. Optional comment if there's partial progress.
+
+## Branch setup for agent briefs
+
+When an outcome moves to `ready-for-agent`, the brief must tell the implementing agent **where to commit** — the `/implement` skill commits to the current branch and does not create or switch branches itself, so the branch directive lives in the brief.
+
+Follow the `/to-tickets` convention:
+
+- All `ready-for-agent` tickets born from one triage session (one issue, or one reframe that spawned several) share **one feature branch**, so the whole feature is reviewed as a single PR.
+- Create the branch from `main`, named after the parent concern (e.g. `feat/62-post-processing-lifecycle`, after the lead ticket).
+- Embed the branch name in every agent brief posted this session — including tickets posted later in the session — with a line like: **Branch:** `feat/<n>-<slug>` — commit all work here. Not pushed; PR opens after all tickets land.
+- Do not push the branch or open a PR yet — that happens after all the tickets are implemented.
+- If the maintainer asks for a brief on an issue that belongs to an existing branch (check prior briefs in the session or linked tickets), reuse that branch instead of creating a new one.
+- If triage produced any decision artifacts (`CONTEXT.md` glossary terms, ADRs), commit them to the feature branch as its first commit — the briefs reference them.
 
 ## Quick state override
 

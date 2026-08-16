@@ -48,32 +48,55 @@ def _no_space_footer(body: str, metadata: dict) -> str:
     )
 
 
+def _crlf(content: str) -> str:
+    """Rewrite a transcript with Windows CRLF line endings.
+
+    Editors on Windows save transcripts with ``\\r\\n`` line endings; footer
+    operations must recognise that framing without rewriting the file first.
+    """
+    return content.replace("\r\n", "\n").replace("\n", "\r\n")
+
+
 # ---------------------------------------------------------------------------
 # Public interface
 # ---------------------------------------------------------------------------
 
 
 class TestPublicInterface:
-    """The module exposes exactly the four agreed operations."""
+    """The module exposes the four core operations plus the Outcome interface."""
 
-    def test_all_exports_are_the_four_operations(self):
+    _CORE = {"parse", "split", "join", "strip"}
+    _OUTCOME = {
+        "PostProcessOutcome",
+        "outcome_from_block",
+        "read_post_process_outcome",
+        "write_post_process_outcome",
+        "clear_post_process_outcome",
+    }
+
+    def test_all_exports_are_core_plus_outcome_operations(self):
         import meetandread.transcription.transcript_footer as mod
 
-        assert set(mod.__all__) == {"parse", "split", "join", "strip"}
+        assert set(mod.__all__) == self._CORE | self._OUTCOME
 
     def test_no_public_marker_constants(self):
         """Marker literals and framing strings stay private.
 
-        A leaked marker would be a public string constant; the four public
-        operations are callables, so no public attribute should be a bare
-        string.
+        A leaked marker would be a public string constant; the public
+        operations are callables, so the only public bare strings are the
+        documented Outcome vocabulary constants (issue #62).
         """
         import meetandread.transcription.transcript_footer as mod
 
+        outcome_vocabulary = (
+            mod.OUTCOME_STATUSES | mod.OUTCOME_STAGES | {mod.OUTCOME_KEY}
+        )
         leaked_strings = {
             name
             for name, value in vars(mod).items()
-            if not name.startswith("_") and isinstance(value, str)
+            if not name.startswith("_")
+            and isinstance(value, str)
+            and value not in outcome_vocabulary
         }
         assert not leaked_strings, f"Public string constants leaked: {leaked_strings}"
 
@@ -134,6 +157,9 @@ class TestParse:
     def test_json_containing_closer_text(self):
         meta = {"note": "ends with --> here", "count": 42}
         assert parse(join("# Body", meta)) == meta
+
+    def test_parses_crlf_footer(self):
+        assert parse(_crlf(join("# Body", META))) == META
 
 
 class TestParseSelectsLastFooter:
@@ -206,6 +232,10 @@ class TestSplit:
     def test_accepts_no_space_form(self):
         assert split(_no_space_footer("# Body", META)) == ("# Body", META)
 
+    def test_splits_crlf_footer(self):
+        content = _crlf(join("# Body\n\nText.", META))
+        assert split(content) == (_crlf("# Body\n\nText."), META)
+
 
 # ---------------------------------------------------------------------------
 # join + split round-trip
@@ -272,6 +302,10 @@ class TestStrip:
 
     def test_empty_content_returns_empty(self):
         assert strip("") == ""
+
+    def test_strips_crlf_footer(self):
+        content = _crlf(join("# Body\n\nReadable text.", META))
+        assert strip(content) == _crlf("# Body\n\nReadable text.")
 
     def test_selects_last_footer(self):
         body = (

@@ -19,6 +19,7 @@ from meetandread.speaker.identity_linking import (
     propagate_rename_to_signature_store,
     rename_identity,
 )
+from meetandread.transcription import transcript_footer
 from meetandread.transcription.engine import TranscriptionSuccess
 from meetandread.transcription.post_processor import (
     PostProcessJob,
@@ -899,6 +900,20 @@ class TestSpeakerRename:
 class TestPostProcessingQueueIdleWait:
     """Verify the queue defers processing while is_recording_callback is True."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_queue_file(self, tmp_path, monkeypatch):
+        """Keep the persisted queue file out of the real app data dir.
+
+        ``start()`` runs pending-job recovery against ``get_data_dir()``;
+        without this, stale entries from real app usage (or crashed runs)
+        leak into the test as extra recovered jobs.
+        """
+        from meetandread.audio.storage import paths as paths_mod
+
+        data = tmp_path / "queue-data"
+        data.mkdir(exist_ok=True)
+        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
+
     def test_idle_wait_delays_processing_until_not_recording(self, tmp_path: Path) -> None:
         """Job stays deferred while is_recording_callback returns True."""
         settings = MagicMock()
@@ -910,6 +925,7 @@ class TestPostProcessingQueueIdleWait:
         ppq = PostProcessingQueue(
             settings=settings,
             is_recording_callback=is_recording,
+            auto_requeue_stalled=False,
         )
         job = _make_job(tmp_path)
         # Patch _process_job so we can observe when it fires
@@ -951,6 +967,7 @@ class TestPostProcessingQueueIdleWait:
         ppq = PostProcessingQueue(
             settings=settings,
             is_recording_callback=is_recording,
+            auto_requeue_stalled=False,
         )
         job = _make_job(tmp_path)
 
@@ -973,12 +990,52 @@ class TestPostProcessingQueueIdleWait:
         finally:
             ppq.stop()
 
+    def test_cancelled_while_queued_is_unpersisted(self, tmp_path, monkeypatch) -> None:
+        """A job cancelled while queued leaves the persisted queue file.
+
+        Otherwise its stem reads as persisted-queued for the rest of the
+        session and blocks the Stalled requeue scan (issue #62).
+        """
+        settings = MagicMock()
+        settings.transcription.postprocess_model_size = "base"
+
+        # Queue file isolation comes from the class's autouse fixture.
+        ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
+        job = _make_job(tmp_path)
+        job.cancel_requested = True  # cancelled before the worker dequeues it
+
+        with ppq._jobs_lock:
+            ppq._jobs[job.job_id] = job
+
+        ppq.start()
+        try:
+            # Persist after start so pending-job recovery does not re-enqueue
+            # a fresh (uncancelled) copy of the job ahead of this one.
+            ppq._persist_job(job)
+            ppq._job_queue.put(job)
+
+            deadline = time.time() + 3.0
+            while (
+                ppq.get_job_status(job.job_id).status
+                != PostProcessStatus.CANCELLED
+                and time.time() < deadline
+            ):
+                time.sleep(0.05)
+            assert (
+                ppq.get_job_status(job.job_id).status == PostProcessStatus.CANCELLED
+            )
+        finally:
+            ppq.stop()
+
+        entries = ppq._read_queue_file()
+        assert all(e.get("job_id") != job.job_id for e in entries)
+
     def test_no_idle_wait_when_callback_is_none(self, tmp_path: Path) -> None:
         """Without is_recording_callback, jobs process immediately."""
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
 
-        ppq = PostProcessingQueue(settings=settings)
+        ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
 
         process_called = threading.Event()
         original_process = ppq._process_job
@@ -1080,12 +1137,18 @@ class TestPostProcessingQueueCancellation:
         result = ppq.cancel_current_job()
         assert result is False
 
-    def test_cancelled_job_skipped_in_worker(self, tmp_path: Path) -> None:
+    def test_cancelled_job_skipped_in_worker(self, tmp_path: Path, monkeypatch) -> None:
         """A job cancelled while queued is skipped by the worker loop."""
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
 
-        ppq = PostProcessingQueue(settings=settings)
+        from meetandread.audio.storage import paths as paths_mod
+
+        data = tmp_path / "queue-data"
+        data.mkdir()
+        monkeypatch.setattr(paths_mod, "get_data_dir", lambda: data)
+
+        ppq = PostProcessingQueue(settings=settings, auto_requeue_stalled=False)
         job = _make_job(tmp_path)
 
         # Register and cancel before worker picks it up
@@ -1158,17 +1221,24 @@ class TestPostProcessingQueueDiarization:
 
     @patch.object(PostProcessingQueue, "_get_or_create_engine")
     @patch.object(PostProcessingQueue, "_load_audio_file")
-    def test_diarization_import_error_continues(
+    def test_diarization_import_error_fails_with_dependency_stage(
         self, mock_load_audio, mock_engine, tmp_path: Path
     ) -> None:
-        """ImportError from diarize callback is caught; transcription proceeds."""
+        """ImportError from diarize callback is a Failed (dependency) Outcome.
+
+        Issue #61: a missing feature dependency must never degrade into a
+        zero-speaker completion — the job fails with the dependency stage
+        and the registry vocabulary in the error.
+        """
         import numpy as np
+
+        from meetandread.dependencies import SHERPA_ONNX, dependency_error
 
         settings = MagicMock()
         settings.transcription.postprocess_model_size = "base"
 
         def diarize_raise_import(wav_path):
-            raise ImportError("sherpa-onnx not installed")
+            raise dependency_error(SHERPA_ONNX)
 
         ppq = PostProcessingQueue(
             settings=settings,
@@ -1176,6 +1246,13 @@ class TestPostProcessingQueueDiarization:
         )
 
         job = _make_job(tmp_path)
+        from tests.footer_test_helpers import write_transcript
+
+        write_transcript(
+            tmp_path / f"{job.audio_file.stem}.md",
+            "# Transcript\n\nlive words",
+            {"recording_start_time": "2026-08-14T09:00:00", "word_count": 2},
+        )
 
         mock_load_audio.return_value = np.zeros(16000, dtype=np.float32)
         mock_eng = MagicMock()
@@ -1184,11 +1261,17 @@ class TestPostProcessingQueueDiarization:
 
         ppq._process_job(job)
 
-        # Transcription should still complete
-        assert job.status == PostProcessStatus.COMPLETED
-        # But diarization_error should be recorded
-        assert job.diarization_error is not None
-        assert "not available" in job.diarization_error
+        # The job fails with the dependency stage — transcription does
+        # NOT silently complete with zero speakers.
+        assert job.status == PostProcessStatus.FAILED
+        assert job.error_stage == transcript_footer.STAGE_DEPENDENCY
+        assert SHERPA_ONNX.name in (job.error or "")
+        outcome = transcript_footer.read_post_process_outcome(
+            (tmp_path / (job.audio_file.stem + ".md")).read_text(encoding="utf-8")
+        )
+        assert outcome is not None
+        assert outcome.stage == transcript_footer.STAGE_DEPENDENCY
+        assert outcome.dependency == SHERPA_ONNX.name
 
     @patch.object(PostProcessingQueue, "_get_or_create_engine")
     @patch.object(PostProcessingQueue, "_load_audio_file")
@@ -1295,7 +1378,7 @@ class TestPostProcessingQueueNegative:
     def test_missing_wav_fails_gracefully(
         self, mock_load_audio, mock_engine, tmp_path: Path
     ) -> None:
-        """When _load_audio_file raises, job status becomes FAILED."""
+        """A missing audio file fails the job with an audio-missing Outcome."""
         mock_load_audio.side_effect = FileNotFoundError("wav not found")
         mock_eng = MagicMock()
         mock_engine.return_value = mock_eng
@@ -1312,7 +1395,15 @@ class TestPostProcessingQueueNegative:
         ppq._process_job(job)
 
         assert job.status == PostProcessStatus.FAILED
-        assert "wav not found" in job.error
+        assert "missing" in job.error.lower()
+        md_path = tmp_path / f"{job.audio_file.stem}.md"
+        outcome = (
+            transcript_footer.read_post_process_outcome(md_path.read_text(encoding="utf-8"))
+            if md_path.exists()
+            else None
+        )
+        if outcome is not None:
+            assert outcome.stage == transcript_footer.STAGE_AUDIO_MISSING
 
     def test_clear_completed_jobs_removes_terminal(self, tmp_path: Path) -> None:
         """clear_completed_jobs removes COMPLETED, FAILED, and CANCELLED."""

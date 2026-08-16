@@ -86,6 +86,7 @@ from meetandread.widgets.theme import (  # noqa: E402
     aetheric_history_list_css, aetheric_history_viewer_css,
     aetheric_history_splitter_css, aetheric_history_header_css,
     aetheric_history_action_button_css,
+    aetheric_status_pill_css,
     aetheric_playback_toolbar_css,
     aetheric_cc_overlay_css,
     AETHERIC_RED,
@@ -125,14 +126,23 @@ class _ToastWidget(QFrame):
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(4)
 
+        # Title row: title label, stretch, optional dismiss (×) button.
+        self._title_row = QHBoxLayout()
+        self._title_row.setSpacing(4)
+
         self.title_label = QLabel(title)
         self.title_label.setObjectName("toast-title")
+        self._title_row.addWidget(self.title_label)
+        self._title_row.addStretch()
+
+        self._dismiss_btn: Optional[QPushButton] = None
+        layout.addLayout(self._title_row)
+
         self.message_label = QLabel(message)
         self.message_label.setObjectName("toast-message")
         self.message_label.setWordWrap(True)
         self.message_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
-        layout.addWidget(self.title_label)
         layout.addWidget(self.message_label)
         self._layout = layout
         self._action_button: Optional[QPushButton] = None
@@ -186,6 +196,58 @@ class _ToastWidget(QFrame):
         self._action_button.clicked.connect(lambda _checked=False, action=callback: action())
         self.adjustSize()
 
+    def set_dismissable(
+        self,
+        on_dismissed: Optional[Callable[[], None]],
+    ) -> None:
+        """Attach or remove a small × button that dismisses the toast.
+
+        Used for banners that persist until the user closes them (issue #61
+        dependency banner); regular toasts pass ``None`` and show no button.
+        """
+        if self._dismiss_btn is not None:
+            try:
+                self._dismiss_btn.clicked.disconnect()
+            except TypeError:
+                pass
+
+        if on_dismissed is None:
+            if self._dismiss_btn is not None:
+                self._dismiss_btn.setParent(None)
+                self._dismiss_btn.deleteLater()
+                self._dismiss_btn = None
+            self.adjustSize()
+            return
+
+        if self._dismiss_btn is None:
+            self._dismiss_btn = QPushButton("×", self)
+            self._dismiss_btn.setObjectName("toast-dismiss")
+            self._dismiss_btn.setFixedSize(18, 18)
+            self._dismiss_btn.setCursor(Qt.CursorShape.ArrowCursor)
+            self._dismiss_btn.setToolTip("Dismiss")
+            self._dismiss_btn.setAccessibleName("Dismiss notification")
+            self._dismiss_btn.setStyleSheet(
+                """
+                QPushButton#toast-dismiss {
+                    color: rgba(255, 255, 255, 140);
+                    background: transparent;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+                QPushButton#toast-dismiss:hover {
+                    color: #ff5545;
+                    background: rgba(255, 85, 69, 40);
+                }
+                """
+            )
+            self._title_row.addWidget(self._dismiss_btn)
+        self._dismiss_btn.clicked.connect(
+            lambda _checked=False, dismiss=on_dismissed: dismiss()
+        )
+        self.adjustSize()
+
 
 class ToastManager(QObject):
     """Manage lightweight, replaceable toast notifications.
@@ -210,8 +272,14 @@ class ToastManager(QObject):
         duration_ms: int = 8000,
         action_label: Optional[str] = None,
         action_callback: Optional[Callable[[], None]] = None,
+        dismissable: bool = False,
     ) -> _ToastWidget:
-        """Show or replace a toast by ID and optionally auto-dismiss it."""
+        """Show or replace a toast by ID and optionally auto-dismiss it.
+
+        ``dismissable=True`` renders a × button so the user can close the
+        toast manually (used by banners that persist until dismissed,
+        e.g. the dependency banner of issue #61).
+        """
         if not toast_id:
             toast_id = "default"
         toast = self._toasts.get(toast_id)
@@ -222,6 +290,9 @@ class ToastManager(QObject):
             toast.update_content(title, message)
 
         toast.set_action(action_label, action_callback)
+        toast.set_dismissable(
+            (lambda tid=toast_id: self.dismiss(tid)) if dismissable else None
+        )
         toast.adjustSize()
         self.reposition()
         toast.show()
@@ -407,6 +478,93 @@ def _strip_confidence_percentages(text: str) -> str:
     parenthesised speaker labels like ``(Empty recording)`` which lack ``%``.
     """
     return re.sub(r" \(\d{1,3}%\)", "", text)
+
+
+# Human-readable labels for the Post-processing Outcome stages (the
+# Transcript Footer owns the machine tokens; see transcript_footer).
+_POST_PROCESS_STAGE_LABELS = {
+    "engine-load": "Model loading",
+    "transcribe": "Transcription",
+    "diarize": "Speaker identification",
+    "dependency": "Dependencies",
+    "audio-missing": "Audio file missing",
+}
+
+
+# ---------------------------------------------------------------------------
+# PostProcessFailureDialog — active failure notice for a failed Retry (#63)
+# ---------------------------------------------------------------------------
+
+class PostProcessFailureDialog(QDialog):
+    """Active failure dialog for a failed user-initiated Retry (issue #63).
+
+    Shows the failing stage, the error message, and copyable details (for
+    reporting).  Success is quiet; only failures of user-initiated jobs
+    surface here — background (auto-requeued) jobs update rows only.
+    """
+
+    def __init__(
+        self,
+        parent=None,
+        *,
+        stage: Optional[str] = None,
+        error: str = "",
+        transcript_path: str = "",
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Post-processing failed")
+        self.setModal(False)
+        self.setMinimumWidth(460)
+        self._error_text = error
+        self._transcript_path = transcript_path
+
+        p = current_palette()
+        self.setStyleSheet(dialog_css(p))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        stage_name = _POST_PROCESS_STAGE_LABELS.get(
+            stage or "", "Post-processing"
+        )
+        self._stage_label = QLabel(f"Stage: {stage_name}")
+        self._stage_label.setStyleSheet(
+            f"font-weight: bold; color: {p.danger}; font-size: 13px;"
+        )
+        layout.addWidget(self._stage_label)
+
+        self._details = QTextEdit()
+        self._details.setReadOnly(True)
+        self._details.setPlainText(self.details_text())
+        self._details.setMinimumHeight(120)
+        layout.addWidget(self._details)
+
+        btn_box = QDialogButtonBox()
+        copy_btn = btn_box.addButton(
+            "Copy details", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        copy_btn.clicked.connect(self._copy_details)
+        close_btn = btn_box.addButton(
+            QDialogButtonBox.StandardButton.Close
+        )
+        close_btn.clicked.connect(self.accept)
+        btn_box.setStyleSheet(action_button_css(p, "dialog"))
+        layout.addWidget(btn_box)
+
+    def details_text(self) -> str:
+        """The full report text shown in the details area / clipboard."""
+        stage = self._stage_label.text().removeprefix("Stage: ")
+        lines = ["Post-processing failed", f"Stage: {stage}"]
+        if self._error_text:
+            lines.append(f"Error: {self._error_text}")
+        if self._transcript_path:
+            lines.append(f"Transcript: {self._transcript_path}")
+        return "\n".join(lines)
+
+    def _copy_details(self) -> None:
+        """Copy the full failure details to the clipboard for reporting."""
+        QApplication.clipboard().setText(self.details_text())
 
 
 # ---------------------------------------------------------------------------
@@ -2231,14 +2389,10 @@ class FloatingTranscriptPanel(QWidget):
         if md_path is not None:
             self._reselect_history_item(md_path)
 
-        # Refresh the viewer content
+        # Refresh the viewer content.  The viewer always re-renders from
+        # the .md on disk, so a transcript replaced by accept/reject (#21)
+        # is picked up without any cached-timestamp invalidation.
         if md_path is not None and md_path.exists():
-            # Re-extract timed words from the updated transcript file —
-            # the cached timestamps are stale after accept/reject replaces
-            # the .md on disk (#21).
-            self._reset_highlight_state()
-            self._extract_timed_words(md_path)
-
             html = self._render_history_transcript(md_path)
             if html is not None:
                 self._history_viewer.setHtml(html)
@@ -3483,8 +3637,33 @@ class _HistoryRowWidget(QWidget):
             self._label.setStyleSheet("color: rgba(255, 255, 255, 140);")
         layout.addWidget(self._label, stretch=1)
 
+        # Post-processing status pill (issue #62): color-coded, tooltip on
+        # hover, and mouse-transparent so row clicks pass through.
+        self._status_pill = QLabel("")
+        self._status_pill.setObjectName("AethericStatusPill")
+        self._status_pill.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._status_pill.hide()
+        layout.addWidget(self._status_pill)
+
         p = current_palette()
         btn_css = aetheric_history_action_button_css(p)
+
+        # Inline Retry button (issue #63): always visible on Failed rows —
+        # next to the Failed pill — unlike the hover-reveal actions below.
+        # Not registered with show_actions/hide_actions; visibility is
+        # driven by set_retry_visible().
+        self._retry_btn = QPushButton("↻ Retry")
+        self._retry_btn.setObjectName("AethericHistoryActionButton")
+        self._retry_btn.setProperty("action", "retry")
+        self._retry_btn.setFixedHeight(26)
+        self._retry_btn.setMinimumWidth(50)
+        self._retry_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._retry_btn.setToolTip("Retry post-processing with default settings")
+        self._retry_btn.setAccessibleName("Retry post-processing")
+        self._retry_btn.setStyleSheet(btn_css)
+        self._retry_btn.hide()
+        self._retry_btn.clicked.connect(self._on_retry)
+        layout.addWidget(self._retry_btn)
 
         # Inline Re-transcribe button
         self._retranscribe_btn = QPushButton("🔄 Re-transcribe")
@@ -3516,6 +3695,7 @@ class _HistoryRowWidget(QWidget):
 
         # Disable buttons when there's no path
         if not path:
+            self._retry_btn.setEnabled(False)
             self._retranscribe_btn.setEnabled(False)
             self._delete_btn.setEnabled(False)
 
@@ -3541,6 +3721,26 @@ class _HistoryRowWidget(QWidget):
             "color: rgba(255, 255, 255, 140);" if italic else ""
         )
 
+    def set_status_pill(self, pill_text: str, pill_kind: str, tooltip: str) -> None:
+        """Update the row's Post-processing status pill in place.
+
+        ``pill_kind`` selects the colour via ``aetheric_status_pill_css``
+        (completed / completed-warning / not-post-processed / failed /
+        queued / processing).  An empty ``pill_text`` hides the pill.
+        """
+        if not pill_text:
+            self._status_pill.hide()
+            return
+        self._status_pill.setText(pill_text)
+        self._status_pill.setToolTip(tooltip)
+        self._status_pill.setStyleSheet(aetheric_status_pill_css(pill_kind))
+        self._status_pill.adjustSize()
+        self._status_pill.show()
+
+    def set_retry_visible(self, visible: bool) -> None:
+        """Show or hide the always-on Retry affordance (Failed rows only)."""
+        self._retry_btn.setVisible(visible)
+
     def show_actions(self) -> None:
         """Reveal the inline Re-transcribe and Delete buttons."""
         self._retranscribe_btn.show()
@@ -3558,6 +3758,11 @@ class _HistoryRowWidget(QWidget):
     # ------------------------------------------------------------------
     # Button handlers — route to existing panel handlers
     # ------------------------------------------------------------------
+
+    def _on_retry(self) -> None:
+        """Set current item and delegate to the panel's Retry handler."""
+        self._panel._history_list.setCurrentItem(self._item)
+        self._panel._on_retry_post_processing(self._item)
 
     def _on_retranscribe(self) -> None:
         """Set current item and delegate to panel's existing retranscribe handler."""
@@ -3610,6 +3815,7 @@ class FloatingSettingsPanel(QWidget):
     _NAV_PERFORMANCE = 1
     _NAV_HISTORY = 2
     _NAV_IDENTITIES = 3
+    _NAV_DIAGNOSTICS = 4
 
     # Post-processing states considered 'live' (drive the row-progress timer).
     _LIVE_POST_PROCESS_STATES = (PostProcessStatus.PENDING, PostProcessStatus.RUNNING)
@@ -3776,6 +3982,18 @@ class FloatingSettingsPanel(QWidget):
         self._nav_identities_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_IDENTITIES))
         sidebar_layout.addWidget(self._nav_identities_btn)
         self._nav_buttons.append(self._nav_identities_btn)
+
+        # Diagnostics nav — issue #61 wires the dependency health view
+        self._nav_diagnostics_btn = QPushButton("🩺  Diagnostics")
+        self._nav_diagnostics_btn.setObjectName("AethericNavButton")
+        self._nav_diagnostics_btn.setCheckable(True)
+        self._nav_diagnostics_btn.setCursor(Qt.CursorShape.ArrowCursor)
+        self._nav_diagnostics_btn.setToolTip("Feature dependency health and fixes")
+        self._nav_diagnostics_btn.setAccessibleName("Diagnostics tab")
+        self._nav_diagnostics_btn.setProperty("nav_id", "diagnostics")
+        self._nav_diagnostics_btn.clicked.connect(lambda: self._on_nav_clicked(self._NAV_DIAGNOSTICS))
+        sidebar_layout.addWidget(self._nav_diagnostics_btn)
+        self._nav_buttons.append(self._nav_diagnostics_btn)
 
         sidebar_layout.addStretch()
 
@@ -4833,6 +5051,37 @@ class FloatingSettingsPanel(QWidget):
         identities_layout.addWidget(self._identities_splitter)
         self._content_stack.addWidget(self._wrap_settings_page_for_scroll(identities_page, "identities"))
 
+        # ------------------------------------------------------------------
+        # Diagnostics page (issue #61) — Tier-2 feature dependency health
+        # ------------------------------------------------------------------
+        diagnostics_page = QWidget()
+        diagnostics_page.setObjectName("AethericDiagnosticsPage")
+        diagnostics_layout = QVBoxLayout(diagnostics_page)
+        diagnostics_layout.setContentsMargins(6, 8, 6, 6)
+        diagnostics_layout.setSpacing(8)
+
+        self._diagnostics_intro_label = QLabel(
+            "These optional components power extra features. meetandread "
+            "keeps recording and transcribing live when one is missing — "
+            "post-processing for the affected feature resumes once it is "
+            "repaired, and recordings that failed because of it are "
+            "re-queued automatically."
+        )
+        self._diagnostics_intro_label.setObjectName("AethericDiagnosticsIntro")
+        self._diagnostics_intro_label.setWordWrap(True)
+        diagnostics_layout.addWidget(self._diagnostics_intro_label)
+
+        self._diagnostics_rows_container = QWidget()
+        self._diagnostics_rows_layout = QVBoxLayout(self._diagnostics_rows_container)
+        self._diagnostics_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._diagnostics_rows_layout.setSpacing(10)
+        diagnostics_layout.addWidget(self._diagnostics_rows_container)
+        diagnostics_layout.addStretch()
+
+        self._content_stack.addWidget(
+            self._wrap_settings_page_for_scroll(diagnostics_page, "diagnostics")
+        )
+
         # -- Identities state attributes --
         self._identity_usage: Dict[str, Any] = {}  # name -> IdentityUsage
         self._identity_profile_names: List[str] = []  # sorted identity names
@@ -4844,6 +5093,11 @@ class FloatingSettingsPanel(QWidget):
         self._retranscribe_original_html: Optional[str] = None
         self._is_retranscribing: bool = False
         self._is_comparison_mode: bool = False
+        # Live re-transcribe progress overlay (QA bug: progress was only
+        # logged).  Target row + last percent, rendered as a processing
+        # pill while the RetranscribeRunner is in flight.
+        self._retranscribe_target_md: Optional[Path] = None
+        self._retranscribe_pct: int = 0
 
         # Connect Qt-safe retranscribe signals to GUI-thread handlers
         self._retranscribe_progress_sig.connect(self._on_retranscribe_progress_gui)
@@ -5565,8 +5819,112 @@ class FloatingSettingsPanel(QWidget):
         if page_index == self._NAV_IDENTITIES:
             self._refresh_identities()
 
+        # Refresh Diagnostics when navigating to it (issue #61)
+        if page_index == self._NAV_DIAGNOSTICS:
+            self._refresh_diagnostics()
+
         nav_id = self._nav_buttons[page_index].property("nav_id") if page_index < len(self._nav_buttons) else "?"
         logger.info("Settings nav changed to '%s' (index %d)", nav_id, page_index)
+
+    # ------------------------------------------------------------------
+    # Diagnostics — Tier-2 feature dependency health (issue #61)
+    # ------------------------------------------------------------------
+
+    def open_diagnostics(self) -> None:
+        """Show the shell on the Diagnostics page (banner action, #61)."""
+        self.show_panel()
+        self._on_nav_clicked(self._NAV_DIAGNOSTICS)
+
+    def _refresh_diagnostics(self) -> None:
+        """Rebuild dependency rows from the Tier-2 registry.
+
+        Registry-driven: appending a ``FeatureDependency`` is all it takes
+        for a new entry to appear here.  The resolution text shown is the
+        registry's — the same vocabulary embedded in dependency-stage
+        Failed-row details.
+        """
+        from meetandread.dependencies import check_feature_dependencies
+
+        # Drop previous rows (statuses can change between sessions).
+        while self._diagnostics_rows_layout.count():
+            item = self._diagnostics_rows_layout.takeAt(0)
+            stale = item.widget()
+            if stale is not None:
+                stale.setParent(None)
+                stale.deleteLater()
+
+        try:
+            statuses = check_feature_dependencies()
+        except Exception:
+            logger.exception("Diagnostics dependency check failed")
+            return
+
+        for status in statuses:
+            self._diagnostics_rows_layout.addWidget(
+                self._build_diagnostics_row(status)
+            )
+
+    def _build_diagnostics_row(self, status) -> QFrame:
+        """One dependency row: name, status, powered feature, fix."""
+        dep = status.dependency
+
+        row = QFrame()
+        row.setObjectName("AethericDiagnosticsRow")
+        row_layout = QVBoxLayout(row)
+        row_layout.setContentsMargins(8, 8, 8, 8)
+        row_layout.setSpacing(2)
+        row.setStyleSheet(
+            """
+            QFrame#AethericDiagnosticsRow {
+                background: rgba(255, 255, 255, 10);
+                border: 1px solid rgba(255, 255, 255, 26);
+                border-radius: 8px;
+            }
+            """
+        )
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
+        name_label = QLabel(dep.name)
+        name_label.setObjectName("AethericDiagnosticsName")
+        name_label.setStyleSheet(
+            "font-weight: 700; color: #f3f4f6; font-size: 13px;"
+        )
+        name_label.setAccessibleName(f"diagnostic-name-{dep.name}")
+        header.addWidget(name_label)
+        header.addStretch()
+
+        status_label = QLabel("Available" if status.available else "Missing")
+        status_label.setObjectName("AethericDiagnosticsStatus")
+        status_label.setStyleSheet(
+            "font-weight: 700; font-size: 12px; padding: 1px 8px;"
+            " border-radius: 7px;"
+            + (
+                "background: rgba(74, 222, 128, 36); color: #4ade80;"
+                if status.available
+                else "background: rgba(255, 85, 69, 46); color: #ff8a7a;"
+            )
+        )
+        status_label.setAccessibleName(f"diagnostic-status-{dep.name}")
+        header.addWidget(status_label)
+
+        row_layout.addLayout(header)
+
+        feature_label = QLabel(f"Powers: {dep.feature}")
+        feature_label.setObjectName("AethericDiagnosticsFeature")
+        feature_label.setStyleSheet("color: rgba(243, 244, 246, 190); font-size: 12px;")
+        feature_label.setAccessibleName(f"diagnostic-feature-{dep.name}")
+        row_layout.addWidget(feature_label)
+
+        resolution_label = QLabel(dep.resolution_text())
+        resolution_label.setObjectName("AethericDiagnosticsResolution")
+        resolution_label.setWordWrap(True)
+        resolution_label.setStyleSheet("color: rgba(255, 209, 102, 220); font-size: 12px;")
+        resolution_label.setAccessibleName(f"diagnostic-resolution-{dep.name}")
+        row_layout.addWidget(resolution_label)
+
+        return row
 
     def _start_resource_monitor(self) -> None:
         """Start the ResourceMonitor if not already running."""
@@ -6980,16 +7338,13 @@ class FloatingSettingsPanel(QWidget):
     ):
         """Build the display text for a history list item.
 
-        Renders the per-Recording Post-processing lifecycle label (issue #19):
+        The row shows the recording label, word count, and speaker count;
+        the Post-processing lifecycle lives in the per-row status pill
+        (``_build_history_status_pill``), not in this text.
 
-        - job RUNNING        -> 'Processing NN%' (live, italic)
-        - job PENDING        -> 'Queued' (italic)
-        - job FAILED         -> 'Failed' (italic)
-        - job CANCELLED      -> 'Manual Action Required' (italic)
-        - no job, no speakers -> 'Manual Action Required' (italic) — stalled,
-          needs manual re-transcribe. Replaces the old '(processing speakers)'.
-        - no job, has speakers -> 'N speakers' (complete, not italic)
         - empty recording    -> '(Empty recording)'
+        - speakers > 0       -> 'N words | M speakers'
+        - no speakers        -> 'N words'
 
         Args:
             meta: RecordingMeta for the item.
@@ -7020,39 +7375,79 @@ class FloatingSettingsPanel(QWidget):
         else:
             display_label = display_date
 
-        italic = False
-        if post_process_status == PostProcessStatus.RUNNING:
-            pct = int(post_process_progress) if post_process_progress is not None else 0
-            tail = f"Processing {pct}%"
-            italic = True
-        elif post_process_status == PostProcessStatus.PENDING:
-            tail = "Queued"
-            italic = True
-        elif post_process_status == PostProcessStatus.FAILED:
-            tail = "Failed"
-            italic = True
-        elif post_process_status == PostProcessStatus.CANCELLED:
-            tail = "Manual Action Required"
-            italic = True
-        elif meta.word_count == 0:
-            tail = "(Empty recording)"
-        elif meta.speaker_count == 0:
-            # No job this session and no speakers — stalled unless the user
-            # manually re-transcribes. Replaces '(processing speakers)'.
-            tail = "Manual Action Required"
-            italic = True
-        else:
-            spk = "speaker" if meta.speaker_count == 1 else "speakers"
-            tail = f"{meta.speaker_count} {spk}"
+        italic = post_process_status in (PostProcessStatus.PENDING, PostProcessStatus.RUNNING)
 
-        if meta.word_count == 0 and post_process_status is None:
-            display_text = f"{display_label} | {tail}"
+        if meta.word_count == 0:
+            display_text = f"{display_label} | (Empty recording)"
+        elif meta.speaker_count > 0:
+            spk = "speaker" if meta.speaker_count == 1 else "speakers"
+            display_text = (
+                f"{display_label} | {meta.word_count} words | "
+                f"{meta.speaker_count} {spk}"
+            )
         else:
-            display_text = f"{display_label} | {meta.word_count} words | {tail}"
+            display_text = f"{display_label} | {meta.word_count} words"
 
         if return_italic:
             return display_text, italic
         return display_text
+
+    # Human-readable labels for the Outcome stages (footer owns the tokens).
+    _OUTCOME_STAGE_LABELS = _POST_PROCESS_STAGE_LABELS
+
+    @classmethod
+    def _build_history_status_pill(
+        cls,
+        meta,  # RecordingMeta — avoids circular import at class level
+        post_process_status: Optional[PostProcessStatus] = None,
+        post_process_progress: Optional[int] = None,
+        post_processing_enabled: Optional[bool] = None,
+    ):
+        """Build the per-row Post-processing status pill (issue #62).
+
+        Maps the Recording's live job state and durable Post-processing
+        Outcome to ``(pill_text, pill_kind, tooltip)``.  ``pill_kind`` is
+        one of ``completed`` / ``completed-warning`` / ``not-post-processed``
+        / ``failed`` / ``queued`` / ``processing`` and drives the pill
+        colour (see ``aetheric_status_pill_css``).
+
+        Priority: live job state first (an in-flight re-attempt must not be
+        masked by a stored Outcome), then the Outcome, then the Stalled
+        fallbacks derived at display time (Post-processing disabled ->
+        'Not post-processed' red; enabled -> queued for the requeue scan).
+        """
+        # Live job states drive the pill while a job is in flight.
+        if post_process_status == PostProcessStatus.RUNNING:
+            pct = int(post_process_progress) if post_process_progress is not None else 0
+            return f"Processing {pct}%", "processing", "Post processing in progress"
+        if post_process_status == PostProcessStatus.PENDING:
+            return "Queued", "queued", "Queued for post processing"
+        if post_process_status == PostProcessStatus.FAILED:
+            # In-session failure; the durable Outcome lands on the next scan.
+            return "Failed", "failed", "Post processing failed"
+
+        outcome = getattr(meta, "post_process_outcome", None)
+        if outcome is not None:
+            from meetandread.transcription import transcript_footer
+
+            if outcome.status == transcript_footer.STATUS_COMPLETED:
+                if meta.speaker_count > 0:
+                    return "Completed", "completed", "Post processing successful"
+                # Zero-speaker completions are legitimate results.
+                return "Completed", "completed-warning", "Speakers not identified"
+            stage_label = cls._OUTCOME_STAGE_LABELS.get(
+                outcome.stage, outcome.stage or "Post processing"
+            )
+            tooltip = f"Post processing failed — {stage_label}"
+            if outcome.error:
+                tooltip += f": {outcome.error}"
+            return "Failed", "failed", tooltip
+
+        # No Outcome: Stalled. CANCELLED jobs land here too (no Outcome is
+        # written on cancellation) and are re-queued by the scan.
+        if post_processing_enabled is False or post_processing_enabled is None:
+            return "Completed", "not-post-processed", "Not post-processed"
+        return "Queued", "queued", "Queued for post processing"
 
     # Polling cadence for live 'Processing NN%' updates on history rows.
     _HISTORY_PROGRESS_INTERVAL_MS = 1000
@@ -7089,6 +7484,25 @@ class FloatingSettingsPanel(QWidget):
             )
             return None
 
+    def _post_processing_enabled(self) -> Optional[bool]:
+        """Whether Post-processing is enabled in current settings.
+
+        Read at display time for the 'Not post-processed' pill (issue #62):
+        a Recording with no Outcome and Post-processing disabled shows red;
+        enabling Post-processing turns such rows Stalled and the requeue
+        scan picks them up.  Returns ``None`` when settings cannot be read
+        (treated as disabled by the pill builder).
+        """
+        try:
+            from meetandread.config import get_config
+
+            return bool(get_config("transcription.enable_postprocessing"))
+        except Exception as exc:
+            logger.debug(
+                "post_processing_enabled read failed (non-fatal): %s", exc,
+            )
+            return None
+
     def _ensure_history_progress_timer(self) -> None:
         """Create the row-progress QTimer on first use."""
         if self._history_progress_timer is None:
@@ -7112,8 +7526,9 @@ class FloatingSettingsPanel(QWidget):
             self._history_progress_timer.stop()
 
     def _on_history_progress_tick(self) -> None:
-        """Refresh each row's lifecycle label/progress; stop when none in flight."""
+        """Refresh each row's lifecycle pill/progress; stop when none in flight."""
         any_live = False
+        pp_enabled = self._post_processing_enabled()
         for idx, meta in enumerate(self._history_recordings):
             status = self._post_processing_state(meta.path)
             progress = (
@@ -7129,6 +7544,19 @@ class FloatingSettingsPanel(QWidget):
                 post_process_status=status, post_process_progress=progress,
             )
             row_widget.update_display_text(display_text, italic=italic)
+            overlay = self._retranscribe_overlay(meta)
+            if overlay is not None:
+                # A re-transcription in flight owns this row's pill; the
+                # post-processing tick must not clobber it.
+                pill_text, pill_kind, tooltip = overlay
+            else:
+                pill_text, pill_kind, tooltip = self._build_history_status_pill(
+                    meta,
+                    post_process_status=status, post_process_progress=progress,
+                    post_processing_enabled=pp_enabled,
+                )
+            row_widget.set_status_pill(pill_text, pill_kind, tooltip)
+            row_widget.set_retry_visible(pill_kind == "failed")
             if status in self._LIVE_POST_PROCESS_STATES:
                 any_live = True
         if not any_live and self._history_progress_timer is not None:
@@ -7148,6 +7576,7 @@ class FloatingSettingsPanel(QWidget):
         self._history_row_widgets.clear()
         self._hovered_history_row = -1
         self._history_recordings = list(recordings)
+        pp_enabled = self._post_processing_enabled()
 
         for meta in recordings:
             status = self._post_processing_state(meta.path)
@@ -7160,6 +7589,18 @@ class FloatingSettingsPanel(QWidget):
                 meta, return_italic=True,
                 post_process_status=status, post_process_progress=progress,
             )
+            overlay = self._retranscribe_overlay(meta)
+            if overlay is not None:
+                pill_text, pill_kind, pill_tooltip = overlay
+            else:
+                pill_text, pill_kind, pill_tooltip = (
+                    self._build_history_status_pill(
+                        meta,
+                        post_process_status=status,
+                        post_process_progress=progress,
+                        post_processing_enabled=pp_enabled,
+                    )
+                )
 
             path_str = str(meta.path)
             item = QListWidgetItem("")  # Text rendered by _HistoryRowWidget; empty here to avoid double-render shadow
@@ -7175,6 +7616,9 @@ class FloatingSettingsPanel(QWidget):
                 parent=self._history_list.viewport(),
                 italic=is_italic,
             )
+            row_widget.set_status_pill(pill_text, pill_kind, pill_tooltip)
+            # The Retry affordance sits next to the Failed pill (issue #63).
+            row_widget.set_retry_visible(pill_kind == "failed")
             self._history_list.setItemWidget(item, row_widget)
             row_index = self._history_list.row(item)
             self._history_row_widgets[row_index] = row_widget
@@ -7207,12 +7651,90 @@ class FloatingSettingsPanel(QWidget):
             else:
                 widget.hide_actions()
 
-    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
-        """Load and display the transcript for the clicked history item.
+    def _on_retry_post_processing(self, item: QListWidgetItem) -> None:
+        """Retry Post-processing for a Failed Recording (issue #63).
 
-        Also loads companion audio via the playback helper, updating
-        toolbar control enabled/disabled state and status text.
+        Distinct from Re-transcribe: no model picker, no sidecar — the
+        recording is re-enqueued with default Post-processing settings and
+        the transcript is overwritten in place.
+
+        * A live job for this Recording means a re-attempt is already in
+          flight — ignore the click.
+        * If another Post-processing job is currently RUNNING, confirm the
+          interruption first ("interrupt the current post-processing job
+          and run this retry first?"); an idle queue runs the Retry
+          immediately with no dialog.
+        * A successful Retry is quiet (the row returns to normal); a failed
+          one surfaces an active failure dialog.
         """
+        controller = self._controller
+        if controller is None:
+            return
+
+        md_path_str = item.data(Qt.ItemDataRole.UserRole)
+        if not md_path_str:
+            return
+        md_path = Path(md_path_str)
+
+        # A re-attempt for this Recording is already queued or running.
+        state = self._post_processing_state(md_path)
+        if state in self._LIVE_POST_PROCESS_STATES:
+            return
+
+        if self._is_post_processing_running_safe():
+            parent = self.parent() if self.parent() else self
+            reply = QMessageBox.question(
+                parent,
+                "Retry post-processing?",
+                "A post-processing job is currently running.\n\n"
+                "Interrupt the current post-processing job and run this "
+                "retry first?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        retry = getattr(controller, "retry_post_processing", None)
+        if not callable(retry):
+            return
+        try:
+            job_id = retry(md_path)
+        except Exception as exc:
+            logger.error("Retry post-processing failed: %s", exc, exc_info=True)
+            job_id = None
+
+        if job_id is None:
+            parent = self.parent() if self.parent() else self
+            QMessageBox.information(
+                parent,
+                "Cannot Retry",
+                "Could not schedule the retry.\n\n"
+                "A job for this recording may already be in flight, "
+                "Post-processing may be disabled, or the recording's "
+                "audio file is missing.",
+            )
+            return
+
+        self._refresh_history()
+
+    def _is_post_processing_running_safe(self) -> bool:
+        """Best-effort probe: is any Post-processing job RUNNING?"""
+        controller = self._controller
+        if controller is None:
+            return False
+        probe = getattr(controller, "is_post_processing_running", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe())
+        except Exception as exc:
+            logger.warning(
+                "is_post_processing_running probe failed (non-fatal): %s", exc,
+            )
+            return False
+
+    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
         if self._is_comparison_mode:
             self._hide_retranscribe_accept_reject()
 
@@ -8945,6 +9467,9 @@ class FloatingSettingsPanel(QWidget):
         self._retranscribe_model_size = model_size
         self._is_retranscribing = True
         self._is_comparison_mode = False
+        self._retranscribe_target_md = md_path
+        self._retranscribe_pct = 0
+        self._update_retranscribe_row()
 
         self._retranscribe_original_html = self._history_viewer.toHtml()
 
@@ -8964,6 +9489,7 @@ class FloatingSettingsPanel(QWidget):
             self._is_comparison_mode = False
             self._retranscribe_runner = None
             self._retranscribe_sidecar_path = None
+            self._clear_retranscribe_progress()
             parent = self.parent() if self.parent() else self
             QMessageBox.warning(
                 parent,
@@ -8979,8 +9505,53 @@ class FloatingSettingsPanel(QWidget):
         self._retranscribe_progress_sig.emit(pct)
 
     def _on_retranscribe_progress_gui(self, pct: int) -> None:
-        """GUI-thread handler for retranscribe progress updates."""
-        logger.debug("Retranscribe progress: %d%%", pct)
+        """GUI-thread handler for retranscribe progress updates.
+
+        Surfaces the progress on the target row's status pill (QA bug:
+        this handler previously only logged, so a running re-transcribe
+        was invisible).
+        """
+        self._retranscribe_pct = int(pct)
+        self._update_retranscribe_row()
+
+    def _clear_retranscribe_progress(self) -> None:
+        """Drop the progress overlay; the row re-renders from its Outcome."""
+        self._retranscribe_target_md = None
+        self._retranscribe_pct = 0
+
+    def _update_retranscribe_row(self) -> None:
+        """Repaint the re-transcribing row's pill with the live percent."""
+        md = self._retranscribe_target_md
+        if md is None:
+            return
+        row_widget = self._history_row_widget_for_md(md)
+        if row_widget is not None:
+            row_widget.set_status_pill(
+                f"Re-transcribing {self._retranscribe_pct}%",
+                "processing",
+                "Re-transcription in progress",
+            )
+            row_widget.set_retry_visible(False)
+
+    def _history_row_widget_for_md(self, md_path: Path):
+        """Return the row widget for a transcript path, if listed."""
+        for idx, meta in enumerate(self._history_recordings):
+            if meta.path == md_path:
+                return self._history_row_widgets.get(idx)
+        return None
+
+    def _retranscribe_overlay(self, meta) -> Optional[tuple]:
+        """Live 'Re-transcribing NN%' pill for the row being re-transcribed."""
+        if (
+            self._retranscribe_target_md is not None
+            and meta.path == self._retranscribe_target_md
+        ):
+            return (
+                f"Re-transcribing {self._retranscribe_pct}%",
+                "processing",
+                "Re-transcription in progress",
+            )
+        return None
 
     def _on_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """RetranscribeRunner completion callback (background thread).
@@ -8996,6 +9567,7 @@ class FloatingSettingsPanel(QWidget):
     def _handle_retranscribe_complete(self, sidecar_path: str, error: Optional[str]) -> None:
         """Process retranscribe completion on the GUI thread."""
         self._is_retranscribing = False
+        self._clear_retranscribe_progress()
 
         if error:
             parent = self.parent() if self.parent() else self

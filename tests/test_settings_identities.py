@@ -814,8 +814,8 @@ class TestIdentitiesNavConstants:
     def test_nav_history_is_2(self):
         assert FloatingSettingsPanel._NAV_HISTORY == 2
 
-    def test_content_stack_has_4_pages(self, settings_panel):
-        assert settings_panel._content_stack.count() == 4
+    def test_content_stack_has_5_pages(self, settings_panel):
+        assert settings_panel._content_stack.count() == 5
 
 
 # ---------------------------------------------------------------------------
@@ -1244,9 +1244,9 @@ class TestHistoryUnchangedByIdentities:
             qapp.processEvents()
             mock_refresh.assert_called_once()
 
-    def test_nav_buttons_count_is_4(self, settings_panel):
-        """Four nav buttons: Settings, Performance, History, Identities."""
-        assert len(settings_panel._nav_buttons) == 4
+    def test_nav_buttons_count_is_5(self, settings_panel):
+        """Five nav buttons: Settings, Performance, History, Identities, Diagnostics."""
+        assert len(settings_panel._nav_buttons) == 5
 
 
 # ===========================================================================

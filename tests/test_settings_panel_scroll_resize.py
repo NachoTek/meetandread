@@ -46,11 +46,11 @@ def panel(qapp):
 class TestScrollAreaWrapping:
     """Each tab page is wrapped in a styled QScrollArea."""
 
-    def test_stack_has_four_pages(self, panel):
-        """Content stack must still have exactly four pages."""
-        assert panel._content_stack.count() == 4
+    def test_stack_has_five_pages(self, panel):
+        """Content stack must still have exactly five pages."""
+        assert panel._content_stack.count() == 5
 
-    @pytest.mark.parametrize("index", [0, 1, 2, 3])
+    @pytest.mark.parametrize("index", [0, 1, 2, 3, 4])
     def test_each_page_is_scroll_area(self, panel, index):
         """Each content-stack entry must be a QScrollArea."""
         widget = panel._content_stack.widget(index)

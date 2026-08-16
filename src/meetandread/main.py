@@ -342,6 +342,23 @@ def main():
     
     # Check critical native DLLs are loadable (frozen exe only)
     check_critical_dlls()
+
+    # Tier-2 feature dependencies (issue #61) — non-blocking degraded mode.
+    # Runs before any Post-processing start so the Stalled/requeue scan
+    # sees repaired dependencies; results are cached for the banner,
+    # Diagnostics, and repair conversion.
+    try:
+        from meetandread.dependencies import unresolved_dependencies
+
+        for status in unresolved_dependencies():
+            logger.warning(
+                "Optional dependency '%s' missing — %s degraded: %s",
+                status.dependency.name,
+                status.dependency.feature,
+                status.dependency.resolution_text(),
+            )
+    except Exception as e:
+        logger.warning("Feature dependency check failed: %s", e)
     
     # Run hardware detection on first startup (if auto-detect enabled)
     try:
@@ -387,6 +404,15 @@ def main():
     # Create and show the main widget
     widget = MeetAndReadWidget()
     _widget_holder[0] = widget  # Enable signal handlers to reach the widget
+
+    # Start Post-processing at app startup: pending-job recovery,
+    # dependency-repair conversion, and the Stalled requeue scan run
+    # while the app idles instead of waiting for the first record-start
+    # (issues #61/#62 — 'Queued' rows must process automatically).
+    try:
+        widget.initialize_post_processing()
+    except Exception as e:
+        logger.warning("Post-processing startup initialization failed: %s", e)
     
     # Create and wire system tray icon manager
     from meetandread.widgets.tray_icon import TrayIconManager
@@ -404,7 +430,14 @@ def main():
     logging.info("Tray icon created and wired to main widget")
     
     widget.show()
-    
+
+    # Degraded-mode banner (issue #61): after the widget is visible so
+    # the toast anchors against the shown widget.
+    try:
+        widget.maybe_show_dependency_banner()
+    except Exception as e:
+        logger.warning("Dependency banner failed: %s", e)
+
     sys.exit(app.exec())
 
 

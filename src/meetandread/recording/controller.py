@@ -37,6 +37,7 @@ from meetandread.transcription.transcript_store import TranscriptStore, Word  # 
 from meetandread.transcription import transcript_footer  # noqa: E402
 from meetandread.transcription.post_processor import PostProcessingQueue, PostProcessStatus  # noqa: E402
 from meetandread.config.manager import ConfigManager  # noqa: E402
+from meetandread import dependencies as feature_dependencies  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +339,24 @@ class RecordingController:
         """Check if currently recording (thread-safe)."""
         with self._state_lock:
             return self._state == ControllerState.RECORDING
+
+    def is_post_processing_gated(self) -> bool:
+        """True while a Recording is starting or active (thread-safe).
+
+        Wired as the Post-processing queue's idle-wait gate.  STARTING
+        (and RETRYING) count as busy so the gate is closed BEFORE the
+        record-start preemption request fires — otherwise a just-preempted
+        job can be re-dequeued before the RECORDING state lands and,
+        being shielded, run un-preemptibly through the whole recording
+        (issue #63).  STOPPING and ERROR leave the gate open: a failed
+        start or a stop in progress must let parked jobs resume.
+        """
+        with self._state_lock:
+            return self._state in (
+                ControllerState.STARTING,
+                ControllerState.RETRYING,
+                ControllerState.RECORDING,
+            )
 
     def is_busy(self) -> bool:
         """Check if controller is busy (starting, retrying, stopping, etc.)."""
@@ -770,20 +789,10 @@ class RecordingController:
         Returns:
             ControllerError if start failed, None on success
         """
-        # Defer (but don't cancel) any in-flight post-processing from a
-        # previous recording.  The queue's idle-wait gate already prevents
-        # new jobs from starting while recording is active.  Cancelling
-        # here would discard a completed diarization and leave the previous
-        # recording stuck at "(processing speakers...)".
-        with self._state_lock:
-            if self._post_processor is not None:
-                self._post_process_job_id = None
-
         # Validate state (read snapshot under lock)
         with self._state_lock:
             current_state = self._state
 
-        # Validate state
         if current_state in (ControllerState.RECORDING, ControllerState.STARTING):
             return self._set_error("Already recording", is_recoverable=True)
 
@@ -801,6 +810,25 @@ class RecordingController:
         self.clear_error()
         self._set_state(ControllerState.STARTING)
         logger.debug("Starting recording...")
+
+        # Preempt any in-flight post-processing from a previous recording
+        # (ADR-0002, issue #63): the live Recording always outranks
+        # background work, so the running job steps aside cooperatively —
+        # per-segment inside its transcription loop — and returns to the
+        # FRONT of the queue, shielded, to finish after the recording.
+        # This supersedes the old defer-and-let-it-finish choice: terminal
+        # cancellation would have discarded completed diarization work, but
+        # preemption keeps the job alive; only partial transcription
+        # progress is redone.  Queued (not running) jobs are unaffected —
+        # the queue's idle-wait gate defers them until recording stops.
+        #
+        # The state is STARTING *before* this request so the gate (see
+        # is_post_processing_gated) is already closed: otherwise the
+        # worker could re-dequeue the just-preempted job during the model
+        # load below and — shielded — run it un-preemptibly through the
+        # whole recording.  A start that fails later sets ERROR, which
+        # reopens the gate and the parked job resumes.
+        self.preempt_post_processing(reason="new recording starting")
 
         try:
             # Initialize transcription if enabled
@@ -994,17 +1022,192 @@ class RecordingController:
                 "cancel_post_processing error (non-fatal): %s", exc,
             )
 
+    def preempt_post_processing(self, reason: str = "") -> None:
+        """Preempt any running post-processing job (ADR-0002, issue #63).
+
+        The preempt request is honored cooperatively per-segment inside the
+        job's transcription loop; the job returns to the FRONT of the queue
+        — not terminal — and is shielded from re-preemption until it
+        completes.  Starting a live Recording always outranks background
+        Post-processing, with no dialog.
+
+        Safe when Post-processing is disabled (no queue), the queue lacks
+        the preempt API, or the call raises: exceptions are logged and
+        swallowed so recording start is never compromised.
+        """
+        if self._post_processor is None:
+            return
+        preempt = getattr(self._post_processor, "preempt_current_job", None)
+        if not callable(preempt):
+            return
+        try:
+            preempted = preempt(reason=reason or "preempted")
+            if preempted:
+                logger.info(
+                    "Preempted running post-processing job: %s", reason,
+                )
+        except Exception as exc:
+            logger.warning(
+                "preempt_post_processing error (non-fatal): %s", exc,
+            )
+
+    def is_post_processing_running(self) -> bool:
+        """True while a post-processing job is RUNNING.
+
+        Façade over the queue used by the Retry flow to decide whether to
+        confirm interrupting the current job.  Returns ``False`` when
+        Post-processing is disabled (no queue) or the probe errors.
+        """
+        if self._post_processor is None:
+            return False
+        probe = getattr(self._post_processor, "is_job_running", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe())
+        except Exception as exc:
+            logger.warning(
+                "is_post_processing_running error (non-fatal): %s", exc,
+            )
+            return False
+
+    def retry_post_processing(self, transcript_path: Path) -> Optional[str]:
+        """Re-run Post-processing for a Failed Recording (issue #63).
+
+        The user-initiated Retry is distinct from Re-transcribe: it uses the
+        current default Post-processing settings (no model picker, no
+        sidecar; the transcript is overwritten in place).  Steps:
+
+        1. Resolve the Recording's Audio; without it a Retry can never run.
+        2. Clear the Failed Outcome from the Transcript Footer (a crash
+           before completion leaves the Recording Stalled, so the automatic
+           requeue scan picks it up — issue #62 semantics).
+        3. Preempt any running job so the Retry runs first.
+        4. Schedule the job at the FRONT of the queue as user-initiated;
+           its failures surface actively in the UI.
+
+        Args:
+            transcript_path: Path to the Recording's transcript .md file.
+
+        Returns:
+            The scheduled job's ID, or ``None`` when the Retry could not be
+            scheduled (no queue, Audio missing, or a queue error).
+        """
+        if self._post_processor is None:
+            logger.warning(
+                "Retry requested but Post-processing is unavailable (no queue)"
+            )
+            return None
+
+        stem = transcript_path.stem
+        try:
+            from meetandread.audio.storage.paths import get_recordings_dir
+            wav_path = get_recordings_dir() / f"{stem}.wav"
+        except Exception:
+            wav_path = transcript_path.parent.parent / "recordings" / f"{stem}.wav"
+
+        if not wav_path.exists():
+            logger.warning(
+                "Retry for %s impossible: Audio file missing (%s)",
+                stem, wav_path.name,
+            )
+            return None
+
+        # A re-attempt for this Recording is already queued or running —
+        # scheduling another would duplicate work (defense in depth; the
+        # Library row guard usually catches this first).
+        try:
+            live_state = self._post_processor.get_status_for_audio(wav_path)
+        except Exception:
+            live_state = None
+        if live_state in (
+            PostProcessStatus.PENDING,
+            PostProcessStatus.RUNNING,
+        ):
+            logger.info(
+                "Retry for %s skipped: a job is already in flight (%s)",
+                stem, getattr(live_state, "name", live_state),
+            )
+            return None
+
+        try:
+            cleared = transcript_footer.clear_post_process_outcome(
+                transcript_path
+            )
+            if cleared:
+                logger.info(
+                    "Retry: cleared Failed Outcome from %s", transcript_path
+                )
+        except Exception as exc:
+            logger.warning(
+                "Retry: clearing Outcome from %s failed (non-fatal): %s",
+                transcript_path, exc,
+            )
+
+        self.preempt_post_processing(reason="user retry")
+
+        try:
+            job = self._post_processor.schedule_post_process(
+                audio_file=wav_path,
+                realtime_transcript=None,
+                output_dir=transcript_path.parent,
+                front=True,
+                user_initiated=True,
+            )
+        except Exception as exc:
+            logger.error("Retry scheduling failed for %s: %s", stem, exc)
+            return None
+
+        logger.info(
+            "Retry scheduled job %s for %s at the front of the queue",
+            job.job_id, stem,
+        )
+        return job.job_id
+
+    def get_post_process_failure(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Return the failure payload for a FAILED job, or ``None``.
+
+        Used by the UI to surface a failed user-initiated Retry actively:
+        a dialog with the failing stage, the error, and copyable details.
+        Background (auto-requeued) failures return ``user_initiated`` False
+        and never raise dialogs.
+
+        Returns:
+            ``{"stage", "error", "user_initiated", "transcript_path"}`` for
+            a FAILED job; ``None`` when the job is unknown, not FAILED, or
+            the queue is unavailable/errors.
+        """
+        if self._post_processor is None:
+            return None
+        try:
+            job = self._post_processor.get_job_status(job_id)
+        except Exception as exc:
+            logger.warning(
+                "get_post_process_failure error (non-fatal): %s", exc,
+            )
+            return None
+        if job is None or job.status != PostProcessStatus.FAILED:
+            return None
+        return {
+            "stage": job.error_stage or transcript_footer.STAGE_TRANSCRIBE,
+            "error": job.error or "",
+            "user_initiated": job.user_initiated,
+            "transcript_path": str(
+                job.output_dir / f"{job.audio_file.stem}.md"
+            ),
+        }
+
     def get_post_processing_state(self, transcript_path: Path) -> Optional[PostProcessStatus]:
         """Return the Post-processing lifecycle state of a Recording.
 
-        Façade over the Post-processing queue used by the History list to
-        label each row (issue #19). Returns the job's ``PostProcessStatus``
-        (PENDING / RUNNING / COMPLETED / FAILED / CANCELLED), or ``None``
-        when there is no job for this Recording (not scheduled this session,
-        or Post-processing is disabled).
+        Façade over the Post-processing queue used by the Library rows to
+        pick a per-row status pill (issue #62). Returns the job's
+        ``PostProcessStatus`` (PENDING / RUNNING / COMPLETED / FAILED /
+        CANCELLED), or ``None`` when there is no job for this Recording
+        (not scheduled this session, or Post-processing is disabled).
 
-        ``None`` lets the History view fall back to a speaker-count based
-        label ('Manual Action Required' when no speakers, else complete).
+        ``None`` lets the Library fall back to the durable Post-processing
+        Outcome carried in the Transcript Footer.
 
         Args:
             transcript_path: Path to the Recording's transcript .md file.
@@ -1046,6 +1249,58 @@ class RecordingController:
             )
             return None
 
+    def initialize_post_processing(self) -> None:
+        """Create and start the Post-processing queue at app startup.
+
+        Before this existed the queue was created on the first
+        record-start, so Stalled Recordings (no Outcome) showed a
+        'Queued' pill while nothing was scheduled and nothing ran until
+        the user recorded (QA on #62).  ``PostProcessingQueue.start()``
+        runs pending-job recovery, dependency-repair conversion, and the
+        Stalled requeue scan — the Recording gate keeps jobs parked
+        while a Recording is active, and record-start preempts a running
+        job (issue #63), so starting early is safe.
+
+        No-op when transcription is disabled, Post-processing is
+        disabled in settings, or the queue already exists.  Failures are
+        logged and swallowed — startup must never block on this.
+        """
+        if not self.enable_transcription:
+            return
+        if self._post_processor is not None:
+            return
+        try:
+            settings = self._config_manager.get_settings()
+            self._ensure_post_processor(settings)
+        except Exception as exc:
+            logger.warning(
+                "Post-processing startup initialization failed "
+                "(non-fatal): %s", exc,
+            )
+
+    def requeue_stalled_recordings(self) -> int:
+        """Scan the Library and re-queue Stalled recordings (issue #62).
+
+        Façade over the Post-processing queue.  The queue reads its live
+        settings object, so recordings blocked because Post-processing was
+        disabled become re-queued as soon as it is enabled.  The queue also
+        runs this scan itself at startup and after each job completes; this
+        façade exists for callers that change Post-processing settings.
+
+        Returns:
+            The number of recordings re-queued, or 0 when Post-processing
+            is disabled (no queue) or the scan errors.
+        """
+        if self._post_processor is None:
+            return 0
+        try:
+            return self._post_processor.requeue_stalled_recordings()
+        except Exception as exc:
+            logger.warning(
+                "requeue_stalled_recordings error (non-fatal): %s", exc,
+            )
+            return 0
+
     def _run_diarization_for_postprocess(self, wav_path: Path) -> "DiarizationResult":
         """Run diarization in the context of post-processing.
 
@@ -1069,11 +1324,9 @@ class RecordingController:
             from meetandread.speaker.signatures import VoiceSignatureStore
             from meetandread.audio.storage.paths import get_recordings_dir
         except ImportError:
-            logger.warning(
-                "sherpa-onnx not installed - speaker diarization skipped. "
-                "Install sherpa-onnx to enable speaker identification."
-            )
-            return None
+            # Broken install: the original error propagates — the queue
+            # maps it to a Failed (dependency) Outcome unattributed.
+            raise
 
         try:
             settings = self._config_manager.get_settings()
@@ -1082,6 +1335,18 @@ class RecordingController:
             if not speaker_cfg.enabled:
                 logger.info("Speaker diarization disabled in settings - skipped")
                 return None
+
+            # Tier-2 gate (issue #61): a missing feature dependency is a
+            # Failed (dependency) Outcome — never a silent zero-speaker
+            # completion.  The ImportError carries the registry's message
+            # and dependency name for repair conversion.  Called through
+            # the module so tests patch one seam regardless of platform.
+            if not feature_dependencies.is_dependency_available(
+                feature_dependencies.SHERPA_ONNX
+            ):
+                raise feature_dependencies.dependency_error(
+                    feature_dependencies.SHERPA_ONNX
+                )
 
             logger.info("Running speaker diarization on %s (post-process)", wav_path.name)
 
@@ -1156,6 +1421,11 @@ class RecordingController:
 
             return result
 
+        except ImportError:
+            # A dependency failure escapes (issue #61): the queue's worker
+            # maps it to a Failed (dependency) Outcome.  It must never be
+            # swallowed into the degraded zero-speaker path below.
+            raise
         except Exception as exc:
             logger.error(
                 "Speaker diarization error for %s: %s",
@@ -1418,18 +1688,10 @@ class RecordingController:
             self._transcription_processor.on_result = self._on_phrase_result
             logger.debug("Transcription result callback wired")
 
-            # Initialize post-processing queue (for after recording stops)
-            if settings.transcription.enable_postprocessing:
-                logger.debug("Initializing post-processing queue")
-                self._post_processor = PostProcessingQueue(
-                    settings=settings,
-                    on_progress=self._on_post_process_progress,
-                    on_complete=self._on_post_process_complete_callback,
-                    is_recording_callback=lambda: self.is_recording(),
-                    diarize_callback=self._run_diarization_for_postprocess,
-                    apply_speaker_labels_callback=lambda store, result: self._apply_speaker_labels(result, store),
-                )
-                self._post_processor.start()
+            # Initialize post-processing queue (for after recording stops).
+            # One queue for the controller's lifetime — see
+            # _ensure_post_processor for why it must never be replaced.
+            self._ensure_post_processor(settings)
 
             return None
 
@@ -1440,6 +1702,35 @@ class RecordingController:
                 message=f"Failed to initialize transcription: {e}",
                 is_recoverable=True
             )
+
+    def _ensure_post_processor(self, settings) -> None:
+        """Create the Post-processing queue once; reuse it every recording.
+
+        The queue's worker, engine cache, preemption state, and pending-job
+        persistence must survive record-start — which preempts the running
+        job back into THIS queue (issue #63, ADR-0002).  Replacing the
+        queue per recording would discard the loaded engines and start a
+        second worker whose pending-job recovery re-enqueues the previous
+        queue's still-persisted (preempted) job as a fresh unshielded
+        copy, defeating the preemption and double-processing the job.
+
+        ConfigManager hands out one live settings object, so the queue's
+        held reference stays current without refreshing.
+        """
+        if not settings.transcription.enable_postprocessing:
+            return
+        if self._post_processor is not None:
+            return
+        logger.debug("Initializing post-processing queue")
+        self._post_processor = PostProcessingQueue(
+            settings=settings,
+            on_progress=self._on_post_process_progress,
+            on_complete=self._on_post_process_complete_callback,
+            is_recording_callback=self.is_post_processing_gated,
+            diarize_callback=self._run_diarization_for_postprocess,
+            apply_speaker_labels_callback=lambda store, result: self._apply_speaker_labels(result, store),
+        )
+        self._post_processor.start()
 
     def _on_phrase_result(self, result: SegmentResult) -> None:
         """Handle segment result from accumulating transcription processor.
