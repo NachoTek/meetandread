@@ -64,3 +64,4 @@ lpt[1-9].*
 # ── GSD baseline (auto-generated) ──
 .gsd-worktrees/
 .gsd-backups/
+tests/fixtures/TEST-OUTPUT-Transcript.md
