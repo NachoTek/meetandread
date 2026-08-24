@@ -14,11 +14,9 @@ WIN_PY="${WIN_PY:-.venv/Scripts/python.exe}"
 
 echo "Running pre-push test suite under $WIN_PY (ADR 0001)..."
 
-# -x stops on first failure for speed. test_settings_history.py is ignored
-# pending #60 (footer-stripping fixture bug).
+# -x stops on first failure for speed.
 result=$(timeout 240 "$WIN_PY" -m pytest -m "not slow" --tb=line -q -x \
-    --timeout=60 -p no:qt \
-    --ignore=tests/test_settings_history.py 2>&1)
+    --timeout=60 -p no:qt 2>&1)
 exit_code=$?
 
 echo "$result" | tail -5
