@@ -154,8 +154,10 @@ class TestRetranscribeCreatesSidecar:
         with patch.object(runner, "_get_or_create_engine", return_value=mock_engine):
             sidecar_str = runner.retranscribe_recording(audio_path, transcript_path, "tiny")
 
-        # Wait for background thread
-        assert completed.wait(timeout=5), "Re-transcribe did not complete in time"
+        # Wait for background thread (generous timeout: hosted CI runners
+        # are 2-core and heavily loaded; the event fires immediately on the
+        # happy path, so the bound only matters on slow machines — #64 flake)
+        assert completed.wait(timeout=30), "Re-transcribe did not complete in time"
 
         sidecar_path = Path(sidecar_str)
         assert sidecar_path.exists(), f"Sidecar not created at {sidecar_path}"
@@ -196,7 +198,7 @@ class TestRetranscribeCreatesSidecar:
         with patch.object(runner, "_get_or_create_engine", return_value=mock_engine):
             runner.retranscribe_recording(audio_path, transcript_path, "base")
 
-        assert completed.wait(timeout=5)
+        assert completed.wait(timeout=30)
         content = sidecar.read_text()
         assert "new" in content
         assert "old content" not in content
