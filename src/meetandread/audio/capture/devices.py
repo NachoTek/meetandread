@@ -89,6 +89,69 @@ def list_mic_inputs() -> List[Dict[str, Any]]:
     return mic_devices
 
 
+def can_open_mic() -> bool:
+    """Return True when a microphone input stream can actually be opened.
+
+    Probes by opening — not by enumerating. On some hosted CI runners
+    device *enumeration* succeeds while *opening* the enumerated device
+    fails, so hardware-gated tests must use this probe rather than
+    ``bool(list_mic_inputs())``.
+
+    Never raises; any backend failure degrades to False.
+    """
+    try:
+        mic_devices = list_mic_inputs()
+        if not mic_devices:
+            return False
+
+        for device in mic_devices:
+            channels = min(int(device.get('max_input_channels', 1)), 2)
+            try:
+                stream = sounddevice.InputStream(
+                    device=int(device['index']),
+                    channels=channels,
+                    samplerate=int(device.get('default_samplerate', 48000)),
+                    blocksize=1024,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "can_open_mic: device %s failed to open: %s",
+                    device.get('index'),
+                    exc,
+                )
+                continue
+            try:
+                stream.start()
+            except Exception as exc:
+                logger.debug(
+                    "can_open_mic: device %s failed to start: %s",
+                    device.get('index'),
+                    exc,
+                )
+                try:
+                    stream.close()
+                except Exception as close_exc:
+                    logger.debug(
+                        "can_open_mic: close after failed start errored: %s",
+                        close_exc,
+                    )
+                continue
+            try:
+                stream.stop()
+                stream.close()
+            except Exception as exc:
+                logger.debug(
+                    "can_open_mic: teardown of device %s errored: %s",
+                    device.get('index'),
+                    exc,
+                )
+            return True
+        return False
+    except Exception as exc:
+        logger.debug("can_open_mic: probe failed: %s", exc)
+        return False
+
+
 def _probe_loopback_windows(device: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     """
     Probe loopback capability on Windows using sounddevice.

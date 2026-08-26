@@ -32,17 +32,24 @@ git push origin v0.19.2
 
 ## CI Workflow
 
-- **Push to main**: Runs full build + validation, uploads artifact for download
-- **Pull requests**: Runs build + validation to catch issues before merge
-- **Tag push (v\*)**: Runs build + validation + publishes release
+One consolidated "CI" workflow (issue #71) with a single reusable
+lint+test job:
+
+- **Pull requests to main**: lint + full suite + PyInstaller bundle
+  validation + artifact upload
+- **Nightly schedule on main**: lint + full suite (safety net)
+- **Tag push (v\*)**: lint + full suite, then release build published to
+  the GitHub release
+
+PyInstaller is pinned via `constraints.txt` — bump it deliberately.
 
 ## Download Test Builds
 
-When you push to main (not a tag), GitHub uploads the build as an artifact:
+Pull-request runs upload the build as an artifact:
 
 1. Go to Actions tab
-2. Click the "Build Validation" workflow run
-3. Download `meetandread-dryrun.zip`
+2. Click the "CI" workflow run on your PR
+3. Download `meetandread-windows`
 4. Test on your machine before tagging
 
 ## Why This Matters

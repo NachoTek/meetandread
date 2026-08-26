@@ -181,16 +181,22 @@ def check_test_data():
     """Check that test data files are present."""
     print("\n🔍 Checking test data and assets...")
 
-    # SVG icons
-    svg_files = glob.glob(os.path.join(BUILD_DIR, "meetandread", "widgets", "*.svg"))
+    # SVG icons — recursive search from the bundle root, mirroring
+    # check_required_dlls(). PyInstaller 6.x relocates datas under
+    # ``_internal/`` while older layouts place them at the bundle root;
+    # both must validate.
+    svg_files = glob.glob(
+        os.path.join(BUILD_DIR, "**", "widgets", "*.svg"), recursive=True
+    )
     if not svg_files:
         print("   ✗ Missing SVG icons")
         return False
     print(f"   ✓ Found {len(svg_files)} SVG icon files")
 
-    # Performance test data
+    # Performance test data — same recursive search
     test_data_files = glob.glob(
-        os.path.join(BUILD_DIR, "meetandread", "performance", "test_data", "*")
+        os.path.join(BUILD_DIR, "**", "performance", "test_data", "*"),
+        recursive=True,
     )
     if not test_data_files:
         print("   ✗ Missing performance test data")

@@ -54,6 +54,7 @@ from meetandread.audio.capture import (
     get_wasapi_hostapi_index,
     list_mic_inputs,
     list_loopback_outputs,
+    can_open_mic,
 )
 
 # Storage primitives
@@ -94,6 +95,7 @@ __all__ = [
     "get_wasapi_hostapi_index",
     "list_mic_inputs",
     "list_loopback_outputs",
+    "can_open_mic",
     # Storage
     "PcmPartWriter",
     "PcmMetadata",

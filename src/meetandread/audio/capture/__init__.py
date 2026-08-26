@@ -9,6 +9,7 @@ from .devices import (
     get_default_loopback_device,
     list_mic_inputs,
     list_loopback_outputs,
+    can_open_mic,
 )
 
 from .sounddevice_source import (
@@ -33,6 +34,7 @@ __all__ = [
     "get_default_loopback_device",
     "list_mic_inputs",
     "list_loopback_outputs",
+    "can_open_mic",
     # Capture sources
     "SoundDeviceSource",
     "MicSource",
