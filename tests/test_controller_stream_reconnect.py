@@ -35,6 +35,29 @@ def _make_fake_source_config(fake_path: str = SILENCE_WAV, loop: bool = True) ->
     return SourceConfig(type="fake", fake_path=fake_path, loop=loop)
 
 
+def _mic_open_probe_succeeds() -> bool:
+    """Probe whether a microphone can actually be *opened* on this machine.
+
+    Deliberately probes by opening, not by enumerating (issue #71): on
+    GitHub-hosted runners ``list_mic_inputs()`` returns devices that then
+    fail to open, so enumeration-based guards are nondeterministic there.
+    Opening is the ground truth the hardware test actually needs.
+    """
+    try:
+        import sounddevice
+
+        devices = list_mic_inputs()
+        if not devices:
+            return False
+        stream = sounddevice.InputStream(device=devices[0]["index"], channels=1)
+        stream.start()
+        stream.stop()
+        stream.close()
+        return True
+    except Exception:
+        return False
+
+
 class _FakeAudioSession:
     """Lightweight mock of AudioSession that tracks swap calls."""
 
@@ -104,12 +127,61 @@ class TestRebuildSourceWrapper:
         assert wrapper.config.type == "fake"
         assert wrapper.config.loop is True
 
+    def test_rebuild_mic_source_with_mocked_devices(self):
+        """_rebuild_source_wrapper should create a MicSource for type='mic'.
+
+        The device layer is mocked out (issue #71): GitHub-hosted runners
+        enumerate a mic but cannot open it, so enumeration-based guards are
+        nondeterministic there. This test asserts the controller builds the
+        right source wrapper for ``type="mic"`` — it does not need real
+        hardware. Real-hardware coverage lives in
+        ``test_rebuild_mic_source_with_hardware`` below.
+        """
+        controller = RecordingController(enable_transcription=False)
+        controller._session = _FakeAudioSession()
+        controller._session._config = SessionConfig(
+            sources=[SourceConfig(type="mic")],
+        )
+
+        fake_device = {
+            "index": 0,
+            "max_input_channels": 1,
+            "default_samplerate": 48000.0,
+            "hostapi": 0,
+        }
+        with mock.patch(
+            "meetandread.audio.capture.sounddevice_source.list_mic_inputs",
+            return_value=[fake_device],
+        ), mock.patch(
+            "meetandread.audio.capture.sounddevice_source.get_wasapi_hostapi_index",
+            return_value=0,
+        ), mock.patch(
+            "meetandread.audio.capture.sounddevice_source.sounddevice.query_devices",
+            return_value=fake_device,
+        ):
+            wrapper = controller._rebuild_source_wrapper("mic")
+
+        assert wrapper is not None
+        assert isinstance(wrapper, AudioSourceWrapper)
+        assert wrapper.config.type == "mic"
+        assert wrapper.source.device_id == 0
+        assert wrapper.source.channels == 1
+        assert wrapper.source.samplerate == 48000
+
+    @pytest.mark.windows
     @pytest.mark.skipif(
-        not list_mic_inputs(),
-        reason="No microphone input devices available on this machine",
+        not _mic_open_probe_succeeds(),
+        reason="No microphone device can be opened on this machine (open probe failed)",
     )
-    def test_rebuild_mic_source(self):
-        """_rebuild_source_wrapper should create a MicSource for type='mic'."""
+    def test_rebuild_mic_source_with_hardware(self):
+        """Real-hardware variant: rebuild uses an actually-openable mic.
+
+        Guarded by an *open* probe rather than device enumeration: on
+        GitHub-hosted runners ``list_mic_inputs()`` succeeds but opening the
+        device fails, so an enumeration guard is nondeterministic across runs
+        of the same commit (issue #71). The open probe makes the skip
+        deterministic: this test only runs where a mic genuinely works.
+        """
         controller = RecordingController(enable_transcription=False)
         controller._session = _FakeAudioSession()
         controller._session._config = SessionConfig(

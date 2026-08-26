@@ -1,0 +1,7 @@
+# Pinned build toolchain for PyInstaller bundle/release jobs (issue #71).
+#
+# CI previously installed PyInstaller unpinned; a runner-side upgrade to
+# the 6.x _internal/ layout silently broke bundle validation on every run
+# from 2026-07-31. Upgrades are now deliberate: bump the pin here (and
+# re-check validate_build.py's layout assumptions) in a reviewed PR.
+pyinstaller==6.22.2

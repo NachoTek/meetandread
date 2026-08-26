@@ -1,19 +1,19 @@
-name: Tests
+name: CI Test
+
+# Reusable lint + full test suite — the single source of truth for the
+# test job (issue #71). Called by ci.yml (PRs to main, nightly) and
+# release.yml (v* tags). Never triggered directly, and deliberately has
+# no push triggers — see ci.yml for the trigger policy.
 
 on:
-  schedule:
-    - cron: "0 3 * * *" # nightly at 03:00 UTC
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-      - 'milestone/**'
-  pull_request:
-    branches:
-      - main
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   test:
+    name: lint-and-test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

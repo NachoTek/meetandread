@@ -1,0 +1,60 @@
+name: CI
+
+# Trigger policy (issue #71):
+#   - pull requests to main: lint + full suite + PyInstaller bundle
+#     validation + artifact upload
+#   - nightly schedule on main: lint + full suite (safety net)
+#   - NO push triggers anywhere (no CI on push to main or milestone/**;
+#     GSD milestone branches are retired)
+# Release builds for v* tags live in release.yml.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # nightly at 03:00 UTC
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci-test.yml
+
+  bundle-validation:
+    name: bundle-validation
+    needs: [test]
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - run: pip install -e .
+
+      # PyInstaller is pinned (issue #71): an unpinned install once bumped
+      # to the 6.x _internal/ layout mid-flight and silently broke bundle
+      # validation. Upgrade deliberately, via this file.
+      - run: pip install -r requirements-build.txt
+
+      - name: Build executable
+        run: pyinstaller meetandread.spec --noconfirm
+
+      - name: Validate build contains required libraries
+        run: python validate_build.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meetandread-windows
+          path: dist/meetandread
+          retention-days: 7
+
+      - name: Check size
+        run: |
+          $size = (Get-ChildItem -Path dist/meetandread -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "Build size: $([math]::Round($size, 2)) MB"

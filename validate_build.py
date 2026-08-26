@@ -81,24 +81,29 @@ REQUIRED_IMPORTS = [
 ]
 
 
-def check_build_directory():
+def check_build_directory(build_dir: str = BUILD_DIR):
     """Check if build directory exists."""
-    if not os.path.exists(BUILD_DIR):
-        print(f"❌ Build directory not found: {BUILD_DIR}")
+    if not os.path.exists(build_dir):
+        print(f"❌ Build directory not found: {build_dir}")
         print("   Run: pyinstaller meetandread.spec --noconfirm")
         return False
     return True
 
 
-def check_required_dlls():
-    """Check that all required DLLs/extension modules are present."""
+def check_required_dlls(build_dir: str = BUILD_DIR):
+    """Check that all required DLLs/extension modules are present.
+
+    Patterns are searched recursively from the bundle root, so the checks
+    keep working when PyInstaller relocates datas (e.g. the ``_internal/``
+    layout introduced by PyInstaller 6.x).
+    """
     print("\n🔍 Checking required DLLs and extension modules...")
     missing = []
     found = []
 
     for pattern in REQUIRED_LIBRARIES:
         # Search for files matching the pattern
-        matches = glob.glob(os.path.join(BUILD_DIR, "**", f"{pattern}*"), recursive=True)
+        matches = glob.glob(os.path.join(build_dir, "**", f"{pattern}*"), recursive=True)
         if matches:
             found.extend(matches)
         else:
@@ -107,7 +112,7 @@ def check_required_dlls():
     if found:
         print(f"✅ Found {len(found)} required library files:")
         for f in sorted(set(found[:10])):  # Show first 10 unique
-            rel_path = os.path.relpath(f, BUILD_DIR)
+            rel_path = os.path.relpath(f, build_dir)
             print(f"   ✓ {rel_path}")
         if len(found) > 10:
             print(f"   ... and {len(found) - 10} more")
@@ -121,10 +126,10 @@ def check_required_dlls():
     return True
 
 
-def check_imports():
+def check_imports(build_dir: str = BUILD_DIR):
     """Check that required modules can be imported from the built exe."""
     print("\n🔍 Checking module imports from built executable...")
-    exe_path = os.path.join(BUILD_DIR, "meetandread.exe")
+    exe_path = os.path.join(build_dir, "meetandread.exe")
 
     if not os.path.exists(exe_path):
         print(f"❌ Executable not found: {exe_path}")
@@ -177,20 +182,27 @@ def check_imports():
     return True
 
 
-def check_test_data():
-    """Check that test data files are present."""
+def check_test_data(build_dir: str = BUILD_DIR):
+    """Check that test data files are present.
+
+    Data files are located by recursive search from the bundle root — the
+    same strategy as the DLL checks — because PyInstaller 6.x relocates
+    datas from ``dist/meetandread/meetandread/...`` to
+    ``dist/meetandread/_internal/meetandread/...``. A fixed-path glob broke
+    CI on every run from 2026-07-31 (issue #71).
+    """
     print("\n🔍 Checking test data and assets...")
 
-    # SVG icons
-    svg_files = glob.glob(os.path.join(BUILD_DIR, "meetandread", "widgets", "*.svg"))
+    # SVG icons — recursive search tolerant of _internal/ relocation
+    svg_files = glob.glob(os.path.join(build_dir, "**", "widgets", "*.svg"), recursive=True)
     if not svg_files:
         print("   ✗ Missing SVG icons")
         return False
     print(f"   ✓ Found {len(svg_files)} SVG icon files")
 
-    # Performance test data
+    # Performance test data — recursive search tolerant of _internal/ relocation
     test_data_files = glob.glob(
-        os.path.join(BUILD_DIR, "meetandread", "performance", "test_data", "*")
+        os.path.join(build_dir, "**", "performance", "test_data", "*"), recursive=True
     )
     if not test_data_files:
         print("   ✗ Missing performance test data")

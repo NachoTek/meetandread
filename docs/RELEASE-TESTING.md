@@ -32,18 +32,19 @@ git push origin v0.19.2
 
 ## CI Workflow
 
-- **Push to main**: Runs full build + validation, uploads artifact for download
-- **Pull requests**: Runs build + validation to catch issues before merge
-- **Tag push (v\*)**: Runs build + validation + publishes release
+- **Pull requests to main**: lint + full test suite, then build + bundle validation; artifact uploaded for download
+- **Nightly (main)**: lint + full test suite (safety net)
+- **Tag push (v\*)**: lint + full test suite, then build + validation + published release
+- **No CI on plain pushes to main** (issue #71; the pre-push git hook gates local work)
 
 ## Download Test Builds
 
-When you push to main (not a tag), GitHub uploads the build as an artifact:
+Every pull request to main uploads the build as an artifact:
 
-1. Go to Actions tab
-2. Click the "Build Validation" workflow run
-3. Download `meetandread-dryrun.zip`
-4. Test on your machine before tagging
+1. Go to the Actions tab
+2. Click the "CI" workflow run on the pull request
+3. Download `meetandread-windows`
+4. Test on your machine before merging
 
 ## Why This Matters
 
