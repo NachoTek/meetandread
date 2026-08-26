@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from meetandread.audio.capture.fake_module import FakeAudioModule
+from meetandread.audio.capture.devices import list_mic_inputs
 from meetandread.audio.hotplug import DeviceEvent, DeviceEventType
 from meetandread.audio.session import (
     AudioSession,
@@ -103,6 +104,10 @@ class TestRebuildSourceWrapper:
         assert wrapper.config.type == "fake"
         assert wrapper.config.loop is True
 
+    @pytest.mark.skipif(
+        not list_mic_inputs(),
+        reason="No microphone input devices available on this machine",
+    )
     def test_rebuild_mic_source(self):
         """_rebuild_source_wrapper should create a MicSource for type='mic'."""
         controller = RecordingController(enable_transcription=False)

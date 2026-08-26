@@ -31,7 +31,6 @@ jobs:
         continue-on-error: true
         run: |
           python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt `
-            --ignore=tests/test_settings_history.py `
             2>&1 | Out-File test_output.txt -Encoding utf8
 
       - name: Verify tests passed
