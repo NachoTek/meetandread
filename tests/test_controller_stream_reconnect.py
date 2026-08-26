@@ -137,6 +137,7 @@ class TestRebuildSourceWrapper:
         assert wrapper.config.type == "mic"
         assert wrapper.source.device_id == 7
 
+    @pytest.mark.windows
     @pytest.mark.skipif(
         not can_open_mic(),
         reason="No microphone can be opened on this machine (open-probe)",
