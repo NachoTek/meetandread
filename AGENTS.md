@@ -30,3 +30,20 @@ Two-layer topology — see `docs/adr/0001-test-execution-topology.md`. The app t
 A versioned pre-push hook (`.githooks/pre-push`) gates every push on the full suite under the Windows venv. **If a push is blocked by `OSError: PortAudio library not found` or a `windows`-marked test, you are on the wrong interpreter** — switch to `make test-windows` / `.venv/Scripts/python.exe`. Do **not** reach for `--no-verify` to mask it; reserve `--no-verify` for content-free pushes (e.g. branch deletions).
 
 Activate hooks once per clone: `git config core.hooksPath .githooks`.
+
+### Long test suites — background execution (Hermes agents)
+
+The full `make test-windows` suite routinely exceeds the agent terminal tool's
+180s foreground cap. Running it foreground truncates output at exactly 180.03s,
+the loop sees a killed-without-verdict run, retries the identical command, and
+stacks orphaned pytest processes.
+
+**Pattern:** any command expected to run longer than ~2 minutes (full pytest
+suite, `make test-windows`, pip installs of heavy wheels, PyInstaller builds)
+MUST run as a background process with completion notification — not foreground:
+
+- `terminal(background=true, notify_on_complete=true)` then `process(wait)`.
+- Scope single-test/collect-only runs (`pytest path::test -x --collect-only`,
+  `-m "not slow and not windows"` logic layer) to foreground — they fit.
+- Before re-running a timed-out suite, check for and kill orphaned
+  `python.exe -m pytest` children (Git-bash wrappers die, children survive).
