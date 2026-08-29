@@ -138,13 +138,23 @@ def can_open_mic() -> bool:
                 continue
             try:
                 stream.stop()
-                stream.close()
             except Exception as exc:
                 logger.debug(
-                    "can_open_mic: teardown of device %s errored: %s",
+                    "can_open_mic: stop of device %s errored: %s",
                     device.get('index'),
                     exc,
                 )
+            finally:
+                # close must always run — a failed stop must not leak
+                # (and lock) the microphone handle.
+                try:
+                    stream.close()
+                except Exception as close_exc:
+                    logger.debug(
+                        "can_open_mic: close of device %s errored: %s",
+                        device.get('index'),
+                        close_exc,
+                    )
             return True
         return False
     except Exception as exc:

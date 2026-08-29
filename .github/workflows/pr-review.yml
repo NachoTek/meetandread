@@ -42,7 +42,10 @@ jobs:
           SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
 
           echo "Sending review-request webhook to Hermes..."
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          # --fail-with-body: exit non-zero on HTTP errors (e.g. the
+          # empty-signature rejection fork PRs get) instead of failing
+          # silently with exit 0.
+          RESPONSE=$(curl -s --fail-with-body -o /dev/null -w "%{http_code}" \
             -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: pull_request" \

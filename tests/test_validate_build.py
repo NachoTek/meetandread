@@ -96,3 +96,35 @@ class TestCheckTestData:
         bundle = _make_bundle(tmp_path)
         validate_build.BUILD_DIR = str(bundle)
         assert validate_build.check_test_data() is False
+
+    def test_unrelated_widgets_svg_fails(self, validate_build, tmp_path):
+        """An SVG bundled by another package must not satisfy the check."""
+        bundle = _make_bundle(
+            tmp_path,
+            svg="_internal/otherapp/widgets/icon.svg",
+            test_data=_internal_test_data(),
+        )
+        validate_build.BUILD_DIR = str(bundle)
+        assert validate_build.check_test_data() is False
+
+    def test_unrelated_test_data_fails(self, validate_build, tmp_path):
+        """Test data bundled by another package must not satisfy the check."""
+        bundle = _make_bundle(
+            tmp_path,
+            svg=_internal_svg(),
+            test_data="_internal/otherapp/performance/test_data/sample.wav",
+        )
+        validate_build.BUILD_DIR = str(bundle)
+        assert validate_build.check_test_data() is False
+
+    def test_empty_test_data_directory_fails(
+        self, validate_build, tmp_path
+    ):
+        """An empty test_data directory must not count as test data."""
+        bundle = _make_bundle(tmp_path, svg=_internal_svg())
+        empty_dir = (
+            bundle / "_internal" / "meetandread" / "performance" / "test_data"
+        )
+        empty_dir.mkdir(parents=True, exist_ok=True)
+        validate_build.BUILD_DIR = str(bundle)
+        assert validate_build.check_test_data() is False

@@ -68,6 +68,20 @@ class TestCanOpenMic:
             assert devices.can_open_mic() is True
         assert real_input_stream is devices.sounddevice.InputStream
 
+    def test_close_runs_when_stop_raises(self):
+        """A failed stop must not leak the stream — close still runs."""
+        fake_device = {"index": 0, "max_input_channels": 1,
+                       "default_samplerate": 48000}
+        stream = mock.MagicMock()
+        stream.stop.side_effect = OSError("stop failed")
+        with mock.patch.object(devices, "list_mic_inputs",
+                               return_value=[fake_device]), \
+             mock.patch.object(devices.sounddevice, "InputStream",
+                               return_value=stream):
+            assert devices.can_open_mic() is True
+        stream.stop.assert_called_once()
+        stream.close.assert_called_once()
+
     def test_never_raises(self):
         """Unexpected backend errors degrade to False, never propagate."""
         with mock.patch.object(devices, "list_mic_inputs",
