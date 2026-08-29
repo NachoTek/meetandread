@@ -1,0 +1,7 @@
+# Pinned build toolchain (issue #71).
+#
+# PyInstaller is installed by CI from this file so a version bump (and
+# any bundle-layout change it brings, e.g. the 6.x _internal/ relocation
+# that broke data-file validation) is a deliberate, reviewed change.
+# Bump on purpose, not by accident.
+pyinstaller==6.22.2

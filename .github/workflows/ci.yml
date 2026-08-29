@@ -1,0 +1,102 @@
+name: CI
+
+# Consolidated CI (issue #71). One reusable test-suite definition
+# (test-suite.yml) shared by all callers. No branch-push triggers —
+# pushes to main and milestone/** run nothing.
+
+on:
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: "0 3 * * *" # nightly at 03:00 UTC
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    uses: ./.github/workflows/test-suite.yml
+
+  bundle-validation:
+    needs: [lint-and-test]
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - run: pip install -e .
+
+      # Pinned so a PyInstaller upgrade (and its layout changes, e.g.
+      # the _internal/ relocation that broke data-file checks) is a
+      # deliberate bump, not a silent break.
+      - run: pip install -c constraints.txt pyinstaller
+
+      - name: Build executable
+        run: pyinstaller meetandread.spec --noconfirm
+
+      - name: Validate build contains required libraries
+        run: python validate_build.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meetandread-windows
+          path: dist/meetandread
+          retention-days: 7
+
+      - name: Check size
+        run: |
+          $size = (Get-ChildItem -Path dist/meetandread -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "Build size: $([math]::Round($size, 2)) MB"
+
+  release:
+    needs: [lint-and-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - run: pip install -e .
+
+      - run: pip install -c constraints.txt pyinstaller
+
+      - name: Build
+        run: pyinstaller meetandread.spec --noconfirm
+
+      - name: Validate build contains required libraries
+        run: python validate_build.py
+
+      - name: Check build size
+        run: |
+          $size = (Get-ChildItem -Path dist/meetandread -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          Write-Host "Build size: $([math]::Round($size, 2)) MB"
+
+      # Tag names can contain shell metacharacters (e.g. `v$(whoami)`),
+      # so ref_name must never interpolate into the run block directly.
+      # Pass it via env: and use a quoted PowerShell variable.
+      - name: Package
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: Compress-Archive -Path dist/meetandread -DestinationPath "meetandread-$env:TAG_NAME.zip"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          generate_release_notes: true
+          files: meetandread-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

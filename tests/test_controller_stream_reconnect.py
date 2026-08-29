@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from meetandread.audio.capture.fake_module import FakeAudioModule
-from meetandread.audio.capture.devices import list_mic_inputs
+from meetandread.audio.capture.devices import can_open_mic
 from meetandread.audio.hotplug import DeviceEvent, DeviceEventType
 from meetandread.audio.session import (
     AudioSession,
@@ -104,12 +104,50 @@ class TestRebuildSourceWrapper:
         assert wrapper.config.type == "fake"
         assert wrapper.config.loop is True
 
-    @pytest.mark.skipif(
-        not list_mic_inputs(),
-        reason="No microphone input devices available on this machine",
-    )
     def test_rebuild_mic_source(self):
-        """_rebuild_source_wrapper should create a MicSource for type='mic'."""
+        """_rebuild_source_wrapper should create a MicSource for type='mic'.
+
+        Hardware-free: the controller reads the device layer only to pick
+        device defaults, so the enumeration result is mocked. This test
+        asserts the controller builds the right source wrapper — it does
+        not need (and must not require) real audio hardware, so it runs
+        deterministically on CI runners with no openable microphone.
+        """
+        fake_device = {
+            "index": 7,
+            "max_input_channels": 2,
+            "default_samplerate": 48000,
+            "hostapi": 0,
+        }
+        controller = RecordingController(enable_transcription=False)
+        controller._session = _FakeAudioSession()
+        controller._session._config = SessionConfig(
+            sources=[SourceConfig(type="mic")],
+        )
+
+        from meetandread.audio.capture import sounddevice_source
+        with patch.object(
+            sounddevice_source, "list_mic_inputs", return_value=[fake_device]
+        ), patch.object(sounddevice_source, "get_wasapi_hostapi_index",
+                       return_value=None):
+            wrapper = controller._rebuild_source_wrapper("mic")
+
+        assert wrapper is not None
+        assert isinstance(wrapper, AudioSourceWrapper)
+        assert wrapper.config.type == "mic"
+        assert wrapper.source.device_id == 7
+
+    @pytest.mark.windows
+    @pytest.mark.skipif(
+        not can_open_mic(),
+        reason="No microphone can be opened on this machine (open-probe)",
+    )
+    def test_rebuild_mic_source_with_hardware(self):
+        """Real-hardware variant: rebuilds a MicSource against a real device.
+
+        Guarded by an open-probe (``can_open_mic``), not enumeration —
+        hosted runners enumerate devices they cannot actually open.
+        """
         controller = RecordingController(enable_transcription=False)
         controller._session = _FakeAudioSession()
         controller._session._config = SessionConfig(

@@ -1,19 +1,18 @@
-name: Tests
+name: Test Suite
+
+# Reusable lint + full-suite job — the single definition used by CI
+# (PRs, nightly, release tags). Do not add branch-push triggers here;
+# callers own when this runs (issue #71).
 
 on:
-  schedule:
-    - cron: "0 3 * * *" # nightly at 03:00 UTC
+  workflow_call:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - 'milestone/**'
-  pull_request:
-    branches:
-      - main
+
+permissions:
+  contents: read
 
 jobs:
-  test:
+  lint-and-test:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

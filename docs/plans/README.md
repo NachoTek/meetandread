@@ -1,0 +1,1 @@
+# docs/plans — planning briefs\n\nTriage briefs, agent work specs, and planning documents live here and are\ncommitted BEFORE work starts. Do not leave planning docs in Temp folders or\nchat threads — if it shaped a decision, it belongs in this directory.\n\nNaming: YYYY-MM-DD-<issue-or-topic>-<kind>.md (brief, original, final, plan)\n

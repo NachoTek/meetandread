@@ -1,60 +1,51 @@
 name: PR Review Trigger
 
-# Fires ONLY when the build-validation CI completes.
-# If CI failed, sends a webhook to Hermes to re-engage the review agent.
-# If CI passed, does nothing — no point spinning up an agent to celebrate.
+# Label-gated agent review (issue #71). When the `ready-for-codereview`
+# label is added to a PR, send the same HMAC-signed webhook to Hermes
+# so the review agent engages. No webhook fires on CI failure alone.
 
 on:
-  workflow_run:
-    workflows: ["Build Validation"]
-    types: [completed]
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
-  actions: read
   pull-requests: read
 
 jobs:
-  trigger-review-on-failure:
+  trigger-review:
     runs-on: ubuntu-latest
-    # Only run if CI failed — success means we're done
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    if: ${{ github.event.label.name == 'ready-for-codereview' }}
     steps:
-      - name: Send CI failure webhook to Hermes
+      - name: Send review-request webhook to Hermes
         env:
           WEBHOOK_SECRET: ${{ secrets.HERMES_WEBHOOK_SECRET }}
           WEBHOOK_URL: https://homelab.nachotek.com/hooks/meetandread-pr
         run: |
           set -euo pipefail
 
-          # Extract PR number from the workflow_run event payload
-          # github.event.workflow_run.pull_requests is populated when
-          # the original workflow was triggered by a pull_request event
-          PR_COUNT=$(echo '${{ toJSON(github.event.workflow_run.pull_requests) }}' | jq 'length')
-
-          if [ "$PR_COUNT" = "0" ] || [ -z "$PR_COUNT" ]; then
-            echo "No PRs associated with this workflow run. Skipping."
-            exit 0
-          fi
-
-          PR_NUMBER=$(echo '${{ toJSON(github.event.workflow_run.pull_requests) }}' | jq -r '.[0].number')
+          PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
-          RUN_ID="${{ github.event.workflow_run.id }}"
 
-          echo "Build Validation run #$RUN_ID failed for PR #$PR_NUMBER"
+          echo "ready-for-codereview label added to PR #$PR_NUMBER"
 
           # Build the webhook payload — uses pull_request event type
-          # with a custom action so the Hermes agent can distinguish it
+          # with a custom action so the Hermes agent can distinguish it.
+          # Same shape as the previous ci_failed trigger: number,
+          # repository.full_name, plus an action + check_run stub.
           PAYLOAD=$(cat <<ENDJSON
-          {"action":"ci_failed","number":${PR_NUMBER},"repository":{"full_name":"${REPO}"},"check_run":{"id":${RUN_ID},"conclusion":"failure"}}
+          {"action":"review_requested","number":${PR_NUMBER},"repository":{"full_name":"${REPO}"},"check_run":{"id":${{ github.run_id }},"conclusion":"neutral"}}
           ENDJSON
           )
 
           # Compute HMAC-SHA256 signature (GitHub-style X-Hub-Signature-256)
           SIGNATURE=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
 
-          echo "Sending CI failure webhook to Hermes..."
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          echo "Sending review-request webhook to Hermes..."
+          # --fail-with-body: exit non-zero on HTTP errors (e.g. the
+          # empty-signature rejection fork PRs get) instead of failing
+          # silently with exit 0.
+          RESPONSE=$(curl -s --fail-with-body -o /dev/null -w "%{http_code}" \
             -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -H "X-GitHub-Event: pull_request" \
