@@ -616,7 +616,15 @@ class TestWorkerPreemptionEndToEnd:
             assert _wait_for(
                 lambda: job_a.status == PostProcessStatus.COMPLETED
             ), f"job did not complete: {job_a.status}"
-            # Terminal: the persisted entry is removed again.
+            # Terminal: the persisted entry is removed again. The
+            # in-memory status flips before the worker loop unpersists
+            # the queue entry, so poll for the removal first.
+            assert _wait_for(
+                lambda: all(
+                    e.get("job_id") != job_a.job_id
+                    for e in queue._read_queue_file()
+                )
+            ), f"job not unpersisted: {job_a.status}"
             assert all(
                 e.get("job_id") != job_a.job_id
                 for e in queue._read_queue_file()
