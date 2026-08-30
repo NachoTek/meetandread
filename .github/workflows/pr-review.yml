@@ -54,8 +54,14 @@ jobs:
 
           echo "Webhook response: HTTP $RESPONSE"
 
-          if [ "$RESPONSE" = "200" ]; then
-            echo "Review agent triggered for PR #$PR_NUMBER"
-          else
-            echo "Webhook delivery failed (HTTP $RESPONSE)"
-          fi
+          # The Hermes gateway answers 202 (accepted for processing) on
+          # success; 200 is also acceptable. Anything else is a failure.
+          case "$RESPONSE" in
+            200|202)
+              echo "Review agent triggered for PR #$PR_NUMBER"
+              ;;
+            *)
+              echo "Webhook delivery failed (HTTP $RESPONSE)"
+              exit 1
+              ;;
+          esac
