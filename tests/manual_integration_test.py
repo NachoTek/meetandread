@@ -17,6 +17,7 @@ should use the active recording controller.
 """
 
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -44,7 +45,7 @@ def test_transcript_store_with_sample_words():
     store.add_words(words)
 
     # Save to file
-    output_path = Path(__file__).parent / 'fixtures' / 'TEST-OUTPUT-Transcript.md'
+    output_path = Path(tempfile.gettempdir()) / 'TEST-OUTPUT-Transcript.md'
     store.save_to_file(output_path)
 
     if output_path.exists():
