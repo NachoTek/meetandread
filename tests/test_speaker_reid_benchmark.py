@@ -5,12 +5,13 @@ multiple scenarios: exact match, noisy match, no-match rejection, threshold
 sensitivity, and multi-speaker discrimination. Uses deterministic random
 embeddings (no real audio or model inference required).
 
-Results are written to src/meetandread/performance/test_data/speaker_reid_results.txt.
+Results are written to <OS temp dir>/meetandread-test-reports/speaker_reid_results.txt.
 """
 
 from __future__ import annotations
 
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from meetandread.speaker.utils import cosine_similarity
 # Helpers
 # ---------------------------------------------------------------------------
 
-RESULTS_PATH = Path("src/meetandread/performance/test_data/speaker_reid_results.txt")
+RESULTS_PATH = Path(tempfile.gettempdir()) / "meetandread-test-reports" / "speaker_reid_results.txt"
 EMBEDDING_DIM = 256
 DEFAULT_THRESHOLD = 0.6
 
