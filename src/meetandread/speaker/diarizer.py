@@ -105,17 +105,12 @@ def main():
             sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(emb_path))
         )
 
-        # Read WAV
-        import soundfile as sf
-        audio, sr = sf.read(wav_path, dtype="float32")
-        if audio.ndim > 1:
-            audio = audio[:, 0]
-
-        # Resample if needed
-        if sr != sd.sample_rate:
-            import soxr
-            audio = soxr.resample(audio, sr, sd.sample_rate)
-            sr = sd.sample_rate
+        # Read WAV: 16-bit PCM via the app-wide wave-based loader.
+        # Returns float32 mono resampled to 16 kHz, which equals
+        # sd.sample_rate for the pyannote segmentation model.
+        from meetandread.audio.utils import load_wav_as_float32_mono
+        audio = load_wav_as_float32_mono(wav_path)
+        sr = sd.sample_rate
 
         duration = len(audio) / sr
 
