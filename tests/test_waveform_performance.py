@@ -12,6 +12,7 @@ Run detailed benchmark (writes report):
 """
 
 import math
+import tempfile
 import threading
 import time
 import tracemalloc
@@ -267,7 +268,7 @@ def test_waveform_performance_ci_regression():
 # Slow detailed benchmark
 # ---------------------------------------------------------------------------
 
-RESULTS_FILE = BENCHMARK_DIR / "waveform_performance_results.txt"
+RESULTS_FILE = Path(tempfile.gettempdir()) / "meetandread-test-reports" / "waveform_performance_results.txt"
 
 
 @pytest.mark.slow
@@ -275,7 +276,7 @@ def test_waveform_performance_detailed():
     """Detailed benchmark: longer duration, persisted report, gap analysis.
 
     Runs the waveform pipeline for SLOW_DURATION_S seconds, writes a
-    comprehensive metrics report to ``waveform_performance_results.txt``,
+    comprehensive metrics report to ``<OS temp dir>/meetandread-test-reports/``
     and includes gap analysis when thresholds are missed.
     """
     result = _run_waveform_performance_measurement(

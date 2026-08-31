@@ -8,6 +8,7 @@ Run with: pytest tests/test_benchmark_accuracy.py -v -m slow
 """
 
 import pytest
+import tempfile
 from pathlib import Path
 
 from meetandread.transcription.engine import WhisperTranscriptionEngine
@@ -18,7 +19,7 @@ from meetandread.performance.wer import calculate_wer_details
 BENCHMARK_DIR = Path(__file__).resolve().parent.parent / "src" / "meetandread" / "performance" / "test_data"
 TEST_CLIP = BENCHMARK_DIR / "benchmark.wav"
 GROUND_TRUTH = BENCHMARK_DIR / "benchmark_ground_truth.txt"
-RESULTS_FILE = BENCHMARK_DIR / "benchmark_results.txt"
+RESULTS_FILE = Path(tempfile.gettempdir()) / "meetandread-test-reports" / "benchmark_results.txt"
 
 # Target WER threshold (informational — test passes regardless)
 WER_TARGET = 0.05
@@ -74,6 +75,7 @@ def test_wer_benchmark_against_real_audio():
 
     # Build and save results report
     report_lines = _build_report(result, details, reference_text)
+    RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     RESULTS_FILE.write_text("\n".join(report_lines), encoding="utf-8")
 
     # Log key results for quick visibility
