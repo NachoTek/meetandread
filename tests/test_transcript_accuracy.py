@@ -24,6 +24,7 @@ Marked @pytest.mark.slow — excluded from CI by default.
 
 import re
 import json
+import subprocess
 import wave
 import time
 import threading
@@ -31,7 +32,6 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 from dataclasses import dataclass, field
 
-import numpy as np
 import pytest
 
 # --- Path constants ---
@@ -100,34 +100,22 @@ def _parse_ts(h: str, m: str, s: str) -> float:
 # ---------------------------------------------------------------------------
 
 def convert_mp3_to_wav(mp3_path: Path, wav_path: Path, target_sr: int = 16000) -> Path:
-    """Convert mp3 to 16kHz mono WAV using soundfile."""
+    """Convert an mp3 to a 16 kHz mono 16-bit PCM WAV using ffmpeg (cached)."""
     if wav_path.exists():
         return wav_path
 
-    import soundfile as sf
-    data, sr = sf.read(str(mp3_path))
-
-    if data.ndim > 1:
-        data = data.mean(axis=1)
-
-    if sr != target_sr:
-        try:
-            import resampy
-            data = resampy.resample(data, sr, target_sr)
-        except ImportError:
-            ratio = target_sr / sr
-            n_samples = int(len(data) * ratio)
-            indices = np.linspace(0, len(data) - 1, n_samples).astype(int)
-            data = data[indices]
-
-    data = data.astype(np.float32)
-    int_data = (data * 32767).astype(np.int16)
-    with wave.open(str(wav_path), 'wb') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(target_sr)
-        wf.writeframes(int_data.tobytes())
-
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", str(mp3_path),
+            "-ac", "1",
+            "-ar", str(target_sr),
+            "-acodec", "pcm_s16le",
+            str(wav_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
     return wav_path
 
 

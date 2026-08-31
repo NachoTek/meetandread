@@ -84,12 +84,10 @@ def test_model_download_and_diarize(downloaded_models, tmp_path):
     wav_path = tmp_path / "test_synth.wav"
     _create_synth_wav(wav_path, duration_s=5.0)
 
-    # Read the WAV back as float32
-    import soundfile as sf
-    audio, sr = sf.read(str(wav_path), dtype="float32")
-    # Ensure mono
-    if audio.ndim > 1:
-        audio = audio[:, 0]
+    # Read the WAV back as float32 mono @16 kHz via the shared loader
+    from meetandread.audio.utils import load_wav_as_float32_mono
+    audio = load_wav_as_float32_mono(wav_path)
+    sr = 16000
 
     # Build the diarization config
     config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
