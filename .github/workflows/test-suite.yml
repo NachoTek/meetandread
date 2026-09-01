@@ -6,6 +6,11 @@ name: Test Suite
 
 on:
   workflow_call:
+    inputs:
+      fast:
+        description: "fast PR lane — additionally deselects requires_qt_widgets"
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -26,10 +31,21 @@ jobs:
       - name: Lint
         run: python -m flake8 src/ --max-line-length=120
 
-      - name: Run tests
-        continue-on-error: true
+      # Issue #86: two lanes instead of one continue-on-error step.
+      # Fast lane (PR gate) additionally deselects requires_qt_widgets;
+      # nightly/tags keep the full not-slow lane. -n auto resolves to
+      # 4 workers on windows-latest. -x fails the step on the first
+      # failure instead of deferring to the Verify step.
+      - name: Run tests (fast lane)
+        if: inputs.fast
         run: |
-          python -m pytest -m "not slow" --tb=short -q --timeout=300 -p no:qt `
+          python -m pytest -n auto -x -m "not slow and not requires_qt_widgets" --tb=short -q --timeout=300 -p no:qt `
+            2>&1 | Out-File test_output.txt -Encoding utf8
+
+      - name: Run tests (full lane)
+        if: ${{ !inputs.fast }}
+        run: |
+          python -m pytest -n auto -x -m "not slow" --tb=short -q --timeout=300 -p no:qt `
             2>&1 | Out-File test_output.txt -Encoding utf8
 
       - name: Verify tests passed

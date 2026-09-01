@@ -20,6 +20,10 @@ permissions:
 jobs:
   lint-and-test:
     uses: ./.github/workflows/test-suite.yml
+    # Issue #86: PRs gate on the fast lane (deselects requires_qt_widgets);
+    # nightly and tag runs keep the full not-slow lane.
+    with:
+      fast: ${{ github.event_name == 'pull_request' }}
 
   bundle-validation:
     needs: [lint-and-test]
