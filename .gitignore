@@ -65,3 +65,6 @@ lpt[1-9].*
 .gsd-worktrees/
 .gsd-backups/
 tests/fixtures/TEST-OUTPUT-Transcript.md
+
+# Build metadata (issue #88) — regenerate with `pip install -e .`
+*.egg-info/
