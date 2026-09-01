@@ -179,6 +179,24 @@ class TestAcquireSingleInstanceLock:
         finally:
             si._release_lock_for_tests()
 
+    def test_null_mutex_handle_fails_closed(self, monkeypatch):
+        import meetandread.single_instance as si
+
+        fake_kernel32 = MagicMock()
+        fake_kernel32.CreateMutexW.return_value = None
+        fake_kernel32.GetLastError.return_value = 5  # ERROR_ACCESS_DENIED
+        fake_windll = MagicMock(kernel32=fake_kernel32)
+        monkeypatch.setattr(si.ctypes, "windll", fake_windll, raising=False)
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        si._release_lock_for_tests()
+        try:
+            assert si.acquire_single_instance_lock("mnr_fake") is False
+            assert si._lock_handle is None
+            fake_kernel32.CloseHandle.assert_not_called()
+        finally:
+            si._release_lock_for_tests()
+
     def test_non_windows_returns_true_without_touching_ctypes(self, monkeypatch):
         import meetandread.single_instance as si
 

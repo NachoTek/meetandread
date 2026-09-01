@@ -49,18 +49,30 @@ def acquire_single_instance_lock(name: str = "meetandread") -> bool:
     Returns:
         True if this process holds the single-instance lock (or the
         platform does not support one); False if another instance
-        already holds it.
+        already holds it or the mutex could not be created/opened
+        (caller must refuse to start).
     """
     global _lock_handle
 
     if sys.platform != "win32":
         return True
 
-    handle = ctypes.windll.kernel32.CreateMutexW(
-        None, False, f"Global\\{name}_single_instance"
-    )
-    if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-        ctypes.windll.kernel32.CloseHandle(handle)
+    from ctypes import wintypes
+
+    k32 = ctypes.windll.kernel32
+    k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    k32.CreateMutexW.restype = wintypes.HANDLE
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+    k32.GetLastError.restype = wintypes.DWORD
+
+    handle = k32.CreateMutexW(None, False, f"Global\\{name}_single_instance")
+    if k32.GetLastError() == ERROR_ALREADY_EXISTS:
+        if handle:
+            k32.CloseHandle(handle)
+        return False
+
+    if not handle:
         return False
 
     _lock_handle = handle

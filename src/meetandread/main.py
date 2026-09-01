@@ -325,7 +325,7 @@ def main():
 
     if not acquire_single_instance_lock():
         print(
-            "meetandread is already running — exiting this duplicate instance.",
+            "meetandread is already running (or the single-instance lock could not be acquired) — exiting this instance.",
             file=sys.stderr,
         )
         sys.exit(1)
