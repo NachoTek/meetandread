@@ -86,15 +86,20 @@ def _cleanup_qtimers():
     widget/timer C++ objects are destroyed late (at gc or interpreter exit)
     while their native callbacks may still fire — a stochastic access
     violation under both single-process and xdist runs.  This teardown now
-    applies pytest-qt's core hygiene even when the plugin is disabled:
-    process events, stop+delete timers, close top-level widgets, and flush
-    the deletion queue before the next test starts.
+    applies pytest-qt's core hygiene even when the plugin is disabled, in
+    the safe order: neutralize leaked timers first (retry timers and
+    ResourceMonitor pollers), then close widgets, then a single event-loop
+    flush to deliver the deferred deletions.  Flushing before the timers
+    are stopped would let a due stale callback execute — the exact hazard
+    this fixture exists to prevent.
     """
     yield
     app = QApplication.instance()
     if app is None:
         return
-    app.processEvents()
+    from meetandread.performance.monitor import ResourceMonitor
+
+    # 1. Neutralize leaked timers BEFORE any event processing.
     for widget in app.topLevelWidgets():
         for timer in widget.findChildren(QTimer):
             try:
@@ -103,6 +108,10 @@ def _cleanup_qtimers():
                 pass
             timer.stop()
             timer.deleteLater()
+    # ResourceMonitor poll timers are parentless — invisible to the
+    # findChildren sweep — and keep firing into deleted panels otherwise.
+    ResourceMonitor.stop_all()
+    # 2. Close top-level widgets (deferred deletion via deleteLater).
     for widget in app.topLevelWidgets():
         try:
             widget.hide()
@@ -110,14 +119,8 @@ def _cleanup_qtimers():
             widget.deleteLater()
         except RuntimeError:
             pass
-    # Issue #86: ResourceMonitor poll timers are parentless QTimers — they
-    # never appear under any widget, survive widget deletion, and keep
-    # firing into the deleted panel (post-delete RuntimeError) while
-    # burning CPU through the rest of the run (timer starvation flake in
-    # the pre-push hook suite). Stop any monitor a test left running.
-    from meetandread.performance.monitor import ResourceMonitor
-
-    ResourceMonitor.stop_all()
+    # 3. Single flush: deliver deferred deletions now that no stale
+    # callback can run.
     app.processEvents()
 
 
