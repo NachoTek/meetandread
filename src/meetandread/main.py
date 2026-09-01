@@ -324,9 +324,10 @@ def main():
     from meetandread.single_instance import acquire_single_instance_lock
 
     if not acquire_single_instance_lock():
-        print(
-            "meetandread is already running (or the single-instance lock could not be acquired) — exiting this instance.",
-            file=sys.stderr,
+        # setup_logging() has not run yet; logging's lastResort handler still
+        # routes ERROR to stderr, so the diagnostic path is preserved.
+        logger.error(
+            "meetandread is already running (or the single-instance lock could not be acquired) — exiting this instance."
         )
         sys.exit(1)
 
