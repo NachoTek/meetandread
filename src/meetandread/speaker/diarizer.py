@@ -8,6 +8,7 @@ single ``Diarizer`` class with a ``diarize(wav_path)`` entry point.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -373,12 +374,39 @@ class Diarizer:
         Running in a subprocess gives it a separate GIL so the UI stays
         responsive.
 
+        **Frozen builds (PyInstaller)**: ``sys.executable`` is the app
+        bundle itself and the bootloader ignores ``-c``, so spawning a
+        subprocess here boots a SECOND full app instance whose stdout
+        never carries the expected length-prefixed JSON (issue #20:
+        duplicate meetandread.exe on stop-recording, post-processing
+        never completes). In frozen mode this method therefore falls
+        back to in-process ``diarize()`` instead. Tradeoff: the
+        in-process path holds the GIL for the whole computation, so the
+        UI may freeze for the diarization duration (10-30s) — still
+        strictly better than the duplicate zombie process. A GIL-friendly
+        rewrite is future scope.
+
         Args:
             wav_path: Path to a 16-bit PCM WAV file.
 
         Returns:
-            A ``DiarizationResult`` — same as ``diarize()``.
+            A ``DiarizationResult`` — same as ``diarize()``. Never
+            raises; unexpected in-process failures are converted into
+            an error result (contract parity with the subprocess path).
         """
+        # Frozen builds cannot use ``python -c`` — run in-process (see
+        # docstring). Must come before any subprocess setup.
+        if getattr(sys, "frozen", False):
+            try:
+                return self.diarize(wav_path)
+            except Exception as e:
+                logger.error(
+                    "Frozen in-process diarization failed: %s", e, exc_info=True
+                )
+                return DiarizationResult(
+                    error=f"In-process diarization failed: {e}"
+                )
+
         wav_path = Path(wav_path)
         t0 = time.monotonic()
 
@@ -386,7 +414,6 @@ class Diarizer:
             import subprocess
             import json
             import struct
-            import sys
 
             # Ensure models are downloaded before spawning subprocess
             self._ensure_initialized()
