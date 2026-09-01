@@ -1,0 +1,2 @@
+[console_scripts]
+meetandread = meetandread.main:main
