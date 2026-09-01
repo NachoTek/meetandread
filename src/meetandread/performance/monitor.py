@@ -8,6 +8,7 @@ Emits threshold-crossing warnings via the Python logging system.
 """
 
 import logging
+import weakref
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
@@ -55,6 +56,13 @@ class ResourceMonitor:
         >>> monitor.stop()
     """
 
+    # Class-level weakref registry (issue #86): ResourceMonitor's QTimer is
+    # parentless, so it is invisible to QApplication.findChildren(QTimer)
+    # sweeps. Tests that abandon a started monitor leak a poll timer that
+    # keeps firing for the rest of the process lifetime. The registry lets
+    # test teardown stop every live monitor deterministically.
+    _instances: "list[weakref.ReferenceType[ResourceMonitor]]" = []
+
     def __init__(
         self,
         poll_interval_ms: int = 2000,
@@ -72,6 +80,8 @@ class ResourceMonitor:
         self._current_snapshot: Optional[ResourceSnapshot] = None
         self._timer = None
         self._running = False
+
+        ResourceMonitor._instances.append(weakref.ref(self))
 
         # Track whether we already warned to avoid log spam
         self._ram_warned = False
@@ -162,6 +172,24 @@ class ResourceMonitor:
                     self._on_warning("cpu", snapshot.cpu_percent, self._cpu_warning_percent)
         else:
             self._cpu_warned = False
+
+    @classmethod
+    def stop_all(cls) -> None:
+        """Stop every live monitor (test teardown hygiene — issue #86).
+
+        Compacts the weakref registry, then stops any monitor that is still
+        polling. Called from the test suite's Qt teardown so an abandoned
+        panel's poll timer cannot keep firing into deleted widgets.
+        """
+        live = []
+        for ref in cls._instances:
+            monitor = ref()
+            if monitor is None:
+                continue
+            live.append(ref)
+            if monitor.is_running:
+                monitor.stop()
+        cls._instances[:] = live
 
     def start(self) -> None:
         """Start periodic resource monitoring.

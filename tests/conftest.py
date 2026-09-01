@@ -110,6 +110,14 @@ def _cleanup_qtimers():
             widget.deleteLater()
         except RuntimeError:
             pass
+    # Issue #86: ResourceMonitor poll timers are parentless QTimers — they
+    # never appear under any widget, survive widget deletion, and keep
+    # firing into the deleted panel (post-delete RuntimeError) while
+    # burning CPU through the rest of the run (timer starvation flake in
+    # the pre-push hook suite). Stop any monitor a test left running.
+    from meetandread.performance.monitor import ResourceMonitor
+
+    ResourceMonitor.stop_all()
     app.processEvents()
 
 
