@@ -78,11 +78,28 @@ def _cleanup_qtimers():
 
     This safety net walks every top-level widget, disconnects, stops, and
     deletes every ``QTimer`` child.
+
+    Issue #86: CI runs with ``-p no:qt`` (issue #64), so pytest-qt's own
+    ``pytest_runtest_teardown`` hook — which normally processes pending Qt
+    events and closes tracked widgets between tests — never runs.  Without
+    any ``processEvents()`` call, ``deleteLater()`` requests accumulate and
+    widget/timer C++ objects are destroyed late (at gc or interpreter exit)
+    while their native callbacks may still fire — a stochastic access
+    violation under both single-process and xdist runs.  This teardown now
+    applies pytest-qt's core hygiene even when the plugin is disabled, in
+    the safe order: neutralize leaked timers first (retry timers and
+    ResourceMonitor pollers), then close widgets, then a single event-loop
+    flush to deliver the deferred deletions.  Flushing before the timers
+    are stopped would let a due stale callback execute — the exact hazard
+    this fixture exists to prevent.
     """
     yield
     app = QApplication.instance()
     if app is None:
         return
+    from meetandread.performance.monitor import ResourceMonitor
+
+    # 1. Neutralize leaked timers BEFORE any event processing.
     for widget in app.topLevelWidgets():
         for timer in widget.findChildren(QTimer):
             try:
@@ -91,6 +108,20 @@ def _cleanup_qtimers():
                 pass
             timer.stop()
             timer.deleteLater()
+    # ResourceMonitor poll timers are parentless — invisible to the
+    # findChildren sweep — and keep firing into deleted panels otherwise.
+    ResourceMonitor.stop_all()
+    # 2. Close top-level widgets (deferred deletion via deleteLater).
+    for widget in app.topLevelWidgets():
+        try:
+            widget.hide()
+            widget.close()
+            widget.deleteLater()
+        except RuntimeError:
+            pass
+    # 3. Single flush: deliver deferred deletions now that no stale
+    # callback can run.
+    app.processEvents()
 
 
 def pytest_collection_modifyitems(config, items):
