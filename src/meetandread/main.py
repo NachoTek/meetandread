@@ -319,6 +319,18 @@ def setup_signal_handlers(app, widget_ref=None):
 
 def main():
     """Application entry point."""
+    # Single-instance guard (issue #20): must run before QApplication so a
+    # duplicate process exits before creating any UI or grabbing resources.
+    from meetandread.single_instance import acquire_single_instance_lock
+
+    if not acquire_single_instance_lock():
+        # setup_logging() has not run yet; logging's lastResort handler still
+        # routes ERROR to stderr, so the diagnostic path is preserved.
+        logger.error(
+            "meetandread is already running (or the single-instance lock could not be acquired) — exiting this instance."
+        )
+        sys.exit(1)
+
     # Setup logging first
     setup_logging()
     logging.info("Starting meetandread")
