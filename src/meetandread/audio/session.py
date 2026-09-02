@@ -258,8 +258,24 @@ class AudioSourceWrapper:
                 num_channels=target_channels,
                 dtype='float32',
             )
+            _log.info(
+                "AudioSourceWrapper: resampling active: source=%s, native=%dHz/%dch "
+                "-> target=%dHz/%dch",
+                config.type,
+                self.source_rate,
+                self.source_channels,
+                self.target_rate,
+                self.target_channels,
+            )
         else:
             self._resampler = None
+            _log.info(
+                "AudioSourceWrapper: passthrough (no resample): source=%s, "
+                "native=%dHz == target=%dHz",
+                config.type,
+                self.source_rate,
+                self.target_rate,
+            )
 
     @property
     def should_denoise(self) -> bool:
@@ -299,7 +315,7 @@ class AudioSourceWrapper:
             if frames.ndim == 1:
                 frames = frames.reshape(-1, 1)
             if frames.shape[0] == 0:
-                return frames
+                return None
             # Use resample_chunk for streaming resampler
             try:
                 frames = self._resampler.resample_chunk(frames)
@@ -311,7 +327,14 @@ class AudioSourceWrapper:
                     type(frames).__name__ if frames is not None else "NoneType",
                 )
                 return None
-        
+
+        if frames.shape[0] == 0:
+            _log.debug(
+                "zero-sample chunk after processing, dropping: source=%s",
+                self.config.type,
+            )
+            return None
+
         return frames
     
     def start(self) -> None:

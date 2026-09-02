@@ -136,6 +136,34 @@ class SoundDeviceSource:
             )
             self._stream.start()
             self._running = True
+
+            # Sanitized stream-open log mirroring the loopback source.
+            # Never let a logging/device-query failure break start().
+            try:
+                if self.device_id is None:
+                    device_name = "default"
+                else:
+                    try:
+                        device_name = sounddevice.query_devices(self.device_id).get(
+                            "name", "unknown"
+                        )
+                    except Exception:
+                        device_name = "unknown"
+                _log.info(
+                    "SoundDevice stream opened: source=%s, device=%r (id=%s), "
+                    "%dHz, %dch, blocksize=%d",
+                    self._source_label,
+                    device_name,
+                    self.device_id,
+                    self.samplerate,
+                    self.channels,
+                    self.blocksize,
+                )
+            except Exception:
+                _log.debug(
+                    "SoundDevice stream-open log failed (source=%s)",
+                    self._source_label,
+                )
     
     def stop(self) -> None:
         """Stop the audio capture stream."""
