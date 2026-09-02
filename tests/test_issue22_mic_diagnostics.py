@@ -199,13 +199,19 @@ class TestZeroSampleGuard:
         assert result is None
         assert any("zero-sample chunk after processing" in r.getMessage() for r in caplog.records)
 
-    def test_empty_chunk_with_resampler_returns_none(self):
+    def test_empty_chunk_with_resampler_returns_none(self, caplog):
         source = _FakeSource(sample_rate=48000, channels=1)
         wrapper = AudioSourceWrapper(
             source, SourceConfig(type="mic"), target_rate=16000, target_channels=1
         )
         source._queue.put(np.zeros((0, 1), dtype=np.float32))
-        assert wrapper.read_and_process(timeout=0.1) is None
+        with caplog.at_level("DEBUG", logger="meetandread.audio.session"):
+            result = wrapper.read_and_process(timeout=0.1)
+        assert result is None
+        assert any(
+            "zero-sample chunk before resampling" in r.getMessage()
+            for r in caplog.records
+        )
 
     def test_resample_chunk_zero_output_returns_none(self):
         source = _FakeSource(sample_rate=48000, channels=1)

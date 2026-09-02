@@ -315,6 +315,10 @@ class AudioSourceWrapper:
             if frames.ndim == 1:
                 frames = frames.reshape(-1, 1)
             if frames.shape[0] == 0:
+                _log.debug(
+                    "zero-sample chunk before resampling, dropping: source=%s",
+                    self.config.type,
+                )
                 return None
             # Use resample_chunk for streaming resampler
             try:
