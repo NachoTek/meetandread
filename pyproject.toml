@@ -72,6 +72,7 @@ markers = [
     "slow: marks tests as slow (requires model download, deselect with '-m \"not slow\"')",
     "requires_qt_widgets: mark tests that require real Qt widgets and a display context",
     "windows: tests that require the real Windows native audio stack (PortAudio/pyaudiowpatch); run under .venv/Scripts/python.exe, see ADR 0001",
+    "real_storage_paths: test opts out of the conftest storage-dir isolation and may touch the real ~/Documents/meetandread tree (issue #66)",
 ]
 
 [tool.flake8]

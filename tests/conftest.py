@@ -65,6 +65,48 @@ def _isolate_native_live_speaker_extraction(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_storage_paths(request, monkeypatch, tmp_path):
+    """Redirect default storage dirs into a per-test tmp base (issue #66).
+
+    Nightly CI run 33603059308 failed on main: two controller tests starting
+    a recording in the same wall-clock second on different xdist workers
+    (``-n auto``, PR #87) collided on the same second-precision
+    ``recording-<timestamp>.pcm.part`` stem inside the REAL
+    ``~/Documents/meetandread/recordings`` tree. Tests must not write real
+    WAV/PCM captures into the real user recordings directory.
+
+    The seam: ``meetandread.audio.storage.paths.get_data_dir`` is the single
+    module-global choke point — ``get_recordings_dir`` /
+    ``get_transcripts_dir`` / ``get_logs_dir`` all call it via their defining
+    module's globals at call time, so patching it redirects every consumer
+    regardless of where the resolver was imported (patching
+    ``get_recordings_dir`` itself would not cover import-bound consumers).
+
+    Explicit ``base_dir`` arguments always win (the wrapper calls the
+    original function for them), and config-based custom storage paths
+    (``_resolve_custom_path``) still run before ``get_data_dir`` in each
+    resolver, untouched.
+
+    Tests that genuinely exercise real user paths opt out with the
+    ``real_storage_paths`` marker.
+    """
+    if request.node.get_closest_marker("real_storage_paths") is not None:
+        return
+
+    from meetandread.audio.storage import paths as storage_paths
+
+    original_get_data_dir = storage_paths.get_data_dir
+    isolated_docs = tmp_path / "mar-storage-home" / "Documents"
+
+    def _isolated_get_data_dir(base_dir=None):
+        if base_dir is not None:
+            return original_get_data_dir(base_dir=base_dir)
+        return original_get_data_dir(base_dir=isolated_docs)
+
+    monkeypatch.setattr(storage_paths, "get_data_dir", _isolated_get_data_dir)
+
+
+@pytest.fixture(autouse=True)
 def _cleanup_qtimers():
     """Stop any leaked QTimers after each test.
 
