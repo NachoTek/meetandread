@@ -77,7 +77,7 @@ An optional installable component that powers a feature (e.g. sherpa-onnx powers
 _Avoid_: Plugin, extension, requirement (as a synonym)
 
 **Issue Capture Mode**:
-A mode the application runs in, entered at process start, in which comprehensive diagnostics are recorded for an issue the user intends to report. Entered only by being launched under the Issue Reporter — the user must start the Issue Reporter *before* reproducing the bug, though Recording is allowed inside the mode. Logging runs at DEBUG, the Interaction Trace and Resource Snapshots are recorded, and the run ends with a Diagnostics Bundle.
+A mode the application runs in, entered at process start, in which comprehensive diagnostics are recorded for an issue the user intends to report. Entered only by being launched under the Issue Reporter — the user must start the Issue Reporter *before* reproducing the bug, though Recording is allowed inside the mode. Logging runs at DEBUG via one global mode switch — INFO on normal runs, DEBUG in capture, no per-module overrides (ADR 0005) — the Interaction Trace and Resource Snapshots are recorded, and the run ends with a Diagnostics Bundle.
 _Avoid_: Debug mode (ambiguous with log levels), recording mode, reproduction mode
 
 **Issue Reporter**:
