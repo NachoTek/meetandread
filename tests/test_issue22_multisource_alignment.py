@@ -321,6 +321,60 @@ class TestAlignedMixing:
         )
         assert session._stats.mix_stall_episodes == 0
 
+    def test_drain_preset_carry_survives_ended_detection(self):
+        session = AudioSession()
+        source_a, wrapper_a = _make_wrapper("mic")
+        source_b, wrapper_b = _make_wrapper("system")
+        session._sources = [wrapper_a, wrapper_b]
+        session._config = SessionConfig(
+            sources=[SourceConfig(type="mic"), SourceConfig(type="system")],
+            sample_rate=16000,
+            channels=1,
+        )
+        session._writer = MagicMock()
+
+        # Reviewer's negative control: each source pre-queues ONE chunk.
+        # Mic: 1000 samples, system: 600. The first no-read round must not
+        # break the drain while a live source still holds carry — the
+        # 3-round ended detection must be allowed to exclude the quiet
+        # source from the min-gate so the survivor's full 1000 samples
+        # are written (600 aligned + 400 residue), not 600 + discard.
+        source_a._queue.put(np.full((1000, 1), 0.25, dtype=np.float32))
+        source_b._queue.put(np.full((600, 1), -0.5, dtype=np.float32))
+
+        # Copy of test_drain_asymmetric_exhaustion setup: stop event set
+        # before start => drain runs directly against pre-queued frames.
+        session._stop_event.set()
+        t = threading.Thread(target=session._consumer_loop_inner)
+        t.start()
+        t.join(timeout=5.0)
+        assert not t.is_alive(), "drain consumer thread did not exit"
+
+        payloads = [c.args[0] for c in session._writer.write_frames_i16.call_args_list]
+        total = sum(len(p) // 2 for p in payloads)
+        assert total == 1000, (
+            f"drain discarded queued tail: total written {total} != 1000"
+        )
+        assert session._stats.mix_stall_episodes == 0
+
+    def test_sync_mix_states_snapshot_covers_state(self):
+        session = AudioSession()
+        _, wrapper_a = _make_wrapper("mic")
+        _, wrapper_b = _make_wrapper("system")
+        session._sources = [wrapper_a, wrapper_b]
+
+        states, snapshot = session._sync_mix_states({}, 0)
+        assert len(snapshot) == 2
+        assert all(w in states for w in snapshot)
+
+        # A wrapper appended AFTER sync must not appear in the already-
+        # returned snapshot (the read pass iterates exactly this list, so
+        # post-sync additions cannot be read without mix state).
+        _, wrapper_c = _make_wrapper("mic")
+        session._sources.append(wrapper_c)
+        assert len(snapshot) == 2
+        assert wrapper_c not in snapshot
+
     def test_all_written_chunks_non_empty(self):
         for run in range(2):
             session = AudioSession()

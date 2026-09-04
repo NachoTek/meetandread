@@ -11,6 +11,7 @@ All tests are hardware-free: the stream layer is mocked/patched and sources
 are built via __new__ construction (see test_audio_frame_drop_mitigation.py).
 """
 
+import logging
 import queue
 import threading
 import time
@@ -19,7 +20,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from meetandread.audio.capture.sounddevice_source import SoundDeviceSource
+from meetandread.audio.capture.sounddevice_source import MicSource, SoundDeviceSource
 from meetandread.audio.session import (
     DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
     AudioSession,
@@ -109,9 +110,32 @@ class TestMicStreamOpenLog:
         open_logs = [r.getMessage() for r in caplog.records if "SoundDevice stream opened" in r.message]
         assert open_logs, f"no stream-open log in records: {[r.getMessage() for r in caplog.records]}"
         msg = open_logs[0]
-        assert "Test Mic (WASAPI)" in msg
+        assert "<redacted:" in msg
+        assert "Test Mic (WASAPI)" not in msg
         assert "48000" in msg
         assert str(DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE) in msg
+
+    def test_device_full_name_only_at_debug(self, caplog):
+        src = _make_sounddevice_source()
+        with patch(
+            "meetandread.audio.capture.sounddevice_source.sounddevice.InputStream",
+            MagicMock(),
+        ), patch(
+            "meetandread.audio.capture.sounddevice_source.sounddevice.query_devices",
+            return_value={"name": "Test Mic (WASAPI)"},
+        ):
+            with caplog.at_level("DEBUG", logger="meetandread.audio.capture.sounddevice_source"):
+                src.start()
+
+        assert src.is_running()
+        assert any(
+            "Test Mic (WASAPI)" in r.getMessage() for r in caplog.records
+        ), "raw device name must appear at DEBUG for diagnostics"
+        info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert info_records, "expected at least one INFO record"
+        assert all(
+            "Test Mic (WASAPI)" not in r.getMessage() for r in info_records
+        ), "raw device name must never appear at INFO"
 
     def test_query_devices_failure_still_starts_and_logs(self, caplog):
         src = _make_sounddevice_source()
@@ -144,6 +168,36 @@ class TestMicStreamOpenLog:
         assert src.is_running()
         msg = next(r.getMessage() for r in caplog.records if "SoundDevice stream opened" in r.message)
         assert "default" in msg
+
+
+class TestMicSourceExplicitDeviceRate:
+    def test_mic_source_explicit_device_uses_native_rate(self):
+        with patch(
+            "meetandread.audio.capture.sounddevice_source.get_wasapi_hostapi_index",
+            return_value=0,
+        ), patch(
+            "meetandread.audio.capture.sounddevice_source.sounddevice.query_devices",
+            return_value={
+                "name": "X",
+                "default_samplerate": 44100,
+                "max_input_channels": 1,
+                "hostapi": 0,
+            },
+        ):
+            src = MicSource(device_id=7)
+        assert src.samplerate == 44100
+        assert src.get_metadata()["sample_rate"] == 44100
+
+    def test_mic_source_rate_query_failure_falls_back(self):
+        with patch(
+            "meetandread.audio.capture.sounddevice_source.get_wasapi_hostapi_index",
+            return_value=None,
+        ), patch(
+            "meetandread.audio.capture.sounddevice_source.sounddevice.query_devices",
+            side_effect=RuntimeError("query failed"),
+        ):
+            src = MicSource(device_id=7)
+        assert src.samplerate == 48000
 
 
 # ---------------------------------------------------------------------------

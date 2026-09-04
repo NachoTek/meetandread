@@ -3,6 +3,7 @@
 Provides threaded audio capture using sounddevice with queue-based frame delivery.
 """
 
+import hashlib
 import logging
 import sounddevice
 import numpy as np
@@ -14,6 +15,12 @@ import platform
 from .devices import get_wasapi_hostapi_index, list_mic_inputs
 
 _log = logging.getLogger(__name__)
+
+
+def _redact_device_name(name: str) -> str:
+    """Stable non-identifying stand-in for an OS device name."""
+    digest = hashlib.sha256(name.encode("utf-8", errors="replace")).hexdigest()[:8]
+    return f"<redacted:{digest}>"
 
 
 class AudioSourceError(Exception):
@@ -149,16 +156,26 @@ class SoundDeviceSource:
                         )
                     except Exception:
                         device_name = "unknown"
+                if device_name in ("default", "unknown"):
+                    redacted = device_name
+                else:
+                    redacted = _redact_device_name(device_name)
                 _log.info(
-                    "SoundDevice stream opened: source=%s, device=%r (id=%s), "
+                    "SoundDevice stream opened: source=%s, device=%s (id=%s), "
                     "%dHz, %dch, blocksize=%d",
                     self._source_label,
-                    device_name,
+                    redacted,
                     self.device_id,
                     self.samplerate,
                     self.channels,
                     self.blocksize,
                 )
+                if device_name not in ("default", "unknown"):
+                    _log.debug(
+                        "SoundDevice device name (diagnostics): source=%s, device=%r",
+                        self._source_label,
+                        device_name,
+                    )
             except Exception:
                 _log.debug(
                     "SoundDevice stream-open log failed (source=%s)",
@@ -245,6 +262,19 @@ class MicSource(SoundDeviceSource):
                         "On Windows, microphone capture requires WASAPI for AUD-06 compliance."
                     )
         
+        # Explicit-device path: when no rate was requested, use the device's
+        # native default rather than assuming 48 kHz, so wrapper diagnostics
+        # report the true native rate (PR #91 review round 4).
+        if samplerate is None:
+            try:
+                samplerate = int(
+                    sounddevice.query_devices(device_id).get(
+                        "default_samplerate", 48000
+                    )
+                )
+            except Exception:
+                samplerate = 48000
+
         super().__init__(
             device_id=device_id,
             channels=channels or 2,

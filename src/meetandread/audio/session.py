@@ -34,7 +34,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Tuple
 import numpy as np
 import soxr
 from meetandread.audio.storage import (
@@ -995,12 +995,12 @@ class AudioSession:
             if not self._writer:
                 break
 
-            mix_states = self._sync_mix_states(mix_states, emitted_total)
+            mix_states, sources_snapshot = self._sync_mix_states(
+                mix_states, emitted_total
+            )
 
             # Read from all sources, applying denoising per-source before mixing
             read_any = False
-            with self._sources_lock:
-                sources_snapshot = list(self._sources)
             for wrapper in sources_snapshot:
                 frames = wrapper.read_and_process(timeout=0.05)
                 if frames is not None:
@@ -1052,21 +1052,19 @@ class AudioSession:
             if not self._writer:
                 break
 
-            mix_states = self._sync_mix_states(mix_states, emitted_total)
+            mix_states, sources_snapshot = self._sync_mix_states(
+                mix_states, emitted_total
+            )
 
             # Check if we've already hit the cap
             if max_frames is not None and self._stats.frames_recorded >= max_frames:
                 # Consume but discard remaining frames to prevent queue blocking
-                with self._sources_lock:
-                    sources_snapshot = list(self._sources)
                 for wrapper in sources_snapshot:
                     wrapper.read_and_process(timeout=0.01)
                 continue
 
             read_any = False
             delivered: set = set()
-            with self._sources_lock:
-                sources_snapshot = list(self._sources)
             for wrapper in sources_snapshot:
                 frames = wrapper.read_and_process(timeout=0.01)
                 if frames is not None:
@@ -1113,7 +1111,12 @@ class AudioSession:
             ]
             n = min((s.carry.shape[0] for s in gate_states), default=0)
             if n <= 0:
-                if not read_any:
+                carry_pending = any(
+                    s.carry.shape[0] > 0
+                    for w, s in mix_states.items()
+                    if w not in ended and not s.stalled
+                )
+                if not read_any and not carry_pending:
                     break
                 continue
 
@@ -1127,12 +1130,17 @@ class AudioSession:
         self,
         mix_states: Dict[AudioSourceWrapper, _SourceMixState],
         emitted_total: int,
-    ) -> Dict[AudioSourceWrapper, _SourceMixState]:
+    ) -> Tuple[Dict[AudioSourceWrapper, _SourceMixState], List[AudioSourceWrapper]]:
         """Sync per-source mix state with the current sources snapshot.
 
         Drops entries for wrappers no longer present (hotplug swap) and
         lazily creates state for new wrappers at the current timeline
         position (a new source starts "now").
+
+        Returns the mix_states dict AND the exact sources snapshot the
+        sync ran against. Callers must read from the returned snapshot —
+        not re-snapshot ``self._sources`` — so a source added after sync
+        cannot be read without a mix_states entry.
         """
         with self._sources_lock:
             sources_snapshot = list(self._sources)
@@ -1148,7 +1156,7 @@ class AudioSession:
                     source_pos=emitted_total,
                     last_delivery=now,
                 )
-        return mix_states
+        return mix_states, sources_snapshot
 
     def _update_stall_states(
         self,
