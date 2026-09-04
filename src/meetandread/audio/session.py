@@ -426,6 +426,10 @@ class AudioSession:
         self._stats_lock = threading.Lock()
         # Lock protecting _sources list for atomic swap mid-recording
         self._sources_lock = threading.Lock()
+        # Hot-plug carry handoff: per-source-type stash of a departed
+        # wrapper's un-emitted mix state, transferred to its replacement
+        # on the next _sync_mix_states pass.
+        self._mix_carry_handoff: Dict[str, tuple] = {}
 
     def _on_source_frame_dropped(self, source_type: str, source_count: int) -> None:
         """Thread-safe handler called from audio callback threads on queue overflow.
@@ -1026,13 +1030,14 @@ class AudioSession:
             n = self._aligned_emit_length(mix_states)
             emitted = 0
             if n > 0:
-                emitted = self._emit_aligned(
+                emitted, discard_now = self._emit_aligned(
                     mix_states, n, max_frames=max_frames, discard_mode=discard_mode,
                     final=False,
                 )
-                if emitted == -1:
+                if discard_now:
                     discard_mode = True
-                    emitted = 0
+                # Consumed is consumed — advance the shared timeline even
+                # when the cap turned this round's samples into a discard.
                 emitted_total += emitted
 
             if not emitted and not read_any:
@@ -1120,11 +1125,13 @@ class AudioSession:
                     break
                 continue
 
-            emitted = self._emit_aligned(
+            emitted, _discard_now = self._emit_aligned(
                 mix_states, n, max_frames=max_frames, discard_mode=False,
                 final=True, ended=ended,
             )
-            emitted_total += max(emitted, 0)
+            # Discard signal ignored here: the drain's own cap branch above
+            # handles subsequent rounds once frames_recorded >= max_frames.
+            emitted_total += emitted
 
     def _sync_mix_states(
         self,
@@ -1137,6 +1144,16 @@ class AudioSession:
         lazily creates state for new wrappers at the current timeline
         position (a new source starts "now").
 
+        Carry handoff: a departed wrapper's un-emitted carry (plus its
+        ``source_pos`` and stall counters) is stashed under its config
+        type; a replacement wrapper of the same type receives that state
+        (one-shot — the stash entry is popped on use) so a hot-plug swap
+        neither drops nor re-timestamps the buffered tail. Transferring
+        both carry and source_pos keeps ``source_pos - carry_len`` (the
+        carry head's timeline position) consistent for the resync-drop
+        arithmetic in ``_update_stall_states``. Departures with empty
+        carry stash nothing.
+
         Returns the mix_states dict AND the exact sources snapshot the
         sync ran against. Callers must read from the returned snapshot —
         not re-snapshot ``self._sources`` — so a source added after sync
@@ -1147,15 +1164,42 @@ class AudioSession:
         live = set(id(w) for w in sources_snapshot)
         for wrapper in list(mix_states.keys()):
             if id(wrapper) not in live:
+                state = mix_states[wrapper]
+                if state.carry.shape[0] > 0:
+                    # Overwrite is correct: swap_source is the only
+                    # mutation seam and replaces one wrapper per type.
+                    self._mix_carry_handoff[wrapper.config.type] = (
+                        state.carry,
+                        state.source_pos,
+                        state.stalled,
+                        state.stall_episodes,
+                        state.zero_filled_samples,
+                    )
                 del mix_states[wrapper]
         now = time.monotonic()
         for wrapper in sources_snapshot:
             if wrapper not in mix_states:
-                mix_states[wrapper] = _SourceMixState(
-                    carry=np.zeros((0, 1), dtype=np.float32),
-                    source_pos=emitted_total,
-                    last_delivery=now,
+                handoff = self._mix_carry_handoff.pop(
+                    wrapper.config.type, None
                 )
+                if handoff is not None:
+                    carry, source_pos, stalled, stall_episodes, zero_filled = (
+                        handoff
+                    )
+                    mix_states[wrapper] = _SourceMixState(
+                        carry=carry,
+                        source_pos=source_pos,
+                        last_delivery=now,
+                        stalled=stalled,
+                        stall_episodes=stall_episodes,
+                        zero_filled_samples=zero_filled,
+                    )
+                else:
+                    mix_states[wrapper] = _SourceMixState(
+                        carry=np.zeros((0, 1), dtype=np.float32),
+                        source_pos=emitted_total,
+                        last_delivery=now,
+                    )
         return mix_states, sources_snapshot
 
     def _update_stall_states(
@@ -1255,14 +1299,20 @@ class AudioSession:
         discard_mode: bool,
         final: bool,
         ended: Optional[set] = None,
-    ) -> int:
+    ) -> Tuple[int, bool]:
         """Emit ``n`` position-aligned samples from every source's carry head.
 
         Stalled/ended sources contribute ``n`` zeros each (for mono mixing the
         live sources pass through). Runs the existing max_frames cap /
         discard_mode / partial-write logic and feeds ``on_audio_frame``
-        exactly as the legacy loop did. Returns the number of samples
-        emitted, or -1 if the caller should switch to discard mode.
+        exactly as the legacy loop did.
+
+        Returns a tuple ``(consumed, discard_now)``: *consumed* is the
+        number of samples removed from every carry this call (``n`` in
+        every non-error path — written or discarded, including a partial
+        cap write); *discard_now* is True when the caller must switch to
+        discard mode (a partial write hit the cap or the cap was already
+        reached).
         """
         take_states = [
             (w, s) for w, s in mix_states.items()
@@ -1299,23 +1349,25 @@ class AudioSession:
                 # Cap reached, switch to discard mode
                 discard_mode = True
             elif len(mixed) > remaining:
-                # Partial chunk would exceed cap - write only remaining frames
+                # Partial chunk would exceed cap - write only remaining frames.
+                # All n carry samples were consumed, written or not, so the
+                # caller's timeline accounting must still advance by n.
                 mixed = mixed[:remaining]
                 int16_bytes = self._float32_to_int16_bytes(mixed)
                 self._writer.write_frames_i16(int16_bytes)
                 self._stats.frames_recorded += len(mixed)
                 # Switch to discard mode after final write
-                return -1
+                return n, True
 
         if discard_mode:
             # In discard mode: consume frames but don't write
-            return n
+            return n, True
 
         # Convert to int16 and write
         int16_bytes = self._float32_to_int16_bytes(mixed)
         self._writer.write_frames_i16(int16_bytes)
         self._stats.frames_recorded += len(mixed)
-        return n
+        return n, False
     
     def _mix_frames(self, frames_list: List[np.ndarray]) -> np.ndarray:
         """Mix multiple frame arrays together.

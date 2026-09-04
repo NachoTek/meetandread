@@ -34,6 +34,7 @@ from meetandread.audio.session import (
     AudioSession,
     AudioSourceWrapper,
     SessionConfig,
+    SessionState,
     SourceConfig,
 )
 
@@ -402,3 +403,264 @@ class TestAlignedMixing:
             assert all(len(p) > 0 for p in payloads)
             assert collected, f"run {run}: expected callback chunks"
             assert all(arr.shape[0] > 0 for arr in collected)
+
+
+class TestRound6CapAccountingAndHotplugCarryTransfer:
+    """Round 6 — cap partial-write timeline accounting + hot-plug carry handoff.
+
+    Pins two review findings:
+
+    - ``_emit_aligned`` must report CONSUMED samples even when the
+      max_frames cap forces a partial write, so ``emitted_total``
+      (the shared timeline position) never under-counts what was
+      removed from carries.
+    - ``_sync_mix_states`` must transfer a departed same-type source's
+      un-emitted carry to its replacement instead of silently dropping
+      it (hot-plug swap tail preservation).
+    """
+
+    def test_emit_aligned_partial_cap_counts_consumed(self):
+        # Partial cap write: 150-sample emission into a 100-frame cap
+        # consumes all 150 carry samples even though only 100 frames
+        # are written. Returns (consumed=150, discard_now=True).
+        session = AudioSession()
+        _, wrapper = _make_wrapper("mic")
+        session._sources = [wrapper]
+        collected = []
+        session._config = SessionConfig(
+            sources=[SourceConfig(type="mic")],
+            sample_rate=16000,
+            channels=1,
+            on_audio_frame=collected.append,
+        )
+        session._writer = MagicMock()
+
+        states, _ = session._sync_mix_states({}, 0)
+        state = states[wrapper]
+        state.carry = np.full((150, 1), 0.25, dtype=np.float32)
+        state.source_pos = 150
+
+        result = session._emit_aligned(
+            states, 150, max_frames=100, discard_mode=False, final=False
+        )
+        assert result == (150, True)
+        assert session._stats.frames_recorded == 100
+        assert state.carry.shape[0] == 0
+        assert collected and collected[0].shape[0] == 150
+
+    def test_emit_aligned_full_write_no_cap(self):
+        # Variant A: no cap (max_frames=None) — full write, no discard.
+        session = AudioSession()
+        _, wrapper = _make_wrapper("mic")
+        session._sources = [wrapper]
+        session._config = SessionConfig(
+            sources=[SourceConfig(type="mic")],
+            sample_rate=16000,
+            channels=1,
+        )
+        session._writer = MagicMock()
+
+        states, _ = session._sync_mix_states({}, 0)
+        state = states[wrapper]
+        state.carry = np.full((150, 1), 0.25, dtype=np.float32)
+        state.source_pos = 150
+
+        result = session._emit_aligned(
+            states, 150, max_frames=None, discard_mode=False, final=False
+        )
+        assert result == (150, False)
+        assert session._stats.frames_recorded == 150
+        assert state.carry.shape[0] == 0
+
+    def test_emit_aligned_cap_already_reached_discards(self):
+        # Variant B: cap already reached before the call — everything is
+        # consumed and discarded, no additional write happens.
+        session = AudioSession()
+        _, wrapper = _make_wrapper("mic")
+        session._sources = [wrapper]
+        session._config = SessionConfig(
+            sources=[SourceConfig(type="mic")],
+            sample_rate=16000,
+            channels=1,
+        )
+        session._writer = MagicMock()
+
+        states, _ = session._sync_mix_states({}, 0)
+        state = states[wrapper]
+        state.carry = np.full((150, 1), 0.25, dtype=np.float32)
+        state.source_pos = 150
+
+        session._stats.frames_recorded = 100
+        writes_before = session._writer.write_frames_i16.call_count
+
+        result = session._emit_aligned(
+            states, 150, max_frames=100, discard_mode=False, final=False
+        )
+        assert result == (150, True)
+        assert session._stats.frames_recorded == 100
+        assert session._writer.write_frames_i16.call_count == writes_before
+        assert state.carry.shape[0] == 0
+
+    def test_drain_partial_cap_writes_exact_cap(self):
+        # Drain with two pre-queued sources (150 each) under a
+        # max_frames=100 cap: exactly 100 frames written, consumer exits.
+        session = AudioSession()
+        source_a, wrapper_a = _make_wrapper("mic")
+        source_b, wrapper_b = _make_wrapper("system")
+        session._sources = [wrapper_a, wrapper_b]
+        session._config = SessionConfig(
+            sources=[SourceConfig(type="mic"), SourceConfig(type="system")],
+            sample_rate=16000,
+            channels=1,
+            max_frames=100,
+        )
+        session._writer = MagicMock()
+
+        source_a._queue.put(np.full((150, 1), 0.25, dtype=np.float32))
+        source_b._queue.put(np.full((150, 1), -0.5, dtype=np.float32))
+
+        # Stop event pre-set so the drain runs directly against the
+        # pre-queued frames (pattern of test_drain_preset_carry_survives_
+        # ended_detection).
+        session._stop_event.set()
+        t = threading.Thread(target=session._consumer_loop_inner)
+        t.start()
+        t.join(timeout=5.0)
+        assert not t.is_alive(), "drain consumer thread did not exit"
+
+        payloads = [c.args[0] for c in session._writer.write_frames_i16.call_args_list]
+        total = sum(len(p) // 2 for p in payloads)
+        assert total == 100, (
+            f"cap partial-write must write exactly the cap: {total} != 100"
+        )
+
+    def test_sync_mix_states_transfers_carry_on_swap(self):
+        # Reviewer's negative control with unequal positioning: A("mic")
+        # carries 700 un-emitted samples, B("system") 300. Swapping A for
+        # a fresh A2("mic") must transfer A's carry AND source_pos so the
+        # tail is neither dropped nor re-timestamped.
+        session = AudioSession()
+        _, wrapper_a = _make_wrapper("mic")
+        _, wrapper_b = _make_wrapper("system")
+        session._sources = [wrapper_a, wrapper_b]
+
+        states, _ = session._sync_mix_states({}, 0)
+        states[wrapper_a].carry = np.full((700, 1), 0.25, dtype=np.float32)
+        states[wrapper_a].source_pos = 700
+        states[wrapper_b].carry = np.full((300, 1), -0.5, dtype=np.float32)
+        states[wrapper_b].source_pos = 300
+
+        _, wrapper_a2 = _make_wrapper("mic")
+        session._sources = [wrapper_a2, wrapper_b]
+
+        states, snapshot = session._sync_mix_states(states, 500)
+        assert wrapper_a not in states
+        assert wrapper_a2 in states
+        assert wrapper_a2 in snapshot
+        assert states[wrapper_a2].carry.shape[0] == 700
+        assert states[wrapper_a2].source_pos == 700
+        np.testing.assert_array_equal(
+            states[wrapper_a2].carry,
+            np.full((700, 1), 0.25, dtype=np.float32),
+        )
+        # B untouched.
+        assert states[wrapper_b].carry.shape[0] == 300
+        assert states[wrapper_b].source_pos == 300
+
+        # Second sync: handoff consumed once — A2 keeps its state, no
+        # duplicate transfer, B stable.
+        states, snapshot = session._sync_mix_states(states, 500)
+        assert states[wrapper_a2].carry.shape[0] == 700
+        assert states[wrapper_a2].source_pos == 700
+        assert states[wrapper_b].carry.shape[0] == 300
+        assert states[wrapper_b].source_pos == 300
+
+        # Negative: depart a "mic" wrapper with EMPTY carry, add a new
+        # "mic" — the new state starts empty at emitted_total (no stale
+        # handoff).
+        states[wrapper_a2].carry = np.zeros((0, 1), dtype=np.float32)
+        _, wrapper_a3 = _make_wrapper("mic")
+        session._sources = [wrapper_a3, wrapper_b]
+        states, snapshot = session._sync_mix_states(states, 500)
+        assert wrapper_a3 in states
+        assert states[wrapper_a3].carry.shape[0] == 0
+        assert states[wrapper_a3].source_pos == 500
+
+    def test_hot_swap_preserves_pending_carry_end_to_end(self):
+        # End-to-end: A("mic") holds a pending 400-sample tail when B is
+        # exhausted; swapping A for A2 must preserve the tail. Feeding B
+        # 400 more releases the tail — the second chunk decodes to the
+        # A+B mix (positive values), not B alone (negative), and total
+        # written stays 700 (no drop, no shift).
+        session = AudioSession()
+        source_a, wrapper_a = _make_wrapper("mic")
+        source_b, wrapper_b = _make_wrapper("system")
+        session._sources = [wrapper_a, wrapper_b]
+        session._config = SessionConfig(
+            sources=[SourceConfig(type="mic"), SourceConfig(type="system")],
+            sample_rate=16000,
+            channels=1,
+            mix_stall_timeout_s=30,
+        )
+        session._writer = MagicMock()
+        # swap_source requires RECORDING state.
+        session._state = SessionState.RECORDING
+
+        source_a._queue.put(np.full((700, 1), 0.9, dtype=np.float32))
+        source_b._queue.put(np.full((300, 1), -0.3, dtype=np.float32))
+
+        t = threading.Thread(target=session._consumer_loop_inner)
+        t.start()
+
+        # Wait for the aligned 300-emission (mixed 0.9-0.3 = 0.6),
+        # leaving A with a pending 400 carry.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if session._writer.write_frames_i16.call_count >= 1:
+                break
+            time.sleep(0.02)
+        assert session._writer.write_frames_i16.call_count >= 1, (
+            "first aligned emission never happened"
+        )
+
+        # Swap the mic via the real seam (FakeSource start/stop no-ops).
+        source_a2, wrapper_a2 = _make_wrapper("mic")
+        session.swap_source("mic", wrapper_a2)
+
+        # Give the consumer at least one _sync_mix_states pass AFTER the
+        # swap commit (idle rounds take ~0.1s each: two 0.05s blocking
+        # reads) so the handoff path is exercised deterministically
+        # instead of racing the loop's read phase.
+        time.sleep(0.25)
+
+        # Release A's transferred tail by feeding B 400 more samples.
+        source_b._queue.put(np.full((400, 1), -0.3, dtype=np.float32))
+
+        # Quiescence-wait (~0.4s no new writes).
+        deadline = time.monotonic() + 5.0
+        seen = session._writer.write_frames_i16.call_count
+        last_progress = time.monotonic()
+        while time.monotonic() < deadline:
+            time.sleep(0.02)
+            current = session._writer.write_frames_i16.call_count
+            if current > seen:
+                seen = current
+                last_progress = time.monotonic()
+            elif seen and time.monotonic() - last_progress > 0.4:
+                break
+        session._stop_event.set()
+        t.join(timeout=5.0)
+        assert not t.is_alive(), "consumer thread did not exit after stop"
+
+        payloads = [c.args[0] for c in session._writer.write_frames_i16.call_args_list]
+        total = sum(len(p) // 2 for p in payloads)
+        assert total == 700, (
+            f"tail dropped or timeline shifted: total {total} != 700"
+        )
+        decoded = _decode_i16_payloads(payloads)
+        second_chunk = decoded[1]
+        assert second_chunk.shape[0] == 400
+        assert np.all(second_chunk.astype(np.int32) > 15000), (
+            "second chunk should be A's transferred tail mixed with B "
+            f"(~0.6), got values like {second_chunk[:5]}"
+        )
