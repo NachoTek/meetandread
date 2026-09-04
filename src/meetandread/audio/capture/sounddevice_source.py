@@ -170,12 +170,6 @@ class SoundDeviceSource:
                     self.channels,
                     self.blocksize,
                 )
-                if device_name not in ("default", "unknown"):
-                    _log.debug(
-                        "SoundDevice device name (diagnostics): source=%s, device=%r",
-                        self._source_label,
-                        device_name,
-                    )
             except Exception:
                 _log.debug(
                     "SoundDevice stream-open log failed (source=%s)",

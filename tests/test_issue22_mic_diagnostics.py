@@ -115,7 +115,7 @@ class TestMicStreamOpenLog:
         assert "48000" in msg
         assert str(DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE) in msg
 
-    def test_device_full_name_only_at_debug(self, caplog):
+    def test_device_full_name_never_logged(self, caplog):
         src = _make_sounddevice_source()
         with patch(
             "meetandread.audio.capture.sounddevice_source.sounddevice.InputStream",
@@ -124,18 +124,20 @@ class TestMicStreamOpenLog:
             "meetandread.audio.capture.sounddevice_source.sounddevice.query_devices",
             return_value={"name": "Test Mic (WASAPI)"},
         ):
-            with caplog.at_level("DEBUG", logger="meetandread.audio.capture.sounddevice_source"):
+            with caplog.at_level(
+                "DEBUG", logger="meetandread.audio.capture.sounddevice_source"
+            ):
                 src.start()
 
         assert src.is_running()
-        assert any(
-            "Test Mic (WASAPI)" in r.getMessage() for r in caplog.records
-        ), "raw device name must appear at DEBUG for diagnostics"
+        assert all(
+            "Test Mic (WASAPI)" not in r.getMessage() for r in caplog.records
+        ), "raw device name must never be logged at any level"
         info_records = [r for r in caplog.records if r.levelno == logging.INFO]
         assert info_records, "expected at least one INFO record"
-        assert all(
-            "Test Mic (WASAPI)" not in r.getMessage() for r in info_records
-        ), "raw device name must never appear at INFO"
+        assert any(
+            "<redacted:" in r.getMessage() for r in info_records
+        ), "redacted device identifier must appear at INFO"
 
     def test_query_devices_failure_still_starts_and_logs(self, caplog):
         src = _make_sounddevice_source()
