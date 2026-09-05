@@ -45,7 +45,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 25. As a developer, I want periodic Resource Snapshots (RAM/CPU percentages, available RAM) across the capture run, so that I can correlate the bug with resource pressure.
 26. As a developer, I want the DEBUG log to start at process start in capture mode, so that startup-sequence bugs are visible.
 27. As a developer, I want environment info (app version, OS, hardware class) in the bundle, so that I can rule out version- and hardware-specific causes.
-28. As a developer triaging a report, I want the bundle in a predictable format (redacted log, Interaction Trace, Resource Snapshot series, environment info), so that I can read any report the same way.
+28. As a developer triaging a report, I want the bundle in a predictable format (redacted log, Interaction Trace, Resource Snapshot series, environment info, termination record), so that I can read any report the same way.
 29. As a developer triaging a report, I want the crash itself captured when one occurred, so that the highest-value evidence isn't lost.
 30. As a maintainer, I want diagnostics to leave the machine only through the user's own hands, so that no endpoint, token, or transmission channel ships inside the app.
 31. As a maintainer of a public repository, I want every bundle redacted before review and submission, so that nothing sensitive is published even by accident.
@@ -134,7 +134,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 
 ## Further Notes
 
-- **OPEN — log retention policy.** How long log files are kept before cleanup is undecided. A value of "14 days" floated in a later round of the grill was **not approved** — do not treat it as decided. Tickets should surface retention as its own decision.
+- **Decided 2026-09-05 — log retention policy.** Normal-run INFO logs are cleaned up at startup once older than 30 days. Capture-mode DEBUG logs and capture artifacts are excluded from automatic cleanup. A user-selectable retention setting and wizard-run cleanup are deferred to a follow-up ticket (issue #112).
 - **Approved cadence/storage decisions** (owner-approved at the seam checkpoint): Resource Snapshots at the ResourceMonitor's existing 2-second default poll interval; Interaction Trace and Resource Snapshot series persisted as append-only JSONL in the capture directory, one line per event/snapshot, written immediately; **full history, no ring buffer**.
 - **Single-instance guard interaction — decided.** When the Issue Reporter launches and detects the app is already running (single-instance guard, issue #20), it alerts the user to close the existing instance before proceeding. Accepted by the owner as adequate at this stage; may be revisited later (e.g. a capture-mode bypass of the guard).
 - **Frozen build.** The reporter ships in the PyInstaller build as a separate entry point with its own Start-menu shortcut; the bundle-validation workflow must cover it.
