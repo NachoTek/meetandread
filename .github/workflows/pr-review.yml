@@ -1,8 +1,10 @@
 name: PR Review Trigger
 
-# Label-gated agent review (issue #71). When the `ready-for-codereview`
-# label is added to a PR, send the same HMAC-signed webhook to Hermes
-# so the review agent engages. No webhook fires on CI failure alone.
+# Label-gated agent review (issues #71, #93). When a review label is
+# added to a PR — `ready-for-codereview` or `ready-for-specreview` —
+# send the same HMAC-signed webhook to Hermes with an action that tells
+# the receiver which review variant to run. Any other label exits 0
+# silently without sending. No webhook fires on CI failure alone.
 
 on:
   pull_request:
@@ -15,7 +17,7 @@ permissions:
 jobs:
   trigger-review:
     runs-on: ubuntu-latest
-    if: ${{ github.event.label.name == 'ready-for-codereview' }}
+    if: ${{ github.event.label.name == 'ready-for-codereview' || github.event.label.name == 'ready-for-specreview' }}
     steps:
       - name: Send review-request webhook to Hermes
         env:
@@ -27,14 +29,30 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
 
-          echo "ready-for-codereview label added to PR #$PR_NUMBER"
+          # Dispatch label -> action (issue #93). One send path below;
+          # only the action field differs between review variants.
+          LABEL="${{ github.event.label.name }}"
+          case "$LABEL" in
+            ready-for-codereview)
+              ACTION="review_requested"
+              echo "ready-for-codereview label added to PR #$PR_NUMBER"
+              ;;
+            ready-for-specreview)
+              ACTION="spec_review_requested"
+              echo "ready-for-specreview label added to PR #$PR_NUMBER"
+              ;;
+            *)
+              echo "Label '$LABEL' is not a review trigger; skipping webhook."
+              exit 0
+              ;;
+          esac
 
           # Build the webhook payload — uses pull_request event type
           # with a custom action so the Hermes agent can distinguish it.
           # Same shape as the previous ci_failed trigger: number,
           # repository.full_name, plus an action + check_run stub.
           PAYLOAD=$(cat <<ENDJSON
-          {"action":"review_requested","number":${PR_NUMBER},"repository":{"full_name":"${REPO}"},"check_run":{"id":${{ github.run_id }},"conclusion":"neutral"}}
+          {"action":"${ACTION}","number":${PR_NUMBER},"repository":{"full_name":"${REPO}"},"check_run":{"id":${{ github.run_id }},"conclusion":"neutral"}}
           ENDJSON
           )
 
