@@ -97,7 +97,7 @@ The single artifact produced at the end of an Issue Capture Mode run: the redact
 _Avoid_: Report (ambiguous with the GitHub issue), log file (the bundle contains more), package
 
 **Redaction**:
-The automatic scrubbing of the Diagnostics Bundle before it is shown to the user or submitted: usernames and home-directory paths, email addresses, and machine identifiers are rewritten; Transcript text and Recording titles are excluded outright. Runs before the review screen — nothing leaves the machine unredacted. Missing details (e.g. a specific Recording file) are requested later through GitHub during triage.
+The automatic scrubbing of the Diagnostics Bundle before it is shown to the user or submitted: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and Recording titles never enter the bundle at all — excluded at the capture boundary, not by scrubbing the log afterwards. Runs before the review screen — nothing leaves the machine unredacted. Missing details (e.g. a specific Recording file) are requested later through GitHub during triage.
 _Avoid_: Sanitization, anonymization (we do not promise anonymity)
 
 **Manual Submission**:

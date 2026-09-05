@@ -1,6 +1,6 @@
 # Spec: Issue Reporting & Diagnostics
 
-Status: Spec text approved by owner 2026-09-05 (settled design from the grill session of 2026-09-02; test seams + cadence approved at the seam checkpoint; single-instance direction settled).
+Status: Spec text approved by owner 2026-09-05 (settled design from the grill session of 2026-09-02; test seams + cadence approved at the seam checkpoint; single-instance direction settled). Amended 2026-09-05 after automated review: the bundle's local path never enters the public prefilled issue body, and transcript exclusion is enforced at the capture boundary rather than by pattern redaction.
 
 ## Problem Statement
 
@@ -34,7 +34,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 14. As a user, I want it made obvious that no audio and no transcript content is included, so that I can report with confidence.
 15. As a user, I want free-text I typed during reproduction to appear only as a "text edited (N chars)" event, so that my keystrokes are never captured.
 16. As a user, I want the reporter to open my browser on the issue form already filled in, so that filing the report is a couple of clicks.
-17. As a user, I want the bundle's file path on my clipboard and in the prefilled issue body, so that attaching the bundle by hand is trivial.
+17. As a user, I want the bundle's file path on my clipboard — and a neutral filename with attach-by-hand instructions in the prefilled issue body, never my local path — so that attaching the bundle is trivial without publishing where my files live.
 18. As a user filing from my own GitHub account, I want to be automatically subscribed to the issue I just filed, so that I hear about follow-up questions.
 19. As a user asked later for more details (e.g. a specific recording file), I want that request to arrive through GitHub, so that I keep control of anything additional that leaves my machine.
 20. As a user, I want normal runs of the app to log at a quieter level, so that my disk isn't filled with debug noise from every session.
@@ -59,7 +59,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 - Real log levels are introduced across the codebase. Normal runs log at **INFO**; Issue Capture Mode logs at full **DEBUG**.
 - Level selection is **all-or-nothing**: there are no per-module overrides. The owner scrapped per-module configuration explicitly — users cannot know which modules to enable, and the goal is maximum information during reproduction.
 - A **full-audit pass** normalizes DEBUG instrumentation across **all** ~40 modules (chosen over a hot-spots-only sweep), in addition to cleaning up the scattered ad-hoc levels already present.
-- The existing per-run timestamped log file under the user's Documents folder and the stdout tee into the root logger are preserved in shape; the tee means transcript fragments can flow into the log stream, which is exactly why Redaction runs on the log before anything is shown or submitted.
+- The existing per-run timestamped log file under the user's Documents folder is preserved in shape. The stdout tee into the root logger is preserved only as a console-mirroring convenience; it is not a transcript channel: transcript-bearing output may reach the console but must never enter the log stream, so the captured DEBUG log contains no transcript fragments in the first place. Redaction still runs on the log, but only for identifiers (usernames, home paths, email addresses, machine identifiers) — it is not, and cannot be, the transcript boundary: arbitrary meeting speech is not reliably removable by pattern or table redaction, especially from a crashed run with no complete Transcript to compare against.
 
 ### Issue Reporter (supervisor process — ADR 0003)
 
@@ -92,7 +92,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 
 ### Privacy: Redaction + review
 
-- The Diagnostics Bundle is **auto-redacted before the review screen**: usernames and home-directory paths, email addresses, and machine identifiers are rewritten; transcript text and recording titles are excluded outright.
+- The Diagnostics Bundle is **auto-redacted before the review screen**: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and recording titles are excluded outright — enforced at the capture boundary (transcript-bearing output never enters the log stream), not by scrubbing the log afterwards.
 - The bundle contains **no Audio and no Transcript content** by design.
 - The user sees a review screen — "here's what will be sent" — before anything leaves the machine. Nothing unredacted is ever shown as what-will-be-sent or written into the submittable artifact.
 - Missing details (e.g. a specific recording file) are requested later, during triage, through GitHub.
@@ -100,7 +100,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 ### Submission: Manual Submission only (ADR 0004)
 
 - The wizard opens the user's **default browser** on the repository's New Issue form, prefilled via query params (title/body).
-- GitHub query params cannot attach files, so the **bundle is saved to disk**, its **path goes into the prefilled body**, and the path is **copied to the clipboard**. The user attaches the bundle by hand.
+- GitHub query params cannot attach files, so the **bundle is saved to disk** and its **path is copied to the clipboard** and shown on the reporter's review screen. The prefilled issue body carries only a neutral bundle filename plus attach-by-hand instructions — never a local filesystem path: the issue body is public, and an unredacted path would disclose the user's home directory.
 - The user files from their own GitHub account, so they are automatically subscribed to their own issue.
 - No token ships inside the app and no report endpoint exists in this slice.
 
@@ -118,7 +118,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 
 - **Qt widget seam** (prior art: the widget test suite's pattern of driving real widgets): install a trace sink, drive real widgets, assert semantic named events appear and the no-keystroke-content invariant ("text edited (N chars)", never content) holds.
 - **`windows`-marked CLI subprocess seam** (prior art: the CLI subprocess tests): the end-to-end supervisor flow — including the app-crashes-during-reproduction case — spawning real processes under the Windows venv per the two-layer test topology (ADR 0001).
-- **Pure-logic unit seam** (prior art: the performance/monitor tests): Redaction tables (including the stdout-tee transcript-fragment case), log-level normalization, snapshot-series persistence.
+- **Pure-logic unit seam** (prior art: the performance/monitor tests): Redaction tables (identifier rewriting), log-level normalization, snapshot-series persistence — plus negative/canary tests for the transcript boundary: feed canary transcript fragments at every capture-side source and assert none appear in the assembled bundle.
 
 **Test topology** follows ADR 0001 unchanged: pure-logic tests run in the fast non-Windows lane; the authoritative pass, including all subprocess supervisor tests, runs under the Windows venv.
 
