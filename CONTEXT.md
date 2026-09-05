@@ -81,7 +81,7 @@ A mode the application runs in, entered at process start, in which comprehensive
 _Avoid_: Debug mode (ambiguous with log levels), recording mode, reproduction mode
 
 **Issue Reporter**:
-A separate process that supervises the application: it launches the app in Issue Capture Mode, monitors it, and if the app crashes it collects the diagnostics gathered so far and proceeds with submission anyway. Also runnable standalone (installer shortcut) so startup crashes are reportable. Owns the user-facing wizard flow: describe, launch, reproduce, stop, review, submit.
+A separate process that supervises the application: it launches the app in Issue Capture Mode, monitors it, and if the app crashes it collects the diagnostics gathered so far and proceeds with submission anyway. Also runnable standalone (installer shortcut) so startup crashes are reportable. Owns the user-facing wizard flow: describe, launch, reproduce, stop, review, submit. On startup it scans for and offers to resume incomplete or review-ready capture directories left by an interrupted run.
 _Avoid_: Wizard (as a noun on its own — ambiguous), bug reporter, feedback tool
 
 **Interaction Trace**:
@@ -93,11 +93,11 @@ A point-in-time sample of system resource usage (RAM/CPU percentages, available 
 _Avoid_: Metrics, telemetry
 
 **Diagnostics Bundle**:
-The single artifact produced at the end of an Issue Capture Mode run: the redacted log, the Interaction Trace, the Resource Snapshot series, and environment info (app version, OS, hardware class). What the user reviews and submits — by the Manual Submission path now; via a possible future relay. Contains no Audio and no Transcript content.
+The single artifact produced at the end of an Issue Capture Mode run: the redacted log, the Interaction Trace, the Resource Snapshot series, and environment info (app version, OS, hardware class), plus the reporter-written termination record of how the run ended. What the user reviews and submits — by the Manual Submission path now; via a possible future relay. Contains no Audio and no Transcript content.
 _Avoid_: Report (ambiguous with the GitHub issue), log file (the bundle contains more), package
 
 **Redaction**:
-The automatic scrubbing of the Diagnostics Bundle before it is shown to the user or submitted: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and Recording titles never enter the bundle at all — excluded at the capture boundary, not by scrubbing the log afterwards. Runs before the review screen — nothing leaves the machine unredacted. Missing details (e.g. a specific Recording file) are requested later through GitHub during triage.
+The automatic scrubbing of the Diagnostics Bundle before it is shown to the user or submitted: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and Recording titles never enter the bundle at all — excluded at the capture boundary, not by scrubbing the log afterwards. Runs before the review screen — nothing leaves the machine unredacted. Assembly is fail-closed: if assembly or redaction fails, no submittable bundle is produced — raw capture data is never the fallback. Missing details (e.g. a specific Recording file) are requested later through GitHub during triage.
 _Avoid_: Sanitization, anonymization (we do not promise anonymity)
 
 **Manual Submission**:

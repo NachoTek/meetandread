@@ -1,6 +1,6 @@
 # Spec: Issue Reporting & Diagnostics
 
-Status: Spec text approved by owner 2026-09-05 (settled design from the grill session of 2026-09-02; test seams + cadence approved at the seam checkpoint; single-instance direction settled). Amended 2026-09-05 after automated review: the bundle's local path never enters the public prefilled issue body, and transcript exclusion is enforced at the capture boundary rather than by pattern redaction.
+Status: Spec text approved by owner 2026-09-05 (settled design from the grill session of 2026-09-02; test seams + cadence approved at the seam checkpoint; single-instance direction settled). Amended 2026-09-05 after automated review: the bundle's local path never enters the public prefilled issue body, and transcript exclusion is enforced at the capture boundary rather than by pattern redaction. Amended again 2026-09-05 after spec review (issue #113, all four recommendations owner-approved): the bundle carries a reporter-written termination record, artifact durability across crashes is an explicit contract, assembly is fail-closed on redaction or transcript-exclusion failure, and reporter startup scans for and resumes incomplete capture directories.
 
 ## Problem Statement
 
@@ -68,7 +68,7 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 - It monitors the app during reproduction; if the app crashes, the reporter survives, assembles the Diagnostics Bundle from what was gathered so far, and proceeds with the flow anyway.
 - It is also installed as a **separate Start-menu shortcut** so that startup crashes ("won't open at all") are reportable.
 - When the reporter launches and detects the app is already running (single-instance guard), it alerts the user to close the existing instance before proceeding — a stage-level decision, may be revisited.
-- The reporter process is **small and defensive**: minimal imports, its own crash handling, and no reliance on the app's subsystems (audio, Qt widget tree). If the reporter itself dies, the bundle from the run remains on disk, and the next app launch offers to resume the submission.
+- The reporter process is **small and defensive**: minimal imports, its own crash handling, and no reliance on the app's subsystems (audio, Qt widget tree). If the reporter itself dies, the capture directory from the run remains on disk. On startup the reporter scans for and offers to resume incomplete or review-ready capture directories — recovery must not depend on the app being able to launch, because a user reporting a startup failure may be unable to relaunch it. The next app launch may also offer to resume, but reporter startup is the designated recovery path.
 - It owns the user-facing wizard flow: **describe, launch, reproduce, stop, review, submit**.
 
 ### Entry discipline
@@ -78,8 +78,9 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 ### Capture-directory contract (the new seam)
 
 - The reporter passes the app a flag naming a **capture directory**; the app in Issue Capture Mode writes every artifact there.
-- Artifacts are written **append-only as they are produced** — one JSONL line per Interaction Trace event, one JSONL line per Resource Snapshot, the DEBUG log streaming from process start — so a crash mid-run loses at most the last line, never the run.
+- Artifacts are written **append-only as they are produced** — one JSONL line per Interaction Trace event, one JSONL line per Resource Snapshot, the DEBUG log streaming from process start. Durability across crashes is an explicit contract, not an append-only side effect: each completed record (log line or JSONL event/snapshot) is **flushed to disk promptly** on write — never held indefinitely in OS or runtime buffers — and assembly **tolerates at most one truncated final record per append-only file**, preserving every valid record before it. Verified by forced-termination tests: a kill mid-run loses at most the record being written, never the run.
 - The app writes a **completion marker** on clean exit; the reporter treats the directory's contents as the source of truth in **any** state (complete or crashed mid-run) and assembles the bundle from the directory alone.
+- The reporter writes a **termination record** into the capture directory at run end: how the run ended — clean stop, user stop, or crash — with start/end timestamps, the app's process exit code or Windows exception code, and the completion marker's presence or absence. Without it, a bundle can survive a native or startup crash without recording what actually terminated the process; the termination record is part of the bundle contract.
 - **Resource Snapshot cadence** (approved): reuse the ResourceMonitor building block's existing default poll interval of 2 seconds; persist **full history** (no ring buffer) — capture runs are minutes long, and crash tolerance beats truncation.
 - **Interaction Trace cadence/storage** (approved): each event is written immediately as one JSONL line, never held only in memory.
 
@@ -89,12 +90,14 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 - **Resource Snapshots** — the periodic series described above, built on the existing ResourceSnapshot shape (RAM/CPU percentages, available RAM).
 - **DEBUG logs from process start.**
 - **Environment info**: app version, OS, hardware class.
+- **Termination record** — written by the reporter at run end (see the capture-directory contract): how the run ended, with timestamps and exit or exception codes.
 
 ### Privacy: Redaction + review
 
 - The Diagnostics Bundle is **auto-redacted before the review screen**: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and recording titles are excluded outright — enforced at the capture boundary (transcript-bearing output never enters the log stream), not by scrubbing the log afterwards.
 - The bundle contains **no Audio and no Transcript content** by design.
 - The user sees a review screen — "here's what will be sent" — before anything leaves the machine. Nothing unredacted is ever shown as what-will-be-sent or written into the submittable artifact.
+- **Assembly is fail-closed.** Redaction and transcript-exclusion checks run across every bundle component — each constituent is checked, not just the log. If assembly or redaction fails for any component, creation of the submittable artifact is blocked and the user is told submission is unavailable; the system never falls back to raw or partially redacted capture data. An error path must not be able to bypass the strongest privacy guarantee.
 - Missing details (e.g. a specific recording file) are requested later, during triage, through GitHub.
 
 ### Submission: Manual Submission only (ADR 0004)
@@ -112,12 +115,12 @@ Underpinning this, the logging system is overhauled properly: real log levels, n
 
 1. **Launch edge**: the reporter starts the app in Issue Capture Mode pointed at a capture directory.
 2. **Artifact edge**: the app writes the DEBUG log from process start, the Interaction Trace, the Resource Snapshot series, and the completion marker into that directory, append-only as events happen.
-3. **Assembly edge**: the reporter's pure core is a function of a capture directory in any state (complete, or crashed mid-run) producing: assembled bundle → redaction → review-screen data → prefilled New Issue URL + clipboard text. Because this is a pure function, the entire privacy-and-submission half of the spec is tested against fixture capture directories with zero subprocesses.
+3. **Assembly edge**: the reporter's pure core is a function of a capture directory in any state (complete, or crashed mid-run) producing: assembled bundle → redaction → review-screen data → prefilled New Issue URL + clipboard text. Because this is a pure function, the entire privacy-and-submission half of the spec is tested against fixture capture directories with zero subprocesses. Assembly tests also cover the crash boundary: fixture directories with one truncated final log or JSONL record still assemble with every valid record preserved; and the fail-closed path — an assembly or redaction failure produces no submittable artifact, never a raw fallback.
 
 **Existing seams reused, no new ones:**
 
 - **Qt widget seam** (prior art: the widget test suite's pattern of driving real widgets): install a trace sink, drive real widgets, assert semantic named events appear and the no-keystroke-content invariant ("text edited (N chars)", never content) holds.
-- **`windows`-marked CLI subprocess seam** (prior art: the CLI subprocess tests): the end-to-end supervisor flow — including the app-crashes-during-reproduction case — spawning real processes under the Windows venv per the two-layer test topology (ADR 0001).
+- **`windows`-marked CLI subprocess seam** (prior art: the CLI subprocess tests): the end-to-end supervisor flow — including the app-crashes-during-reproduction case (the reporter writes the termination record with the real exit or exception code) and the standalone-recovery case (reporter startup finds and resumes an incomplete or review-ready capture directory) — spawning real processes under the Windows venv per the two-layer test topology (ADR 0001). Forced-termination tests live here too: kill the app mid-run and assert the capture directory preserves every completed record (the prompt-flush contract).
 - **Pure-logic unit seam** (prior art: the performance/monitor tests): Redaction tables (identifier rewriting), log-level normalization, snapshot-series persistence — plus negative/canary tests for the transcript boundary: feed canary transcript fragments at every capture-side source and assert none appear in the assembled bundle.
 
 **Test topology** follows ADR 0001 unchanged: pure-logic tests run in the fast non-Windows lane; the authoritative pass, including all subprocess supervisor tests, runs under the Windows venv.

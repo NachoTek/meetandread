@@ -16,8 +16,12 @@ value bug class, whenever collection or submission depends on the crashed proces
 
 - The Issue Reporter process must be deliberately small and defensive: minimal
   imports, own crash handling, no reliance on the app's subsystems (audio, Qt
-  widget tree). If the reporter itself dies, the Diagnostics Bundle from the run
-  remains on disk and the next app launch offers to resume the submission.
+  widget tree). If the reporter itself dies, the capture directory from the run
+  remains on disk. On startup the reporter scans for and offers to resume
+  incomplete or review-ready capture directories — recovery must not depend on
+  the app being able to launch, because a user reporting a startup failure may
+  be unable to relaunch it. (Amended 2026-09-05 after spec review, issue #113;
+  previously the next app launch was the only resume path.)
 - The app is launched with a flag (or equivalent) that enables Issue Capture
   Mode at process start; entering capture mode mid-process is not supported.
 - Users must enter the reporter *before* reproducing the bug. Recording is

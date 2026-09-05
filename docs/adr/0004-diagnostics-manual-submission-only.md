@@ -24,6 +24,11 @@ future feature, to be built as a separate vertical slice.
   the console but must never enter the log stream — and negative/canary tests
   prove no transcript text reaches the assembled bundle. Post-hoc pattern
   redaction is not a reliable boundary for arbitrary speech.
+- Assembly is fail-closed: redaction and transcript-exclusion checks cover
+  every bundle component, and if assembly or redaction fails, no submittable
+  artifact is produced — the system never falls back to raw capture data. An
+  error path must not be able to bypass the strongest privacy guarantee.
+  (Added 2026-09-05 after spec review, issue #113.)
 - The bundle excludes Audio and Transcript content by design; follow-up data
   (e.g. a specific Recording) is requested during triage through GitHub.
 - The interaction vocabulary (named-action events, "text edited (N chars)") is
