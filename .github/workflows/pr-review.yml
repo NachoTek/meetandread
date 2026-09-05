@@ -2,7 +2,7 @@ name: PR Review Trigger
 
 # Label-gated agent review (issues #71, #93). When a review label is
 # added to a PR — `ready-for-codereview` or `ready-for-specreview` —
-# send the same HMAC-signed webhook to Hermes with an action that tells
+# send an HMAC-signed webhook to Hermes with an action that tells
 # the receiver which review variant to run. Any other label exits 0
 # silently without sending. No webhook fires on CI failure alone.
 
@@ -22,23 +22,26 @@ jobs:
       - name: Send review-request webhook to Hermes
         env:
           WEBHOOK_SECRET: ${{ secrets.HERMES_WEBHOOK_SECRET }}
-          WEBHOOK_URL: https://homelab.nachotek.com/hooks/meetandread-pr
         run: |
           set -euo pipefail
 
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
 
-          # Dispatch label -> action (issue #93). One send path below;
-          # only the action field differs between review variants.
+          # Dispatch label -> (action, route) (issue #93). One send path:
+          # same secret, same HMAC, same curl — only the action field and
+          # route URL differ between review variants. The gateway routes
+          # by URL path, so each variant has its own route.
           LABEL="${{ github.event.label.name }}"
           case "$LABEL" in
             ready-for-codereview)
               ACTION="review_requested"
+              WEBHOOK_URL="https://homelab.nachotek.com/hooks/meetandread-pr"
               echo "ready-for-codereview label added to PR #$PR_NUMBER"
               ;;
             ready-for-specreview)
               ACTION="spec_review_requested"
+              WEBHOOK_URL="https://homelab.nachotek.com/hooks/meetandread-pr-specreview"
               echo "ready-for-specreview label added to PR #$PR_NUMBER"
               ;;
             *)
@@ -50,7 +53,7 @@ jobs:
           # Build the webhook payload — uses pull_request event type
           # with a custom action so the Hermes agent can distinguish it.
           # Same shape as the previous ci_failed trigger: number,
-          # repository.full_name, plus an action + check_run stub.
+          # repository.full_name, payload action + check_run stub.
           PAYLOAD=$(cat <<ENDJSON
           {"action":"${ACTION}","number":${PR_NUMBER},"repository":{"full_name":"${REPO}"},"check_run":{"id":${{ github.run_id }},"conclusion":"neutral"}}
           ENDJSON
@@ -62,7 +65,7 @@ jobs:
           echo "Sending review-request webhook to Hermes..."
           # --fail-with-body: exit non-zero on HTTP errors (e.g. the
           # empty-signature rejection fork PRs get) instead of failing
-          # silently with exit 0.
+          # exit 0 silently.
           RESPONSE=$(curl -s --fail-with-body -o /dev/null -w "%{http_code}" \
             -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
@@ -72,7 +75,7 @@ jobs:
 
           echo "Webhook response: HTTP $RESPONSE"
 
-          # The Hermes gateway answers 202 (accepted for processing) on
+          # The Hermes gateway answers 202 (for processing) on
           # success; 200 is also acceptable. Anything else is a failure.
           case "$RESPONSE" in
             200|202)
