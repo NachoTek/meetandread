@@ -75,3 +75,31 @@ _Avoid_: Re-transcribe (different intent — model comparison), reprocess, rerun
 **Feature Dependency**:
 An optional installable component that powers a feature (e.g. sherpa-onnx powers Speaker identification). Checked in two tiers at startup: critical dependencies are fatal when missing; Feature Dependencies degrade instead — a dismissible banner and the Diagnostics view explain what is missing and how to fix it, and Post-processing fails with a Failed (dependency) Outcome rather than silently completing without the feature. Once the dependency imports cleanly again, dependency-failed Recordings return to Stalled and are re-queued automatically at startup.
 _Avoid_: Plugin, extension, requirement (as a synonym)
+
+**Issue Capture Mode**:
+A mode the application runs in, entered at process start, in which comprehensive diagnostics are recorded for an issue the user intends to report. Entered only by being launched under the Issue Reporter — the user must start the Issue Reporter *before* reproducing the bug, though Recording is allowed inside the mode. Logging runs at DEBUG, the Interaction Trace and Resource Snapshots are recorded, and the run ends with a Diagnostics Bundle.
+_Avoid_: Debug mode (ambiguous with log levels), recording mode, reproduction mode
+
+**Issue Reporter**:
+A separate process that supervises the application: it launches the app in Issue Capture Mode, monitors it, and if the app crashes it collects the diagnostics gathered so far and proceeds with submission anyway. Also runnable standalone (installer shortcut) so startup crashes are reportable. Owns the user-facing wizard flow: describe, launch, reproduce, stop, review, submit.
+_Avoid_: Wizard (as a noun on its own — ambiguous), bug reporter, feedback tool
+
+**Interaction Trace**:
+The ordered record of semantic user actions taken during Issue Capture Mode — named events (button/menu/shortcut presses, panel open/close/move/resize, device selections, focus changes) with timestamps. Records what the user did and when, never what they typed: free-text entry appears only as a "text edited (N chars)" event.
+_Avoid_: Click log, input capture, keystroke log
+
+**Resource Snapshot**:
+A point-in-time sample of system resource usage (RAM/CPU percentages, available RAM) recorded periodically during Issue Capture Mode. Already exists as the ResourceMonitor's snapshot; Issue Capture Mode persists the series.
+_Avoid_: Metrics, telemetry
+
+**Diagnostics Bundle**:
+The single artifact produced at the end of an Issue Capture Mode run: the redacted log, the Interaction Trace, the Resource Snapshot series, and environment info (app version, OS, hardware class). What the user reviews and submits — by the Manual Submission path now; via a possible future relay. Contains no Audio and no Transcript content.
+_Avoid_: Report (ambiguous with the GitHub issue), log file (the bundle contains more), package
+
+**Redaction**:
+The automatic scrubbing of the Diagnostics Bundle before it is shown to the user or submitted: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and Recording titles never enter the bundle at all — excluded at the capture boundary, not by scrubbing the log afterwards. Runs before the review screen — nothing leaves the machine unredacted. Missing details (e.g. a specific Recording file) are requested later through GitHub during triage.
+_Avoid_: Sanitization, anonymization (we do not promise anonymity)
+
+**Manual Submission**:
+The user-driven submission path for a Diagnostics Bundle: open the user's default browser on the repository's New Issue form pre-filled with the summary, and hand them the bundle file to attach (GitHub URLs cannot pre-attach files). The user files from their own GitHub account, so they are automatically subscribed to their issue.
+_Avoid_: Direct submission, relay (a possible future alternative path)
