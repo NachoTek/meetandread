@@ -84,6 +84,7 @@ def recover_part_file(
         # Delete original files
         part_path.unlink(missing_ok=True)
         metadata_path.unlink(missing_ok=True)
+        logger.debug("part_removed: stem=%s", stem)
     else:
         # Backup original files
         part_backup = recordings_dir / f"{stem}.pcm.part{backup_suffix}"
@@ -91,6 +92,12 @@ def recover_part_file(
 
         shutil.move(str(part_path), str(part_backup))
         shutil.move(str(metadata_path), str(metadata_backup))
+        logger.debug(
+            "part_recovery_backup: stem=%s part=%s metadata=%s",
+            stem,
+            part_backup.name,
+            metadata_backup.name,
+        )
 
     return wav_path
 
@@ -130,11 +137,18 @@ def recover_part_files(
 
     recovered: List[Path] = []
     total = len(part_files)
+    failed = 0
 
     for i, part_path in enumerate(part_files, 1):
         if progress_callback:
             progress_callback(part_path.name, i, total)
 
+        logger.debug(
+            "part_recovery_start: part=%s index=%d total=%d",
+            part_path.name,
+            i,
+            total,
+        )
         try:
             wav_path = recover_part_file(
                 part_path=part_path,
@@ -144,9 +158,22 @@ def recover_part_files(
             )
             if wav_path:
                 recovered.append(wav_path)
+                logger.debug(
+                    "part_recovered: part=%s wav=%s",
+                    part_path.name,
+                    wav_path.name,
+                )
         except Exception as e:
+            failed += 1
             # Log error but continue with other files
             logger.error("Failed to recover %s: %s", part_path, e)
+
+    logger.info(
+        "part_recovery: recovered=%d skipped=%d failed=%d",
+        len(recovered),
+        total - len(recovered) - failed,
+        failed,
+    )
 
     return recovered
 
