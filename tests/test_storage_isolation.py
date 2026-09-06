@@ -29,19 +29,43 @@ from meetandread.audio.storage import get_logs_dir, get_recordings_dir, get_tran
 class TestStorageIsolation:
     """Prove the conftest storage isolation is active for every test."""
 
-    def test_default_recordings_dir_is_isolated(self):
-        """Default recordings dir lands under the conftest tmp base, not ~/Documents."""
-        p = get_recordings_dir()
-        assert "meetandread" in str(p)
-        assert p.name == "recordings"
-        assert not str(p).startswith(str(Path.home() / "Documents"))
+    def test_default_recordings_dir_is_isolated(self, tmp_path: Path):
+        """Default recordings dir lands under the conftest tmp base, not ~/Documents.
 
-    def test_default_transcripts_dir_is_isolated(self):
-        """Default transcripts dir lands under the conftest tmp base, not ~/Documents."""
-        p = get_transcripts_dir()
-        assert "meetandread" in str(p)
-        assert p.name == "transcripts"
-        assert not str(p).startswith(str(Path.home() / "Documents"))
+        Self-priming: reset the ConfigManager singleton to an all-defaults
+        sandbox first, so the default-resolution premise is explicit rather
+        than inherited from worker order.
+        """
+        from meetandread.config import ConfigManager
+
+        try:
+            self._configure_custom_path(tmp_path)
+            p = get_recordings_dir()
+            assert "meetandread" in str(p)
+            assert p.name == "recordings"
+            assert not str(p).startswith(str(Path.home() / "Documents"))
+        finally:
+            ConfigManager._instance = None
+            ConfigManager._initialized = False
+
+    def test_default_transcripts_dir_is_isolated(self, tmp_path: Path):
+        """Default transcripts dir lands under the conftest tmp base, not ~/Documents.
+
+        Self-priming: reset the ConfigManager singleton to an all-defaults
+        sandbox first, so the default-resolution premise is explicit rather
+        than inherited from worker order.
+        """
+        from meetandread.config import ConfigManager
+
+        try:
+            self._configure_custom_path(tmp_path)
+            p = get_transcripts_dir()
+            assert "meetandread" in str(p)
+            assert p.name == "transcripts"
+            assert not str(p).startswith(str(Path.home() / "Documents"))
+        finally:
+            ConfigManager._instance = None
+            ConfigManager._initialized = False
 
     def test_explicit_base_dir_still_wins(self, tmp_path: Path):
         """Explicit base_dir overrides must not be hijacked by the isolation wrapper."""
@@ -129,6 +153,31 @@ class TestStorageIsolation:
         try:
             self._configure_custom_path(tmp_path, recordings_path=str(custom_dir))
             assert get_recordings_dir(base_dir=None) == custom_dir
+        finally:
+            ConfigManager._instance = None
+            ConfigManager._initialized = False
+
+    def test_poisoned_singleton_config_read_is_ignored(self, tmp_path: Path):
+        """A mocked get_settings on the singleton must read as 'unset', not redirect.
+
+        test_speaker_pipeline-style mocks shadow get_settings on the
+        ConfigManager singleton and are never undone, so after those tests
+        run on a worker, the isolation wrapper's config read observes a
+        MagicMock storage_paths. The wrapper must treat that read as
+        no-custom-path (default isolated dir), never as a configured
+        external path to redirect.
+        """
+        from unittest import mock as _mock
+
+        from meetandread.config import ConfigManager
+        from meetandread.config.manager import get_config_manager
+
+        try:
+            get_config_manager().get_settings = _mock.MagicMock()
+            p = get_recordings_dir()
+            assert "meetandread" in str(p)
+            assert p.name == "recordings"
+            assert "custom" not in p.parts
         finally:
             ConfigManager._instance = None
             ConfigManager._initialized = False

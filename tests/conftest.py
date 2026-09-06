@@ -89,7 +89,9 @@ def _isolate_storage_paths(request, monkeypatch, tmp_path):
     the original resolver; any other configured custom path (the real
     user tree or anywhere external) is redirected under
     ``tmp_path/mar-storage-home/custom/<field>`` so unmarked tests can
-    never touch real user storage.
+    never touch real user storage. The wrapper only trusts a configured
+    custom path whose raw configured value is a real string; mock-poisoned
+    reads (shadowed get_settings on the config singleton) read as unset.
 
     Tests that genuinely exercise real user paths opt out with the
     ``real_storage_paths`` marker.
@@ -124,7 +126,13 @@ def _isolate_storage_paths(request, monkeypatch, tmp_path):
             raw = getattr(storage, field, None)
             if raw is None:
                 return None
-            return str(raw)
+            if not isinstance(raw, str):
+                # A non-str value means the config read is poisoned (a
+                # test mock shadowing the ConfigManager singleton's
+                # get_settings, e.g. test_speaker_pipeline) — not a real
+                # configured location. Treat as unset.
+                return None
+            return raw
         except (OSError, ValueError, AttributeError, ImportError, TypeError):
             return None
 
