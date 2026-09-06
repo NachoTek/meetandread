@@ -8,7 +8,6 @@ import queue
 import threading
 import logging
 import signal
-from datetime import datetime
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -18,6 +17,7 @@ from meetandread.widgets.main_widget import MeetAndReadWidget
 from meetandread.audio import has_partial_recordings, recover_part_files, get_recordings_dir
 from meetandread.config import get_config
 from meetandread.hardware.recommender import ModelRecommender
+from meetandread.logging_setup import configure_logging
 
 
 class _RecoveryResult(NamedTuple):
@@ -66,49 +66,17 @@ def check_critical_dlls():
             sys.exit(1)
 
 
-class TeeOutput:
-    """Redirects stdout to both console and log file."""
-    def __init__(self, logger):
-        self.logger = logger
-        self.stdout = sys.stdout
-        
-    def write(self, message):
-        if self.stdout is not None:
-            self.stdout.write(message)
-            self.stdout.flush()
-        if message.strip():
-            self.logger.debug(message.rstrip())
-    
-    def flush(self):
-        if self.stdout is not None:
-            self.stdout.flush()
+def setup_logging(capture_mode: bool = False):
+    """Setup logging: root level INFO normally, full DEBUG in capture mode.
 
-
-def setup_logging():
-    """Setup logging to both console and file with timestamped filename."""
-    # Determine logs directory: under user Documents for both frozen and dev
-    logs_dir = Path.home() / "Documents" / "meetandread" / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create timestamped log filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = logs_dir / f"meetandread_{timestamp}.log"
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w', encoding='utf-8')
-        ]
-    )
-    
-    # Redirect stdout to both console and file
-    sys.stdout = TeeOutput(logging.getLogger())
-    
-    logger.info("Logging to: %s", log_file)
-    logger.info("Logs directory: %s", logs_dir)
-    return log_file
+    Thin startup hook over ``meetandread.logging_setup`` (issue #98):
+    level selection is all-or-nothing — INFO for a normal run, app-wide
+    DEBUG when the Issue Reporter launches the app in capture mode.
+    Keeps the per-run timestamped log file under Documents/meetandread/logs
+    and the stdout console-mirroring tee; also runs the 30-day retention
+    cleanup for normal-run logs (capture logs are never touched).
+    """
+    return configure_logging(capture_mode=capture_mode)
 
 
 def check_and_offer_recovery(parent=None):
