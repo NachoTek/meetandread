@@ -23,6 +23,21 @@ def _redact_device_name(name: str) -> str:
     return f"<redacted:{digest}>"
 
 
+def _redact_device_id(device_id) -> str:
+    """Stable non-identifying stand-in for a device id / index.
+
+    ``None`` is the literal ``default`` (already non-identifying); ints are
+    per-session device-table positions, not machine identifiers, and pass
+    through; any other value (string Windows endpoint IDs from reconnect
+    paths) is hashed exactly like device names.
+    """
+    if device_id is None:
+        return "default"
+    if isinstance(device_id, int) and not isinstance(device_id, bool):
+        return str(device_id)
+    return _redact_device_name(str(device_id))
+
+
 class AudioSourceError(Exception):
     """Base exception for audio source errors."""
     pass
@@ -148,7 +163,7 @@ class SoundDeviceSource:
             _log.debug(
                 "source_start: source=%s, device=%s, rate=%d, ch=%d, blocksize=%d",
                 self._source_label,
-                self.device_id,
+                _redact_device_id(self.device_id),
                 self.samplerate,
                 self.channels,
                 self.blocksize,
@@ -185,7 +200,7 @@ class SoundDeviceSource:
                     "%dHz, %dch, blocksize=%d",
                     self._source_label,
                     redacted,
-                    self.device_id,
+                    _redact_device_id(self.device_id),
                     self.samplerate,
                     self.channels,
                     self.blocksize,
@@ -205,7 +220,7 @@ class SoundDeviceSource:
             _log.debug(
                 "source_stop: source=%s, device=%s, enqueued=%d, dropped=%d",
                 self._source_label,
-                self.device_id,
+                _redact_device_id(self.device_id),
                 self._frames_enqueued,
                 self._frames_dropped,
             )

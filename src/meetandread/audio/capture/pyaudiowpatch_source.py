@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from .sounddevice_source import _redact_device_name
+from .sounddevice_source import _redact_device_id, _redact_device_name
 
 try:
     import pyaudiowpatch
@@ -25,6 +25,15 @@ except ImportError:
     _HAS_PYAUDIOWPATCH = False
 
 logger = logging.getLogger(__name__)
+
+# PortAudio status bits that mean discarded audio (a real data-loss
+# condition), not routine diagnostics. Values from portaudio.h:
+# paInputOverflow = 0x2, paOutputUnderflow = 0x4. Prefer the module
+# constants when pyaudiowpatch is importable; tests run against a
+# patched module seam, so the literals must stand alone.
+_PA_STATUS_INPUT_OVERFLOW = getattr(pyaudiowpatch, "paInputOverflow", 2) if pyaudiowpatch else 2
+_PA_STATUS_OUTPUT_UNDERFLOW = getattr(pyaudiowpatch, "paOutputUnderflow", 4) if pyaudiowpatch else 4
+_PA_STATUS_LOSS_MASK = _PA_STATUS_INPUT_OVERFLOW | _PA_STATUS_OUTPUT_UNDERFLOW
 
 
 class PyAudioWPatchSource:
@@ -53,6 +62,10 @@ class PyAudioWPatchSource:
         blocksize: Frames per buffer passed to PyAudio (default 1024).
         queue_size: Max queued frame buffers before drops (default 10).
     """
+
+    # Data-loss streak counter for callback status bits; class-level
+    # default so __new__-constructed instances (tests) start at zero.
+    _lossy_callbacks: int = 0
 
     def __init__(
         self,
@@ -112,9 +125,26 @@ class PyAudioWPatchSource:
             return (None, pyaudiowpatch.paComplete)
 
         if status:
-            # Non-error status flags (input overflow etc.) are routine
-            # diagnostics, not operational failures - DEBUG, not WARNING.
-            logger.debug("PyAudioWPatch callback status flag: %s", status)
+            # Two-tier contract: loss-type bits (discarded audio) WARN, but
+            # rate-limited — the callback is a hot path, so warnings fire at
+            # power-of-two streak buckets (1, 2, 4, ...) and a clean callback
+            # resets the streak. Benign flags stay routine DEBUG diagnostics.
+            if status & _PA_STATUS_LOSS_MASK:
+                self._lossy_callbacks = getattr(self, "_lossy_callbacks", 0) + 1
+                if (
+                    self._lossy_callbacks
+                    & (self._lossy_callbacks - 1) == 0
+                ):
+                    logger.warning(
+                        "PyAudioWPatch callback data-loss status: samples "
+                        "discarded (status=%s, streak=%d)",
+                        status,
+                        self._lossy_callbacks,
+                    )
+            else:
+                logger.debug("PyAudioWPatch callback status flag: %s", status)
+        else:
+            self._lossy_callbacks = 0
         try:
             # Validate buffer before conversion
             expected_bytes = frame_count * self.channels * 4  # float32 = 4 bytes
@@ -171,7 +201,7 @@ class PyAudioWPatchSource:
             logger.debug(
                 "source_start: source=%s, device=%s, rate=%d, ch=%d, blocksize=%d",
                 self._source_label,
-                self.device_index,
+                _redact_device_id(self.device_index),
                 self.samplerate,
                 self.channels,
                 self.blocksize,
@@ -197,7 +227,7 @@ class PyAudioWPatchSource:
                         "PyAudioWPatch loopback stream opened: device=%r "
                         "(%s, %dHz, %dch)",
                         _redact_device_name(str(dev_info.get("name", "unknown"))),
-                        self.device_index,
+                        _redact_device_id(self.device_index),
                         self.samplerate,
                         self.channels,
                     )
@@ -213,7 +243,7 @@ class PyAudioWPatchSource:
                 logger.error(
                     "Failed to open PyAudioWPatch loopback stream "
                     "(device=%s): %s",
-                    self.device_index,
+                    _redact_device_id(self.device_index),
                     exc,
                 )
                 self._stream = None
@@ -228,7 +258,7 @@ class PyAudioWPatchSource:
             logger.debug(
                 "source_stop: source=%s, device=%s, enqueued=%d, dropped=%d",
                 self._source_label,
-                self.device_index,
+                _redact_device_id(self.device_index),
                 self._frames_enqueued,
                 self._frames_dropped,
             )
@@ -340,5 +370,5 @@ class PyAudioWPatchSource:
                 logger.debug(
                     "source_close: source=%s, device=%s",
                     self._source_label,
-                    self.device_index,
+                    _redact_device_id(self.device_index),
                 )

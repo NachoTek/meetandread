@@ -59,6 +59,7 @@ SESS_LOG = "meetandread.audio.session"
 CLI_LOG = "meetandread.audio.cli"
 
 PRIVACY_NAME = "ACME Wire Tap 9000"
+PRIVACY_ENDPOINT_ID = "{0.0.0.00000000}.{e7a1b2c3-4d5e-6f70-8a9b-cdef01234567}"
 
 
 def _write_wav(tmp_path, name: str = "sine.wav", seconds: float = 0.4) -> str:
@@ -295,13 +296,41 @@ class TestSoundDeviceSourceLifecycle:
             "callback_stats" in m for m in info_msgs
         ), f"callback stats leaked to INFO: {info_msgs}"
 
+    def test_lifecycle_endpoint_id_redacted(self, caplog):
+        src = _make_sd_source(device_id=PRIVACY_ENDPOINT_ID)
+        with patch(
+            "meetandread.audio.capture.sounddevice_source.sounddevice.InputStream",
+            MagicMock(),
+        ), patch(
+            "meetandread.audio.capture.sounddevice_source.sounddevice.query_devices",
+            return_value={"name": "Test Mic (WASAPI)"},
+        ):
+            with caplog.at_level(logging.DEBUG, logger=SD_LOG):
+                src.start()
+                src.stop()
+
+        joined = [r.getMessage() for r in caplog.records]
+        for msg in joined:
+            assert PRIVACY_ENDPOINT_ID not in msg, (
+                f"raw endpoint id leaked: {msg!r}"
+            )
+        debug_msgs = _messages_at(caplog.records, logging.DEBUG)
+        start_msgs = [m for m in debug_msgs if "source_start" in m]
+        stop_msgs = [m for m in debug_msgs if "source_stop" in m]
+        assert start_msgs and any("<redacted:" in m for m in start_msgs), (
+            f"hashed id expected in source_start: {start_msgs}"
+        )
+        assert stop_msgs and any("<redacted:" in m for m in stop_msgs), (
+            f"hashed id expected in source_stop: {stop_msgs}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # pyaudiowpatch_source.py
 # ---------------------------------------------------------------------------
 
 
-def _make_paw_source(queue_size: int = 10) -> PyAudioWPatchSource:
+def _make_paw_source(queue_size: int = 10, **overrides) -> PyAudioWPatchSource:
     src = PyAudioWPatchSource.__new__(PyAudioWPatchSource)
     src.device_index = 5
     src.channels = 2
@@ -318,10 +347,13 @@ def _make_paw_source(queue_size: int = 10) -> PyAudioWPatchSource:
     src._max_consecutive_frames_dropped = 0
     src._on_frame_dropped = None
     src._source_label = "system"
+    src._lossy_callbacks = 0
     src._pyaudio = MagicMock()
     src._pyaudio.get_device_info_by_index.return_value = {
         "name": "Loopback Test Device"
     }
+    for key, value in overrides.items():
+        setattr(src, key, value)
     return src
 
 
@@ -347,17 +379,63 @@ class TestPyAudioWPatchSourceLifecycle:
             "source_start" in m or "source_stop" in m for m in info_msgs
         ), f"lifecycle DEBUG events leaked to INFO: {info_msgs}"
 
-    def test_callback_status_flag_demoted_to_debug(self, caplog):
+    def test_callback_data_loss_status_warns(self, caplog):
+        src = _make_paw_source()
+        src._running = True
+        buf = np.zeros((1024, 2), dtype=np.float32).tobytes()
+        with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
+            src._callback(buf, 1024, None, 2)  # paInputOverflow: samples discarded
+
+        warn_msgs = _messages_at(caplog.records, logging.WARNING)
+        assert any(
+            "data-loss" in m.lower() for m in warn_msgs
+        ), f"data-loss status flag not visible at WARNING: {warn_msgs}"
+
+    def test_callback_data_loss_warning_rate_limited(self, caplog):
+        src = _make_paw_source()
+        src._running = True
+        buf = np.zeros((1024, 2), dtype=np.float32).tobytes()
+        with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
+            for _ in range(3):
+                src._callback(buf, 1024, None, 2)
+
+        warn_msgs = [
+            m for m in _messages_at(caplog.records, logging.WARNING)
+            if "data-loss" in m.lower()
+        ]
+        assert len(warn_msgs) == 2, (
+            f"expected power-of-two bucketing (streak 1,2 of 3), got {warn_msgs}"
+        )
+
+    def test_callback_data_loss_streak_resets_on_clean(self, caplog):
         src = _make_paw_source()
         src._running = True
         buf = np.zeros((1024, 2), dtype=np.float32).tobytes()
         with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
             src._callback(buf, 1024, None, 2)
+            src._callback(buf, 1024, None, 2)
+            src._callback(buf, 1024, None, 0)  # clean callback ends the streak
+            src._callback(buf, 1024, None, 2)
+
+        warn_msgs = [
+            m for m in _messages_at(caplog.records, logging.WARNING)
+            if "data-loss" in m.lower()
+        ]
+        assert len(warn_msgs) == 3, (
+            f"expected warnings at streak 1, 2, then 1 after reset: {warn_msgs}"
+        )
+
+    def test_callback_non_loss_status_flag_stays_debug(self, caplog):
+        src = _make_paw_source()
+        src._running = True
+        buf = np.zeros((1024, 2), dtype=np.float32).tobytes()
+        with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
+            src._callback(buf, 1024, None, 16)  # paPrimingOutput: non-loss
 
         warn_msgs = _messages_at(caplog.records, logging.WARNING)
         assert not any(
-            "status flag" in m.lower() for m in warn_msgs
-        ), f"non-error status flag still at WARNING: {warn_msgs}"
+            "status" in m.lower() for m in warn_msgs
+        ), f"non-loss status flag escalated to WARNING: {warn_msgs}"
         debug_msgs = _messages_at(caplog.records, logging.DEBUG)
         assert any("status flag" in m.lower() for m in debug_msgs), debug_msgs
 
@@ -370,6 +448,40 @@ class TestPyAudioWPatchSourceLifecycle:
 
         error_msgs = _messages_at(caplog.records, logging.ERROR)
         assert any("loopback stream" in m.lower() for m in error_msgs), error_msgs
+
+    def test_lifecycle_endpoint_id_redacted(self, caplog):
+        src = _make_paw_source(device_index=PRIVACY_ENDPOINT_ID)
+        with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
+            src.start()
+            src.stop()
+            src.close()
+
+        joined = [r.getMessage() for r in caplog.records]
+        for msg in joined:
+            assert PRIVACY_ENDPOINT_ID not in msg, (
+                f"raw endpoint id leaked: {msg!r}"
+            )
+        debug_msgs = _messages_at(caplog.records, logging.DEBUG)
+        start_msgs = [m for m in debug_msgs if "source_start" in m]
+        assert start_msgs and any("<redacted:" in m for m in start_msgs), (
+            f"hashed id expected in source_start: {start_msgs}"
+        )
+
+    def test_open_failure_error_redacts_endpoint_id(self, caplog):
+        src = _make_paw_source(device_index=PRIVACY_ENDPOINT_ID)
+        src._pyaudio.open.side_effect = OSError("device gone")
+        with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
+            with pytest.raises(OSError):
+                src.start()
+
+        joined = [r.getMessage() for r in caplog.records]
+        for msg in joined:
+            assert PRIVACY_ENDPOINT_ID not in msg, (
+                f"raw endpoint id leaked: {msg!r}"
+            )
+        error_msgs = _messages_at(caplog.records, logging.ERROR)
+        assert any("loopback stream" in m.lower() for m in error_msgs), error_msgs
+        assert any("<redacted:" in m for m in error_msgs), error_msgs
 
 
 # ---------------------------------------------------------------------------
