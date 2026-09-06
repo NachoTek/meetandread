@@ -22,6 +22,7 @@ Example:
 """
 
 import json
+import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
@@ -31,6 +32,11 @@ from meetandread.audio.storage.paths import (
     get_part_filename,
     get_part_metadata_filename,
 )
+
+logger = logging.getLogger(__name__)
+
+# DEBUG size-milestone interval for part-file appends (bytes written).
+_PART_SIZE_LOG_THRESHOLD_BYTES = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,7 @@ class PcmPartWriter:
         self._file = file_handle
         self._closed = False
         self._frames_written = 0
+        self._bytes_logged_milestone = 0
     
     @classmethod
     def create(
@@ -125,7 +132,9 @@ class PcmPartWriter:
         
         # Open PCM file for binary append
         file_handle = open(part_path, "wb")
-        
+
+        logger.debug("part_created: metadata_written=1")
+
         return cls(
             part_path=part_path,
             metadata_path=metadata_path,
@@ -151,6 +160,26 @@ class PcmPartWriter:
         
         self._file.write(frames)
         self._frames_written += len(frames) // self._metadata.sample_width_bytes
+
+        bytes_written = self._frames_written * self._metadata.sample_width_bytes
+        if (
+            bytes_written - self._bytes_logged_milestone
+            >= _PART_SIZE_LOG_THRESHOLD_BYTES
+        ):
+            self._bytes_logged_milestone = (
+                bytes_written // _PART_SIZE_LOG_THRESHOLD_BYTES
+            ) * _PART_SIZE_LOG_THRESHOLD_BYTES
+            logger.debug(
+                "part_size_threshold: bytes=%d threshold_bytes=%d",
+                bytes_written,
+                _PART_SIZE_LOG_THRESHOLD_BYTES,
+            )
+        logger.debug(
+            "part_appended: frames=%d total_frames=%d bytes=%d",
+            len(frames) // self._metadata.sample_width_bytes,
+            self._frames_written,
+            bytes_written,
+        )
     
     def flush(self) -> None:
         """Flush written data to disk.
@@ -160,15 +189,24 @@ class PcmPartWriter:
         """
         if not self._closed:
             self._file.flush()
-    
+            logger.debug(
+                "part_flushed: total_frames=%d",
+                self._frames_written,
+            )
+
     def close(self) -> None:
         """Close the writer and release resources.
-        
+
         After closing, the .pcm.part file is ready to be finalized to WAV.
         """
         if not self._closed:
             self._file.close()
             self._closed = True
+            logger.debug(
+                "part_closed: total_frames=%d bytes=%d",
+                self._frames_written,
+                self._frames_written * self._metadata.sample_width_bytes,
+            )
     
     def __enter__(self):
         return self

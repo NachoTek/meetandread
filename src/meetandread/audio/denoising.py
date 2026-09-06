@@ -161,6 +161,11 @@ class SpectralGateProvider(DenoisingProvider):
 
         if validation_error is not None:
             latency_ms = (time.perf_counter() - start) * 1000.0
+            logger.debug(
+                "denoise_frame_fallback: provider=%s reason=%s",
+                self.name,
+                validation_error,
+            )
             return DenoisingResult(
                 audio=np.clip(sanitized, -1.0, 1.0),
                 provider_name=self.name,
@@ -168,6 +173,15 @@ class SpectralGateProvider(DenoisingProvider):
                 fallback=True,
                 error=validation_error,
             )
+
+        # Accepted only after validation succeeded (malformed frames log
+        # fallback above, never accepted).
+        logger.debug(
+            "denoise_frame_accepted: provider=%s samples=%d dtype=%s",
+            self.name,
+            int(frame.size) if hasattr(frame, "size") else -1,
+            getattr(frame, "dtype", type(frame).__name__),
+        )
 
         # ---- Spectral gate processing ----
         try:
@@ -343,6 +357,12 @@ class SpectralGateProvider(DenoisingProvider):
 
         # Save tail for next call (last fft_size samples of combined input)
         self._overlap_tail = combined[-self._fft_size:].copy()
+        logger.debug(
+            "denoise_overlap_buffered: provider=%s tail_samples=%d frame_samples=%d",
+            self.name,
+            int(self._overlap_tail.size),
+            int(n),
+        )
 
         # Return only the output corresponding to the new frame
         # (skip the fft_size overlap portion from the previous frame)
@@ -397,4 +417,5 @@ def create_provider(name: Optional[str] = None) -> DenoisingProvider:
             f"Valid providers: {VALID_PROVIDER_NAMES}"
         )
 
+    logger.debug("provider_created: provider=%s", provider_name)
     return _PROVIDERS[provider_name]()

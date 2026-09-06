@@ -179,11 +179,13 @@ class HistoryPlaybackController:
         # Resolve companion WAV in the recordings directory
         recordings = self._resolve_recordings_dir()
         wav_path = recordings / f"{md_path.stem}.wav"
+        logger.debug("load_resolve: companion=wav")
 
         self._current_audio_path = wav_path
 
         if not wav_path.exists() or not wav_path.is_file():
             self._set_error("Audio file not found")
+            logger.debug("load_resolve_missing: companion=wav")
             logger.warning(
                 "load_missing: stem=%s expected=%s", md_path.stem, wav_path
             )
@@ -192,6 +194,10 @@ class HistoryPlaybackController:
         # Assign source to player
         source_url = QUrl.fromLocalFile(str(wav_path))
         self._player.setSource(source_url)
+        logger.debug(
+            "load_source_set: media_status=%s",
+            self._player.mediaStatus(),
+        )
         logger.info("load_ready: stem=%s source=%s", md_path.stem, wav_path.name)
 
     # ------------------------------------------------------------------
@@ -226,6 +232,7 @@ class HistoryPlaybackController:
         is required before file deletion can succeed.
         """
         logger.info("release_source: stem=%s", self._stem_or_none())
+        logger.debug("source_unset: player_source_cleared")
         self._player.stop()
         self._player.setSource(QUrl())
         self._reset_state()
@@ -259,7 +266,15 @@ class HistoryPlaybackController:
         position_ms = max(0, int(position_ms))
         duration = self._player.duration()
         if duration > 0:
-            position_ms = min(position_ms, duration)
+            clamped_ms = min(position_ms, duration)
+            if clamped_ms != position_ms:
+                logger.debug(
+                    "seek_clamped: requested_ms=%d clamped_ms=%d duration=%d",
+                    position_ms,
+                    clamped_ms,
+                    duration,
+                )
+            position_ms = clamped_ms
         logger.info(
             "seek_to: position_ms=%d duration=%d stem=%s",
             position_ms,
@@ -370,16 +385,25 @@ class HistoryPlaybackController:
             )
         elif status == QMediaPlayer.MediaStatus.NoMedia:
             self._status_text = ""
+        elif status == QMediaPlayer.MediaStatus.EndOfMedia:
+            logger.debug(
+                "media_end_of_audio: position_ms=%d duration_ms=%d",
+                self._player.position(),
+                self._player.duration(),
+            )
 
     def _on_playback_state_changed(
         self,
         state: QMediaPlayer.PlaybackState,
     ) -> None:
         """Handle playback state changes for status text updates."""
+        logger.debug(
+            "playback_state_changed: state=%s",
+            state,
+        )
         # Status text is computed on-demand in the property; nothing to
         # update here, but the signal connection keeps the controller
         # eligible for future observability extensions.
-        pass
 
     # ------------------------------------------------------------------
     # Diagnostics

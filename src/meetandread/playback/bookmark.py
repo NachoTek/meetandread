@@ -160,6 +160,7 @@ class BookmarkManager:
         """
         position_ms = max(int(position_ms), 0)
 
+        caller_named = bool(name)
         if not name:
             name = f"Bookmark at {_format_position(position_ms)}"
 
@@ -173,10 +174,25 @@ class BookmarkManager:
         bookmarks = metadata.get("bookmarks", [])
         if not isinstance(bookmarks, list):
             bookmarks = []
+        logger.debug(
+            "bookmark_add_detail: position_ms=%d existing_count=%d named=%s",
+            position_ms,
+            len(bookmarks),
+            caller_named,
+        )
         bookmarks.append({"name": bm.name, "position_ms": bm.position_ms, "created_at": bm.created_at})
         metadata["bookmarks"] = bookmarks
 
-        _write_transcript(self._path, md_body, metadata)
+        try:
+            _write_transcript(self._path, md_body, metadata)
+        except BookmarkError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "bookmark_write_failed: operation=add error=%s",
+                type(exc).__name__,
+            )
+            raise
 
         logger.info(
             "bookmark_added: stem=%s count=%d position_ms=%d",
@@ -208,10 +224,27 @@ class BookmarkManager:
         filtered = [bm for bm in bookmarks if bm.get("created_at") != created_at]
 
         if len(filtered) == original_len:
+            logger.debug(
+                "bookmark_delete_detail: removed=0 remaining=%d",
+                original_len,
+            )
             return False
 
+        logger.debug(
+            "bookmark_delete_detail: removed=1 remaining=%d",
+            len(filtered),
+        )
         metadata["bookmarks"] = filtered
-        _write_transcript(self._path, md_body, metadata)
+        try:
+            _write_transcript(self._path, md_body, metadata)
+        except BookmarkError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "bookmark_write_failed: operation=delete error=%s",
+                type(exc).__name__,
+            )
+            raise
 
         logger.info(
             "bookmark_deleted: stem=%s count=%d",

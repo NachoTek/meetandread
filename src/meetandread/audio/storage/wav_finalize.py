@@ -4,11 +4,14 @@ Converts raw PCM data with sidecar metadata into standard WAV files.
 Uses the stdlib `wave` module for reliable WAV header generation.
 """
 
+import logging
 import wave
 from pathlib import Path
 from typing import Optional
 
 from meetandread.audio.storage.pcm_part import load_metadata, PcmMetadata
+
+logger = logging.getLogger(__name__)
 
 
 def finalize_part_to_wav(
@@ -65,6 +68,22 @@ def finalize_part_to_wav(
     sample_width = metadata.sample_width_bytes
     frame_rate = metadata.sample_rate
 
+    logger.debug("wav_pcm_read: bytes=%d", len(pcm_data))
+    logger.debug(
+        "wav_header_params: frames=%d channels=%d sample_width=%d rate=%d",
+        n_frames,
+        n_channels,
+        sample_width,
+        frame_rate,
+    )
+    duration_s = n_frames / frame_rate if frame_rate else 0.0
+    logger.debug(
+        "wav_duration: frames=%d rate=%d duration_s=%.2f",
+        n_frames,
+        frame_rate,
+        duration_s,
+    )
+
     # Write WAV file using stdlib wave module
     with wave.open(str(wav_path), "wb") as wav_file:
         wav_file.setnchannels(n_channels)
@@ -72,6 +91,11 @@ def finalize_part_to_wav(
         wav_file.setframerate(frame_rate)
         wav_file.setnframes(n_frames)
         wav_file.writeframes(pcm_data)
+
+    logger.info(
+        "wav_finalized: duration_s=%.2f",
+        duration_s,
+    )
 
     return wav_path
 
@@ -109,5 +133,6 @@ def finalize_stem(
         metadata_path = part_path.with_suffix(".part.json")
         part_path.unlink(missing_ok=True)
         metadata_path.unlink(missing_ok=True)
+        logger.debug("part_removed: original_deleted=1")
 
     return result
