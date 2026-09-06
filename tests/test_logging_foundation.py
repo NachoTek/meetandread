@@ -9,8 +9,8 @@ Covers:
   kept, capture-mode logs never deleted at any age.
 - Log-file shape: one timestamped file per run; an INFO run excludes
   routine DEBUG chatter; a capture run includes it; the stdout tee stays
-  console-mirroring only (transcript-bearing output never enters the log
-  stream at INFO).
+  console-mirroring only (transcript-bearing output never enters the
+  log stream).
 """
 
 import inspect
@@ -296,6 +296,19 @@ class TestStdoutTee:
         _flush_root()
 
         content = log_file.read_text(encoding="utf-8")
+        assert "TRANSCRIPT-FRAGMENT" not in content
+
+    def test_transcript_bearing_stdout_never_enters_capture_log(
+        self, isolated_logging, tmp_path
+    ):
+        """Capture mode runs at DEBUG, yet stdout still stays console-only."""
+        log_file = configure_logging(logs_dir=tmp_path, capture_mode=True)
+        logging.getLogger("meetandread.capture.probe").debug("capture probe line")
+        print("TRANSCRIPT-FRAGMENT capture canary")
+        _flush_root()
+
+        content = log_file.read_text(encoding="utf-8")
+        assert "capture probe line" in content
         assert "TRANSCRIPT-FRAGMENT" not in content
 
     def test_console_mirroring_preserved(

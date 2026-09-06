@@ -9,8 +9,9 @@ which modules matter, and reproductions need maximum information.
 
 The per-run timestamped log file under the user's Documents folder keeps
 its existing shape. The stdout tee stays a console-mirroring convenience
-only: it writes at DEBUG, so at the normal INFO level transcript-bearing
-stdout may reach the console but never enters the log stream.
+only: stdout is never routed into the logging framework, so
+transcript-bearing output may reach the console but never enters any
+log stream, in any run mode.
 
 Retention (decided 2026-09-05): on startup, normal-run log files older
 than 30 days are deleted. Capture-mode DEBUG logs and capture artifacts
@@ -126,18 +127,21 @@ def cleanup_expired_logs(
 
 
 class TeeOutput:
-    """Redirects stdout to both console and log file."""
+    """Mirror stdout to the console only — never into the logging framework.
 
-    def __init__(self, logger):
-        self.logger = logger
+    Console-mirroring convenience: writes pass through to the real
+    stdout and nowhere else. Stdout is never routed into the logging
+    framework, so no run mode (normal INFO or capture DEBUG) can record
+    transcript-bearing stdout in any log stream.
+    """
+
+    def __init__(self):
         self.stdout = sys.stdout
 
     def write(self, message):
         if self.stdout is not None:
             self.stdout.write(message)
             self.stdout.flush()
-        if message.strip():
-            self.logger.debug(message.rstrip())
 
     def flush(self):
         if self.stdout is not None:
@@ -155,10 +159,9 @@ def configure_logging(
     One timestamped file per run is created under *logs_dir* (resolved
     via the storage seam when None) — capture runs carry the capture
     prefix so retention never selects them. Expired normal logs are
-    cleaned up alongside (the startup retention hook). Stdout is teed to
-    the root logger at DEBUG: console mirroring intact, silent in the
-    log file at the normal INFO level — transcript-bearing output never
-    enters the log stream.
+    cleaned up alongside (the startup retention hook). Stdout is teed
+    console-only: transcript-bearing output never enters the log stream
+    in ANY mode (normal INFO or capture DEBUG).
     """
     if logs_dir is None:
         logs_dir = resolve_logs_dir()
@@ -190,8 +193,9 @@ def configure_logging(
     handler._meetandread_run_handler = True  # type: ignore[attr-defined]
     root.addHandler(handler)
 
-    # Redirect stdout to both console and file (console-mirroring only).
-    sys.stdout = TeeOutput(logging.getLogger())
+    # Redirect stdout to the console only (console-mirroring tee; stdout
+    # never enters the logging framework, so no mode can capture it).
+    sys.stdout = TeeOutput()
 
     logger.info("Logging to: %s", log_file)
     logger.info(
