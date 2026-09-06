@@ -5,12 +5,15 @@ Includes confidence variation support and ground truth tracking for accuracy tes
 """
 
 import wave
+import logging
 import numpy as np
 import queue
 import threading
 from typing import Optional, Dict, Any, List, Tuple
 import math
 from dataclasses import dataclass, field
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -315,7 +318,22 @@ class FakeAudioModule:
                     audio_data = self._apply_confidence_based_modification(audio_data)
                     
                     # Update frame counter for confidence calculation
+                    prev_frame_count = self._frame_count
                     self._frame_count += n_frames_read
+
+                    # Periodic feed accounting at DEBUG (once per second
+                    # bucket; power-of-two seconds only, to bound log volume).
+                    new_second = int(self._frame_count / self._samplerate)
+                    if (
+                        new_second > 0
+                        and new_second & (new_second - 1) == 0
+                        and int(prev_frame_count / self._samplerate) < new_second
+                    ):
+                        _log.debug(
+                            "fake_feed: frames_fed=%d, position_s=%d",
+                            self._frame_count,
+                            new_second,
+                        )
                     
                     # Record ground truth if testing with patterns
                     if self._current_ground_truth and self._confidence_variation:
@@ -345,29 +363,40 @@ class FakeAudioModule:
         with self._lock:
             if self._running:
                 return
-            
+
             self._running = True
             self._thread = threading.Thread(target=self._read_loop, daemon=True)
             self._thread.start()
-    
+            _log.debug(
+                "fake_source_start: rate=%d, ch=%d, loop=%s",
+                self._samplerate,
+                self._channels,
+                self._loop,
+            )
+
     def stop(self) -> None:
         """Stop emitting audio frames."""
         with self._lock:
             if not self._running:
                 return
-            
+
             self._running = False
-            
+
             if self._thread:
                 self._thread.join(timeout=2.0)
                 self._thread = None
-            
+
             # Clear the queue
             while not self._queue.empty():
                 try:
                     self._queue.get_nowait()
                 except queue.Empty:
                     break
+
+            _log.debug(
+                "fake_source_stop: frames_fed=%d",
+                getattr(self, "_frame_count", 0),
+            )
     
     def read_frames(self, timeout: Optional[float] = None) -> Optional[np.ndarray]:
         """

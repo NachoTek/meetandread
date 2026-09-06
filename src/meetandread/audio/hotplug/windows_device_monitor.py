@@ -21,6 +21,8 @@ import queue
 import threading
 from typing import Any, Callable, Mapping, Optional
 
+from meetandread.audio.capture.sounddevice_source import _redact_device_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -215,8 +217,20 @@ class WindowsDeviceMonitor:
             return
 
         logger.debug(
-            "Hot-plug event queued",
-            extra={"event_type": event.event_type.value, "queued_events": self._queue.qsize()},
+            "event_queued: event_type=%s, queued=%d",
+            event.event_type.value,
+            self._queue.qsize(),
+        )
+        # Device added/removed/changed is a user-visible operational fact:
+        # INFO with a redacted identifier (the raw friendly_name is
+        # OS-supplied and must never enter any log stream).
+        logger.info(
+            "device_event: %s device=%s name=%s",
+            event.event_type.value,
+            _redact_device_name(event.device_id),
+            _redact_device_name(event.friendly_name)
+            if event.friendly_name
+            else "none",
         )
 
     def drain_pending_events(self, limit: Optional[int] = None) -> int:
