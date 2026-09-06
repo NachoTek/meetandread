@@ -1738,8 +1738,8 @@ class RecordingController:
         Args:
             result: SegmentResult with text, confidence, and completion status
         """
-        logger.debug("Segment: %r [conf: %d%%, final: %s, idx: %s]",
-                     result.text[:40], result.confidence, result.is_final,
+        logger.debug("Segment received [conf: %d%%, final: %s, idx: %s]",
+                     result.confidence, result.is_final,
                      result.segment_index)
 
         # Attempt live speaker matching (conservative; attaches name only
