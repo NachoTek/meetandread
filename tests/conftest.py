@@ -2,6 +2,7 @@
 import importlib
 import sys
 import types
+from pathlib import Path
 
 
 def _ensure_stub_if_missing(name: str, **attrs) -> None:
@@ -62,6 +63,100 @@ def _isolate_native_live_speaker_extraction(request, monkeypatch):
         "_ensure_live_extractor",
         lambda self: False,
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_storage_paths(request, monkeypatch, tmp_path):
+    """Redirect default storage dirs into a per-test tmp base (issue #66).
+
+    Nightly CI run 33603059308 failed on main: two controller tests starting
+    a recording in the same wall-clock second on different xdist workers
+    (``-n auto``, PR #87) collided on the same second-precision
+    ``recording-<timestamp>.pcm.part`` stem inside the REAL
+    ``~/Documents/meetandread/recordings`` tree. Tests must not write real
+    WAV/PCM captures into the real user recordings directory.
+
+    The seam: ``meetandread.audio.storage.paths.get_data_dir`` is the single
+    module-global choke point — ``get_recordings_dir`` /
+    ``get_transcripts_dir`` / ``get_logs_dir`` all call it via their defining
+    module's globals at call time, so patching it redirects every consumer
+    regardless of where the resolver was imported (patching
+    ``get_recordings_dir`` itself would not cover import-bound consumers).
+
+    Explicit ``base_dir`` arguments still win (the wrapper calls the
+    original function for them). Configured custom storage paths that
+    already live inside the test's ``tmp_path`` sandbox are honored via
+    the original resolver; any other configured custom path (the real
+    user tree or anywhere external) is redirected under
+    ``tmp_path/mar-storage-home/custom/<field>`` so unmarked tests can
+    never touch real user storage. The wrapper only trusts a configured
+    custom path whose raw configured value is a real string; mock-poisoned
+    reads (shadowed get_settings on the config singleton) read as unset.
+
+    Tests that genuinely exercise real user paths opt out with the
+    ``real_storage_paths`` marker.
+    """
+    if request.node.get_closest_marker("real_storage_paths") is not None:
+        return
+
+    from meetandread.audio.storage import paths as storage_paths
+
+    original_get_data_dir = storage_paths.get_data_dir
+    original_resolve_custom = storage_paths._resolve_custom_path
+    isolated_docs = tmp_path / "mar-storage-home" / "Documents"
+
+    def _isolated_get_data_dir(base_dir=None):
+        if base_dir is not None:
+            return original_get_data_dir(base_dir=base_dir)
+        return original_get_data_dir(base_dir=isolated_docs)
+
+    def _configured_raw_custom_path(field: str):
+        """Read a configured custom storage path WITHOUT mkdir side effects.
+
+        Mirrors the config access of paths._resolve_custom_path but stops
+        before resolving/creating anything.
+        """
+        try:
+            from meetandread.config.manager import get_config_manager
+            cm = get_config_manager()
+            settings = cm.get_settings()
+            storage = getattr(settings, "storage_paths", None)
+            if storage is None:
+                return None
+            raw = getattr(storage, field, None)
+            if raw is None:
+                return None
+            if not isinstance(raw, str):
+                # A non-str value means the config read is poisoned (a
+                # test mock shadowing the ConfigManager singleton's
+                # get_settings, e.g. test_speaker_pipeline) — not a real
+                # configured location. Treat as unset.
+                return None
+            return raw
+        except (OSError, ValueError, AttributeError, ImportError, TypeError):
+            return None
+
+    def _isolated_resolve_custom_path(field: str):
+        raw = _configured_raw_custom_path(field)
+        if raw is None:
+            return None
+        try:
+            resolved = Path(raw).expanduser().resolve()
+        except (OSError, ValueError):
+            return None
+        if resolved.is_relative_to(tmp_path):
+            # Already inside this test's sandbox: preserve original semantics
+            # (including the original's mkdir/validation) via the real resolver.
+            return original_resolve_custom(field)
+        # External configured path (e.g. the real user tree): redirect into the
+        # per-test sandbox. Do NOT call the original resolver here — it would
+        # mkdir the configured external path before we ever redirect it.
+        redirected = tmp_path / "mar-storage-home" / "custom" / field.removesuffix("_path")
+        redirected.mkdir(parents=True, exist_ok=True)
+        return redirected
+
+    monkeypatch.setattr(storage_paths, "get_data_dir", _isolated_get_data_dir)
+    monkeypatch.setattr(storage_paths, "_resolve_custom_path", _isolated_resolve_custom_path)
 
 
 @pytest.fixture(autouse=True)
