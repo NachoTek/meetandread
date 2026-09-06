@@ -15,6 +15,8 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+from .sounddevice_source import _redact_device_name
+
 try:
     import pyaudiowpatch
     _HAS_PYAUDIOWPATCH = True
@@ -110,7 +112,9 @@ class PyAudioWPatchSource:
             return (None, pyaudiowpatch.paComplete)
 
         if status:
-            logger.warning("PyAudioWPatch callback status flag: %s", status)
+            # Non-error status flags (input overflow etc.) are routine
+            # diagnostics, not operational failures - DEBUG, not WARNING.
+            logger.debug("PyAudioWPatch callback status flag: %s", status)
         try:
             # Validate buffer before conversion
             expected_bytes = frame_count * self.channels * 4  # float32 = 4 bytes
@@ -164,6 +168,14 @@ class PyAudioWPatchSource:
             if self._running:
                 return
 
+            logger.debug(
+                "source_start: source=%s, device=%s, rate=%d, ch=%d, blocksize=%d",
+                self._source_label,
+                self.device_index,
+                self.samplerate,
+                self.channels,
+                self.blocksize,
+            )
             try:
                 self._stream = self._pyaudio.open(
                     format=pyaudiowpatch.paFloat32,
@@ -176,7 +188,7 @@ class PyAudioWPatchSource:
                 )
                 self._running = True
 
-                # Log device info for diagnostics
+                # Log device info for diagnostics (redacted name only)
                 if self.device_index is not None:
                     dev_info = self._pyaudio.get_device_info_by_index(
                         self.device_index
@@ -184,7 +196,7 @@ class PyAudioWPatchSource:
                     logger.info(
                         "PyAudioWPatch loopback stream opened: device=%r "
                         "(%s, %dHz, %dch)",
-                        dev_info.get("name"),
+                        _redact_device_name(str(dev_info.get("name", "unknown"))),
                         self.device_index,
                         self.samplerate,
                         self.channels,
@@ -212,6 +224,14 @@ class PyAudioWPatchSource:
         with self._lock:
             if not self._running:
                 return
+
+            logger.debug(
+                "source_stop: source=%s, device=%s, enqueued=%d, dropped=%d",
+                self._source_label,
+                self.device_index,
+                self._frames_enqueued,
+                self._frames_dropped,
+            )
 
             # Signal callback to stop processing BEFORE closing the stream.
             # This prevents the callback from accessing freed memory.
@@ -317,3 +337,8 @@ class PyAudioWPatchSource:
                 except Exception:
                     logger.exception("Error terminating PyAudio instance")
                 self._pyaudio = None
+                logger.debug(
+                    "source_close: source=%s, device=%s",
+                    self._source_label,
+                    self.device_index,
+                )

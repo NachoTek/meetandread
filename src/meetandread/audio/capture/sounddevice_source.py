@@ -101,6 +101,18 @@ class SoundDeviceSource:
             self._queue.put_nowait(indata.copy())
             self._frames_enqueued = getattr(self, "_frames_enqueued", 0) + 1
             self._consecutive_frames_dropped = 0
+            self._callback_stats_counter = (
+                getattr(self, "_callback_stats_counter", 0) + 1
+            )
+            # Periodic summary only (power-of-ten buckets): the callback is
+            # the audio hot path, so per-call logging is never acceptable.
+            if self._callback_stats_counter & (self._callback_stats_counter - 1) == 0:
+                _log.debug(
+                    "callback_stats: source=%s, enqueued=%d, dropped=%d",
+                    self._source_label,
+                    self._frames_enqueued,
+                    getattr(self, "_frames_dropped", 0),
+                )
         except queue.Full:
             # Queue is full - drop this frame, increment counter, log, callback
             self._frames_dropped += 1
@@ -132,7 +144,15 @@ class SoundDeviceSource:
         with self._lock:
             if self._running:
                 return
-            
+
+            _log.debug(
+                "source_start: source=%s, device=%s, rate=%d, ch=%d, blocksize=%d",
+                self._source_label,
+                self.device_id,
+                self.samplerate,
+                self.channels,
+                self.blocksize,
+            )
             self._stream = sounddevice.InputStream(
                 device=self.device_id,
                 channels=self.channels,
@@ -172,16 +192,23 @@ class SoundDeviceSource:
                 )
             except Exception:
                 _log.debug(
-                    "SoundDevice stream-open log failed (source=%s)",
+                    "stream_open_log_failed: source=%s",
                     self._source_label,
                 )
-    
+
     def stop(self) -> None:
         """Stop the audio capture stream."""
         with self._lock:
             if not self._running:
                 return
-            
+
+            _log.debug(
+                "source_stop: source=%s, device=%s, enqueued=%d, dropped=%d",
+                self._source_label,
+                self.device_id,
+                self._frames_enqueued,
+                self._frames_dropped,
+            )
             if self._stream:
                 self._stream.stop()
                 self._stream.close()
@@ -356,9 +383,9 @@ class SystemSource:
             self.available = True
 
             self._log.info(
-                "SystemSource: WASAPI loopback device found — %s "
+                "SystemSource: WASAPI loopback device found - %s "
                 "(index=%s, %dHz, %dch)",
-                self._loopback_device_name,
+                _redact_device_name(str(self._loopback_device_name)),
                 self._device_index,
                 self._samplerate,
                 self._channels,

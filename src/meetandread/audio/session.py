@@ -505,8 +505,14 @@ class AudioSession:
             
             # Start all sources
             for wrapper in self._sources:
+                _log.debug(
+                    "source_start: source=%s", wrapper.config.type
+                )
                 wrapper.start()
-            
+                _log.debug(
+                    "stream_open: source=%s", wrapper.config.type
+                )
+
             # Start consumer thread
             self._stop_event.clear()
             self._start_time = time.time()
@@ -516,7 +522,18 @@ class AudioSession:
                 daemon=True,
             )
             self._consumer_thread.start()
-            
+
+            _log.info(
+                "session_start: sources=[%s], rate=%d, ch=%d, max_frames=%s",
+                ",".join(w.config.type for w in self._sources),
+                config.sample_rate,
+                config.channels,
+                config.max_frames,
+            )
+            _log.debug(
+                "consumer_loop_started: sources=%d", len(self._sources)
+            )
+
         except Exception as e:
             self._state = SessionState.ERROR
             self._error = e
@@ -537,12 +554,15 @@ class AudioSession:
         
         self._state = SessionState.STOPPING
         self._stop_event.set()
+        _log.debug("session_stop: state=stopping")
 
         # Stop all sources first (prevents new frames from being added)
         with self._sources_lock:
             sources_snapshot = list(self._sources)
         for wrapper in sources_snapshot:
+            _log.debug("source_stop: source=%s", wrapper.config.type)
             wrapper.stop()
+            _log.debug("stream_close: source=%s", wrapper.config.type)
 
         # Wait for consumer thread to finish (drains existing frames)
         # If consumer crashed, thread is already dead — join returns quickly
@@ -566,9 +586,17 @@ class AudioSession:
             stem=self._stem,
             recordings_dir=output_dir or get_recordings_dir(),
         )
-        
+
         self._state = SessionState.FINALIZED
-        
+
+        _log.info(
+            "session_stop: state=finalized, frames_recorded=%d, "
+            "frames_dropped=%d, duration=%.2fs",
+            self._stats.frames_recorded,
+            self._stats.frames_dropped,
+            self._stats.duration_seconds,
+        )
+
         return wav_path
     
     def get_state(self) -> SessionState:
@@ -631,6 +659,11 @@ class AudioSession:
 
         # Stop the old wrapper *after* the swap is committed
         old_wrapper.stop()
+
+        _log.debug(
+            "source_swap: source=%s, replaced=1",
+            source_type,
+        )
 
         return old_wrapper
 
@@ -982,7 +1015,7 @@ class AudioSession:
                     _log.exception("on_error callback raised during consumer crash")
 
     def _consumer_loop_inner(self) -> None:
-        """Inner consumer loop — separated for crash-guard wrapping."""
+        """Inner consumer loop - separated for crash-guard wrapping."""
         discard_mode = False
         max_frames = self._config.max_frames if self._config else None
 
@@ -993,6 +1026,9 @@ class AudioSession:
         stall_timeout = (
             self._config.mix_stall_timeout_s if self._config else DEFAULT_MIX_STALL_TIMEOUT_S
         )
+        # Periodic frame accounting (DEBUG): rounds and frames at last report
+        emitting_rounds = 0
+        last_accounting_emitted = 0
 
         while not self._stop_event.is_set():
             # Check writer is available
@@ -1039,6 +1075,21 @@ class AudioSession:
                 # Consumed is consumed — advance the shared timeline even
                 # when the cap turned this round's samples into a discard.
                 emitted_total += emitted
+
+            # Periodic frame accounting at DEBUG (every 200 emitting
+            # rounds) - interval summaries, never per-round.
+            if emitted > 0:
+                emitting_rounds += 1
+                if emitting_rounds % 200 == 0:
+                    _log.debug(
+                        "session_frame_accounting: rounds=%d, frames_in=%d, "
+                        "frames_out=%d, drops=%d",
+                        emitting_rounds,
+                        emitted_total - last_accounting_emitted,
+                        self._stats.frames_recorded,
+                        self._stats.frames_dropped,
+                    )
+                    last_accounting_emitted = emitted_total
 
             if not emitted and not read_any:
                 # No frames available, sleep briefly
