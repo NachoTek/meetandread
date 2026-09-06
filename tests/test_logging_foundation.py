@@ -150,10 +150,12 @@ class TestRetentionSelection:
     def test_retention_boundary_strictly_older(self, tmp_path):
         cutoff = NOW - timedelta(days=30)
         just_newer = _touch(
-            tmp_path / "meetandread_newer.log", cutoff + timedelta(seconds=1)
+            tmp_path / "meetandread_20260807_120001.log",
+            cutoff + timedelta(seconds=1),
         )
         just_older = _touch(
-            tmp_path / "meetandread_older.log", cutoff - timedelta(seconds=1)
+            tmp_path / "meetandread_20260807_115959.log",
+            cutoff - timedelta(seconds=1),
         )
         assert select_expired_normal_logs([just_newer, just_older], cutoff) == [
             just_older
@@ -176,6 +178,23 @@ class TestRetentionSelection:
         )
         cutoff = NOW - timedelta(days=30)
         assert select_expired_normal_logs([stranger, foreign_log], cutoff) == []
+
+    def test_wrong_shape_names_never_selected(self, tmp_path):
+        """Only the exact meetandread_YYYYMMDD_HHMMSS.log shape is a
+        candidate — foreign meetandread-prefixed artifacts survive."""
+        cutoff = NOW - timedelta(days=30)
+        wrong_shape_names = [
+            "meetandread_notes.log",
+            "meetandread_20260101.log",
+            "meetandread_20260101_1200.log",
+            "meetandread_2026AB0101_120000.log",
+            "meetandread_99999999_999999.log",
+        ]
+        wrong_shape = [
+            _touch(tmp_path / name, NOW - timedelta(days=400))
+            for name in wrong_shape_names
+        ]
+        assert select_expired_normal_logs(wrong_shape, cutoff) == []
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +246,8 @@ class TestRetentionCleanup:
 
     def test_default_retention_window_is_30_days(self, tmp_path):
         boundary_old = _touch(
-            tmp_path / "meetandread_old.log", datetime.now() - timedelta(days=31)
+            tmp_path / "meetandread_20260101_120000.log",
+            datetime.now() - timedelta(days=31),
         )
         cleanup_expired_logs(tmp_path)
         assert not boundary_old.exists()

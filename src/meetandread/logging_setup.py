@@ -24,6 +24,7 @@ so tests never touch the real user tree or the wall clock.
 """
 
 import logging
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,6 +40,12 @@ NORMAL_LOG_PREFIX = "meetandread_"
 CAPTURE_LOG_PREFIX = "meetandread_capture_"
 
 _LOG_FILENAME_FORMAT = "%Y%m%d_%H%M%S"
+
+# Exact normal-run filename shape (only what our own writer produces):
+# meetandread_YYYYMMDD_HHMMSS.log. The strict shape excludes capture
+# logs (meetandread_capture_*) and foreign meetandread-prefixed
+# artifacts by construction.
+_NORMAL_LOG_NAME_RE = re.compile(r"^meetandread_\d{8}_\d{6}\.log$")
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +80,16 @@ def select_expired_normal_logs(
     """Pure selector: which files are expired normal-run logs.
 
     A file is selected when ALL hold:
-    - it is a ``meetandread_*.log`` filename (the per-run shape), and
-    - its filename does NOT carry the capture prefix (capture logs and
-      capture artifacts are excluded from automatic cleanup at any age,
-      per the retention decision), and
+    - its whole filename matches the exact normal-run shape
+      ``meetandread_YYYYMMDD_HHMMSS.log`` (the only shape our writer
+      produces, ``configure_logging``), AND its timestamp segment
+      parses via the filename format — a shape-matching but invalid
+      timestamp is a foreign artifact and survives, and
     - its modification time is strictly older than *cutoff*.
+
+    The exact shape excludes capture logs (``meetandread_capture_*``)
+    and any non-log or foreign meetandread-prefixed artifact by
+    construction, at any age.
 
     Unreadable files (stat failure) are never selected — cleanup must
     not crash startup on a locked or vanished file.
@@ -85,9 +97,13 @@ def select_expired_normal_logs(
     expired = []
     for path in files:
         name = path.name
-        if not name.startswith(NORMAL_LOG_PREFIX) or not name.endswith(".log"):
+        if not _NORMAL_LOG_NAME_RE.match(name):
             continue
-        if name.startswith(CAPTURE_LOG_PREFIX):
+        try:
+            datetime.strptime(
+                name[len(NORMAL_LOG_PREFIX): -len(".log")], _LOG_FILENAME_FORMAT
+            )
+        except ValueError:
             continue
         try:
             mtime = datetime.fromtimestamp(path.stat().st_mtime)
