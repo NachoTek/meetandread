@@ -15,6 +15,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _redacted(name: Any) -> str:
+    """Redact a device name via the shared helper (sounddevice_source).
+
+    Imported at call time: sounddevice_source imports this module at top
+    level, so a module-level import would be circular.
+    """
+    from .sounddevice_source import _redact_device_name
+
+    return _redact_device_name(str(name))
+
+
 # Optional pyaudiowpatch import — graceful degradation when not installed
 try:
     import pyaudiowpatch as _paw
@@ -47,7 +59,7 @@ def get_default_loopback_device() -> Optional[Dict[str, Any]]:
     installed or no loopback device is found.
     """
     if not _HAS_PYAUDIOWPATCH:
-        logger.debug("pyaudiowpatch not available — cannot probe loopback device")
+        logger.debug("loopback_probe: pyaudiowpatch not available, cannot probe loopback device")
         return None
 
     try:
@@ -55,13 +67,17 @@ def get_default_loopback_device() -> Optional[Dict[str, Any]]:
             info = pa.get_default_wasapi_loopback()
             if info is not None:
                 logger.info(
-                    "Default loopback device: %s (index=%s)",
-                    info.get("name"),
+                    "loopback_default_found: device=%s (index=%s)",
+                    _redacted(str(info.get("name"))),
                     info.get("index"),
                 )
+            else:
+                logger.debug("loopback_default_found: none")
             return info
     except Exception as exc:
-        logger.warning("Failed to query loopback device via pyaudiowpatch: %s", exc)
+        logger.warning(
+            "loopback_default_query_failed: error_class=%s", type(exc).__name__
+        )
         return None
 
 
@@ -225,9 +241,19 @@ def list_loopback_outputs() -> List[Dict[str, Any]]:
                     loopback_devices.append(device)
             if loopback_devices:
                 logger.info(
-                    "Found %d loopback device(s) via pyaudiowpatch",
+                    "loopback_enum: found %d loopback device(s) via pyaudiowpatch",
                     len(loopback_devices),
                 )
+                for device in loopback_devices:
+                    logger.debug(
+                        "loopback_probe: device=%s (index=%s, in_ch=%s, rate=%s, ok=True)",
+                        _redacted(str(device.get('name', 'unknown'))),
+                        device.get('index'),
+                        device.get('max_input_channels', device.get('maxInputChannels')),
+                        device.get(
+                            'default_samplerate', device.get('defaultSampleRate')
+                        ),
+                    )
                 return loopback_devices
         except Exception as exc:
             logger.warning(
@@ -239,74 +265,108 @@ def list_loopback_outputs() -> List[Dict[str, Any]]:
     # Fallback: sounddevice-based probing
     all_devices = list_devices()
     output_devices = []
-    
+
+    logger.debug("loopback_enum: sounddevice fallback, devices=%d", len(all_devices))
+
     for device in all_devices:
         # Check if this is an output device (max_output_channels > 0)
         if device.get('max_output_channels', 0) > 0:
             # Probe loopback capability
             loopback_ok, loopback_error = probe_loopback_capability(device)
-            
+
             # Add loopback info to device dict
             device_info = dict(device)
             device_info['loopback_ok'] = loopback_ok
             device_info['loopback_error'] = loopback_error
             output_devices.append(device_info)
-    
+
+            logger.debug(
+                "loopback_probe: device=%s (index=%s, out_ch=%s, rate=%s, "
+                "ok=%s, error=%s)",
+                _redacted(str(device.get('name', 'unknown'))),
+                device.get('index'),
+                device.get('max_output_channels'),
+                device.get('default_samplerate'),
+                loopback_ok,
+                loopback_error,
+            )
+
+    if not _HAS_PYAUDIOWPATCH:
+        logger.info(
+            "loopback_enum: scanned %d output device(s), loopback_ok=%d",
+            len(output_devices),
+            sum(1 for d in output_devices if d.get('loopback_ok')),
+        )
+
     return output_devices
 
 
 def print_device_summary():
-    """Print a compact summary of audio devices."""
-    logger.info("=" * 60)
-    logger.info("Audio Device Summary")
-    logger.info("=" * 60)
-    
+    """Log a compact summary of audio devices (sanitized identifiers only)."""
     # Check WASAPI availability
     wasapi_idx = get_wasapi_hostapi_index()
     if wasapi_idx is not None:
-        logger.info("WASAPI Host API Index: %d", wasapi_idx)
+        logger.debug("wasapi_hostapi: index=%d", wasapi_idx)
     else:
-        logger.info("WASAPI Host API: Not detected (non-Windows or no WASAPI support)")
-    
+        logger.debug("wasapi_hostapi: not detected (non-Windows or no WASAPI support)")
+
     # List all devices
     all_devices = list_devices()
-    logger.info("Total devices: %d", len(all_devices))
-    
+
     # List mic inputs
     mic_devices = list_mic_inputs()
-    logger.info("--- Microphone Inputs (%d devices) ---", len(mic_devices))
     for device in mic_devices:
-        logger.info("  [%d] %s", device['index'], device['name'])
-        logger.info("       Channels: %d in", device['max_input_channels'])
-        logger.info("       Sample rate: %d Hz", int(device['default_samplerate']))
-        if wasapi_idx is not None:
-            is_wasapi = device.get('hostapi') == wasapi_idx
-            logger.info("       WASAPI: %s", 'Yes' if is_wasapi else 'No')
-    
+        logger.debug(
+            "mic_input: device=%s (index=%s, in_ch=%s, rate=%s, wasapi=%s)",
+            _redacted(str(device.get('name', 'unknown'))),
+            device.get('index'),
+            device.get('max_input_channels'),
+            device.get('default_samplerate'),
+            (
+                'Yes'
+                if wasapi_idx is not None
+                and device.get('hostapi') == wasapi_idx
+                else 'No'
+            ),
+        )
+
     # List loopback outputs
     loopback_devices = list_loopback_outputs()
-    logger.info("--- Output Devices with Loopback Probing (%d devices) ---", len(loopback_devices))
-    
     loopback_ok_count = sum(1 for d in loopback_devices if d.get('loopback_ok'))
-    
-    if loopback_ok_count > 0:
-        logger.info("Loopback-capable devices: %d", loopback_ok_count)
-        for device in loopback_devices:
-            if device.get('loopback_ok'):
-                logger.info("  [%d] %s", device['index'], device['name'])
-                logger.info("       Channels: %d out", device['max_output_channels'])
-                logger.info("       Sample rate: %d Hz", int(device['default_samplerate']))
-                logger.info("       WASAPI: Yes")
-    else:
-        logger.warning("No loopback-capable devices found")
-        logger.info("Per-device failure table:")
-        logger.info("-" * 60)
-        for device in loopback_devices:
-            logger.info("  [%d] %s", device['index'], device['name'])
-            error = device.get('loopback_error', 'Unknown error')
-            logger.info("       Error: %s", error[:80] + "..." if len(error) > 80 else error)
-    
-    logger.info("=" * 60)
+
+    for device in loopback_devices:
+        if device.get('loopback_ok'):
+            logger.debug(
+                "loopback_ok: device=%s (index=%s, out_ch=%s, rate=%s)",
+                _redacted(str(device.get('name', 'unknown'))),
+                device.get('index'),
+                device.get('max_output_channels'),
+                device.get('default_samplerate'),
+            )
+        else:
+            error = str(device.get('loopback_error', 'Unknown error'))
+            logger.debug(
+                "loopback_failed: device=%s (index=%s, error=%s)",
+                _redacted(str(device.get('name', 'unknown'))),
+                device.get('index'),
+                error[:80] + "..." if len(error) > 80 else error,
+            )
+
+    # Single INFO summary line: counts and sanitized facts only.
+    logger.info(
+        "device_summary: total=%d, mics=%d, outputs=%d, loopback_ok=%d, "
+        "wasapi=%s",
+        len(all_devices),
+        len(mic_devices),
+        len(loopback_devices),
+        loopback_ok_count,
+        'yes' if wasapi_idx is not None else 'no',
+    )
+
+    if loopback_devices and loopback_ok_count == 0:
+        logger.warning(
+            "loopback_none_capable: outputs=%d", len(loopback_devices)
+        )
 
 
 if __name__ == "__main__":

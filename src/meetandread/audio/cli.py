@@ -98,8 +98,13 @@ def check_mic_available() -> bool:
     """Check if any microphone devices are available."""
     try:
         devices = list_mic_inputs()
+        logger.debug("device_enumeration: mics=%d", len(devices))
         return len(devices) > 0
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "device_enumeration: mic probe failed: error_class=%s",
+            type(exc).__name__,
+        )
         return False
 
 
@@ -107,8 +112,15 @@ def check_system_available() -> bool:
     """Check if any system audio loopback devices are available."""
     try:
         devices = list_loopback_outputs()
+        logger.debug(
+            "device_enumeration: loopback_outputs=%d", len(devices)
+        )
         return len(devices) > 0
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "device_enumeration: loopback probe failed: error_class=%s",
+            type(exc).__name__,
+        )
         return False
 
 
@@ -120,7 +132,14 @@ def cmd_record(args) -> int:
     """
     # Determine sources based on flags
     sources = []
-    
+    logger.debug(
+        "source_resolution: mic=%s, system=%s, both=%s, fake=%s",
+        getattr(args, "mic", False),
+        getattr(args, "system", False),
+        getattr(args, "both", False),
+        getattr(args, "fake", None) is not None,
+    )
+
     if args.mic:
         if not check_mic_available():
             logger.error("No microphone devices available")
@@ -177,7 +196,8 @@ def cmd_record(args) -> int:
     
     # Start recording
     session = AudioSession()
-    
+    logger.debug("session_start_step: sources=%d", len(sources))
+
     try:
         session.start(config)
     except AudioSourceError as e:
@@ -186,22 +206,28 @@ def cmd_record(args) -> int:
     except Exception as e:
         logger.error("Error starting recording: %s", e)
         return 1
-    
+
     # Wait for recording duration
     try:
         time.sleep(args.seconds)
     except KeyboardInterrupt:
         logger.info("Interrupted by user, stopping...")
-    
+
     # Stop and finalize
+    logger.debug("finalization: stopping session and finalizing wav")
     try:
         wav_path = session.stop()
     except Exception as e:
         logger.error("Error stopping recording: %s", e)
         return 1
-    
+
     # Report success
     stats = session.get_stats()
+    logger.debug(
+        "finalization: done, frames=%d, drops=%d",
+        stats.frames_recorded,
+        stats.frames_dropped,
+    )
     logger.info("Recording complete! WAV file: %s, Duration: %.2fs, Frames: %d",
                 wav_path, stats.duration_seconds, stats.frames_recorded)
     
