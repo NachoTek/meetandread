@@ -1002,8 +1002,8 @@ to avoid clipping issues and enable proper text rendering.
         phrase_start = getattr(result, 'phrase_start', False)
         speaker_id = getattr(result, 'speaker_id', None)
 
-        logging.debug("Segment: '%s' [conf: %d%%, final: %s, phrase_start: %s, speaker_id: %s]",
-                      result.text[:40], result.confidence, result.is_final, phrase_start,
+        logging.debug("Segment received [conf: %d%%, final: %s, phrase_start: %s, speaker_id: %s]",
+                      result.confidence, result.is_final, phrase_start,
                       speaker_id if speaker_id else "None")
 
         if self._cc_overlay:

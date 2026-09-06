@@ -11,6 +11,10 @@ Covers:
   routine DEBUG chatter; a capture run includes it; the stdout tee stays
   console-mirroring only (transcript-bearing output never enters the
   log stream).
+- Transcript-leak canaries: the two ``_on_phrase_result`` handlers run
+  their real code paths under capture-mode DEBUG with a distinctive
+  transcript text; the capture log must contain the telemetry fields
+  but never the transcript text.
 """
 
 import inspect
@@ -19,6 +23,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -330,6 +335,101 @@ class TestStdoutTee:
 
         assert "one record" not in first.read_text(encoding="utf-8")
         assert "one record" in second.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Transcript-leak canaries — real handlers under capture-mode DEBUG
+# ---------------------------------------------------------------------------
+
+class TestTranscriptLeakCanaries:
+    """PR #116 review finding: capture DEBUG must never record transcript.
+
+    The two ``_on_phrase_result`` handlers are the seam where segment
+    text previously flowed into a ``logger.debug`` call. These canaries
+    run the REAL methods (unbound, with a minimal fake ``self``) under
+    capture-mode DEBUG on a temp storage dir and assert the distinctive
+    transcript canary never reaches the capture log file — while the
+    non-content telemetry (conf/final/idx/...) still does, proving the
+    handler body actually executed.
+    """
+
+    CANARY = "CANARY_TRANSCRIPT_LEAK_xyzzy"
+
+    def _make_canary_result(self):
+        from meetandread.transcription.accumulating_processor import (
+            SegmentResult,
+        )
+
+        return SegmentResult(
+            text=self.CANARY,
+            confidence=87,
+            start_time=1.0,
+            end_time=2.0,
+            segment_index=3,
+            is_final=True,
+            phrase_start=True,
+        )
+
+    def _capture_log_content(self, tmp_path):
+        _flush_root()
+        logs = sorted(tmp_path.glob("meetandread_capture_*.log"))
+        assert logs, "capture log file was not created"
+        return logs[-1].read_text(encoding="utf-8")
+
+    def test_controller_phrase_handler_never_logs_transcript(
+        self, isolated_logging, tmp_path
+    ):
+        from meetandread.recording.controller import RecordingController
+
+        configure_logging(logs_dir=tmp_path, capture_mode=True)
+
+        word_count_calls = []
+
+        controller_self = SimpleNamespace(
+            _try_live_speaker_match=lambda: None,
+            _segment_to_words=(
+                lambda result: RecordingController._segment_to_words(None, result)
+            ),
+            _transcript_store=SimpleNamespace(
+                get_word_count=lambda: 0,
+                commit_live_phrase=lambda: word_count_calls.append("commit"),
+                set_live_phrase_words=lambda words: word_count_calls.append("set"),
+            ),
+            on_phrase_result=None,
+        )
+
+        RecordingController._on_phrase_result(
+            controller_self, self._make_canary_result()
+        )
+
+        content = self._capture_log_content(tmp_path)
+        assert self.CANARY not in content
+        # Handler ran: telemetry present and word-count path exercised.
+        assert "Segment received" in content
+        assert "conf: 87" in content
+        assert word_count_calls, "word-count path was not exercised"
+
+    def test_main_widget_phrase_handler_never_logs_transcript(
+        self, isolated_logging, tmp_path
+    ):
+        from meetandread.widgets.main_widget import MeetAndReadWidget
+
+        configure_logging(logs_dir=tmp_path, capture_mode=True)
+
+        widget_self = SimpleNamespace(
+            _cc_overlay=None,
+        )
+
+        MeetAndReadWidget._on_phrase_result(
+            widget_self, self._make_canary_result()
+        )
+
+        content = self._capture_log_content(tmp_path)
+        assert self.CANARY not in content
+        # Handler ran: telemetry present without the transcript text.
+        assert "Segment received" in content
+        assert "conf: 87" in content
+        assert "phrase_start: True" in content
 
 
 # ---------------------------------------------------------------------------
