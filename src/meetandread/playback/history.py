@@ -17,7 +17,6 @@ Design contract:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from pathlib import Path
 from typing import Optional
@@ -28,11 +27,6 @@ from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from meetandread.audio.storage.paths import get_recordings_dir
 
 logger = logging.getLogger(__name__)
-
-
-def _stem_id(stem: str) -> str:
-    """Opaque sha256-8 digest of a stem, for correlation without content."""
-    return hashlib.sha256(stem.encode("utf-8")).hexdigest()[:8]
 
 # Allowed playback rate range
 _MIN_RATE = 0.25
@@ -185,15 +179,13 @@ class HistoryPlaybackController:
         # Resolve companion WAV in the recordings directory
         recordings = self._resolve_recordings_dir()
         wav_path = recordings / f"{md_path.stem}.wav"
-        logger.debug("load_resolve: id=%s", _stem_id(md_path.stem))
+        logger.debug("load_resolve: companion=wav")
 
         self._current_audio_path = wav_path
 
         if not wav_path.exists() or not wav_path.is_file():
             self._set_error("Audio file not found")
-            logger.debug(
-                "load_resolve_missing: id=%s", _stem_id(md_path.stem)
-            )
+            logger.debug("load_resolve_missing: companion=wav")
             logger.warning(
                 "load_missing: stem=%s expected=%s", md_path.stem, wav_path
             )
@@ -203,8 +195,7 @@ class HistoryPlaybackController:
         source_url = QUrl.fromLocalFile(str(wav_path))
         self._player.setSource(source_url)
         logger.debug(
-            "load_source_set: id=%s media_status=%s",
-            _stem_id(md_path.stem),
+            "load_source_set: media_status=%s",
             self._player.mediaStatus(),
         )
         logger.info("load_ready: stem=%s source=%s", md_path.stem, wav_path.name)
@@ -241,10 +232,7 @@ class HistoryPlaybackController:
         is required before file deletion can succeed.
         """
         logger.info("release_source: stem=%s", self._stem_or_none())
-        logger.debug(
-            "source_unset: player_source_cleared id=%s",
-            self._stem_id_or_none(),
-        )
+        logger.debug("source_unset: player_source_cleared")
         self._player.stop()
         self._player.setSource(QUrl())
         self._reset_state()
@@ -281,11 +269,10 @@ class HistoryPlaybackController:
             clamped_ms = min(position_ms, duration)
             if clamped_ms != position_ms:
                 logger.debug(
-                    "seek_clamped: requested_ms=%d clamped_ms=%d duration=%d id=%s",
+                    "seek_clamped: requested_ms=%d clamped_ms=%d duration=%d",
                     position_ms,
                     clamped_ms,
                     duration,
-                    self._stem_id_or_none(),
                 )
             position_ms = clamped_ms
         logger.info(
@@ -365,12 +352,6 @@ class HistoryPlaybackController:
             return self._current_transcript_path.stem
         return "<none>"
 
-    def _stem_id_or_none(self) -> str:
-        """Return the opaque stem digest, or '<none>' when unloaded."""
-        if self._current_transcript_path is not None:
-            return _stem_id(self._current_transcript_path.stem)
-        return "<none>"
-
     # ------------------------------------------------------------------
     # Qt signal handlers
     # ------------------------------------------------------------------
@@ -406,8 +387,7 @@ class HistoryPlaybackController:
             self._status_text = ""
         elif status == QMediaPlayer.MediaStatus.EndOfMedia:
             logger.debug(
-                "media_end_of_audio: id=%s position_ms=%d duration_ms=%d",
-                self._stem_id_or_none(),
+                "media_end_of_audio: position_ms=%d duration_ms=%d",
                 self._player.position(),
                 self._player.duration(),
             )
@@ -418,9 +398,8 @@ class HistoryPlaybackController:
     ) -> None:
         """Handle playback state changes for status text updates."""
         logger.debug(
-            "playback_state_changed: state=%s id=%s",
+            "playback_state_changed: state=%s",
             state,
-            self._stem_id_or_none(),
         )
         # Status text is computed on-demand in the property; nothing to
         # update here, but the signal connection keeps the controller

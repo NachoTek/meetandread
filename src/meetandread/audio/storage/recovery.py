@@ -4,7 +4,6 @@ Detects leftover .pcm.part files and converts them to playable WAV files.
 Preserves originals by default for safety.
 """
 
-import hashlib
 import logging
 import shutil
 from pathlib import Path
@@ -14,11 +13,6 @@ from meetandread.audio.storage.pcm_part import load_metadata
 from meetandread.audio.storage.wav_finalize import finalize_part_to_wav
 
 logger = logging.getLogger(__name__)
-
-
-def _stem_id(stem: str) -> str:
-    """Opaque sha256-8 digest of a stem, for correlation without content."""
-    return hashlib.sha256(stem.encode("utf-8")).hexdigest()[:8]
 
 
 def find_part_files(recordings_dir: Path) -> List[Path]:
@@ -90,7 +84,7 @@ def recover_part_file(
         # Delete original files
         part_path.unlink(missing_ok=True)
         metadata_path.unlink(missing_ok=True)
-        logger.debug("part_removed: id=%s", _stem_id(stem))
+        logger.debug("part_removed: original_deleted=1")
     else:
         # Backup original files
         part_backup = recordings_dir / f"{stem}.pcm.part{backup_suffix}"
@@ -98,7 +92,7 @@ def recover_part_file(
 
         shutil.move(str(part_path), str(part_backup))
         shutil.move(str(metadata_path), str(metadata_backup))
-        logger.debug("part_recovery_backup: id=%s", _stem_id(stem))
+        logger.debug("part_recovery_backup: files_backed_up=2")
 
     return wav_path
 
@@ -145,8 +139,7 @@ def recover_part_files(
             progress_callback(part_path.name, i, total)
 
         logger.debug(
-            "part_recovery_start: id=%s index=%d total=%d",
-            _stem_id(part_path.stem.replace(".pcm", "")),
+            "part_recovery_start: index=%d total=%d",
             i,
             total,
         )
@@ -159,10 +152,7 @@ def recover_part_files(
             )
             if wav_path:
                 recovered.append(wav_path)
-                logger.debug(
-                    "part_recovered: id=%s",
-                    _stem_id(part_path.stem.replace(".pcm", "")),
-                )
+                logger.debug("part_recovered: outcome=1")
         except Exception as e:
             failed += 1
             # Log error but continue with other files

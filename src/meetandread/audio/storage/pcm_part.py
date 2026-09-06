@@ -21,7 +21,6 @@ Example:
     writer.close()
 """
 
-import hashlib
 import json
 import logging
 from dataclasses import dataclass, asdict
@@ -38,11 +37,6 @@ logger = logging.getLogger(__name__)
 
 # DEBUG size-milestone interval for part-file appends (bytes written).
 _PART_SIZE_LOG_THRESHOLD_BYTES = 1 << 20
-
-
-def _stem_id(stem: str) -> str:
-    """Opaque sha256-8 digest of a stem, for correlation without content."""
-    return hashlib.sha256(stem.encode("utf-8")).hexdigest()[:8]
 
 
 @dataclass(frozen=True)
@@ -91,12 +85,6 @@ class PcmPartWriter:
         self._closed = False
         self._frames_written = 0
         self._bytes_logged_milestone = 0
-        # Opaque correlation id (sha256-8 of the recording stem).
-        self._id = _stem_id(part_path.stem.replace(".pcm", ""))
-
-    def _stem_id(self) -> str:
-        """Return this writer's opaque stem digest."""
-        return self._id
     
     @classmethod
     def create(
@@ -145,7 +133,7 @@ class PcmPartWriter:
         # Open PCM file for binary append
         file_handle = open(part_path, "wb")
 
-        logger.debug("part_created: id=%s", _stem_id(stem))
+        logger.debug("part_created: metadata_written=1")
 
         return cls(
             part_path=part_path,
@@ -182,14 +170,12 @@ class PcmPartWriter:
                 bytes_written // _PART_SIZE_LOG_THRESHOLD_BYTES
             ) * _PART_SIZE_LOG_THRESHOLD_BYTES
             logger.debug(
-                "part_size_threshold: id=%s bytes=%d threshold_bytes=%d",
-                self._stem_id(),
+                "part_size_threshold: bytes=%d threshold_bytes=%d",
                 bytes_written,
                 _PART_SIZE_LOG_THRESHOLD_BYTES,
             )
         logger.debug(
-            "part_appended: id=%s frames=%d total_frames=%d bytes=%d",
-            self._stem_id(),
+            "part_appended: frames=%d total_frames=%d bytes=%d",
             len(frames) // self._metadata.sample_width_bytes,
             self._frames_written,
             bytes_written,
@@ -204,8 +190,7 @@ class PcmPartWriter:
         if not self._closed:
             self._file.flush()
             logger.debug(
-                "part_flushed: id=%s total_frames=%d",
-                self._stem_id(),
+                "part_flushed: total_frames=%d",
                 self._frames_written,
             )
 
@@ -218,8 +203,7 @@ class PcmPartWriter:
             self._file.close()
             self._closed = True
             logger.debug(
-                "part_closed: id=%s total_frames=%d bytes=%d",
-                self._stem_id(),
+                "part_closed: total_frames=%d bytes=%d",
                 self._frames_written,
                 self._frames_written * self._metadata.sample_width_bytes,
             )

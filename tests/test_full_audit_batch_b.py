@@ -6,15 +6,15 @@ quietness (per-step events must not appear at INFO), (c) operational
 facts asserted at INFO. Mirrors the caplog prior art in
 tests/test_audio_session_denoising.py (caplog.at_level + r.getMessage()).
 
-Fix round (PR #117 review): the NEW events carry opaque sha256-8 stem
-ids (never stems/filenames/custom-root basenames), the denoise accepted
-event fires only after validation succeeds, bookmark named= reflects
-caller-supplied names, and release/provider lifecycle events exist.
-Privacy canaries drive a distinctive stem and a distinctive custom-root
-basename through the lane and assert they never appear in the trail.
+Fix round (PR #117 review): the NEW events carry pure numeric/count
+outcomes (never stems, filenames, custom-root basenames, or hashes
+derived from them), the denoise accepted event fires only after
+validation succeeds, bookmark named= reflects caller-supplied names,
+and release/provider lifecycle events exist. Privacy canaries drive a
+distinctive stem and a distinctive custom-root basename through the
+lane and assert they never appear in the trail at any log level.
 """
 
-import hashlib
 import json
 import logging
 import sys
@@ -247,10 +247,24 @@ LANE_LOGGERS = [
     "meetandread.playback.bookmark",
 ]
 
-
-def _expected_digest(stem: str) -> str:
-    """sha256-8 digest form, mirroring the production helper contract."""
-    return hashlib.sha256(stem.encode("utf-8")).hexdigest()[:8]
+# Pinned pre-existing events (on main before this lane) that still carry
+# stems; they are an already-reviewed surface. The canaries inspect every
+# record at every level and exempt only this vocabulary.
+PINNED_STEM_EVENT_PREFIXES = (
+    "load_requested:",
+    "load_ready:",
+    "load_missing:",
+    "play:",
+    "pause:",
+    "stop:",
+    "release_source:",
+    "seek_to:",
+    "skip_forward:",
+    "skip_backward:",
+    "bookmark_added:",
+    "bookmark_deleted:",
+    "Failed to recover",
+)
 
 
 def _drive_full_stem_lifecycle(recordings: Path, stem: str) -> None:
@@ -433,20 +447,18 @@ class TestPcmPartLogging:
         with caplog.at_level(logging.DEBUG, logger=PCM_LOGGER):
             self._drive(tmp_path)
         debugs = _debug_messages(caplog, PCM_LOGGER)
-        sid = _expected_digest("test-stem")
-        assert _starts_with(debugs, f"part_created: id={sid}")
-        assert _starts_with(debugs, f"part_appended: id={sid}")
-        assert _starts_with(debugs, f"part_flushed: id={sid}")
-        assert _starts_with(debugs, f"part_closed: id={sid}")
-        assert not any("stem=" in m for m in debugs)
+        assert _starts_with(debugs, "part_created:")
+        assert _starts_with(debugs, "part_appended:")
+        assert _starts_with(debugs, "part_flushed:")
+        assert _starts_with(debugs, "part_closed:")
+        assert not any("stem=" in m or "id=" in m for m in debugs)
 
     def test_size_threshold_debug_event(self, tmp_path: Path, caplog) -> None:
         big = b"\x00\x01" * 300000  # 600000 bytes x2 crosses 1 MiB once
         with caplog.at_level(logging.DEBUG, logger=PCM_LOGGER):
             self._drive(tmp_path, frames=big * 2)
         debugs = _debug_messages(caplog, PCM_LOGGER)
-        sid = _expected_digest("test-stem")
-        assert _starts_with(debugs, f"part_size_threshold: id={sid}")
+        assert _starts_with(debugs, "part_size_threshold:")
         assert any("threshold_bytes=" in m for m in debugs)
 
     def test_info_quietness(self, tmp_path: Path, caplog) -> None:
@@ -505,9 +517,10 @@ class TestRecoveryLogging:
         assert "index=1" in starts[0] and "total=3" in starts[0]
         assert len(_starts_with(debugs, "part_recovered:")) == 2
         assert _starts_with(debugs, "part_recovery_backup:")
-        # New events carry opaque ids, never stems/filenames.
+        # New events carry index/total/outcome counts, never stems or
+        # stem-derived ids.
         for m in starts + _starts_with(debugs, "part_recovered:"):
-            assert "id=" in m
+            assert "id=" not in m
             assert "good-1" not in m and "good-2" not in m
 
     def test_outcome_info_line(self, tmp_path: Path, caplog) -> None:
@@ -546,7 +559,7 @@ class TestRecoveryLogging:
         debugs = _debug_messages(caplog, RECOVERY_LOGGER)
         removed = _starts_with(debugs, "part_removed:")
         assert removed
-        assert "id=" in removed[0]
+        assert "id=" not in removed[0]
         assert "del-1" not in removed[0]
         assert not (tmp_path / "del-1.pcm.part").exists()
 
@@ -623,9 +636,10 @@ class TestWavFinalizeLogging:
             for m in debugs
         )
         assert _starts_with(debugs, "wav_duration:")
-        # New events carry opaque ids, never part/wav filenames.
+        # New events carry byte/param facts only, never part/wav names
+        # or ids derived from them.
         for m in _starts_with(debugs, "wav_pcm_read:"):
-            assert "id=" in m
+            assert "id=" not in m
             assert "fin.pcm.part" not in m
 
     def test_finalize_info_completion(self, tmp_path: Path, caplog) -> None:
@@ -641,7 +655,7 @@ class TestWavFinalizeLogging:
         done = _starts_with(infos, "wav_finalized:")
         assert len(done) == 1
         assert "duration_s=1.00" in done[0]
-        assert "id=" in done[0]
+        assert "id=" not in done[0]
         assert "stem=" not in done[0] and "wav=" not in done[0]
 
     def test_finalize_stem_part_removed_debug(
@@ -651,8 +665,7 @@ class TestWavFinalizeLogging:
         with caplog.at_level(logging.DEBUG, logger=WAV_LOGGER):
             finalize_stem("stemdel", tmp_path, delete_part=True)
         debugs = _debug_messages(caplog, WAV_LOGGER)
-        sid = _expected_digest("stemdel")
-        assert _starts_with(debugs, f"part_removed: id={sid}")
+        assert _starts_with(debugs, "part_removed:")
         assert not (tmp_path / "stemdel.pcm.part").exists()
         assert not (tmp_path / "stemdel.pcm.part.json").exists()
 
@@ -796,15 +809,16 @@ class TestHistoryExtendedLogging:
         with caplog.at_level(logging.DEBUG, logger=HISTORY_LOGGER):
             ctrl.load_transcript_audio(md)
         debugs = _debug_messages(caplog, HISTORY_LOGGER)
-        sid = _expected_digest("session-001")
-        assert _starts_with(debugs, f"load_resolve: id={sid}")
-        assert _starts_with(debugs, f"load_source_set: id={sid}")
-        # New events never carry the stem or wav filename.
+        assert _starts_with(debugs, "load_resolve:")
+        assert _starts_with(debugs, "load_source_set:")
+        # New events never carry the stem, wav filename, or an id
+        # derived from them.
         for m in _starts_with(debugs, "load_resolve:") + _starts_with(
             debugs, "load_source_set:"
         ):
             assert "session-001" not in m
             assert "wav=" not in m
+            assert "id=" not in m
         # Existing INFO event vocabulary stays intact.
         infos = [
             r.getMessage()
@@ -823,7 +837,7 @@ class TestHistoryExtendedLogging:
         debugs = _debug_messages(caplog, HISTORY_LOGGER)
         missing = _starts_with(debugs, "load_resolve_missing:")
         assert missing
-        assert "id=" in missing[0]
+        assert "id=" not in missing[0]
         assert "gone-001" not in missing[0]
 
     def test_seek_clamped_debug_event(self, tmp_path: Path, caplog) -> None:
@@ -872,8 +886,7 @@ class TestHistoryExtendedLogging:
         unset = _starts_with(debugs, "source_unset:")
         assert unset
         assert "session-001" not in unset[0]
-        assert "id=" in unset[0]
-        assert _expected_digest("session-001") in unset[0]
+        assert "id=" not in unset[0]
 
     def test_info_quietness_for_new_debug_events(
         self, tmp_path: Path, caplog
@@ -946,24 +959,13 @@ class TestHistoryExtendedLogging:
                 _MockQMediaPlayer.PlaybackState.PlayingState
             )
             ctrl.release_source()
-        new_prefixes = (
-            "load_resolve:",
-            "load_resolve_missing:",
-            "load_source_set:",
-            "seek_clamped:",
-            "media_end_of_audio:",
-            "playback_state_changed:",
-            "source_unset:",
-        )
         checked = 0
         for rec in caplog.records:
             if rec.name != HISTORY_LOGGER:
                 continue
-            if rec.levelno != logging.DEBUG:
-                # Pinned INFO events (load_requested etc.) are a separate,
-                # already-reviewed surface; canary covers the NEW trail.
-                continue
-            if not rec.getMessage().startswith(new_prefixes):
+            if rec.getMessage().startswith(PINNED_STEM_EVENT_PREFIXES):
+                # Pinned INFO events (load_requested etc.) are a
+                # separate, already-reviewed surface.
                 continue
             checked += 1
             assert CANARY_STEM not in rec.getMessage()
@@ -992,7 +994,7 @@ class TestBookmarkLogging:
         detail = _starts_with(debugs, "bookmark_add_detail:")
         assert detail
         assert "position_ms=65000" in detail[0]
-        assert "id=" in detail[0]
+        assert "id=" not in detail[0]
         assert "meet-001" not in detail[0]
         infos = [
             r.getMessage()
@@ -1027,7 +1029,7 @@ class TestBookmarkLogging:
         debugs = _debug_messages(caplog, BOOKMARK_LOGGER)
         deleted = _starts_with(debugs, "bookmark_delete_detail:")
         assert deleted
-        assert "id=" in deleted[0]
+        assert "id=" not in deleted[0]
         assert "meet-001" not in deleted[0]
         infos = [
             r.getMessage()
@@ -1057,6 +1059,8 @@ class TestBookmarkLogging:
             if r.name == BOOKMARK_LOGGER and r.levelno == logging.WARNING
         ]
         assert _starts_with(warnings, "bookmark_write_failed:")
+        assert "stem=" not in warnings[0]
+        assert "meet-001" not in warnings[0]
 
     def test_info_quietness(self, tmp_path: Path, caplog) -> None:
         mgr = self._manager(tmp_path)
@@ -1089,9 +1093,7 @@ class TestBookmarkLogging:
         for rec in caplog.records:
             if rec.name != BOOKMARK_LOGGER:
                 continue
-            if rec.levelno != logging.DEBUG:
-                # Pinned INFO events (bookmark_added stem=...) are a
-                # separate, already-reviewed surface.
+            if rec.getMessage().startswith(PINNED_STEM_EVENT_PREFIXES):
                 continue
             assert CANARY_STEM not in rec.getMessage()
             for arg in rec.args or ():
@@ -1107,10 +1109,10 @@ class TestPrivacyCanaries:
     """End-to-end privacy canaries for the fix round.
 
     A distinctive recording stem and a distinctive custom-root basename
-    flow through the full lane; assert no DEBUG record from the lane's
-    loggers carries them. Pinned pre-existing events (INFO stems, the
-    recovery ERROR path, etc.) are an already-reviewed surface and are
-    excluded; the reviewer finding covers only the NEW trail.
+    flow through the full lane; assert no record from the lane's loggers
+    — at ANY level — carries them. Only the pinned pre-existing event
+    vocabulary (INFO stem lines, the recovery ERROR path) is exempt;
+    the reviewer finding covers everything else.
     """
 
     def test_canary_stem_absent_across_lane(
@@ -1138,11 +1140,7 @@ class TestPrivacyCanaries:
         for rec in caplog.records:
             if rec.name not in LANE_LOGGERS:
                 continue
-            if rec.name == RECOVERY_LOGGER and rec.getMessage().startswith(
-                "Failed to recover"
-            ):
-                continue
-            if rec.levelno != logging.DEBUG:
+            if rec.getMessage().startswith(PINNED_STEM_EVENT_PREFIXES):
                 continue
             checked += 1
             msg = rec.getMessage()
@@ -1173,3 +1171,41 @@ class TestPrivacyCanaries:
             for arg in rec.args or ():
                 assert CANARY_ROOT_NAME not in str(arg), (msg, arg)
         assert checked > 0
+
+    def test_canary_stem_absent_on_write_failure(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """Failure path: the write-failure WARNING carries no stem either."""
+        from unittest.mock import patch as _patch
+
+        path = _write_bookmark_transcript(tmp_path / f"{CANARY_STEM}.md")
+        mgr = BookmarkManager(path)
+
+        def _boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        with _patch.object(
+            bookmark_mod, "_write_transcript", side_effect=_boom
+        ):
+            with caplog.at_level(logging.DEBUG, logger="meetandread"):
+                with pytest.raises(OSError):
+                    mgr.add(position_ms=1000)
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.name == BOOKMARK_LOGGER
+            and r.levelno == logging.WARNING
+        ]
+        assert _starts_with(
+            [r.getMessage() for r in warnings], "bookmark_write_failed:"
+        )
+        for rec in caplog.records:
+            if rec.name not in LANE_LOGGERS:
+                continue
+            if rec.getMessage().startswith(PINNED_STEM_EVENT_PREFIXES):
+                continue
+            msg = rec.getMessage()
+            assert CANARY_STEM not in msg, msg
+            for arg in rec.args or ():
+                assert CANARY_STEM not in str(arg), (msg, arg)
