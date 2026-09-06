@@ -3,6 +3,7 @@
 Provides threaded audio capture using sounddevice with queue-based frame delivery.
 """
 
+import hashlib
 import logging
 import sounddevice
 import numpy as np
@@ -14,6 +15,12 @@ import platform
 from .devices import get_wasapi_hostapi_index, list_mic_inputs
 
 _log = logging.getLogger(__name__)
+
+
+def _redact_device_name(name: str) -> str:
+    """Stable non-identifying stand-in for an OS device name."""
+    digest = hashlib.sha256(name.encode("utf-8", errors="replace")).hexdigest()[:8]
+    return f"<redacted:{digest}>"
 
 
 class AudioSourceError(Exception):
@@ -136,6 +143,38 @@ class SoundDeviceSource:
             )
             self._stream.start()
             self._running = True
+
+            # Sanitized stream-open log mirroring the loopback source.
+            # Never let a logging/device-query failure break start().
+            try:
+                if self.device_id is None:
+                    device_name = "default"
+                else:
+                    try:
+                        device_name = sounddevice.query_devices(self.device_id).get(
+                            "name", "unknown"
+                        )
+                    except Exception:
+                        device_name = "unknown"
+                if device_name in ("default", "unknown"):
+                    redacted = device_name
+                else:
+                    redacted = _redact_device_name(device_name)
+                _log.info(
+                    "SoundDevice stream opened: source=%s, device=%s (id=%s), "
+                    "%dHz, %dch, blocksize=%d",
+                    self._source_label,
+                    redacted,
+                    self.device_id,
+                    self.samplerate,
+                    self.channels,
+                    self.blocksize,
+                )
+            except Exception:
+                _log.debug(
+                    "SoundDevice stream-open log failed (source=%s)",
+                    self._source_label,
+                )
     
     def stop(self) -> None:
         """Stop the audio capture stream."""
@@ -217,6 +256,19 @@ class MicSource(SoundDeviceSource):
                         "On Windows, microphone capture requires WASAPI for AUD-06 compliance."
                     )
         
+        # Explicit-device path: when no rate was requested, use the device's
+        # native default rather than assuming 48 kHz, so wrapper diagnostics
+        # report the true native rate (PR #91 review round 4).
+        if samplerate is None:
+            try:
+                samplerate = int(
+                    sounddevice.query_devices(device_id).get(
+                        "default_samplerate", 48000
+                    )
+                )
+            except Exception:
+                samplerate = 48000
+
         super().__init__(
             device_id=device_id,
             channels=channels or 2,

@@ -34,7 +34,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Tuple
 import numpy as np
 import soxr
 from meetandread.audio.storage import (
@@ -58,6 +58,10 @@ _log = logging.getLogger(__name__)
 
 # Larger capture blocks reduce audio callback pressure under transcription load.
 DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE = 4096
+
+# Seconds without delivery after which a multi-source source is treated as
+# stalled and its timeline span is zero-filled to keep mixing aligned.
+DEFAULT_MIX_STALL_TIMEOUT_S = 0.5
 
 
 class SessionState(Enum):
@@ -129,6 +133,9 @@ class SessionConfig:
             If None, create_provider() is used.
         microphone_denoising_auto_disable_on_frame_drops: Whether frame-drop
             thresholds can fail open to raw mic audio for the rest of the session.
+        mix_stall_timeout_s: Seconds without delivery after which a source in a
+            multi-source mix is treated as stalled and zero-filled to keep the
+            shared mixing timeline aligned (default: 0.5).
     """
     sources: List[SourceConfig] = field(default_factory=list)
     output_dir: Optional[Path] = None
@@ -142,6 +149,7 @@ class SessionConfig:
     denoising_latency_budget_ms: float = 200.0
     denoising_provider_factory: Optional[Callable[[], DenoisingProvider]] = None
     microphone_denoising_auto_disable_on_frame_drops: bool = True
+    mix_stall_timeout_s: float = DEFAULT_MIX_STALL_TIMEOUT_S
     on_error: Optional[Callable[[Exception], None]] = None
 
 
@@ -213,6 +221,10 @@ class SessionStats:
         retry_outcome: Sanitized final retry/fallback outcome ("none" before retry)
         failed_sources: Sanitized source types that failed during retry/fallback
         fallback_sources: Sanitized source types used after fallback confirmation
+        mix_stall_episodes: Number of stall episodes detected by the aligned
+            multi-source mixer
+        mix_zero_filled_samples: Samples zero-filled in stalled sources' spans
+            by the aligned multi-source mixer
     """
     frames_recorded: int = 0
     frames_dropped: int = 0
@@ -227,6 +239,8 @@ class SessionStats:
     retry_outcome: str = "none"
     failed_sources: List[str] = field(default_factory=list)
     fallback_sources: List[str] = field(default_factory=list)
+    mix_stall_episodes: int = 0
+    mix_zero_filled_samples: int = 0
 
 
 class AudioSourceWrapper:
@@ -258,8 +272,24 @@ class AudioSourceWrapper:
                 num_channels=target_channels,
                 dtype='float32',
             )
+            _log.info(
+                "AudioSourceWrapper: resampling active: source=%s, native=%dHz/%dch "
+                "-> target=%dHz/%dch",
+                config.type,
+                self.source_rate,
+                self.source_channels,
+                self.target_rate,
+                self.target_channels,
+            )
         else:
             self._resampler = None
+            _log.info(
+                "AudioSourceWrapper: passthrough (no resample): source=%s, "
+                "native=%dHz == target=%dHz",
+                config.type,
+                self.source_rate,
+                self.target_rate,
+            )
 
     @property
     def should_denoise(self) -> bool:
@@ -299,7 +329,11 @@ class AudioSourceWrapper:
             if frames.ndim == 1:
                 frames = frames.reshape(-1, 1)
             if frames.shape[0] == 0:
-                return frames
+                _log.debug(
+                    "zero-sample chunk before resampling, dropping: source=%s",
+                    self.config.type,
+                )
+                return None
             # Use resample_chunk for streaming resampler
             try:
                 frames = self._resampler.resample_chunk(frames)
@@ -311,7 +345,14 @@ class AudioSourceWrapper:
                     type(frames).__name__ if frames is not None else "NoneType",
                 )
                 return None
-        
+
+        if frames.shape[0] == 0:
+            _log.debug(
+                "zero-sample chunk after processing, dropping: source=%s",
+                self.config.type,
+            )
+            return None
+
         return frames
     
     def start(self) -> None:
@@ -326,6 +367,23 @@ class AudioSourceWrapper:
     def is_running(self) -> bool:
         """Check if source is running."""
         return self.source.is_running()
+
+
+@dataclass
+class _SourceMixState:
+    """Per-source state for the position-aligned mixer.
+
+    ``carry`` holds processed samples not yet emitted; ``source_pos`` is the
+    total samples consumed from this source into carry. The session-scalar
+    ``emitted_total`` is the shared timeline position.
+    """
+
+    carry: np.ndarray  # (n, 1) float32, non-empty while streaming
+    source_pos: int
+    last_delivery: float
+    stalled: bool = False
+    stall_episodes: int = 0
+    zero_filled_samples: int = 0
 
 
 class AudioSession:
@@ -368,6 +426,10 @@ class AudioSession:
         self._stats_lock = threading.Lock()
         # Lock protecting _sources list for atomic swap mid-recording
         self._sources_lock = threading.Lock()
+        # Hot-plug carry handoff: per-source-type stash of a departed
+        # wrapper's un-emitted mix state, transferred to its replacement
+        # on the next _sync_mix_states pass.
+        self._mix_carry_handoff: Dict[str, tuple] = {}
 
     def _on_source_frame_dropped(self, source_type: str, source_count: int) -> None:
         """Thread-safe handler called from audio callback threads on queue overflow.
@@ -924,102 +986,388 @@ class AudioSession:
         discard_mode = False
         max_frames = self._config.max_frames if self._config else None
 
+        # Shared-timeline position: total samples emitted (written OR discarded)
+        emitted_total = 0
+        # Per-wrapper mix state for the position-aligned mixer
+        mix_states: Dict[AudioSourceWrapper, _SourceMixState] = {}
+        stall_timeout = (
+            self._config.mix_stall_timeout_s if self._config else DEFAULT_MIX_STALL_TIMEOUT_S
+        )
+
         while not self._stop_event.is_set():
             # Check writer is available
             if not self._writer:
                 break
 
+            mix_states, sources_snapshot = self._sync_mix_states(
+                mix_states, emitted_total
+            )
+
             # Read from all sources, applying denoising per-source before mixing
-            frames_list = []
-            with self._sources_lock:
-                sources_snapshot = list(self._sources)
+            read_any = False
             for wrapper in sources_snapshot:
                 frames = wrapper.read_and_process(timeout=0.05)
                 if frames is not None:
+                    read_any = True
                     # Apply denoising to denoise-enabled sources before mixing
                     frames = self._apply_denoising(frames, wrapper)
-                    frames_list.append(frames)
+                    state = mix_states[wrapper]
+                    state.carry = (
+                        np.concatenate((state.carry, frames), axis=0)
+                        if state.carry.shape[0]
+                        else frames
+                    )
+                    state.source_pos += frames.shape[0]
+                    state.last_delivery = time.monotonic()
 
-            if not frames_list:
+            # Stall detection and stall-recovery backlog drop
+            self._update_stall_states(
+                mix_states, emitted_total, stall_timeout,
+                detect_onset=not self._stop_event.is_set(),
+            )
+
+            # Position-aligned emission: min over non-stalled carries
+            n = self._aligned_emit_length(mix_states)
+            emitted = 0
+            if n > 0:
+                emitted, discard_now = self._emit_aligned(
+                    mix_states, n, max_frames=max_frames, discard_mode=discard_mode,
+                    final=False,
+                )
+                if discard_now:
+                    discard_mode = True
+                # Consumed is consumed — advance the shared timeline even
+                # when the cap turned this round's samples into a discard.
+                emitted_total += emitted
+
+            if not emitted and not read_any:
                 # No frames available, sleep briefly
                 time.sleep(0.01)
                 continue
 
-            # Mix frames together
-            mixed = self._mix_frames(frames_list)
-
-            # Feed to transcription callback (float32 audio before int16 conversion)
-            # Flatten to 1D array as transcription buffer expects (n_samples,)
-            if self._config and self._config.on_audio_frame:
-                audio_for_transcription = mixed.flatten() if mixed.ndim > 1 else mixed
-                self._config.on_audio_frame(audio_for_transcription)
-
-            # Check max_frames cap
-            if max_frames is not None and not discard_mode:
-                remaining = max_frames - self._stats.frames_recorded
-                if remaining <= 0:
-                    # Cap reached, switch to discard mode
-                    discard_mode = True
-                elif len(mixed) > remaining:
-                    # Partial chunk would exceed cap - write only remaining frames
-                    mixed = mixed[:remaining]
-                    int16_bytes = self._float32_to_int16_bytes(mixed)
-                    self._writer.write_frames_i16(int16_bytes)
-                    self._stats.frames_recorded += len(mixed)
-                    # Switch to discard mode after final write
-                    discard_mode = True
-                    continue
-
-            if discard_mode:
-                # In discard mode: consume frames but don't write
-                continue
-
-            # Convert to int16 and write
-            int16_bytes = self._float32_to_int16_bytes(mixed)
-            self._writer.write_frames_i16(int16_bytes)
-            self._stats.frames_recorded += len(mixed)
+            # discard_mode may have been set mid-emission; nothing else to do
+            if discard_mode and emitted == 0 and read_any:
+                # Frames were consumed but discarded under the cap — pace loop
+                time.sleep(0.01)
 
         # Drain remaining frames (respecting max_frames cap)
+        ended: set = set()
+        empty_drain_rounds: Dict[AudioSourceWrapper, int] = {}
         for _ in range(50):  # Brief drain period
             if not self._writer:
                 break
 
+            mix_states, sources_snapshot = self._sync_mix_states(
+                mix_states, emitted_total
+            )
+
             # Check if we've already hit the cap
             if max_frames is not None and self._stats.frames_recorded >= max_frames:
                 # Consume but discard remaining frames to prevent queue blocking
-                with self._sources_lock:
-                    sources_snapshot = list(self._sources)
                 for wrapper in sources_snapshot:
                     wrapper.read_and_process(timeout=0.01)
                 continue
 
-            frames_list = []
-            with self._sources_lock:
-                sources_snapshot = list(self._sources)
+            read_any = False
+            delivered: set = set()
             for wrapper in sources_snapshot:
                 frames = wrapper.read_and_process(timeout=0.01)
                 if frames is not None:
+                    read_any = True
+                    delivered.add(wrapper)
                     frames = self._apply_denoising(frames, wrapper)
-                    frames_list.append(frames)
+                    state = mix_states[wrapper]
+                    state.carry = (
+                        np.concatenate((state.carry, frames), axis=0)
+                        if state.carry.shape[0]
+                        else frames
+                    )
+                    state.source_pos += frames.shape[0]
+                    state.last_delivery = time.monotonic()
 
-            if not frames_list:
-                break
-
-            mixed = self._mix_frames(frames_list)
-
-            # Check max_frames cap during drain
-            if max_frames is not None:
-                remaining = max_frames - self._stats.frames_recorded
-                if remaining <= 0:
-                    # Cap already reached, consume but don't write
+            # Track consecutive drain rounds where a source returns nothing
+            # and has no carry: after 3, treat it as ENDED and exclude it
+            # from the min-gate for the rest of the drain.
+            for wrapper, state in mix_states.items():
+                if wrapper in ended:
                     continue
-                elif len(mixed) > remaining:
-                    # Partial chunk - write only remaining frames
-                    mixed = mixed[:remaining]
+                if state.carry.shape[0] == 0 and wrapper not in delivered:
+                    empty_drain_rounds[wrapper] = empty_drain_rounds.get(wrapper, 0) + 1
+                    if empty_drain_rounds[wrapper] >= 3:
+                        ended.add(wrapper)
+                        _log.info(
+                            "Drain: source ended, span zero-filled: source=%s, "
+                            "pos=%d",
+                            wrapper.config.type,
+                            state.source_pos,
+                        )
+                else:
+                    empty_drain_rounds[wrapper] = 0
 
-            int16_bytes = self._float32_to_int16_bytes(mixed)
-            self._writer.write_frames_i16(int16_bytes)
-            self._stats.frames_recorded += len(mixed)
+            # Drain never declares NEW stalls — it only processes recovery
+            # drops for sources already stalled when draining began.
+            self._update_stall_states(
+                mix_states, emitted_total, stall_timeout, detect_onset=False,
+            )
+
+            gate_states = [
+                s for w, s in mix_states.items()
+                if w not in ended and not s.stalled
+            ]
+            n = min((s.carry.shape[0] for s in gate_states), default=0)
+            if n <= 0:
+                carry_pending = any(
+                    s.carry.shape[0] > 0
+                    for w, s in mix_states.items()
+                    if w not in ended and not s.stalled
+                )
+                if not read_any and not carry_pending:
+                    break
+                continue
+
+            emitted, _discard_now = self._emit_aligned(
+                mix_states, n, max_frames=max_frames, discard_mode=False,
+                final=True, ended=ended,
+            )
+            # Discard signal ignored here: the drain's own cap branch above
+            # handles subsequent rounds once frames_recorded >= max_frames.
+            emitted_total += emitted
+
+    def _sync_mix_states(
+        self,
+        mix_states: Dict[AudioSourceWrapper, _SourceMixState],
+        emitted_total: int,
+    ) -> Tuple[Dict[AudioSourceWrapper, _SourceMixState], List[AudioSourceWrapper]]:
+        """Sync per-source mix state with the current sources snapshot.
+
+        Drops entries for wrappers no longer present (hotplug swap) and
+        lazily creates state for new wrappers at the current timeline
+        position (a new source starts "now").
+
+        Carry handoff: a departed wrapper's un-emitted carry (plus its
+        ``source_pos`` and stall counters) is stashed under its config
+        type; a replacement wrapper of the same type receives that state
+        (one-shot — the stash entry is popped on use) so a hot-plug swap
+        neither drops nor re-timestamps the buffered tail. Transferring
+        both carry and source_pos keeps ``source_pos - carry_len`` (the
+        carry head's timeline position) consistent for the resync-drop
+        arithmetic in ``_update_stall_states``. Departures with empty
+        carry stash nothing.
+
+        Returns the mix_states dict AND the exact sources snapshot the
+        sync ran against. Callers must read from the returned snapshot —
+        not re-snapshot ``self._sources`` — so a source added after sync
+        cannot be read without a mix_states entry.
+        """
+        with self._sources_lock:
+            sources_snapshot = list(self._sources)
+        live = set(id(w) for w in sources_snapshot)
+        for wrapper in list(mix_states.keys()):
+            if id(wrapper) not in live:
+                state = mix_states[wrapper]
+                if state.carry.shape[0] > 0:
+                    # Overwrite is correct: swap_source is the only
+                    # mutation seam and replaces one wrapper per type.
+                    self._mix_carry_handoff[wrapper.config.type] = (
+                        state.carry,
+                        state.source_pos,
+                        state.stalled,
+                        state.stall_episodes,
+                        state.zero_filled_samples,
+                    )
+                del mix_states[wrapper]
+        now = time.monotonic()
+        for wrapper in sources_snapshot:
+            if wrapper not in mix_states:
+                handoff = self._mix_carry_handoff.pop(
+                    wrapper.config.type, None
+                )
+                if handoff is not None:
+                    carry, source_pos, stalled, stall_episodes, zero_filled = (
+                        handoff
+                    )
+                    mix_states[wrapper] = _SourceMixState(
+                        carry=carry,
+                        source_pos=source_pos,
+                        last_delivery=now,
+                        stalled=stalled,
+                        stall_episodes=stall_episodes,
+                        zero_filled_samples=zero_filled,
+                    )
+                else:
+                    mix_states[wrapper] = _SourceMixState(
+                        carry=np.zeros((0, 1), dtype=np.float32),
+                        source_pos=emitted_total,
+                        last_delivery=now,
+                    )
+        return mix_states, sources_snapshot
+
+    def _update_stall_states(
+        self,
+        mix_states: Dict[AudioSourceWrapper, _SourceMixState],
+        emitted_total: int,
+        stall_timeout: float,
+        detect_onset: bool = True,
+    ) -> None:
+        """Detect stall onset/recovery and drop recovered sources' backlogs.
+
+        A source is stalled iff its carry is empty and it has not delivered
+        for longer than the stall timeout. A recovering source drops the
+        carry-head samples whose timeline position was already zero-filled
+        (``source_pos - len(carry) < emitted_total``). ``detect_onset``
+        suppresses NEW stall declarations (after stop, during drain) while
+        still processing recovery drops.
+        """
+        now = time.monotonic()
+        # Pass 1 — recovery drops for stalled sources (so pass 2 sees the
+        # post-drop carry of others when deciding stall materiality).
+        for wrapper, state in mix_states.items():
+            if not state.stalled:
+                continue
+            # Resync-drop: backlog samples whose span was already
+            # zero-filled are dropped so the source stays position-locked.
+            drop = min(
+                state.carry.shape[0],
+                max(emitted_total - (state.source_pos - state.carry.shape[0]), 0),
+            )
+            if drop > 0:
+                state.carry = state.carry[drop:]
+                _log.info(
+                    "Mix source recovered, dropped zero-filled backlog: "
+                    "source=%s, dropped=%d",
+                    wrapper.config.type,
+                    drop,
+                )
+            if state.carry.shape[0] > 0:
+                state.stalled = False
+        # Pass 2 — stall onset detection.
+        for wrapper, state in mix_states.items():
+            if state.stalled:
+                continue
+            if not (
+                detect_onset
+                and state.carry.shape[0] == 0
+                and now - state.last_delivery > stall_timeout
+            ):
+                continue
+            state.stalled = True
+            # Only count/log episodes that materially gate the timeline:
+            # the source is behind what has been emitted, nothing has been
+            # emitted yet, or another source still has carry pending (so
+            # this source's span will be zero-filled). A caught-up source
+            # that simply has no more content is not a stall episode.
+            others_have_carry = any(
+                s.carry.shape[0] > 0
+                for w2, s in mix_states.items()
+                if w2 is not wrapper
+            )
+            materially_behind = (
+                state.source_pos < emitted_total
+                or emitted_total == 0
+                or others_have_carry
+            )
+            if materially_behind:
+                state.stall_episodes += 1
+                self._stats.mix_stall_episodes += 1
+                _log.warning(
+                    "Mix source stalled, zero-filling its span: "
+                    "source=%s, silent_for=%.2fs",
+                    wrapper.config.type,
+                    now - state.last_delivery,
+                )
+
+    def _aligned_emit_length(
+        self,
+        mix_states: Dict[AudioSourceWrapper, _SourceMixState],
+    ) -> int:
+        """Emission gate: min carry length over non-stalled sources.
+
+        A non-stalled source with empty carry forces 0 (wait for it). If all
+        sources are stalled, emit nothing this iteration.
+        """
+        gate_states = [s for s in mix_states.values() if not s.stalled]
+        if not gate_states:
+            return 0
+        return min(s.carry.shape[0] for s in gate_states)
+
+    def _emit_aligned(
+        self,
+        mix_states: Dict[AudioSourceWrapper, _SourceMixState],
+        n: int,
+        *,
+        max_frames: Optional[int],
+        discard_mode: bool,
+        final: bool,
+        ended: Optional[set] = None,
+    ) -> Tuple[int, bool]:
+        """Emit ``n`` position-aligned samples from every source's carry head.
+
+        Stalled/ended sources contribute ``n`` zeros each (for mono mixing the
+        live sources pass through). Runs the existing max_frames cap /
+        discard_mode / partial-write logic and feeds ``on_audio_frame``
+        exactly as the legacy loop did.
+
+        Returns a tuple ``(consumed, discard_now)``: *consumed* is the
+        number of samples removed from every carry this call (``n`` in
+        every non-error path — written or discarded, including a partial
+        cap write); *discard_now* is True when the caller must switch to
+        discard mode (a partial write hit the cap or the cap was already
+        reached).
+        """
+        take_states = [
+            (w, s) for w, s in mix_states.items()
+            if (ended is None or w not in ended) and s.carry.shape[0] >= n
+        ]
+        contributes = [
+            s.carry[:n] for _, s in take_states
+        ]
+        zero_fill_states = [
+            s for w, s in mix_states.items()
+            if (ended is None or w not in ended) and s.carry.shape[0] < n
+        ]
+        parts = list(contributes) + [
+            np.zeros((n, 1), dtype=np.float32) for _ in zero_fill_states
+        ]
+        for state in zero_fill_states:
+            state.zero_filled_samples += n
+            self._stats.mix_zero_filled_samples += n
+        for _, state in take_states:
+            state.carry = state.carry[n:]
+
+        mixed = self._mix_frames(parts)
+
+        # Feed to transcription callback (float32 audio before int16 conversion)
+        # Flatten to 1D array as transcription buffer expects (n_samples,)
+        if self._config and self._config.on_audio_frame:
+            audio_for_transcription = mixed.flatten() if mixed.ndim > 1 else mixed
+            self._config.on_audio_frame(audio_for_transcription)
+
+        # Check max_frames cap
+        if max_frames is not None and not discard_mode:
+            remaining = max_frames - self._stats.frames_recorded
+            if remaining <= 0:
+                # Cap reached, switch to discard mode
+                discard_mode = True
+            elif len(mixed) > remaining:
+                # Partial chunk would exceed cap - write only remaining frames.
+                # All n carry samples were consumed, written or not, so the
+                # caller's timeline accounting must still advance by n.
+                mixed = mixed[:remaining]
+                int16_bytes = self._float32_to_int16_bytes(mixed)
+                self._writer.write_frames_i16(int16_bytes)
+                self._stats.frames_recorded += len(mixed)
+                # Switch to discard mode after final write
+                return n, True
+
+        if discard_mode:
+            # In discard mode: consume frames but don't write
+            return n, True
+
+        # Convert to int16 and write
+        int16_bytes = self._float32_to_int16_bytes(mixed)
+        self._writer.write_frames_i16(int16_bytes)
+        self._stats.frames_recorded += len(mixed)
+        return n, False
     
     def _mix_frames(self, frames_list: List[np.ndarray]) -> np.ndarray:
         """Mix multiple frame arrays together.
