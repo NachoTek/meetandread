@@ -145,13 +145,6 @@ class SpectralGateProvider(DenoisingProvider):
         """
         start = time.perf_counter()
 
-        logger.debug(
-            "denoise_frame_accepted: provider=%s samples=%d dtype=%s",
-            self.name,
-            int(frame.size) if hasattr(frame, "size") else -1,
-            getattr(frame, "dtype", type(frame).__name__),
-        )
-
         # ---- Input validation / sanitization ----
         try:
             sanitized, validation_error = self._sanitize_input(frame)
@@ -180,6 +173,15 @@ class SpectralGateProvider(DenoisingProvider):
                 fallback=True,
                 error=validation_error,
             )
+
+        # Accepted only after validation succeeded (malformed frames log
+        # fallback above, never accepted).
+        logger.debug(
+            "denoise_frame_accepted: provider=%s samples=%d dtype=%s",
+            self.name,
+            int(frame.size) if hasattr(frame, "size") else -1,
+            getattr(frame, "dtype", type(frame).__name__),
+        )
 
         # ---- Spectral gate processing ----
         try:
@@ -415,4 +417,5 @@ def create_provider(name: Optional[str] = None) -> DenoisingProvider:
             f"Valid providers: {VALID_PROVIDER_NAMES}"
         )
 
+    logger.debug("provider_created: provider=%s", provider_name)
     return _PROVIDERS[provider_name]()

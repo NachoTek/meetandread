@@ -4,6 +4,7 @@ Converts raw PCM data with sidecar metadata into standard WAV files.
 Uses the stdlib `wave` module for reliable WAV header generation.
 """
 
+import hashlib
 import logging
 import wave
 from pathlib import Path
@@ -12,6 +13,11 @@ from typing import Optional
 from meetandread.audio.storage.pcm_part import load_metadata, PcmMetadata
 
 logger = logging.getLogger(__name__)
+
+
+def _stem_id(stem: str) -> str:
+    """Opaque sha256-8 digest of a stem, for correlation without content."""
+    return hashlib.sha256(stem.encode("utf-8")).hexdigest()[:8]
 
 
 def finalize_part_to_wav(
@@ -69,8 +75,8 @@ def finalize_part_to_wav(
     frame_rate = metadata.sample_rate
 
     logger.debug(
-        "wav_pcm_read: part=%s bytes=%d",
-        part_path.name,
+        "wav_pcm_read: id=%s bytes=%d",
+        _stem_id(part_path.stem.replace(".pcm", "")),
         len(pcm_data),
     )
     logger.debug(
@@ -97,9 +103,8 @@ def finalize_part_to_wav(
         wav_file.writeframes(pcm_data)
 
     logger.info(
-        "wav_finalized: stem=%s wav=%s duration_s=%.2f",
-        wav_path.stem,
-        wav_path.name,
+        "wav_finalized: id=%s duration_s=%.2f",
+        _stem_id(wav_path.stem),
         duration_s,
     )
 
@@ -139,6 +144,6 @@ def finalize_stem(
         metadata_path = part_path.with_suffix(".part.json")
         part_path.unlink(missing_ok=True)
         metadata_path.unlink(missing_ok=True)
-        logger.debug("part_removed: stem=%s", stem)
+        logger.debug("part_removed: id=%s", _stem_id(stem))
 
     return result

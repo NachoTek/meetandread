@@ -89,8 +89,8 @@ def get_recordings_dir(base_dir: Optional[Path] = None) -> Path:
     if base_dir is None:
         custom = _resolve_custom_path("recordings_path")
         if custom is not None:
-            logger.debug("storage_path_custom: kind=recordings root=%s", custom.name)
-            logger.info("storage_root_resolved: kind=recordings root=%s", custom.name)
+            logger.debug("storage_path_custom: kind=recordings source=custom")
+            logger.info("storage_root_resolved: kind=recordings source=custom")
             return custom
         logger.debug("storage_path_fallback_default: kind=recordings")
     else:
@@ -99,7 +99,7 @@ def get_recordings_dir(base_dir: Optional[Path] = None) -> Path:
     data_dir = get_data_dir(base_dir)
     recordings_dir = data_dir / RECORDINGS_SUBDIR
     recordings_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("storage_root_resolved: kind=recordings root=%s", recordings_dir.name)
+    logger.info("storage_root_resolved: kind=recordings source=default")
     return recordings_dir
 
 
@@ -119,8 +119,8 @@ def get_transcripts_dir(base_dir: Optional[Path] = None) -> Path:
     if base_dir is None:
         custom = _resolve_custom_path("transcripts_path")
         if custom is not None:
-            logger.debug("storage_path_custom: kind=transcripts root=%s", custom.name)
-            logger.info("storage_root_resolved: kind=transcripts root=%s", custom.name)
+            logger.debug("storage_path_custom: kind=transcripts source=custom")
+            logger.info("storage_root_resolved: kind=transcripts source=custom")
             return custom
         logger.debug("storage_path_fallback_default: kind=transcripts")
     else:
@@ -129,7 +129,7 @@ def get_transcripts_dir(base_dir: Optional[Path] = None) -> Path:
     data_dir = get_data_dir(base_dir)
     transcripts_dir = data_dir / TRANSCRIPTS_SUBDIR
     transcripts_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("storage_root_resolved: kind=transcripts root=%s", transcripts_dir.name)
+    logger.info("storage_root_resolved: kind=transcripts source=default")
     return transcripts_dir
 
 
@@ -149,8 +149,8 @@ def get_logs_dir(base_dir: Optional[Path] = None) -> Path:
     if base_dir is None:
         custom = _resolve_custom_path("logs_path")
         if custom is not None:
-            logger.debug("storage_path_custom: kind=logs root=%s", custom.name)
-            logger.info("storage_root_resolved: kind=logs root=%s", custom.name)
+            logger.debug("storage_path_custom: kind=logs source=custom")
+            logger.info("storage_root_resolved: kind=logs source=custom")
             return custom
         logger.debug("storage_path_fallback_default: kind=logs")
     else:
@@ -159,7 +159,7 @@ def get_logs_dir(base_dir: Optional[Path] = None) -> Path:
     data_dir = get_data_dir(base_dir)
     logs_dir = data_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("storage_root_resolved: kind=logs root=%s", logs_dir.name)
+    logger.info("storage_root_resolved: kind=logs source=default")
     return logs_dir
 
 

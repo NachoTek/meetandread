@@ -12,6 +12,7 @@ raw bookmark names or transcript text.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,11 @@ from typing import Any, Dict, List, Optional
 from meetandread.transcription import transcript_footer
 
 logger = logging.getLogger(__name__)
+
+
+def _stem_id(stem: str) -> str:
+    """Opaque sha256-8 digest of a stem, for correlation without content."""
+    return hashlib.sha256(stem.encode("utf-8")).hexdigest()[:8]
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +166,7 @@ class BookmarkManager:
         """
         position_ms = max(int(position_ms), 0)
 
+        caller_named = bool(name)
         if not name:
             name = f"Bookmark at {_format_position(position_ms)}"
 
@@ -174,11 +181,11 @@ class BookmarkManager:
         if not isinstance(bookmarks, list):
             bookmarks = []
         logger.debug(
-            "bookmark_add_detail: stem=%s position_ms=%d existing_count=%d named=%s",
-            self._path.stem,
+            "bookmark_add_detail: id=%s position_ms=%d existing_count=%d named=%s",
+            _stem_id(self._path.stem),
             position_ms,
             len(bookmarks),
-            bool(name),
+            caller_named,
         )
         bookmarks.append({"name": bm.name, "position_ms": bm.position_ms, "created_at": bm.created_at})
         metadata["bookmarks"] = bookmarks
@@ -226,15 +233,15 @@ class BookmarkManager:
 
         if len(filtered) == original_len:
             logger.debug(
-                "bookmark_delete_detail: stem=%s removed=0 remaining=%d",
-                self._path.stem,
+                "bookmark_delete_detail: id=%s removed=0 remaining=%d",
+                _stem_id(self._path.stem),
                 original_len,
             )
             return False
 
         logger.debug(
-            "bookmark_delete_detail: stem=%s removed=1 remaining=%d",
-            self._path.stem,
+            "bookmark_delete_detail: id=%s removed=1 remaining=%d",
+            _stem_id(self._path.stem),
             len(filtered),
         )
         metadata["bookmarks"] = filtered
