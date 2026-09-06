@@ -1026,9 +1026,12 @@ class AudioSession:
         stall_timeout = (
             self._config.mix_stall_timeout_s if self._config else DEFAULT_MIX_STALL_TIMEOUT_S
         )
-        # Periodic frame accounting (DEBUG): rounds and frames at last report
+        # Periodic frame accounting (DEBUG): cumulative round counter plus
+        # per-window interval baselines for emitted/recorded/dropped frames
         emitting_rounds = 0
         last_accounting_emitted = 0
+        last_accounting_recorded = 0
+        last_accounting_dropped = 0
 
         while not self._stop_event.is_set():
             # Check writer is available
@@ -1077,19 +1080,26 @@ class AudioSession:
                 emitted_total += emitted
 
             # Periodic frame accounting at DEBUG (every 200 emitting
-            # rounds) - interval summaries, never per-round.
+            # rounds) - interval summaries, never per-round. All frame
+            # fields report the same accounting window (the interval
+            # since the previous emission); rounds is the cumulative
+            # emitting-round counter.
             if emitted > 0:
                 emitting_rounds += 1
                 if emitting_rounds % 200 == 0:
                     _log.debug(
-                        "session_frame_accounting: rounds=%d, frames_in=%d, "
-                        "frames_out=%d, drops=%d",
+                        "session_frame_accounting: rounds=%d, "
+                        "frames_emitted_interval=%d, "
+                        "frames_recorded_interval=%d, "
+                        "frames_dropped_interval=%d",
                         emitting_rounds,
                         emitted_total - last_accounting_emitted,
-                        self._stats.frames_recorded,
-                        self._stats.frames_dropped,
+                        self._stats.frames_recorded - last_accounting_recorded,
+                        self._stats.frames_dropped - last_accounting_dropped,
                     )
                     last_accounting_emitted = emitted_total
+                    last_accounting_recorded = self._stats.frames_recorded
+                    last_accounting_dropped = self._stats.frames_dropped
 
             if not emitted and not read_any:
                 # No frames available, sleep briefly

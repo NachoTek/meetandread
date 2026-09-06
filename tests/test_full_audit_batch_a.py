@@ -590,8 +590,14 @@ class TestSessionLifecycleEvents:
         assert any("consumer_loop_started" in m for m in debug_msgs), debug_msgs
 
     def test_session_frame_accounting_debug_firehose(self, tmp_path, caplog):
-        """Frame accounting fires periodically under a fast-emitting source."""
+        """Accounting reports per-window intervals, not cumulative totals."""
         import time as _time
+
+        acct_re = re.compile(
+            r"session_frame_accounting: rounds=(\d+), "
+            r"frames_emitted_interval=(\d+), frames_recorded_interval=(\d+), "
+            r"frames_dropped_interval=(\d+)"
+        )
 
         wav = _write_wav(tmp_path, seconds=2.0)
         config = SessionConfig(
@@ -599,28 +605,51 @@ class TestSessionLifecycleEvents:
             output_dir=tmp_path,
             sample_rate=16000,
             channels=1,
-            max_frames=16000 * 30,  # 30s cap: never reached, firehose runs
+            max_frames=16000 * 120,  # generous cap: two windows never reach it
         )
         session = AudioSession()
         try:
             with caplog.at_level(logging.DEBUG, logger=SESS_LOG):
                 session.start(config)
-                # The fake source emits faster than real-time; 200 emitting
-                # rounds accumulate well inside a couple of seconds.
-                deadline = _time.monotonic() + 8.0
+                # The fake source emits faster than real-time; two
+                # accounting windows (400 emitting rounds) accumulate in a
+                # few seconds.
+                deadline = _time.monotonic() + 20.0
+                events = []
                 while _time.monotonic() < deadline:
-                    if any(
-                        "session_frame_accounting" in r.getMessage()
-                        for r in caplog.records
-                    ):
+                    events = [
+                        m
+                        for m in (
+                            acct_re.search(r.getMessage())
+                            for r in caplog.records
+                        )
+                        if m
+                    ]
+                    if len(events) >= 2:
                         break
                     _time.sleep(0.05)
         finally:
             session.stop()
 
-        debug_msgs = _messages_at(caplog.records, logging.DEBUG)
-        assert any("session_frame_accounting" in m for m in debug_msgs), (
-            f"periodic frame accounting never fired: {debug_msgs[-8:]}"
+        assert len(events) >= 2, (
+            f"expected two accounting windows, saw {len(events)}: "
+            f"{[r.getMessage() for r in caplog.records][-8:]}"
+        )
+        first, second = events[0], events[1]
+        assert int(first.group(1)) == 200
+        assert int(second.group(1)) == 400
+        # Every interval axis carries frames in both windows.
+        assert int(first.group(2)) > 0 and int(second.group(2)) > 0
+        assert int(first.group(3)) > 0 and int(second.group(3)) > 0
+        # Interval basis, not cumulative: pre-cap, every emitted frame is
+        # written, so each window's recorded interval equals its emitted
+        # interval. A cumulative frames_out would report the running total
+        # at the second window (~2x the window's own frames).
+        assert int(first.group(3)) == int(first.group(2))
+        assert int(second.group(3)) == int(second.group(2)), (
+            f"second window recorded={second.group(3)} looks cumulative "
+            f"(window emitted={second.group(2)}, "
+            f"first window recorded={first.group(3)})"
         )
 
     def test_session_start_stop_operational_info(self, tmp_path, caplog):
