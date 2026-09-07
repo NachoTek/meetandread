@@ -448,35 +448,11 @@ class TestReusedCaptureDirectoryRejected:
     Negative control (a): a REUSED directory holding a stale completion
     marker from a previous run is rejected at entry — before any
     logging starts — so a killed reused run can never be read as a
-    clean exit through the stale marker.
+    clean exit through the stale marker. (The pure fast-lane twins —
+    parse-time rejection, empty-dir acceptance, in-process same-second
+    collision — live in tests/test_logging_foundation.py per ADR 0001;
+    this file carries the end-to-end subprocess controls.)
     """
-
-    def test_stale_marker_reused_dir_rejected_before_logging(self, tmp_path):
-        from meetandread.capture_mode import CaptureModeError, parse_capture_flag
-
-        reused = tmp_path / "capture" / "stale-run"
-        reused.mkdir(parents=True)
-        # A previous run's stale artifacts: marker + old log.
-        (reused / COMPLETION_MARKER_NAME).write_text(
-            '{"finished_at": "2026-09-06T10:00:00"}', encoding="utf-8"
-        )
-        (reused / f"{CAPTURE_LOG_PREFIX}20260906_100000.log").write_text(
-            "old run line\n", encoding="utf-8"
-        )
-
-        # Rejection happens at flag parse, before ANY logging side
-        # effect: no new capture log is created, nothing is touched.
-        with pytest.raises(CaptureModeError, match="not empty"):
-            parse_capture_flag([ISSUE_CAPTURE_FLAG, str(reused)])
-
-        # The stale marker is still the ONLY interpretation key, and it
-        # belongs to the OLD run's log; a forced-kill reused run can
-        # never add records that this marker would falsely cover.
-        marker = read_completion_marker(reused)
-        assert marker == {"finished_at": "2026-09-06T10:00:00"}
-        # And no NEW log file appeared for the rejected start.
-        logs = sorted(reused.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
-        assert len(logs) == 1  # the old run's, untouched
 
     def test_reused_dir_launch_exits_2_without_logging(self, tmp_path):
         """End-to-end negative control: launching the real app against
@@ -516,48 +492,13 @@ class TestReusedCaptureDirectoryRejected:
             [old_log.name, old_marker.name]
         )
 
-    def test_empty_existing_dir_is_accepted(self, tmp_path):
-        """The reporter-created fresh dir (empty, pre-created) proceeds."""
-        from meetandread.capture_mode import parse_capture_flag
-
-        fresh = tmp_path / "capture" / "fresh-run"
-        fresh.mkdir(parents=True)
-        assert parse_capture_flag([ISSUE_CAPTURE_FLAG, str(fresh)]) == fresh
-
 
 class TestSameSecondCollision:
     """Fix round 1, finding 2 (collision half): two starts resolving to
     the same second-resolution log filename — the second start must
     fail loudly (exclusive creation), and the first run's log must
-    survive intact."""
-
-    def test_second_same_second_start_fails_first_log_intact(self, tmp_path):
-        from meetandread.capture_mode import (
-            CaptureModeError,
-            configure_capture_logging,
-        )
-        from datetime import datetime
-
-        capture_dir = tmp_path / "capture" / "collision"
-        capture_dir.mkdir(parents=True)
-        fixed_now = datetime.now()  # same second for both starts
-
-        first_log = configure_capture_logging(capture_dir, now=fixed_now)
-        import logging as _logging
-
-        _logging.getLogger("meetandread.first.run").info(
-            "first run record that must survive"
-        )
-
-        with pytest.raises(CaptureModeError, match="already exists"):
-            configure_capture_logging(capture_dir, now=fixed_now)
-
-        # First run's log: intact, never truncated by mode='w'.
-        content = first_log.read_text(encoding="utf-8")
-        assert "first run record that must survive" in content
-        # Exactly one log file in the dir.
-        logs = list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
-        assert [p.name for p in logs] == [first_log.name]
+    survive intact. (The in-process pure twin lives in
+    tests/test_logging_foundation.py; this is the end-to-end control.)"""
 
     def test_two_subprocesses_same_second_second_exits_2(self, tmp_path):
         """End-to-end: two real app launches into the SAME (empty at

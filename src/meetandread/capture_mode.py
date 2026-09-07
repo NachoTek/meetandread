@@ -178,9 +178,11 @@ class _PromptFlushFileHandler(logging.FileHandler):
     """
 
     def __init__(self, filename, mode=None, encoding="utf-8"):
-        # 'x' regardless of the requested mode (O_CREAT | O_EXCL): one
-        # log file per run; same-second collisions must fail loudly,
-        # never truncate.
+        # 'x' (O_CREAT | O_EXCL) is the contract — one log file per run;
+        # same-second collisions must fail loudly, never truncate. The
+        # *mode* parameter is accepted for signature compatibility with
+        # logging.FileHandler (logging_setup passes mode='w') but is
+        # deliberately overridden; exclusive creation is not optional.
         super().__init__(filename, mode="x", encoding=encoding)
 
     def emit(self, record: logging.LogRecord) -> None:

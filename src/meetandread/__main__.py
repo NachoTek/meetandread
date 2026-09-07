@@ -34,6 +34,7 @@ _CAPTURE_FLAG_PARSED = None  # Optional[Path] once parsed below
 def _bootstrap() -> None:
     """Parse the capture flag; configure capture logging if requested."""
     from meetandread.capture_mode import (
+        ISSUE_CAPTURE_FLAG,
         CaptureModeError,
         configure_capture_logging,
         parse_capture_flag,
@@ -42,30 +43,16 @@ def _bootstrap() -> None:
     global _CAPTURE_FLAG_PARSED
     try:
         capture_dir = parse_capture_flag()
+        _CAPTURE_FLAG_PARSED = capture_dir
+        if capture_dir is not None:
+            configure_capture_logging(capture_dir)
     except CaptureModeError as exc:
         # Pre-logging path: the root logger's lastResort handler routes
         # ERROR to stderr (same discipline as main()'s refusals).
         import logging
 
-        logging.getLogger(__name__).error("--issue-capture %s", exc)
+        logging.getLogger(__name__).error("%s %s", ISSUE_CAPTURE_FLAG, exc)
         sys.exit(2)
-    _CAPTURE_FLAG_PARSED = capture_dir
-    if capture_dir is None:
-        return
-    try:
-        configure_capture_logging(capture_dir)
-    except CaptureModeError as exc:
-        import logging
-
-        logging.getLogger(__name__).error(
-            "--issue-capture %s", exc
-        )
-        sys.exit(2)
-
-
-def _bootstrap_capture_dir():
-    """The capture dir parsed by this process's bootstrap (test seam)."""
-    return _CAPTURE_FLAG_PARSED
 
 
 def _run() -> None:
