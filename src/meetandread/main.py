@@ -357,9 +357,7 @@ def main(capture_dir: Optional[Path] = None):
     # _PromptFlushFileHandler is installed), do NOT reconfigure — a second
     # configure would tear down the run handler mid-stream and refuse the
     # same-second exclusive filename.
-    if capture_dir is not None and capture_logging_configured():
-        pass  # already streaming from process start
-    else:
+    if capture_dir is None or not capture_logging_configured():
         setup_logging(capture_dir=capture_dir)
     logging.getLogger(__name__).info(
         "Starting meetandread%s",
