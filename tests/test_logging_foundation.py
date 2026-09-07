@@ -86,6 +86,24 @@ def isolated_logging():
         root.setLevel(saved_level)
 
 
+@pytest.fixture(autouse=True)
+def _reset_capture_claim():
+    """Isolate the capture-dir claim state (fix round 2) per test.
+
+    ``capture_mode._claim_held_for`` is per-process run state; tests
+    that simulate second processes must start from a clean slate, and
+    no test may leak a claim into the next one.
+    """
+    import meetandread.capture_mode as cm
+
+    saved = cm._claim_held_for
+    cm._claim_held_for = None
+    try:
+        yield
+    finally:
+        cm._claim_held_for = saved
+
+
 # ---------------------------------------------------------------------------
 # Level normalization (all-or-nothing, root level)
 # ---------------------------------------------------------------------------
@@ -769,3 +787,130 @@ class TestCaptureDirectoryContract:
 
         configure_logging(logs_dir=tmp_path)
         assert capture_logging_configured() is False
+
+    def test_claim_file_created_atomically_before_any_logging(
+        self, isolated_logging, tmp_path
+    ):
+        """Fix round 2, finding 2: the run CLAIMS the capture directory
+        atomically (O_CREAT|O_EXCL on a FIXED-name claim file) BEFORE
+        any logging — the authoritative one-dir-one-run gate. The claim
+        is a one-line JSON run-identity record (start timestamp), held
+        for the process lifetime."""
+        from meetandread.capture_mode import (
+            CLAIM_FILE_NAME,
+            claim_capture_dir,
+            read_claim,
+        )
+
+        capture_dir = tmp_path / "cap"
+        claim = claim_capture_dir(capture_dir)
+        assert claim.name == CLAIM_FILE_NAME
+        assert claim.parent == capture_dir
+
+        data = read_claim(capture_dir)
+        assert data is not None and "started_at" in data
+
+        # And the configure step that follows sees the claim in place.
+        from meetandread.capture_mode import configure_capture_logging
+
+        log_file = configure_capture_logging(capture_dir)
+        assert log_file.parent == capture_dir
+        assert (capture_dir / CLAIM_FILE_NAME).exists()
+
+    def test_second_claim_rejected_even_with_different_timestamps(
+        self, isolated_logging, tmp_path
+    ):
+        """The reviewer's reproduced race: two processes pass the
+        (cheap) emptiness check and start in DIFFERENT seconds — the
+        exclusive CLAIM, not the timestamped log name, is the gate.
+        The second claim fails; the first run's log is untouched.
+
+        A second PROCESS is simulated by resetting the in-process
+        claim state (the autouse _reset_capture_claim fixture keeps
+        this from leaking).
+        """
+        import meetandread.capture_mode as cm
+        from meetandread.capture_mode import (
+            CLAIM_FILE_NAME,
+            CaptureModeError,
+            claim_capture_dir,
+            configure_capture_logging,
+        )
+
+        capture_dir = tmp_path / "cap"
+        # First process: claims, then logs.
+        claim_capture_dir(capture_dir)
+        first = configure_capture_logging(
+            capture_dir, now=datetime(2026, 9, 8, 9, 0, 1)
+        )
+        logging.getLogger("meetandread.first.run").info("first run record")
+
+        # Second process, one second later: the emptiness check now
+        # sees the first run's files, but even without them the CLAIM
+        # refuses — assert the claim-level rejection directly.
+        cm._claim_held_for = None  # fresh process
+        with pytest.raises(CaptureModeError, match="already claimed"):
+            claim_capture_dir(capture_dir, now=datetime(2026, 9, 8, 9, 0, 2))
+
+        # Same-second/different-second alike: exactly one claim, one
+        # log, first run's stream intact.
+        assert len(list(capture_dir.glob(CLAIM_FILE_NAME))) == 1
+        logs = list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+        assert [p.name for p in logs] == [first.name]
+        assert "first run record" in first.read_text(encoding="utf-8")
+
+    def test_configure_rejects_when_claim_already_held(
+        self, isolated_logging, tmp_path
+    ):
+        """configure_capture_logging refuses a directory whose claim is
+        already held — even mid-race, before any log file exists."""
+        import meetandread.capture_mode as cm
+        from meetandread.capture_mode import (
+            CaptureModeError,
+            claim_capture_dir,
+            configure_capture_logging,
+        )
+
+        capture_dir = tmp_path / "cap"
+        capture_dir.mkdir()
+        # Simulate the race window: claim won, log not yet created.
+        claim_capture_dir(capture_dir, now=datetime(2026, 9, 8, 9, 0, 0))
+        assert not list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+
+        # A DIFFERENT process's configure (fresh in-process claim
+        # state) is refused by the on-disk claim alone.
+        cm._claim_held_for = None  # fresh process
+        with pytest.raises(CaptureModeError, match="already claimed"):
+            configure_capture_logging(
+                capture_dir, now=datetime(2026, 9, 8, 9, 0, 5)
+            )
+        # The loser wrote NOTHING: no log file appeared.
+        assert not list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+
+    def test_configure_after_foreign_log_leaves_claim_held(
+        self, isolated_logging, tmp_path
+    ):
+        """If the log-file creation itself fails after the claim was
+        won (a foreign same-named log blocks exclusive creation), the
+        claim stays held by THIS run — it is still the only writer —
+        and the failure is the loud same-second/log-exists refusal."""
+        from meetandread.capture_mode import (
+            CaptureModeError,
+            claim_capture_dir,
+            configure_capture_logging,
+        )
+
+        capture_dir = tmp_path / "cap"
+        claim_capture_dir(capture_dir, now=datetime(2026, 9, 8, 9, 0, 0))
+        # Foreign same-named log (prevents exclusive creation).
+        foreign = capture_dir / f"{CAPTURE_LOG_PREFIX}20260908_090000.log"
+        foreign.write_text("foreign\n", encoding="utf-8")
+
+        with pytest.raises(CaptureModeError, match="already exists"):
+            configure_capture_logging(
+                capture_dir, now=datetime(2026, 9, 8, 9, 0, 0)
+            )
+        # The claim survives: this run owns the dir (same process —
+        # the in-process idempotence lets configure reach the log-file
+        # step, where the foreign log forces the loud refusal).
+        assert (capture_dir / "capture_run.claim").exists()

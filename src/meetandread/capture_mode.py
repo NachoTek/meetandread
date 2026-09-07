@@ -51,6 +51,11 @@ to pre-#104: no capture directory is created.
 
 ## Files in a capture directory (this ticket)
 
+- ``capture_run.claim`` — the atomic run CLAIM (fix round 2): created
+  with ``O_CREAT | O_EXCL`` before any logging, the authoritative
+  one-directory-one-run gate; one JSON line with the run's
+  ``started_at`` identity. Held for the process lifetime; a held claim
+  means this directory belongs to a live (or crashed-mid-run) run.
 - ``meetandread_capture_YYYYMMDD_HHMMSS.log`` — the streaming DEBUG log.
 - ``capture_complete.marker`` — the clean-exit marker (JSON object with
   ``finished_at`` ISO-8601 local time).
@@ -86,7 +91,18 @@ ISSUE_CAPTURE_FLAG = "--issue-capture"
 # Tickets #105-#110 consume this name; treat it as stable contract.
 COMPLETION_MARKER_NAME = "capture_complete.marker"
 
+# Filename of the run CLAIM inside the capture dir (fix round 2): the
+# atomic one-directory-one-run gate and the run-identity artifact
+# (#105-#110 may consume it; treat the name as stable contract).
+CLAIM_FILE_NAME = "capture_run.claim"
+
 logger = logging.getLogger(__name__)
+
+# The capture directory THIS process has claimed (fix round 2). The
+# claim is exclusive ACROSS processes (O_CREAT | O_EXCL) but idempotent
+# WITHIN one: bootstrap claims, then configure_capture_logging — same
+# run, same directory — must not refuse itself.
+_claim_held_for: Optional[Path] = None
 
 
 class CaptureModeError(Exception):
@@ -215,6 +231,76 @@ def capture_logging_configured() -> bool:
     return False
 
 
+def claim_capture_dir(
+    capture_dir: Path, now: Optional[datetime] = None
+) -> Path:
+    """Atomically CLAIM *capture_dir* for THIS run; return the claim path.
+
+    Fix round 2 (finding: non-atomic claim): the emptiness check plus
+    timestamped-log creation were two steps, so two processes starting
+    in different seconds could both pass and interleave their records —
+    one run's clean marker could brand a crashed peer as clean. The
+    claim is a FIXED-NAME file created with ``os.open`` +
+    ``O_CREAT | O_EXCL``: exactly one process wins; every loser gets
+    ``FileExistsError`` -> :class:`CaptureModeError` (exit 2, clear
+    stderr), exactly like the non-empty-dir rejection. This is the
+    AUTHORITATIVE gate — the cheap emptiness check in
+    ``parse_capture_flag`` stays as a fast, still-useful pre-filter.
+
+    The claim holds the run's identity as one JSON line
+    (``{"started_at": ...}``, ISO-8601 local time), written with the
+    same prompt-flush discipline as every capture record, and is held
+    for the process lifetime — never released, never rewritten: a held
+    claim means a live (or crashed-mid-run) run owned this directory.
+    Within ONE process the claim is idempotent: re-claiming the
+    directory this process already claimed (bootstrap ->
+    configure_capture_logging) is the same run, not a conflict.
+
+    Raises:
+        CaptureModeError: the claim already exists and belongs to
+            ANOTHER run (another process).
+    """
+    global _claim_held_for
+    if _claim_held_for is not None:
+        if Path(_claim_held_for) == Path(capture_dir):
+            return capture_dir / CLAIM_FILE_NAME  # same run, same claim
+        raise CaptureModeError(
+            f"{ISSUE_CAPTURE_FLAG}: this process already claimed "
+            f"'{_claim_held_for}' — one run claims one directory"
+        )
+    if now is None:
+        now = datetime.now()
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    claim = capture_dir / CLAIM_FILE_NAME
+    try:
+        fd = os.open(str(claim), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise CaptureModeError(
+            f"{ISSUE_CAPTURE_FLAG}: '{capture_dir}' is already claimed by "
+            f"another run ({CLAIM_FILE_NAME} exists) — one capture "
+            "directory holds one run; pass a fresh directory"
+        ) from exc
+    try:
+        payload = json.dumps({"started_at": now.isoformat()}) + "\n"
+        os.write(fd, payload.encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _claim_held_for = Path(capture_dir)
+    return claim
+
+
+def read_claim(capture_dir: Path) -> Optional[dict]:
+    """Read the run claim; None when absent or unreadable (pure read
+    for the reporter side #107 and tests)."""
+    claim = capture_dir / CLAIM_FILE_NAME
+    try:
+        raw = claim.read_text(encoding="utf-8")
+        return json.loads(raw)
+    except (OSError, ValueError):
+        return None
+
+
 def configure_capture_logging(
     capture_dir: Path, now: Optional[datetime] = None
 ) -> Path:
@@ -222,8 +308,10 @@ def configure_capture_logging(
 
     Entry-discipline seam: called only from process start (the
     ``__main__`` bootstrap, or ``main`` when the process started some
-    other way), never mid-process. Creates the capture directory if
-    missing, then delegates to ``logging_setup.configure_logging`` with
+    other way), never mid-process. Claims the capture directory
+    atomically FIRST (``claim_capture_dir`` — the authoritative
+    one-dir-one-run gate), then creates the capture directory if
+    missing and delegates to ``logging_setup.configure_logging`` with
     ``logs_dir=capture_dir, capture_mode=True`` — so the capture log
     lives INSIDE the capture directory with the shared
     ``meetandread_capture_`` prefix (issue #104: the #98 prefix
@@ -235,14 +323,16 @@ def configure_capture_logging(
     handler.
 
     Raises:
-        CaptureModeError: the capture log file already exists (a
-            same-second second start — one log file per run, by
-            construction; never truncate the first run's stream).
+        CaptureModeError: the directory is already claimed by another
+            run, or the capture log file already exists (a same-second
+            second start — one log file per run, by construction; never
+            truncate the first run's stream).
 
     Returns the capture log file path.
     """
     from meetandread.logging_setup import configure_logging
 
+    claim_capture_dir(capture_dir, now=now)
     capture_dir.mkdir(parents=True, exist_ok=True)
     try:
         log_file = configure_logging(

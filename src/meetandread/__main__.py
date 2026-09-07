@@ -1,5 +1,6 @@
-"""Lightweight executable bootstrap for ``python -m meetandread`` (and
-the frozen exe — ``meetandread.spec`` analyzes THIS file as the entry).
+"""Lightweight executable bootstrap for ``python -m meetandread``, the
+pip-installed ``meetandread`` console script, and the frozen exe
+(``meetandread.spec`` analyzes THIS file as the entry).
 
 Fix round 1 (PR #121 review, finding 1): capture mode must own the
 process from its FIRST moment — including startup failures. Parsing
@@ -14,16 +15,24 @@ This module therefore imports ONLY argparse/pathlib/stdlib plus
 ``--issue-capture``, configures capture logging if flagged — BEFORE
 any app subsystem import and before the single-instance lock — then
 imports ``meetandread.main`` and delegates to ``main()``. If that
-import or startup raises while capture logging is configured, the
-exception (with traceback) is recorded into the capture log via the
-prompt-flush handler, so the capture directory still holds the
-startup-crash evidence.
+import OR THE ``main()`` CALL raises while capture logging is
+configured, the exception (with traceback) is recorded into the
+capture log via the prompt-flush handler (fix round 2, finding 1b),
+then re-raised so exit code/stderr behavior is preserved — the
+capture directory still holds the startup-crash evidence.
 
 NORMAL runs (no flag) are byte-identical to the pre-bootstrap import
 order — ``meetandread.main`` first, straight to ``main()`` — with no
 new logging side effects. ``main()`` parses the flag again for its own
 decisions but never reconfigures capture logging the bootstrap already
 configured (``capture_mode.capture_logging_configured``).
+
+Fix round 2, finding 1a: the pip-installed console script points HERE
+(``meetandread.__main__:run`` — see pyproject ``[project.scripts]``),
+so the installed ``meetandread`` command gets the identical
+parse-and-configure-before-heavy-imports discipline. ``run`` is the
+public entry; module-level execution is guarded so importing this
+module (as the console-script loader does) does not start the app.
 """
 
 import sys
@@ -64,16 +73,30 @@ def _run() -> None:
             # Import-time failure of the application subsystems
             # (PyQt/widgets/native audio) WITH capture logging live:
             # record it, then re-raise so the process still fails with
-            # its normal traceback/exit behavior. The capture dir now
-            # holds the startup-crash record (the case finding 1 of the
-            # PR #121 review closed).
+            # its normal traceback/exit behavior.
             import logging
 
             logging.getLogger(__name__).exception(
                 "Startup failure: meetandread.main could not be imported"
             )
             raise
-        main(capture_dir=_CAPTURE_FLAG_PARSED)
+        try:
+            main(capture_dir=_CAPTURE_FLAG_PARSED)
+        except SystemExit:
+            # main()'s normal exit path (app.exec() -> sys.exit(code)):
+            # not a startup failure — pass through untouched.
+            raise
+        except BaseException:
+            # Startup failure INSIDE main() (fix round 2, finding 1b)
+            # with capture logging live: record it with traceback, then
+            # re-raise so the process still fails normally. The capture
+            # dir holds the startup-crash record.
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Startup failure: meetandread failed during startup"
+            )
+            raise
     else:
         # NORMAL run: same import order as before the bootstrap existed.
         from meetandread.main import main
@@ -81,4 +104,10 @@ def _run() -> None:
         main()
 
 
-_run()
+def run() -> None:
+    """Public executable entry (console script, ``python -m``)."""
+    _run()
+
+
+if __name__ == "__main__":
+    _run()

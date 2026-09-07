@@ -36,6 +36,7 @@ import pytest
 
 from meetandread.capture_mode import (
     CAPTURE_LOG_PREFIX,
+    CLAIM_FILE_NAME,
     COMPLETION_MARKER_NAME,
     ISSUE_CAPTURE_FLAG,
     read_appendable_records,
@@ -441,6 +442,132 @@ class TestStartupFailureIsCaptured:
         # No clean-exit marker for a crashed startup, by construction.
         assert read_completion_marker(capture_dir) is None
 
+    def test_console_script_entry_path_captures_import_failure(
+        self, tmp_path
+    ):
+        """Fix round 2, finding 1a: the pip-installed console script
+        points at the bootstrap's public run() (pyproject
+        [project.scripts] -> meetandread.__main__:run). Driving THE SAME
+        function the console script invokes — importing the module must
+        NOT start the app (guarded module-level execution) — proves the
+        installed command gets capture-before-heavy-imports too."""
+        capture_dir = tmp_path / "capture" / "console-script-crash"
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+
+        # Same PyQt6 poison as the python -m test above.
+        poison_dir = tmp_path / "poisoned_pyqt"
+        (poison_dir / "PyQt6").mkdir(parents=True)
+        (poison_dir / "PyQt6" / "__init__.py").write_text(
+            "raise ImportError('poisoned PyQt6 import for console-script "
+            "capture test')\n",
+            encoding="utf-8",
+        )
+        env["PYTHONPATH"] = f"{poison_dir}{os.pathsep}{env['PYTHONPATH']}"
+
+        # EXACTLY what the installed console script runs: import the
+        # bootstrap module (as the entry-point loader does), call run()
+        # with the flag in sys.argv.
+        shim = (
+            "import os, sys\n"
+            'sys.path.insert(0, os.environ["PYTHONPATH"])\n'
+            "from meetandread.__main__ import run\n"
+            "run()\n"
+        )
+        stdout_file = tmp_path / "app-stdout.txt"
+        with open(stdout_file, "w", encoding="utf-8", errors="replace") as fh:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    shim,
+                    ISSUE_CAPTURE_FLAG,
+                    str(capture_dir),
+                ],
+                cwd=str(REPO_ROOT),
+                env=env,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        try:
+            exit_code = proc.wait(timeout=STARTUP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            _kill_hard(proc)
+            pytest.fail(
+                "console-script-path app did not exit: "
+                f"{_tail(stdout_file)}"
+            )
+
+        assert exit_code != 0
+        records = _read_log_records(capture_dir)
+        assert records, (
+            "capture log missing after console-script-path import "
+            f"failure: {_tail(stdout_file)}"
+        )
+        joined = "\n".join(records)
+        assert "Startup failure:" in joined
+        assert "poisoned PyQt6 import" in joined
+        assert any("Log level: DEBUG (capture mode: True)" in r for r in records)
+        assert read_completion_marker(capture_dir) is None
+
+    def test_main_startup_exception_lands_in_capture_log(self, tmp_path):
+        """Fix round 2, finding 1b: an exception raised INSIDE main()
+        (after the bootstrap configured capture logging and handed off)
+        is recorded into the capture log before the nonzero exit — the
+        guard now covers the main() call, not just its import.
+
+        Mechanism: a sitecustomize pre-hook (loaded by the interpreter
+        from PYTHONPATH before any app code) patches
+        QApplication.__init__ to raise once main() constructs the Qt
+        application — an unguarded main()-body statement (main.py:
+        ``app = QApplication(sys.argv)``), deep after the handoff."""
+        capture_dir = tmp_path / "capture" / "main-crash"
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+
+        poison_dir = tmp_path / "qapp_raiser"
+        poison_dir.mkdir()
+        (poison_dir / "sitecustomize.py").write_text(
+            "from PyQt6.QtWidgets import QApplication\n"
+            "def _raising_init(self, *a, **k):\n"
+            "    raise RuntimeError(\n"
+            "        'injected QApplication failure for '\n"
+            "        'main-startup-exception test'\n"
+            "    )\n"
+            "QApplication.__init__ = _raising_init\n",
+            encoding="utf-8",
+        )
+        env["PYTHONPATH"] = f"{poison_dir}{os.pathsep}{env['PYTHONPATH']}"
+
+        proc = _launch_app(capture_dir, env, tmp_path / "app-stdout.txt")
+        try:
+            exit_code = proc.wait(timeout=STARTUP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            _kill_hard(proc)
+            pytest.fail(
+                "app did not exit after main() startup exception: "
+                f"{_tail(tmp_path / 'app-stdout.txt')}"
+            )
+
+        # Nonzero exit (the injected failure propagates).
+        assert exit_code != 0, (
+            "expected nonzero exit after injected QApplication failure: "
+            f"{_tail(tmp_path / 'app-stdout.txt')}"
+        )
+
+        # THE assertion: the capture log holds the main()-phase startup
+        # failure with traceback — the guard covered the main() call.
+        records = _read_log_records(capture_dir)
+        joined = "\n".join(records)
+        assert "Startup failure: meetandread failed during startup" in joined
+        assert "injected QApplication failure" in joined
+        # main() got far enough to prove the handoff happened (the
+        # failure is INSIDE main, not at its import: the startup banner
+        # is the first main()-body record after configure).
+        assert "Starting meetandread (Issue Capture Mode)" in joined
+        # Crashed run: no marker, by construction.
+        assert read_completion_marker(capture_dir) is None
+
 
 class TestReusedCaptureDirectoryRejected:
     """Fix round 1, finding 2: one capture directory == one run.
@@ -511,7 +638,13 @@ class TestSameSecondCollision:
         # second via the shim below.
         stdout_a = open(tmp_path / "a-stdout.txt", "w", encoding="utf-8")
         stdout_b = open(tmp_path / "b-stdout.txt", "w", encoding="utf-8")
-        cmd = [sys.executable, "-c", _FROZEN_CLOCK_SHIM, ISSUE_CAPTURE_FLAG, str(capture_dir)]
+        cmd = [
+            sys.executable,
+            "-c",
+            _FROZEN_CLOCK_SHIM.replace("_MAR_TS_", "12, 0, 0"),
+            ISSUE_CAPTURE_FLAG,
+            str(capture_dir),
+        ]
         procs = []
         try:
             for fh in (stdout_a, stdout_b):
@@ -572,8 +705,8 @@ class TestSameSecondCollision:
 
 # Frozen-clock launch shim: identical to the production bootstrap path
 # except the filename clocks (datetime.now) are pinned in BOTH
-# capture_mode and logging_setup, forcing both children onto the same
-# second-resolution log filename (the collision under test).
+# capture_mode and logging_setup to _MAR_TS_ (h:m:s substituted per
+# child by the test), controlling the second-resolution log filename.
 _FROZEN_CLOCK_SHIM = """
 import os, sys
 sys.path.insert(0, os.environ["PYTHONPATH"])
@@ -588,11 +721,150 @@ import datetime as _dt
 class _FrozenDatetime:
     @staticmethod
     def now(tz=None):
-        return _dt.datetime(2026, 9, 7, 12, 0, 0)
+        return _dt.datetime(2026, 9, 7, _MAR_TS_)
 import meetandread.capture_mode as _cm
 import meetandread.logging_setup as _ls
 _cm.datetime = _FrozenDatetime
 _ls.datetime = _FrozenDatetime
+import runpy
+runpy.run_module("meetandread.__main__", run_name="__main__", alter_sys=True)
+"""
+
+
+class TestConcurrentDifferentTimestampStarts:
+    """Fix round 2, finding 2: the capture-directory CLAIM is atomic.
+
+    The reviewer's reproduced race: two processes pass the (cheap)
+    emptiness check and start in DIFFERENT seconds — distinct
+    timestamped log names, so the round-1 exclusive log creation never
+    fires — and interleave their records in one directory. The
+    O_CREAT|O_EXCL claim (capture_run.claim) is the authoritative
+    gate: exactly one process wins; the loser exits 2 with the
+    rejection message and writes NOTHING into the directory."""
+
+    def test_two_different_timestamp_starts_one_wins_one_exits_2(
+        self, tmp_path
+    ):
+        capture_dir = tmp_path / "capture" / "concurrent"
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+
+        # Distinct frozen clocks: child A at 12:00:00, child B at
+        # 12:00:05 — different log filenames, defeating the round-1
+        # same-second guard so the CLAIM is the only gate.
+        # A start-line barrier (in the shim, OUTSIDE the claim code)
+        # holds both children AFTER their emptiness check passed and
+        # BEFORE either runs the real claim — the deterministic form
+        # of the reviewer's near-simultaneous race.
+        stdout_a = open(tmp_path / "a-stdout.txt", "w", encoding="utf-8")
+        stdout_b = open(tmp_path / "b-stdout.txt", "w", encoding="utf-8")
+        barrier = tmp_path / "start-line"
+        barrier.mkdir()
+        procs = []
+        try:
+            for fh, ts, who in (
+                (stdout_a, "12, 0, 0", "a"),
+                (stdout_b, "12, 0, 5", "b"),
+            ):
+                shim = _BARRIER_CLOCK_SHIM.replace("_MAR_TS_", ts).replace(
+                    "_MAR_WHO_", who
+                ).replace("_MAR_BARRIER_", barrier.as_posix())
+                procs.append(
+                    subprocess.Popen(
+                        [
+                            sys.executable, "-c", shim,
+                            ISSUE_CAPTURE_FLAG, str(capture_dir),
+                        ],
+                        cwd=str(REPO_ROOT),
+                        env=env,
+                        stdout=fh,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    )
+                )
+            # Exactly one child loses the claim race and exits 2
+            # quickly; the winner runs the full app (killed in
+            # finally — the race is decided at claim time).
+            deadline = time.monotonic() + STARTUP_TIMEOUT_S
+            loser_codes = []
+            while time.monotonic() < deadline:
+                for proc in procs:
+                    if proc.poll() is not None and proc.returncode == 2:
+                        loser_codes.append(proc.returncode)
+                if loser_codes:
+                    break
+                time.sleep(0.25)
+            assert loser_codes, (
+                "no collision loser exited 2 — claim race not decided: "
+                f"a={_tail(tmp_path / 'a-stdout.txt')} "
+                f"b={_tail(tmp_path / 'b-stdout.txt')}"
+            )
+        finally:
+            for proc in procs:
+                if proc.poll() is None:
+                    _kill_hard(proc)
+            for fh in (stdout_a, stdout_b):
+                fh.close()
+
+        # Exactly one claim and one log; the loser wrote NOTHING.
+        claims = list(capture_dir.glob(CLAIM_FILE_NAME))
+        assert len(claims) == 1
+        logs = list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+        assert len(logs) == 1
+        # The winner's records are unmixed: the log carries exactly one
+        # run-header sequence (one capture-mode banner).
+        joined = "\n".join(read_appendable_records(logs[0]))
+        assert joined.count("Issue Capture Mode: streaming diagnostics into") == 1
+        assert "Log level: DEBUG (capture mode: True)" in joined
+        # The rejection message named the CLAIM (the loser passed the
+        # emptiness check — both parsed the empty dir before the
+        # barrier — so only the exclusive claim could refuse it).
+        loser_tail = _tail(tmp_path / "a-stdout.txt") + _tail(
+            tmp_path / "b-stdout.txt"
+        )
+        assert "already claimed by another run" in loser_tail
+
+
+# Barrier + frozen-clock launch shim: like _FROZEN_CLOCK_SHIM, but the
+# REAL claim_capture_dir is wrapped with a start-line barrier — each
+# child signals arrival and waits for its peer AFTER the bootstrap
+# parsed the (still-empty) dir and BEFORE the claim executes — making
+# the simultaneous emptiness-pass race deterministic. The claim itself
+# is the production code, called unmodified inside the wrapper.
+_BARRIER_CLOCK_SHIM = """
+import os, sys, time
+sys.path.insert(0, os.environ["PYTHONPATH"])
+import meetandread.single_instance as _si
+_orig_acquire = _si.acquire_single_instance_lock
+def _acquire_with_test_name(name=None):
+    if name is None or name == "meetandread":
+        name = os.environ.get("MAR_TEST_LOCK_NAME", name)
+    return _orig_acquire(name)
+_si.acquire_single_instance_lock = _acquire_with_test_name
+import datetime as _dt
+class _FrozenDatetime:
+    @staticmethod
+    def now(tz=None):
+        return _dt.datetime(2026, 9, 7, _MAR_TS_)
+import meetandread.capture_mode as _cm
+import meetandread.logging_setup as _ls
+_cm.datetime = _FrozenDatetime
+_ls.datetime = _FrozenDatetime
+# Start-line barrier AROUND the real claim: both children have already
+# parsed the empty dir when they reach the claim; hold each until the
+# peer arrives, then run the PRODUCTION claim unmodified.
+_real_claim = _cm.claim_capture_dir
+def _barrier_claim(capture_dir, now=None):
+    _me = os.path.join("_MAR_BARRIER_", "arrived_" + "_MAR_WHO_")
+    _peer = os.path.join(
+        "_MAR_BARRIER_", "arrived_" + ("b" if "_MAR_WHO_" == "a" else "a")
+    )
+    open(_me, "w").close()
+    _deadline = time.monotonic() + 30.0
+    while not os.path.exists(_peer) and time.monotonic() < _deadline:
+        time.sleep(0.02)
+    return _real_claim(capture_dir, now=now)
+_cm.claim_capture_dir = _barrier_claim
 import runpy
 runpy.run_module("meetandread.__main__", run_name="__main__", alter_sys=True)
 """
@@ -604,7 +876,6 @@ class TestRecordingLifecycleInsideCaptureMode:
     fake-duration seam (tests/test_cli_fake_duration.py — it exists
     precisely to drive recording without real audio). The capture
     DEBUG log must show the recording lifecycle events."""
-
     def test_record_start_stop_lifecycle_lands_in_capture_log(
         self, tmp_path
     ):
