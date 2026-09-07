@@ -1,2 +1,2 @@
 [console_scripts]
-meetandread = meetandread.main:main
+meetandread = meetandread.__main__:run

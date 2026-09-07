@@ -15,7 +15,9 @@ log stream, in any run mode.
 
 Retention (decided 2026-09-05): on startup, normal-run log files older
 than 30 days are deleted. Capture-mode DEBUG logs and capture artifacts
-are never touched by this cleanup at any age.
+are never touched by this cleanup at any age. Since issue #104, capture
+logs live inside capture directories (``capture_mode`` module) and the
+retention scan never targets a capture directory.
 
 This module is structured for testability (ADR 0001 fast lane):
 ``normalize_level`` and ``select_expired_normal_logs`` are pure, and
@@ -33,9 +35,9 @@ from typing import List, Optional
 # Retention: normal-run logs older than this are deleted at startup.
 LOG_RETENTION_DAYS = 30
 
-# Filename prefixes distinguishing run kinds. Capture logs live beside
-# normal logs for now (later tickets move them into capture directories);
-# the prefix is what retention uses to never select them.
+# Filename prefixes distinguishing run kinds. Capture logs live inside
+# capture directories (issue #104); the prefix keeps them excluded from
+# any retention scan that ever sees them.
 NORMAL_LOG_PREFIX = "meetandread_"
 CAPTURE_LOG_PREFIX = "meetandread_capture_"
 
@@ -168,6 +170,8 @@ def configure_logging(
     logs_dir: Optional[Path] = None,
     capture_mode: bool = False,
     now: Optional[datetime] = None,
+    is_capture_dir: bool = False,
+    handler_cls=logging.FileHandler,
 ) -> Path:
     """Configure root-level logging for one run and return the log file path.
 
@@ -178,6 +182,16 @@ def configure_logging(
     cleaned up alongside (the startup retention hook). Stdout is teed
     console-only: transcript-bearing output never enters the log stream
     in ANY mode (normal INFO or capture DEBUG).
+
+    Issue Capture Mode (issue #104): when *logs_dir* is a capture
+    directory (``is_capture_dir=True``, set by
+    ``capture_mode.configure_capture_logging`` — the only supported
+    caller shape), the capture log lives inside the capture directory
+    and the retention scan is skipped for it: nothing inside a capture
+    directory is ever a cleanup candidate at any age (retention
+    decision 2026-09-05). *handler_cls* lets the capture path install
+    its prompt-flush file handler (``capture_mode``) in the same call —
+    default runs get the plain FileHandler, byte-identical to before.
     """
     if logs_dir is None:
         logs_dir = resolve_logs_dir()
@@ -202,7 +216,7 @@ def configure_logging(
                 existing.close()
             except OSError:
                 pass
-    handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+    handler = handler_cls(log_file, mode='w', encoding='utf-8')
     handler.setFormatter(
         logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     )
@@ -220,5 +234,8 @@ def configure_logging(
         capture_mode,
     )
 
-    cleanup_expired_logs(logs_dir, now=now)
+    if not is_capture_dir:
+        # Retention scans the normal logs dir only — never inside a
+        # capture directory (issue #104, retention decision 2026-09-05).
+        cleanup_expired_logs(logs_dir, now=now)
     return log_file

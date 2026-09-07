@@ -57,7 +57,11 @@ dev = [
 ]
 
 [project.scripts]
-meetandread = "meetandread.main:main"
+# The console script goes through the LIGHTWEIGHT BOOTSTRAP (fix round
+# 2, finding 1a) so the pip-installed `meetandread` command parses
+# --issue-capture and configures capture logging BEFORE any heavy app
+# import — same discipline as `python -m meetandread` and the frozen exe.
+meetandread = "meetandread.__main__:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]
