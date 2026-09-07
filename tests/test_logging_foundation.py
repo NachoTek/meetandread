@@ -36,6 +36,12 @@ from meetandread.logging_setup import (
     normalize_level,
     select_expired_normal_logs,
 )
+from meetandread.capture_mode import (
+    COMPLETION_MARKER_NAME,
+    configure_capture_logging,
+    read_completion_marker,
+    write_completion_marker,
+)
 
 
 # Fixed clock so retention boundaries are deterministic.
@@ -100,7 +106,7 @@ class TestLevelNormalization:
         """Level selection is a single boolean; no per-module knobs exist."""
         assert set(inspect.signature(normalize_level).parameters) == {"capture_mode"}
         assert set(inspect.signature(configure_logging).parameters) == {
-            "logs_dir", "capture_mode", "now",
+            "logs_dir", "capture_mode", "now", "is_capture_dir", "handler_cls",
         }
         forbidden = [
             name
@@ -126,6 +132,18 @@ class TestLevelNormalization:
 
         main_mod.setup_logging(capture_mode=True)
         assert recorded == {"capture_mode": True}
+
+    def test_main_setup_logging_capture_dir_routes_to_capture_mode(
+        self, isolated_logging, tmp_path
+    ):
+        """A capture dir selects the capture-directory logging path
+        (issue #104) — full DEBUG into the capture dir, prompt-flushed."""
+        import meetandread.main as main_mod
+
+        log_file = main_mod.setup_logging(capture_dir=tmp_path / "cap")
+        assert log_file.parent == tmp_path / "cap"
+        assert log_file.name.startswith(CAPTURE_LOG_PREFIX)
+        assert logging.getLogger().level == logging.DEBUG
 
 
 # ---------------------------------------------------------------------------
@@ -487,3 +505,186 @@ class TestLogsDirResolution:
         )
         configure_logging(logs_dir=tmp_path, now=NOW)
         assert not doomed.exists()
+
+    def test_configure_capture_dir_skips_retention(self, isolated_logging, tmp_path):
+        """Retention never runs against a capture directory (issue #104):
+        an expired normal-shaped log inside a capture dir survives a
+        configure_logging call made with is_capture_dir=True."""
+        from meetandread.logging_setup import CAPTURE_LOG_PREFIX as _prefix
+
+        capture_dir = tmp_path / "capture-home"
+        capture_dir.mkdir()
+        ancient = _touch(
+            capture_dir / "meetandread_20200101_120000.log",
+            NOW - timedelta(days=365 * 5),
+        )
+        log_file = configure_logging(
+            logs_dir=capture_dir,
+            capture_mode=True,
+            now=NOW,
+            is_capture_dir=True,
+        )
+        assert log_file.parent == capture_dir
+        assert log_file.name.startswith(_prefix)
+        assert ancient.exists()
+
+
+# ---------------------------------------------------------------------------
+# Capture-directory contract (issue #104) — pure fast-lane coverage
+# ---------------------------------------------------------------------------
+
+class TestCaptureDirectoryContract:
+    """The artifact edge of the one new seam (docs/specs/issue-reporting.md).
+
+    Pure fast-lane coverage of the capture-directory contract: flag
+    parsing, capture-dir logging layout, retention exclusion, prompt
+    flush on write, marker write/read round-trip, and the torn-record
+    reader. Subprocess launch/kill coverage lives in the windows-marked
+    test_capture_mode_subprocess.py (ADR 0001).
+    """
+
+    def test_flag_absent_means_normal_run(self):
+        from meetandread.capture_mode import parse_capture_flag
+
+        assert parse_capture_flag([]) is None
+
+    def test_flag_parses_directory(self, tmp_path):
+        from meetandread.capture_mode import parse_capture_flag
+
+        parsed = parse_capture_flag(["--issue-capture", str(tmp_path / "cap")])
+        assert parsed == tmp_path / "cap"
+
+    def test_flag_rejects_existing_file(self, tmp_path):
+        from meetandread.capture_mode import CaptureModeError, parse_capture_flag
+
+        existing = tmp_path / "file.txt"
+        existing.write_text("not a dir", encoding="utf-8")
+        with pytest.raises(CaptureModeError):
+            parse_capture_flag(["--issue-capture", str(existing)])
+
+    def test_unknown_flags_ignored_by_capture_parse(self, tmp_path):
+        """The capture parser must not choke on the app's other flags."""
+        from meetandread.capture_mode import parse_capture_flag
+
+        parsed = parse_capture_flag(
+            ["--some-future-flag", "value", "--issue-capture", str(tmp_path)]
+        )
+        assert parsed == tmp_path
+
+    def test_configure_capture_logging_streams_debug_into_capture_dir(
+        self, isolated_logging, tmp_path
+    ):
+        capture_dir = tmp_path / "cap" / "run-1"  # nested: created if missing
+        log_file = configure_capture_logging(
+            capture_dir, now=datetime(2026, 9, 6, 9, 30, 0)
+        )
+        assert capture_dir.is_dir()
+        assert log_file.parent == capture_dir
+        assert log_file.name == "meetandread_capture_20260906_093000.log"
+
+        logging.getLogger("meetandread.anything.deep").debug(
+            "capture chatter line"
+        )
+        content = log_file.read_text(encoding="utf-8")
+        assert "capture chatter line" in content
+        assert logging.getLogger().level == logging.DEBUG
+
+    def test_capture_log_prompt_flushed_without_explicit_flush(
+        self, isolated_logging, tmp_path
+    ):
+        """Prompt-flush contract: a completed record is on disk
+        immediately after its emit returns — no explicit flush needed."""
+        capture_dir = tmp_path / "cap"
+        log_file = configure_capture_logging(capture_dir)
+
+        logging.getLogger("meetandread.flush.probe").info(
+            "immediately-on-disk probe"
+        )
+
+        # No _flush_root() call: the prompt-flush handler must already
+        # have written the record to the file (flush+fsync per emit).
+        content = log_file.read_text(encoding="utf-8")
+        assert "immediately-on-disk probe" in content
+
+    def test_completion_marker_round_trip(self, tmp_path):
+        capture_dir = tmp_path / "cap"
+        capture_dir.mkdir()
+        marker = write_completion_marker(
+            capture_dir, now=datetime(2026, 9, 6, 10, 0, 0)
+        )
+        assert marker.name == COMPLETION_MARKER_NAME
+        data = read_completion_marker(capture_dir)
+        assert data is not None
+        assert data["finished_at"] == "2026-09-06T10:00:00"
+
+    def test_missing_marker_reads_none(self, tmp_path):
+        assert read_completion_marker(tmp_path) is None
+
+    def test_retention_never_selects_capture_dir_contents(self, tmp_path):
+        """AC6: nothing inside a capture directory is ever a retention
+        candidate — even a file whose name matches the normal-run shape
+        exactly, at any age. The retention scan runs against the normal
+        logs dir (where it deletes an expired normal log, proving the
+        scan really ran) while the capture dir sits untouched beside it."""
+        normal_logs = tmp_path / "normal-logs"
+        normal_logs.mkdir()
+        capture_dir = tmp_path / "issue-capture-2026-09-06"
+        capture_dir.mkdir()
+
+        expired_normal = _touch(
+            normal_logs / "meetandread_20200101_120000.log",
+            NOW - timedelta(days=365 * 5),
+        )
+        # A capture dir can contain normal-SHAPED names (e.g. a copied
+        # log) — they must still never be selected, because the scan
+        # never enters a capture directory.
+        normal_shaped_in_capture = _touch(
+            capture_dir / "meetandread_20200101_120000.log",
+            NOW - timedelta(days=365 * 5),
+        )
+        capture_log = _touch(
+            capture_dir / f"{CAPTURE_LOG_PREFIX}20200101_120000.log",
+            NOW - timedelta(days=365 * 5),
+        )
+        marker = _touch(
+            capture_dir / COMPLETION_MARKER_NAME, NOW - timedelta(days=400)
+        )
+
+        deleted = cleanup_expired_logs(normal_logs, now=NOW)
+
+        # The scan ran and did its normal job...
+        assert deleted == [expired_normal]
+        assert not expired_normal.exists()
+        # ...and nothing inside the capture directory was touched.
+        assert normal_shaped_in_capture.exists()
+        assert capture_log.exists()
+        assert marker.exists()
+
+    def test_read_appendable_records_tolerates_torn_tail(self, tmp_path):
+        from meetandread.capture_mode import read_appendable_records
+
+        log = tmp_path / "capture.log"
+        log.write_text(
+            "line one\nline two\nline three torn, no newline",
+            encoding="utf-8",
+        )
+        assert read_appendable_records(log) == ["line one", "line two"]
+
+    def test_read_appendable_records_complete_file(self, tmp_path):
+        from meetandread.capture_mode import read_appendable_records
+
+        log = tmp_path / "capture.log"
+        log.write_text("a\nb\nc\n", encoding="utf-8")
+        assert read_appendable_records(log) == ["a", "b", "c"]
+
+    def test_read_appendable_records_missing_file(self, tmp_path):
+        from meetandread.capture_mode import read_appendable_records
+
+        assert read_appendable_records(tmp_path / "nope.log") == []
+
+    def test_read_appendable_records_keeps_blank_interior_lines(self, tmp_path):
+        from meetandread.capture_mode import read_appendable_records
+
+        log = tmp_path / "capture.log"
+        log.write_text("a\n\nb\n", encoding="utf-8")
+        assert read_appendable_records(log) == ["a", "", "b"]

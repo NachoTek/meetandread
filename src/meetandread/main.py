@@ -66,7 +66,7 @@ def check_critical_dlls():
             sys.exit(1)
 
 
-def setup_logging(capture_mode: bool = False):
+def setup_logging(capture_mode: bool = False, capture_dir: Optional[Path] = None):
     """Setup logging: root level INFO normally, full DEBUG in capture mode.
 
     Thin startup hook over ``meetandread.logging_setup`` (issue #98):
@@ -75,7 +75,17 @@ def setup_logging(capture_mode: bool = False):
     Keeps the per-run timestamped log file under Documents/meetandread/logs
     and the stdout console-mirroring tee; also runs the 30-day retention
     cleanup for normal-run logs (capture logs are never touched).
+
+    Capture mode (issue #104): when *capture_dir* is given (entry at
+    process start only, via ``--issue-capture``), the capture log
+    streams into the capture directory itself under the
+    prompt-flush durability contract, and retention never scans inside
+    a capture directory.
     """
+    if capture_dir is not None:
+        from meetandread.capture_mode import configure_capture_logging
+
+        return configure_capture_logging(capture_dir)
     return configure_logging(capture_mode=capture_mode)
 
 
@@ -260,13 +270,22 @@ def setup_signal_handlers(app, widget_ref=None):
         else:
             app.quit()
 
-    def sigint_handler(signum, frame):
-        """Handle SIGINT (Ctrl+C) gracefully."""
-        logger.info("Received SIGINT, shutting down gracefully...")
-        _graceful_exit()
+    def _make_signal_handler(signal_name: str):
+        """Build a graceful-exit handler for a named termination signal."""
+        def handler(signum, frame):
+            logger.info("Received %s, shutting down gracefully...", signal_name)
+            _graceful_exit()
+        return handler
 
     # Register SIGINT handler
-    signal.signal(signal.SIGINT, sigint_handler)
+    signal.signal(signal.SIGINT, _make_signal_handler("SIGINT"))
+
+    # On Windows, also handle SIGBREAK (Ctrl+Break) through the same
+    # graceful path. The Issue Reporter (#107) uses it for user-stop of
+    # a capture run, and the capture-mode subprocess tests use it to
+    # drive a genuine clean exit (marker contract, issue #104).
+    if sys.platform == 'win32' and hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, _make_signal_handler("SIGBREAK"))
 
     # On Windows, also set up console control handler for Ctrl+C
     if sys.platform == 'win32':
@@ -287,6 +306,25 @@ def setup_signal_handlers(app, widget_ref=None):
 
 def main():
     """Application entry point."""
+    # Issue Capture Mode entry (issue #104): parse the launch flag BEFORE
+    # any other startup step, so a capture run owns the whole process —
+    # logging included — from the first moment. Entry is at process start
+    # only; there is deliberately no mid-process capture API (ADR 0003).
+    from meetandread.capture_mode import (
+        ISSUE_CAPTURE_FLAG,
+        CaptureModeError,
+        parse_capture_flag,
+        write_completion_marker,
+    )
+
+    try:
+        capture_dir = parse_capture_flag()
+    except CaptureModeError as exc:
+        # Pre-logging path: the root logger's lastResort handler routes
+        # ERROR to stderr (same as the single-instance refusal below).
+        logger.error("%s %s", ISSUE_CAPTURE_FLAG, exc)
+        sys.exit(2)
+
     # Single-instance guard (issue #20): must run before QApplication so a
     # duplicate process exits before creating any UI or grabbing resources.
     from meetandread.single_instance import acquire_single_instance_lock
@@ -299,9 +337,13 @@ def main():
         )
         sys.exit(1)
 
-    # Setup logging first
-    setup_logging()
-    logging.info("Starting meetandread")
+    # Setup logging first — capture mode (if requested) streams DEBUG into
+    # the capture directory from this point on.
+    setup_logging(capture_dir=capture_dir)
+    logging.getLogger(__name__).info(
+        "Starting meetandread%s",
+        " (Issue Capture Mode)" if capture_dir is not None else "",
+    )
     
     # Enable high DPI support
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -418,7 +460,15 @@ def main():
     except Exception as e:
         logger.warning("Dependency banner failed: %s", e)
 
-    sys.exit(app.exec())
+    # Clean-exit completion marker (issue #104): written only when the
+    # event loop returns normally with exit code 0 — the marker is the
+    # absence-proof of a crash ("no marker == crashed run", by
+    # construction). Any hard exit (kill, native crash, sys.exit from a
+    # dialog path) skips this point entirely.
+    exit_code = app.exec()
+    if capture_dir is not None and exit_code == 0:
+        write_completion_marker(capture_dir)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
