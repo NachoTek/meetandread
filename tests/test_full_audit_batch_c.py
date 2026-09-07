@@ -344,6 +344,42 @@ class TestSettingsPanelLogging:
             panel._on_waveform_toggled(2)
         assert _at_or_above_info(caplog, FP_LOG) == []
 
+    def test_post_processing_enabled_read_failed_warns(
+        self, panel, qapp, caplog
+    ):
+        """Round 3: a failed post-processing settings read warns.
+
+        The read failure changes the status shown to the user (the pill
+        builder treats None as disabled), so it must surface at WARNING
+        like its siblings post_processing_state_read_failed and
+        post_processing_progress_read_failed — not DEBUG.
+        """
+        import meetandread.config as config_mod
+
+        with patch(
+            "meetandread.config.get_config",
+            side_effect=RuntimeError("config unreadable"),
+        ):
+            with caplog.at_level(logging.DEBUG, logger=FP_LOG):
+                result = panel._post_processing_enabled()
+
+        assert result is None  # pill builder treats as disabled
+        records = [
+            r
+            for r in caplog.records
+            if r.name == FP_LOG
+            and "post_processing_enabled_read_failed" in r.getMessage()
+        ]
+        assert records, caplog.records
+        assert records[0].levelname == "WARNING"
+        assert (
+            "post_processing_enabled_read_failed: error_class=RuntimeError"
+            in records[0].getMessage()
+        )
+        # Fully formatted output carries no exception payload (round-1 rule)
+        for line in _formatted_output(caplog, FP_LOG):
+            assert "config unreadable" not in line, line
+
     def test_model_change_info_operational_fact(
         self, panel, qapp, caplog, monkeypatch
     ):

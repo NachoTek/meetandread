@@ -7626,7 +7626,7 @@ class FloatingSettingsPanel(QWidget):
 
             return bool(get_config("transcription.enable_postprocessing"))
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 "post_processing_enabled_read_failed: error_class=%s",
                 type(exc).__name__,
             )
