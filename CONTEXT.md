@@ -84,6 +84,18 @@ _Avoid_: Debug mode (ambiguous with log levels), recording mode, reproduction mo
 A separate process that supervises the application: it launches the app in Issue Capture Mode, monitors it, and if the app crashes it collects the diagnostics gathered so far and proceeds with submission anyway. Also runnable standalone (installer shortcut) so startup crashes are reportable. Owns the user-facing wizard flow: describe, launch, reproduce, stop, review, submit. On startup it scans for and offers to resume incomplete or review-ready capture directories left by an interrupted run.
 _Avoid_: Wizard (as a noun on its own — ambiguous), bug reporter, feedback tool
 
+**Capture directory**:
+The directory the Issue Reporter names for one Issue Capture Mode run; the app writes every artifact there and the reporter assembles the Diagnostics Bundle from it alone, in any state (complete or crashed mid-run). Holds exactly one run — concurrent capture runs are impossible (docs/specs/issue-reporting.md, ADR 0005).
+_Avoid_: capture folder, diagnostics folder, bundle (the bundle is assembled *from* it)
+
+**Capture run claim (`capture_run.claim`)**:
+The O_CREAT|O_EXCL file a capture run creates before any logging to atomically claim the capture directory; any second start against a claimed or non-empty directory is rejected before a single record is written (exit code 2). A held claim means the directory belongs to a live or crashed-mid-run run (ADR 0005).
+_Avoid_: Lock file (it is never released for reuse — sequential reuse is refused too), sentinel
+
+**Completion marker (`capture_complete.marker`)**:
+The marker file the app writes into the capture directory on clean exit from Issue Capture Mode; its presence or absence is recorded in the reporter's termination record (docs/specs/issue-reporting.md, ADR 0005).
+_Avoid_: Done file, success flag
+
 **Interaction Trace**:
 The ordered record of semantic user actions taken during Issue Capture Mode — named events (button/menu/shortcut presses, panel open/close/move/resize, device selections, focus changes) with timestamps. Records what the user did and when, never what they typed: free-text entry appears only as a "text edited (N chars)" event.
 _Avoid_: Click log, input capture, keystroke log
