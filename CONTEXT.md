@@ -89,7 +89,7 @@ The directory the Issue Reporter names for one Issue Capture Mode run; the app w
 _Avoid_: capture folder, diagnostics folder, bundle (the bundle is assembled *from* it)
 
 **Capture run claim (`capture_run.claim`)**:
-The O_CREAT|O_EXCL file a capture run creates before any logging to atomically claim the capture directory; any second start against a claimed or non-empty directory is rejected before a single record is written (exit code 2). A held claim means the directory belongs to a live or crashed-mid-run run (ADR 0005).
+The O_CREAT|O_EXCL file a capture run creates before any logging to atomically claim the capture directory; any second start against a claimed or non-empty directory is rejected before a single record is written (exit code 2). The claim is never released — it persists after clean exit too — so a held claim means only that the directory permanently belongs to exactly one run and says nothing about whether that run is still live. Run completion state comes from the Completion marker, and an absent marker cannot by itself distinguish a live run from a crashed one (ADR 0005).
 _Avoid_: Lock file (it is never released for reuse — sequential reuse is refused too), sentinel
 
 **Completion marker (`capture_complete.marker`)**:

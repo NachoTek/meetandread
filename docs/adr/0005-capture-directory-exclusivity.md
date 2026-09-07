@@ -22,8 +22,15 @@ Also rejected: tolerating concurrency and degrading the bundle to "best effort".
 ## Consequences
 
 - The claim file is part of the capture-directory contract consumed by #105-#110.
-  Run identity comes from the claim (started_at); a held claim means the
-  directory belongs to a live — or crashed-mid-run — run.
+  Run identity comes from the claim (started_at). The claim is held for the
+  process lifetime and is NEVER removed — not even on clean exit; sequential
+  reuse is refused precisely because the claim persists. A held claim therefore
+  means only one thing: the directory permanently belongs to exactly one run —
+  it does NOT mean the run is still live.
+- Whether that one run completed cleanly is told by the completion marker alone:
+  marker present = clean exit; marker absent = the run is live OR crashed/killed
+  mid-run. The claim cannot distinguish these — downstream work (#105-#110,
+  reporter/assembler) must never infer run liveness from the claim alone.
 - Rejection-before-logging means a rejected start writes NOTHING into the target
   directory.
 - Sequential reuse is equally refused: a fresh directory per run is the
