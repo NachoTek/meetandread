@@ -70,7 +70,7 @@ class TrayIconManager:
         self._on_toggle_recording: Optional[Callable] = None
         self._on_exit: Optional[Callable] = None
 
-        logger.info("TrayIconManager initialized")
+        logger.debug("tray_init: menu_actions=3 icons=2")
 
     def set_callbacks(
         self,
@@ -94,18 +94,17 @@ class TrayIconManager:
         """
         if not QSystemTrayIcon.isSystemTrayAvailable():
             logger.warning(
-                "System tray is not available — tray icon will not be shown. "
-                "App will continue to function normally."
+                "tray_unavailable: reason=not_supported app_continues=1"
             )
             return
 
         self._tray.show()
-        logger.info("Tray icon shown in system tray")
+        logger.info("tray_state: shown=1")
 
     def hide(self) -> None:
         """Hide and remove the tray icon from the system tray."""
         self._tray.hide()
-        logger.info("Tray icon hidden")
+        logger.info("tray_state: shown=0")
 
     def update_recording_state(self, state: ControllerState) -> None:
         """Update the tray icon and menu to reflect the current recording state.
@@ -139,7 +138,7 @@ class TrayIconManager:
 
         # Update menu items
         self._update_menu_items()
-        logger.debug("Tray updated for state: %s", state.name)
+        logger.debug("tray_state_applied: state=%s", state.name)
 
     # -- Menu construction ---------------------------------------------------
 
@@ -195,6 +194,7 @@ class TrayIconManager:
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """Handle tray icon activation (click, double-click)."""
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            logger.debug("tray_activated: reason=double_click")
             self._show_widget()
 
     def _show_widget(self) -> None:
@@ -203,15 +203,17 @@ class TrayIconManager:
             self._widget.show()
             self._widget.activateWindow()
             self._widget.raise_()
-            logger.info("Widget shown via tray")
+            logger.info("tray_action: action=show_widget")
 
     def _handle_toggle_recording(self) -> None:
         """Handle Start/Stop Recording menu action."""
+        logger.debug("tray_menu_action: action=toggle_recording")
         if self._on_toggle_recording is not None:
             self._on_toggle_recording()
 
     def _handle_toggle_visibility(self) -> None:
         """Handle Show/Hide Widget menu action."""
+        logger.debug("tray_menu_action: action=toggle_visibility")
         if self._widget is None:
             return
 
@@ -223,13 +225,14 @@ class TrayIconManager:
             if hasattr(self._widget, '_floating_settings_panel') and self._widget._floating_settings_panel:
                 self._widget._floating_settings_panel.hide()
             self._toggle_visibility_action.setText("Show Widget")
-            logger.info("Widget and panels hidden via tray")
+            logger.info("tray_action: action=hide_widget panels=1")
         else:
             self._show_widget()
             self._toggle_visibility_action.setText("Hide Widget")
 
     def _handle_exit(self) -> None:
         """Handle Exit menu action."""
+        logger.debug("tray_menu_action: action=exit")
         if self._on_exit is not None:
             self._on_exit()
 

@@ -233,7 +233,7 @@ class TestLaunchWithFlagCleanExit:
             # path is covered by the existing (unmodified, passing)
             # recording and audio-session test suites.
             _wait_for(
-                lambda: "Main widget initialized" in "\n".join(
+                lambda: "main_widget_init:" in "\n".join(
                     _read_log_records(capture_dir)
                 ),
                 STARTUP_TIMEOUT_S,

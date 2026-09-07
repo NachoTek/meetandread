@@ -3108,7 +3108,7 @@ class TestBookmarkLogging:
         add_records = [r for r in caplog.records if "bookmark_added_ui" in r.message]
         assert len(add_records) == 1
         assert "position_ms=15000" in add_records[0].message
-        assert "log_add" in add_records[0].message
+        assert "log_add" not in add_records[0].message  # stems never logged (privacy)
 
     def test_navigation_logs_structured(self, settings_panel_on_history, qapp, tmp_path, caplog):
         """Bookmark navigation logs bookmark_navigation_triggered."""
@@ -3498,7 +3498,7 @@ class TestBookmarkDeleteLogging:
 
         del_records = [r for r in caplog.records if "bookmark_deleted_ui" in r.message]
         assert len(del_records) == 1
-        assert "log_del" in del_records[0].message
+        assert "log_del" not in del_records[0].message  # stems never logged (privacy)
 
     def test_delete_logs_no_raw_name(self, settings_panel_on_history, qapp, tmp_path, caplog):
         """Bookmark deletion log never contains raw bookmark name."""

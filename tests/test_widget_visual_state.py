@@ -130,7 +130,7 @@ class TestWidgetVisualStateMachine:
         sm = _WidgetVisualStateMachine(WidgetVisualState.IDLE)
         with caplog.at_level(logging.DEBUG, logger="root"):
             sm.transition_to(WidgetVisualState.RECORDING)
-        assert any("WidgetVisualState" in r.message and "IDLE" in r.message
+        assert any("widget_visual_state" in r.message and "from=IDLE" in r.message
                     for r in caplog.records)
 
     def test_mid_transition_retarget(self):
@@ -350,7 +350,7 @@ class TestGlassOpacity:
         with caplog.at_level(logging.DEBUG, logger="root"):
             widget._on_controller_state_change(ControllerState.RECORDING)
             widget._update_animations()  # one tick, transition not settled
-        assert any("Glass opacity" in r.message for r in caplog.records)
+        assert any("glass_opacity_frame" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

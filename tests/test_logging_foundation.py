@@ -483,9 +483,9 @@ class TestTranscriptLeakCanaries:
         content = self._capture_log_content(tmp_path)
         assert self.CANARY not in content
         # Handler ran: telemetry present without the transcript text.
-        assert "Segment received" in content
-        assert "conf: 87" in content
-        assert "phrase_start: True" in content
+        assert "phrase_result_received" in content
+        assert "conf=87" in content
+        assert "phrase_start=True" in content
 
 
 # ---------------------------------------------------------------------------

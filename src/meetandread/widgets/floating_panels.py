@@ -309,10 +309,9 @@ class ToastManager(QObject):
             timer.start(int(duration_ms))
             self._timers[toast_id] = timer
 
-        logger.info(
-            "Toast emitted: id=%s title=%s duration_ms=%s",
+        logger.debug(
+            "toast_shown: id=%s duration_ms=%s",
             toast_id,
-            title,
             int(duration_ms) if duration_ms else 0,
         )
         return toast
@@ -908,7 +907,7 @@ def _open_identity_link_dialog(
     ``_link_speaker_identity_in_file``).
     """
     if md_path is None or not md_path.exists():
-        logger.warning("No transcript file selected for identity link")
+        logger.warning("identity_link_skipped: reason=no_transcript_selected")
         return False
 
         # Parse speaker_matches from the transcript metadata
@@ -984,7 +983,9 @@ def _open_identity_link_dialog(
     try:
         _link_speaker_identity_in_file(md_path, raw_label, identity_name)
     except Exception as exc:
-        logger.error("Failed to link identity in %s: %s", md_path, exc)
+        logger.error(
+            "identity_link_failed: error_class=%s", type(exc).__name__
+        )
         return False
 
     # NOTE: Cross-transcript propagation by raw label is disabled because
@@ -1387,7 +1388,8 @@ class FloatingTranscriptPanel(QWidget):
         self._pending_content_count = 0
         if hasattr(self, '_new_content_badge'):
             self._new_content_badge.hide()
-    
+        logger.debug("transcript_panel_state: visible=1")
+
     def hide_panel(self) -> None:
         """Hide the panel with a 150ms fade-out."""
         self._set_glass_active(False)
@@ -1395,6 +1397,7 @@ class FloatingTranscriptPanel(QWidget):
         self._duration_timer.stop()
         self._recording_start_time = None
         self._start_fade_out()
+        logger.debug("transcript_panel_state: visible=0")
 
     def _set_glass_active(self, active: bool) -> None:
         """Transition glass opacity between idle (0.87) and active (1.0).
@@ -1482,7 +1485,7 @@ class FloatingTranscriptPanel(QWidget):
             self._show_empty_state()
 
         scheme_name = "dark" if p is DARK_PALETTE else "light"
-        logger.info("Applied %s theme to FloatingTranscriptPanel", scheme_name)
+        logger.debug("theme_applied: panel=transcript scheme=%s", scheme_name)
 
     # ------------------------------------------------------------------
     # Fade transition helpers
@@ -1498,6 +1501,7 @@ class FloatingTranscriptPanel(QWidget):
             self._fade_timer.stop()
         # Re-apply theme on show (picks up any desktop theme change while hidden)
         self._apply_theme()
+        logger.debug("transcript_panel_fade_in: start=1")
         self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
@@ -1512,6 +1516,7 @@ class FloatingTranscriptPanel(QWidget):
         """Animate window opacity from 1 → 0 over 150ms, then hide."""
         if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
             self._fade_timer.stop()
+        logger.debug("transcript_panel_fade_out: start=1")
         self.setWindowOpacity(1.0)
         self._fade_step = 0
         self._fade_direction = -1  # -1 = fading out
@@ -1532,7 +1537,8 @@ class FloatingTranscriptPanel(QWidget):
             if self._fade_direction == -1:
                 self.hide()
                 self.setWindowOpacity(1.0)  # Reset for next show
-    
+                logger.debug("transcript_panel_hidden: fade_out=complete")
+
     def toggle_panel(self) -> None:
         """Toggle panel visibility."""
         if self.isVisible():
@@ -1716,7 +1722,7 @@ class FloatingTranscriptPanel(QWidget):
         try:
             from meetandread.transcription.transcript_scanner import scan_recordings
         except ImportError:
-            logger.warning("transcript_scanner not available — cannot populate history")
+            logger.warning("history_scan_unavailable: reason=transcript_scanner_import_failed")
             return
         self._populate_history_list(scan_recordings())
 
@@ -1826,7 +1832,9 @@ class FloatingTranscriptPanel(QWidget):
             from meetandread.recording.management import enumerate_recording_files, delete_recording_structured
             files = enumerate_recording_files(stem)
         except Exception as exc:
-            logger.error("Failed to enumerate recording files: %s", exc)
+            logger.error(
+                "recording_enum_failed: error_class=%s", type(exc).__name__
+            )
             files = []
 
         # R027: Release playback file handles *before* the confirmation
@@ -1837,8 +1845,8 @@ class FloatingTranscriptPanel(QWidget):
             self._stop_playback()
         except Exception as stop_exc:
             logger.warning(
-                "Pre-delete playback stop failed for '%s': %s",
-                recording_name, stop_exc,
+                "pre_delete_playback_stop_failed: error_class=%s",
+                type(stop_exc).__name__,
             )
 
         file_count = len(files)
@@ -1855,17 +1863,20 @@ class FloatingTranscriptPanel(QWidget):
         )
 
         if reply != QMessageBox.StandardButton.Yes:
+            logger.debug("recording_delete: confirmed=0 files=%d", file_count)
             return
 
         # Perform deletion with structured results
         try:
             result = delete_recording_structured(stem)
             logger.info(
-                "Deleted recording '%s': %d/%d files removed",
-                recording_name, result.success_count, file_count,
+                "recording_deleted: files_removed=%d files_total=%d",
+                result.success_count, file_count,
             )
         except Exception as exc:
-            logger.error("Failed to delete recording '%s': %s", recording_name, exc)
+            logger.error(
+                "recording_delete_failed: error_class=%s", type(exc).__name__
+            )
             QMessageBox.warning(
                 parent,
                 "Delete Failed",
@@ -1877,8 +1888,8 @@ class FloatingTranscriptPanel(QWidget):
             failed_names = [p for p, _ in result.failed[:5]]
             detail = "\n".join(failed_names)
             logger.warning(
-                "Partial delete for '%s': %d files remain",
-                recording_name, result.failure_count,
+                "recording_delete_partial: files_remaining=%d",
+                result.failure_count,
             )
             QMessageBox.warning(
                 parent, "Delete Partially Failed",
@@ -1939,13 +1950,15 @@ class FloatingTranscriptPanel(QWidget):
                 f"Cannot rename to '{new_stem}'.\n\n{exc}",
             )
             return
-
         try:
             result = rename_recording(old_stem, new_stem)
         except Exception as exc:
-            logger.error("Rename failed for %s -> %s: %s", old_stem, new_stem, exc)
+            logger.error(
+                "recording_rename_failed: error_class=%s", type(exc).__name__
+            )
             QMessageBox.warning(
-                parent, "Rename Failed",
+                parent,
+                "Rename Failed",
                 f"Could not rename recording.\n\n{exc}",
             )
             return
@@ -1954,19 +1967,19 @@ class FloatingTranscriptPanel(QWidget):
             conflict_names = [p for p, _ in result.failed[:5]]
             detail = "\n".join(conflict_names)
             QMessageBox.warning(
-                parent, "Rename Partially Failed",
+                parent,
+                "Rename Partially Failed",
                 f"Could not rename all files.\n\n"
                 f"{result.success_count} renamed, {result.failure_count} failed:\n{detail}",
             )
 
         logger.info(
-            "Renamed recording %s -> %s (%d files)",
-            old_stem, new_stem, result.success_count,
+            "recording_renamed: files_renamed=%d",
+            result.success_count,
         )
 
         # Refresh the history list to show the new name
         self._refresh_history()
-
     # ------------------------------------------------------------------
     # Re-transcribe functionality
     # ------------------------------------------------------------------
@@ -2118,7 +2131,10 @@ class FloatingTranscriptPanel(QWidget):
                 wav_path, md_path, model_size,
             )
         except Exception as exc:
-            logger.error("Retranscribe startup failed: %s", exc, exc_info=True)
+            logger.error(
+                "retranscribe_startup_failed: panel=transcript error_class=%s",
+                type(exc).__name__,
+            )
             # Restore all retranscribe state so the UI is not stuck
             self._is_retranscribing = False
             self._is_comparison_mode = False
@@ -2177,7 +2193,10 @@ class FloatingTranscriptPanel(QWidget):
                 "Re-transcribe Failed",
                 f"Re-transcription failed:\n\n{error}",
             )
-            logger.error("Retranscribe failed: %s", error)
+            logger.error(
+                "retranscribe_failed: panel=transcript error_class=%s",
+                type(error).__name__ if isinstance(error, Exception) else "str",
+            )
             return
 
         # Emit history data changed — retranscribe adds a new sidecar recording
@@ -2205,7 +2224,9 @@ class FloatingTranscriptPanel(QWidget):
         """
         sidecar = Path(sidecar_path)
         if not sidecar.exists():
-            logger.warning("Sidecar not found for comparison: %s", sidecar_path)
+            logger.warning(
+                "retranscribe_comparison_skipped: panel=transcript reason=sidecar_missing"
+            )
             return
 
         self._is_comparison_mode = True
@@ -2328,8 +2349,8 @@ class FloatingTranscriptPanel(QWidget):
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
-                "Accepted retranscribe: %s model %s",
-                self._current_history_md_path, self._retranscribe_model_size,
+                "retranscribe_accepted: panel=transcript model=%s",
+                self._retranscribe_model_size,
             )
         except FileNotFoundError:
             parent = self.parent() if self.parent() else self
@@ -2362,11 +2383,14 @@ class FloatingTranscriptPanel(QWidget):
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
-                "Rejected retranscribe: %s model %s",
-                self._current_history_md_path, self._retranscribe_model_size,
+                "retranscribe_rejected: panel=transcript model=%s",
+                self._retranscribe_model_size,
             )
         except Exception as exc:
-            logger.warning("Error rejecting retranscribe: %s", exc)
+            logger.warning(
+                "retranscribe_reject_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         # Restore original view
         self._hide_retranscribe_accept_reject()
@@ -2424,7 +2448,7 @@ class FloatingTranscriptPanel(QWidget):
             if item and item.data(Qt.ItemDataRole.UserRole) == md_str:
                 self._history_list.setCurrentItem(item)
                 return
-        logger.debug("Could not re-select history item for %s", md_path)
+        logger.debug("history_item_reselect_missed: path_present=%s", bool(md_path))
 
     @staticmethod
     def _extract_transcript_body(md_path: Optional[Path]) -> str:
@@ -2466,7 +2490,10 @@ class FloatingTranscriptPanel(QWidget):
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
-            logger.error("Failed to read transcript for rendering: %s: %s", md_path, exc)
+            logger.error(
+                "transcript_render_failed: reason=read_error error_class=%s",
+                type(exc).__name__,
+            )
             return None
 
         # Split markdown body from JSON footer
@@ -2908,7 +2935,7 @@ class CCOverlayPanel(QWidget):
         # Restore persisted geometry (position + size)
         self._restore_geometry()
 
-        logger.debug("CCOverlayPanel created (parent=%s)", type(parent).__name__ if parent else "None")
+        logger.debug("cc_overlay_created: parent=%s", type(parent).__name__ if parent else "None")
 
     # ------------------------------------------------------------------
     # Theme
@@ -3103,7 +3130,8 @@ class CCOverlayPanel(QWidget):
             self.setGeometry(new_x, new_y, new_w, new_h)
         except Exception as exc:
             logger.warning(
-                "CC edge-resize error (edge=%s): %s", self._resize_edge, exc
+                "cc_edge_resize_error: edge=%s error_class=%s",
+                self._resize_edge, type(exc).__name__,
             )
             if self._resize_start_geometry is not None:
                 try:
@@ -3266,6 +3294,7 @@ class CCOverlayPanel(QWidget):
         recording restarts are seamless.
         """
         self.cancel_delayed_hide()
+        logger.debug("cc_overlay_state: visible=1")
         self._start_fade_in()
 
     def hide_panel(self, immediate: bool = False) -> None:
@@ -3275,6 +3304,7 @@ class CCOverlayPanel(QWidget):
             immediate: If True, hide instantly. If False, fade out.
         """
         self.save_geometry()
+        logger.debug("cc_overlay_state: visible=0 immediate=%s", bool(immediate))
         if immediate:
             self.hide()
             self.setWindowOpacity(1.0)
@@ -3300,7 +3330,7 @@ class CCOverlayPanel(QWidget):
         self.cancel_delayed_hide()
         self._fade_delay_timer.start(self.CC_FADE_DELAY_MS)
         logger.debug(
-            "CC overlay: delayed hide scheduled (%d ms), content=%s",
+            "cc_overlay_delayed_hide_scheduled: delay_ms=%d content=%s",
             self.CC_FADE_DELAY_MS,
             self._has_content,
         )
@@ -3312,18 +3342,18 @@ class CCOverlayPanel(QWidget):
         """
         if self._fade_delay_timer.isActive():
             self._fade_delay_timer.stop()
-            logger.debug("CC overlay: delayed hide cancelled")
+            logger.debug("cc_overlay_delayed_hide_cancelled:")
         if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
             self._fade_timer.stop()
             # Restore full opacity if we interrupted a fade-out mid-way
             if self._fade_direction == -1:
                 self.setWindowOpacity(1.0)
-            logger.debug("CC overlay: in-progress fade cancelled, opacity restored")
+            logger.debug("cc_overlay_fade_cancelled: opacity_restored=1")
 
     def _on_delay_elapsed(self) -> None:
         """Callback when the fade-delay timer fires — starts the fade-out."""
         logger.debug(
-            "CC overlay: delay elapsed, starting fade-out, content=%s",
+            "cc_overlay_delay_elapsed: starting_fade_out=1 content=%s",
             self._has_content,
         )
         self._start_fade_out()
@@ -3349,9 +3379,12 @@ class CCOverlayPanel(QWidget):
                 self.resize(w, h)
                 self.move(x, y)
                 ensure_on_screen(self)
-                logger.debug("Restored CC panel geometry: (%d, %d, %d, %d)", x, y, w, h)
+                logger.debug("cc_geometry_restored: x=%d y=%d w=%d h=%d", x, y, w, h)
         except Exception as e:
-            logger.warning("Failed to restore CC panel geometry: %s", e)
+            logger.warning(
+                "cc_geometry_restore_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     def save_geometry(self) -> None:
         """Save CC panel position and size to config."""
@@ -3360,10 +3393,15 @@ class CCOverlayPanel(QWidget):
             if self.isVisible():
                 set_config("ui.cc_panel_geometry", (self.x(), self.y(), self.width(), self.height()))
                 save_config()
-                logger.debug("Saved CC panel geometry: (%d, %d, %d, %d)",
-                             self.x(), self.y(), self.width(), self.height())
+                logger.debug(
+                    "cc_geometry_saved: x=%d y=%d w=%d h=%d",
+                    self.x(), self.y(), self.width(), self.height(),
+                )
         except Exception as e:
-            logger.warning("Failed to save CC panel geometry: %s", e)
+            logger.warning(
+                "cc_geometry_save_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     # ------------------------------------------------------------------
     # Live transcript rendering — TV closed-caption style
@@ -3515,7 +3553,7 @@ class CCOverlayPanel(QWidget):
             self.text_edit.setStyleSheet(
                 f"font-family: {AETHERIC_CC_FONT_FAMILY}; font-size: {size_px}px;"
             )
-        logger.debug("CC overlay font size set to %dpx", size_px)
+        logger.debug("cc_font_size_applied: size_px=%d", size_px)
 
     def set_font_color(self, color_str: str) -> None:
         """Apply font color to the CC text display immediately.
@@ -3539,7 +3577,7 @@ class CCOverlayPanel(QWidget):
             self.text_edit.setStyleSheet(
                 f"font-family: {AETHERIC_CC_FONT_FAMILY}; color: {color_str};"
             )
-        logger.debug("CC overlay font color set to %s", color_str)
+        logger.debug("cc_font_color_applied: color=1")
 
     # ------------------------------------------------------------------
     # Fade helpers (matching FloatingTranscriptPanel pattern)
@@ -3585,7 +3623,7 @@ class CCOverlayPanel(QWidget):
                 self.hide()
                 self.setWindowOpacity(1.0)
                 logger.debug(
-                    "CC overlay: fade-out complete, hidden, content=%s",
+                    "cc_overlay_hidden: fade_out=complete content=%s",
                     self._has_content,
                 )
 
@@ -5154,7 +5192,7 @@ class FloatingSettingsPanel(QWidget):
         # Restore persisted geometry (position + size)
         self._restore_geometry()
 
-        logger.debug("FloatingSettingsPanel created")
+        logger.debug("settings_panel_created: theme=applied geometry=restored")
 
     def _wrap_settings_page_for_scroll(self, page: QWidget, page_name: str) -> QScrollArea:
         """Wrap a settings tab *page* in a scroll area for overflow safety.
@@ -5186,12 +5224,11 @@ class FloatingSettingsPanel(QWidget):
                 f"}}"
             )
             return scroll
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "Failed to create scroll wrapper for settings page %r — "
-                "falling back to unwrapped page",
+                "settings_scroll_wrapper_failed: page=%s error_class=%s",
                 page_name,
-                exc_info=True,
+                type(exc).__name__,
             )
             return page  # type: ignore[return-value]
 
@@ -5205,9 +5242,12 @@ class FloatingSettingsPanel(QWidget):
                 self.resize(w, h)
                 self.move(x, y)
                 ensure_on_screen(self)
-                logger.debug("Restored settings panel geometry: (%d, %d, %d, %d)", x, y, w, h)
+                logger.debug("settings_geometry_restored: x=%d y=%d w=%d h=%d", x, y, w, h)
         except Exception as e:
-            logger.warning("Failed to restore settings panel geometry: %s", e)
+            logger.warning(
+                "settings_geometry_restore_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     def save_geometry(self) -> None:
         """Save settings panel position and size to config."""
@@ -5216,10 +5256,15 @@ class FloatingSettingsPanel(QWidget):
             if self.isVisible():
                 set_config("ui.settings_panel_geometry", (self.x(), self.y(), self.width(), self.height()))
                 save_config()
-                logger.debug("Saved settings panel geometry: (%d, %d, %d, %d)",
-                             self.x(), self.y(), self.width(), self.height())
+                logger.debug(
+                    "settings_geometry_saved: x=%d y=%d w=%d h=%d",
+                    self.x(), self.y(), self.width(), self.height(),
+                )
         except Exception as e:
-            logger.warning("Failed to save settings panel geometry: %s", e)
+            logger.warning(
+                "settings_geometry_save_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     # ------------------------------------------------------------------
     # Edge-resize helpers
@@ -5350,7 +5395,8 @@ class FloatingSettingsPanel(QWidget):
             self.setGeometry(new_x, new_y, new_w, new_h)
         except Exception as exc:
             logger.warning(
-                "Edge-resize error (edge=%s): %s", self._resize_edge, exc
+                "settings_edge_resize_error: edge=%s error_class=%s",
+                self._resize_edge, type(exc).__name__,
             )
             if self._resize_start_geometry is not None:
                 try:
@@ -5598,7 +5644,7 @@ class FloatingSettingsPanel(QWidget):
         # Resize grip — draws its own textured triangle via paintEvent
 
         scheme_name = "dark" if p is DARK_PALETTE else "light"
-        logger.info("Applied %s Aetheric theme to FloatingSettingsPanel", scheme_name)
+        logger.debug("theme_applied: panel=settings scheme=%s", scheme_name)
 
     # -- Title bar drag handlers --
 
@@ -5691,14 +5737,16 @@ class FloatingSettingsPanel(QWidget):
 
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""
+        logger.debug("settings_panel_state: visible=1")
         self._start_fade_in()
         # Activate monitoring if Performance tab is visible
         if self._perf_tab_active:
             self._start_resource_monitor()
             self._metrics_timer.start()
-    
+
     def hide_panel(self):
         """Hide the panel with a 150ms fade-out and stop monitoring."""
+        logger.debug("settings_panel_state: visible=0")
         self.save_geometry()
         self._stop_resource_monitor()
         self._metrics_timer.stop()
@@ -5719,6 +5767,7 @@ class FloatingSettingsPanel(QWidget):
             self._fade_timer.stop()
         # Re-apply theme on show (picks up any desktop theme change while hidden)
         self._apply_theme()
+        logger.debug("settings_panel_fade_in: start=1")
         self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
@@ -5733,6 +5782,7 @@ class FloatingSettingsPanel(QWidget):
         """Animate window opacity from 1 → 0 over 150ms, then hide."""
         if hasattr(self, "_fade_timer") and self._fade_timer.isActive():
             self._fade_timer.stop()
+        logger.debug("settings_panel_fade_out: start=1")
         self.setWindowOpacity(1.0)
         self._fade_step = 0
         self._fade_direction = -1  # -1 = fading out
@@ -5753,6 +5803,7 @@ class FloatingSettingsPanel(QWidget):
             if self._fade_direction == -1:
                 self.hide()
                 self.setWindowOpacity(1.0)  # Reset for next show
+                logger.debug("settings_panel_hidden: fade_out=complete")
     
     # ------------------------------------------------------------------
     # Performance tab wiring (T03)
@@ -5786,7 +5837,7 @@ class FloatingSettingsPanel(QWidget):
             page_index: QStackedWidget index (_NAV_SETTINGS, _NAV_PERFORMANCE, _NAV_HISTORY).
         """
         if page_index < 0 or page_index >= self._content_stack.count():
-            logger.warning("Invalid nav index %d — ignoring", page_index)
+            logger.warning("settings_nav_invalid: index=%d", page_index)
             return
 
         # Update checked state on nav buttons (exclusive toggle)
@@ -5824,7 +5875,7 @@ class FloatingSettingsPanel(QWidget):
             self._refresh_diagnostics()
 
         nav_id = self._nav_buttons[page_index].property("nav_id") if page_index < len(self._nav_buttons) else "?"
-        logger.info("Settings nav changed to '%s' (index %d)", nav_id, page_index)
+        logger.info("settings_nav_changed: page=%s", nav_id)
 
     # ------------------------------------------------------------------
     # Diagnostics — Tier-2 feature dependency health (issue #61)
@@ -5855,8 +5906,11 @@ class FloatingSettingsPanel(QWidget):
 
         try:
             statuses = check_feature_dependencies()
-        except Exception:
-            logger.exception("Diagnostics dependency check failed")
+        except Exception as exc:
+            logger.error(
+                "diagnostics_check_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return
 
         for status in statuses:
@@ -5930,13 +5984,13 @@ class FloatingSettingsPanel(QWidget):
         """Start the ResourceMonitor if not already running."""
         if not self._resource_monitor.is_running:
             self._resource_monitor.start()
-            logger.info("ResourceMonitor started for Performance tab")
+            logger.debug("resource_monitor: running=1 reason=performance_tab")
 
     def _stop_resource_monitor(self) -> None:
         """Stop the ResourceMonitor if running."""
         if self._resource_monitor.is_running:
             self._resource_monitor.stop()
-            logger.info("ResourceMonitor stopped")
+            logger.debug("resource_monitor: running=0")
 
     def _on_resource_snapshot(self, snapshot: ResourceSnapshot) -> None:
         """Update RAM/CPU bars from a resource snapshot.
@@ -5989,7 +6043,10 @@ class FloatingSettingsPanel(QWidget):
                     f"High {resource_name.upper()} usage: {value:.0f}% (threshold: {threshold:.0f}%)",
                 )
             except Exception as exc:
-                logger.debug("Failed to send tray notification: %s", exc)
+                logger.warning(
+                    "resource_warning_tray_failed: error_class=%s",
+                    type(exc).__name__,
+                )
 
         # Also show warning on the main widget scene
         if self._main_widget is not None:
@@ -5998,7 +6055,10 @@ class FloatingSettingsPanel(QWidget):
                     f"⚠ High {resource_name.upper()}: {value:.0f}%"
                 )
             except Exception as exc:
-                logger.debug("Failed to show main widget resource warning: %s", exc)
+                logger.warning(
+                    "resource_warning_widget_failed: error_class=%s",
+                    type(exc).__name__,
+                )
 
     def _check_hide_resource_warning(self) -> None:
         """Hide warning if resources are back to normal."""
@@ -6051,7 +6111,10 @@ class FloatingSettingsPanel(QWidget):
                 self._metric_throughput.setText("Throughput: —")
 
         except Exception as exc:
-            logger.debug("Error refreshing recording metrics: %s", exc)
+            logger.warning(
+                "recording_metrics_refresh_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def update_wer_display(self, wer_value: Optional[float]) -> None:
         """Update the WER display label.
@@ -6085,7 +6148,7 @@ class FloatingSettingsPanel(QWidget):
         benchmark model dropdown, and runs it asynchronously.
         """
         if self._benchmark_runner and self._benchmark_runner.is_running:
-            logger.info("Benchmark already running, ignoring click")
+            logger.debug("benchmark_ignored: reason=already_running")
             return
 
         # Disable button and show progress
@@ -6104,7 +6167,10 @@ class FloatingSettingsPanel(QWidget):
             engine = WhisperTranscriptionEngine(model_size=model_size)
             engine.load_model()
         except Exception as exc:
-            logger.warning("Could not create transcription engine for benchmark: %s", exc)
+            logger.warning(
+                "benchmark_engine_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         self._benchmark_runner = BenchmarkRunner(
             engine=engine,
@@ -6166,9 +6232,14 @@ class FloatingSettingsPanel(QWidget):
 
             set_config("transcription.benchmark_history", history)
             save_config()
-            logger.info("Persisted benchmark result for model '%s' to config", model_name)
+            logger.info(
+                "benchmark_persisted: model=%s", model_name
+            )
         except Exception as exc:
-            logger.warning("Failed to persist benchmark result to config: %s", exc)
+            logger.warning(
+                "benchmark_persist_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         # Build per-model history display
         lines = []
@@ -6204,7 +6275,7 @@ class FloatingSettingsPanel(QWidget):
         self.update_wer_display(result.wer)
 
         logger.info(
-            "Benchmark complete: model=%s, WER=%.3f, throughput=%.1fx, latency=%.2fs",
+            "benchmark_complete: model=%s wer=%.3f throughput=%.1fx latency_s=%.2f",
             model_name, result.wer, result.throughput_ratio, result.total_latency_s,
         )
 
@@ -6268,10 +6339,13 @@ class FloatingSettingsPanel(QWidget):
             set_config("transcription.realtime_model_size", model_size)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save live model selection: %s", exc)
+            logger.warning(
+                "live_model_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         self.model_changed.emit(model_size)
-        logger.info("Live model changed to: %s", model_size)
+        logger.info("live_model_changed: model=%s", model_size)
 
     def _on_postprocess_model_changed(self, index: int) -> None:
         """Handle Post Process Model dropdown selection change.
@@ -6287,9 +6361,12 @@ class FloatingSettingsPanel(QWidget):
             set_config("transcription.postprocess_model_size", model_size)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save post-process model selection: %s", exc)
+            logger.warning(
+                "postprocess_model_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
-        logger.info("Post-process model changed to: %s", model_size)
+        logger.info("postprocess_model_changed: model=%s", model_size)
 
     def _on_noise_filter_toggled(self, state: int) -> None:
         """Handle Background Noise Filter checkbox toggle.
@@ -6302,8 +6379,13 @@ class FloatingSettingsPanel(QWidget):
             set_config("transcription.microphone_denoising_enabled", enabled)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save noise filter setting: %s", exc)
-        logger.info("Background noise filter %s", "enabled" if enabled else "disabled")
+            logger.warning(
+                "noise_filter_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug(
+            "noise_filter_set: enabled=%s", enabled
+        )
 
     def _on_denoising_auto_disable_toggled(self, state: int) -> None:
         """Persist frame-drop denoising auto-disable policy changes."""
@@ -6316,10 +6398,13 @@ class FloatingSettingsPanel(QWidget):
             )
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save denoising auto-disable setting: %s", exc)
-        logger.info(
-            "Denoising auto-disable on frame drops %s",
-            "enabled" if enabled else "disabled",
+            logger.warning(
+                "denoising_auto_disable_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug(
+            "denoising_auto_disable_set: enabled=%s",
+            enabled,
         )
 
     def _on_cc_font_size_changed(self, value: int) -> None:
@@ -6332,9 +6417,12 @@ class FloatingSettingsPanel(QWidget):
             set_config("transcription.cc_font_size", value)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save CC font size: %s", exc)
+            logger.warning(
+                "cc_font_size_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
         self.cc_font_size_changed.emit(value)
-        logger.info("CC font size set to %dpx", value)
+        logger.debug("cc_font_size_set: size_px=%d", value)
 
     def _on_cc_color_picker_clicked(self) -> None:
         """Handle CC font color swatch click — open QColorDialog."""
@@ -6366,9 +6454,12 @@ class FloatingSettingsPanel(QWidget):
             set_config("transcription.cc_font_color", color_str)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save CC font color: %s", exc)
+            logger.warning(
+                "cc_font_color_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
         self.cc_font_color_changed.emit(color_str)
-        logger.info("CC font color set to %s", color_str)
+        logger.debug("cc_font_color_set: color=1")
 
     @staticmethod
     def _parse_rgba_color(rgba_str: str):
@@ -6409,8 +6500,11 @@ class FloatingSettingsPanel(QWidget):
             set_config("transcription.cc_auto_open", enabled)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save CC auto-open setting: %s", exc)
-        logger.info("CC auto-open set to %s", enabled)
+            logger.warning(
+                "cc_auto_open_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug("cc_auto_open_set: enabled=%s", enabled)
 
     def _on_waveform_toggled(self, state: int) -> None:
         """Handle waveform visualization checkbox toggle.
@@ -6424,8 +6518,13 @@ class FloatingSettingsPanel(QWidget):
             set_config("ui.waveform_enabled", enabled)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save waveform setting: %s", exc)
-        logger.info("Waveform visualization %s", "enabled" if enabled else "disabled")
+            logger.warning(
+                "waveform_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug(
+            "waveform_set: enabled=%s", enabled
+        )
 
     def _on_clustering_threshold_changed(self, value: float) -> None:
         """Handle clustering threshold spinbox change.
@@ -6437,8 +6536,11 @@ class FloatingSettingsPanel(QWidget):
             set_config("speaker.clustering_threshold", float(value))
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save clustering threshold: %s", exc)
-        logger.info("Clustering threshold set to %.2f", value)
+            logger.warning(
+                "clustering_threshold_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug("clustering_threshold_set: value=%.2f", value)
 
     def _on_min_duration_on_changed(self, value: float) -> None:
         """Handle min duration on spinbox change.
@@ -6450,8 +6552,11 @@ class FloatingSettingsPanel(QWidget):
             set_config("speaker.min_duration_on", float(value))
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save min duration on: %s", exc)
-        logger.info("Min duration on set to %.1f s", value)
+            logger.warning(
+                "min_duration_on_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug("min_duration_on_set: value_s=%.1f", value)
 
     def _on_min_duration_off_changed(self, value: float) -> None:
         """Handle min duration off spinbox change.
@@ -6463,8 +6568,11 @@ class FloatingSettingsPanel(QWidget):
             set_config("speaker.min_duration_off", float(value))
             save_config()
         except Exception as exc:
-            logger.warning("Failed to save min duration off: %s", exc)
-        logger.info("Min duration off set to %.1f s", value)
+            logger.warning(
+                "min_duration_off_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug("min_duration_off_set: value_s=%.1f", value)
 
     # ------------------------------------------------------------------
     # Storage path management
@@ -6550,9 +6658,12 @@ class FloatingSettingsPanel(QWidget):
             cm._settings.storage_paths = candidate
             cm._dirty_paths.add("storage_paths")
             cm.save()
-            logger.info("Storage paths saved successfully")
+            logger.info("storage_paths_saved: fields_committed=3")
         except Exception as exc:
-            logger.warning("Failed to save storage paths: %s", exc)
+            logger.warning(
+                "storage_paths_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
             QMessageBox.warning(
                 self,
                 "Save Error",
@@ -6626,7 +6737,10 @@ class FloatingSettingsPanel(QWidget):
             set_config("transcription.benchmark_history", history)
             save_config()
         except Exception as exc:
-            logger.warning("Failed to update benchmark history in config: %s", exc)
+            logger.warning(
+                "benchmark_history_update_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         self._refresh_dropdown_wer()
 
@@ -6669,7 +6783,10 @@ class FloatingSettingsPanel(QWidget):
             finally:
                 store.close()
         except Exception as exc:
-            logger.info("Identity tab: store load failed: %s", exc)
+            logger.warning(
+                "identity_store_load_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         # Discover additional identity names from transcript speaker_matches
         # that were linked through the history dialog but don't have embeddings yet.
@@ -6699,7 +6816,10 @@ class FloatingSettingsPanel(QWidget):
                         key=lambda n: n.lower(),
                     )
         except Exception as exc:
-            logger.info("Identity tab: transcript scan failed: %s", exc)
+            logger.warning(
+                "identity_transcript_scan_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         if not profile_names:
             self._populate_identity_list(profile_names, {})
@@ -6714,7 +6834,10 @@ class FloatingSettingsPanel(QWidget):
             transcripts_dir = get_transcripts_dir()
             usage = scan_identity_usage(transcripts_dir, profile_names)
         except Exception as exc:
-            logger.info("Identity tab: usage scan failed: %s", exc)
+            logger.warning(
+                "identity_usage_scan_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         # Filter out orphaned placeholder identities (e.g. SPK_0, SPK_1) that
         # have zero recordings and no entry in the signature store.  These are
@@ -6733,8 +6856,8 @@ class FloatingSettingsPanel(QWidget):
             ]
             if len(filtered) < len(profile_names):
                 removed = set(profile_names) - set(filtered)
-                logger.info(
-                    "Identity tab: filtered %d orphaned placeholder(s)",
+                logger.debug(
+                    "identity_placeholders_filtered: removed=%d",
                     len(removed),
                 )
                 profile_names = filtered
@@ -6953,7 +7076,7 @@ class FloatingSettingsPanel(QWidget):
             self._refresh_identities()
             return
 
-        logger.info("Identity rename completed via Settings UI")
+        logger.info("identity_renamed: via=settings")
         self._refresh_and_reselect(target_name=new_name)
         self._emit_identity_changed()
 
@@ -7028,7 +7151,7 @@ class FloatingSettingsPanel(QWidget):
             self._refresh_identities()
             return
 
-        logger.info("Identity merge completed via Settings UI")
+        logger.info("identity_merged: via=settings")
         self._refresh_and_reselect(target_name=target_name)
         self._emit_identity_changed()
 
@@ -7078,7 +7201,7 @@ class FloatingSettingsPanel(QWidget):
             self._refresh_identities()
             return
 
-        logger.info("Identity delete completed via Settings UI")
+        logger.info("identity_deleted: via=settings")
         # After delete, the identity is gone — clear detail and refresh
         self._refresh_and_reselect(target_name=None)
         self._emit_identity_changed()
@@ -7241,15 +7364,16 @@ class FloatingSettingsPanel(QWidget):
                     for name in summary.failed_identities:
                         queue.enqueue_identity_cleanup(name)
                     logger.info(
-                        "Enqueued %d failed identity cleanup(s) for retry",
+                        "identity_cleanup_enqueued: count=%d",
                         len(summary.failed_identities),
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Failed to enqueue identity cleanup(s): %s", exc
+                        "identity_cleanup_enqueue_failed: error_class=%s",
+                        type(exc).__name__,
                     )
 
-        logger.info("Identity prune completed via Settings UI")
+        logger.info("identity_pruned: via=settings")
         self._refresh_and_reselect(target_name=None)
         self._emit_identity_changed()
 
@@ -7273,10 +7397,12 @@ class FloatingSettingsPanel(QWidget):
         """
         import time as _t
         _t0 = _t.monotonic()
-        logger.info("[UI-TIMER] refresh_history_if_visible start")
+        logger.debug("history_refresh_begin: trigger=external")
         self._refresh_history()
-        logger.info("[UI-TIMER] refresh_history_if_visible _refresh_history: %.1fms",
-                    (_t.monotonic() - _t0) * 1000)
+        logger.debug(
+            "history_refresh_scan_done: duration_ms=%.1f",
+            (_t.monotonic() - _t0) * 1000,
+        )
         if self._content_stack.currentIndex() == self._NAV_HISTORY:
             # Re-render the currently-viewed transcript (speaker labels
             # may have been added by post-processing diarization).
@@ -7325,7 +7451,7 @@ class FloatingSettingsPanel(QWidget):
         try:
             from meetandread.transcription.transcript_scanner import scan_recordings
         except ImportError:
-            logger.warning("transcript_scanner not available — cannot populate history")
+            logger.warning("history_scan_unavailable: reason=transcript_scanner_import_failed")
             return
         self._populate_history_list(scan_recordings())
 
@@ -7464,7 +7590,8 @@ class FloatingSettingsPanel(QWidget):
             return getter(md_path)
         except Exception as exc:
             logger.warning(
-                "post_processing_state read failed (non-fatal): %s", exc,
+                "post_processing_state_read_failed: error_class=%s",
+                type(exc).__name__,
             )
             return None
 
@@ -7480,7 +7607,8 @@ class FloatingSettingsPanel(QWidget):
             return getter(md_path)
         except Exception as exc:
             logger.warning(
-                "post_processing_progress read failed (non-fatal): %s", exc,
+                "post_processing_progress_read_failed: error_class=%s",
+                type(exc).__name__,
             )
             return None
 
@@ -7498,8 +7626,9 @@ class FloatingSettingsPanel(QWidget):
 
             return bool(get_config("transcription.enable_postprocessing"))
         except Exception as exc:
-            logger.debug(
-                "post_processing_enabled read failed (non-fatal): %s", exc,
+            logger.warning(
+                "post_processing_enabled_read_failed: error_class=%s",
+                type(exc).__name__,
             )
             return None
 
@@ -7701,7 +7830,10 @@ class FloatingSettingsPanel(QWidget):
         try:
             job_id = retry(md_path)
         except Exception as exc:
-            logger.error("Retry post-processing failed: %s", exc, exc_info=True)
+            logger.error(
+                "post_process_retry_failed: error_class=%s",
+                type(exc).__name__,
+            )
             job_id = None
 
         if job_id is None:
@@ -7730,7 +7862,8 @@ class FloatingSettingsPanel(QWidget):
             return bool(probe())
         except Exception as exc:
             logger.warning(
-                "is_post_processing_running probe failed (non-fatal): %s", exc,
+                "post_processing_running_probe_failed: error_class=%s",
+                type(exc).__name__,
             )
             return False
 
@@ -7803,8 +7936,10 @@ class FloatingSettingsPanel(QWidget):
                 self._playback_helper = HistoryPlaybackController()
                 # Wire player signals to progress slider (once per helper)
                 self._wire_player_signals()
-            except ImportError as exc:
-                logger.warning("QtMultimedia unavailable — playback disabled: %s", exc)
+            except ImportError:
+                logger.warning(
+                    "playback_unavailable: reason=qt_multimedia_import_failed"
+                )
                 self._playback_helper = None
         return self._playback_helper
 
@@ -7829,7 +7964,9 @@ class FloatingSettingsPanel(QWidget):
             player.mediaStatusChanged.connect(self._on_player_media_status_changed)
             signals.append("mediaStatusChanged")
         if signals:
-            logger.info("player_signals_wired: %s", ", ".join(signals))
+            logger.debug(
+                "player_signals_wired: signals=%s", ",".join(signals)
+            )
 
     # Minimum interval (ms) between slider updates from player position
     _POSITION_UPDATE_INTERVAL_MS = 50
@@ -7902,8 +8039,8 @@ class FloatingSettingsPanel(QWidget):
         value 0 so the user sees a clean start position.
         """
         if duration_ms > 0:
-            logger.info(
-                "duration_changed: duration_ms=%d, resetting slider",
+            logger.debug(
+                "duration_changed: duration_ms=%d slider_reset=1",
                 duration_ms,
             )
             # Reset slider to start on new media load
@@ -7986,10 +8123,13 @@ class FloatingSettingsPanel(QWidget):
 
     def _on_playback_play_clicked(self) -> None:
         """Toggle play/pause on the playback helper."""
-        logger.debug("[PLAY-CLICK] handler called, helper=%s", self._playback_helper)
+        logger.debug(
+            "playback_play_click: helper=%s",
+            "present" if self._playback_helper is not None else "none",
+        )
         helper = self._playback_helper
         if helper is None or not helper.is_audio_available:
-            logger.debug("[PLAY-CLICK] no helper or no audio, returning")
+            logger.debug("playback_play_click: skipped=1 reason=no_helper_or_audio")
             return
         # Check current state from the helper's player
         player = helper.player
@@ -8015,7 +8155,10 @@ class FloatingSettingsPanel(QWidget):
 
     def _on_playback_speed_clicked(self) -> None:
         """Cycle to the next speed preset and apply it."""
-        logger.debug("[SPEED-CLICK] handler called, current index=%d", self._speed_preset_index)
+        logger.debug(
+            "playback_speed_click: preset_index=%d",
+            self._speed_preset_index,
+        )
         self._speed_preset_index = (self._speed_preset_index + 1) % len(self._SPEED_PRESETS)
         rate = self._SPEED_PRESETS[self._speed_preset_index]
         # Format: show "1x" for whole numbers, "1.5x" otherwise
@@ -8114,7 +8257,7 @@ class FloatingSettingsPanel(QWidget):
         now = time.monotonic()
         if now - getattr(self, '_volume_popup_closed_at', 0) < 0.3:
             return  # Ignore click — popup just closed
-        logger.debug("[VOLUME-CLICK] showing popup")
+        logger.debug("volume_popup: shown=1")
         btn_pos = self._playback_volume_btn.mapToGlobal(QPoint(0, 0))
         # Position popup below the button, right-aligned
         x = btn_pos.x() + self._playback_volume_btn.width() - self._volume_popup.width()
@@ -8185,11 +8328,14 @@ class FloatingSettingsPanel(QWidget):
                 self._bookmark_manager = BookmarkManager(md_path)
             self._bookmark_manager.add(position_ms, name=name)
             logger.info(
-                "bookmark_added_ui: stem=%s position_ms=%d",
-                md_path.stem, position_ms,
+                "bookmark_added_ui: position_ms=%d",
+                position_ms,
             )
         except Exception as exc:
-            logger.warning("bookmark_add_failed: stem=%s error=%s", md_path.stem, exc)
+            logger.warning(
+                "bookmark_add_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return
 
         # Refresh the bookmark combo
@@ -8244,8 +8390,8 @@ class FloatingSettingsPanel(QWidget):
             bookmarks = self._bookmark_manager.list_bookmarks()
         except Exception as exc:
             logger.warning(
-                "bookmark_load_failed: stem=%s error=%s",
-                md_path.stem, exc,
+                "bookmark_load_failed: error_class=%s",
+                type(exc).__name__,
             )
             self._bookmark_combo.clear()
             self._bookmark_combo.addItem("(Bookmark error)")
@@ -8299,13 +8445,13 @@ class FloatingSettingsPanel(QWidget):
                 self._bookmark_manager = BookmarkManager(md_path)
             deleted = self._bookmark_manager.delete(created_at)
             if deleted:
-                logger.info(
-                    "bookmark_deleted_ui: stem=%s",
-                    md_path.stem,
-                )
+                logger.info("bookmark_deleted_ui:")
             # If not found (already deleted), silently refresh
         except Exception as exc:
-            logger.warning("bookmark_delete_failed: stem=%s error=%s", md_path.stem, exc)
+            logger.warning(
+                "bookmark_delete_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return
 
         self._refresh_bookmark_combo()
@@ -8334,7 +8480,7 @@ class FloatingSettingsPanel(QWidget):
             percent = slider_value / 1000.0
             target_ms = int(percent * duration)
             logger.info(
-                "slider_seek_triggered position_ms=%d percent=%.3f",
+                "slider_seek_triggered: position_ms=%d percent=%.3f",
                 target_ms, percent,
             )
             helper.seek_to(target_ms)
@@ -8420,7 +8566,7 @@ class FloatingSettingsPanel(QWidget):
 
             if action is not None:
                 logger.info(
-                    "keyboard_shortcut_triggered key=%s action=%s",
+                    "keyboard_shortcut_triggered: key=%s action=%s",
                     event.text() or str(key), action,
                 )
                 event.accept()
@@ -8454,7 +8600,7 @@ class FloatingSettingsPanel(QWidget):
 
                 if action is not None:
                     logger.info(
-                        "keyboard_shortcut_triggered key=%s action=%s",
+                        "keyboard_shortcut_triggered: key=%s action=%s",
                         event.text() or str(key), action,
                     )
                     event.accept()
@@ -8720,7 +8866,10 @@ class FloatingSettingsPanel(QWidget):
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
-            logger.error("Failed to read transcript for highlighting: %s: %s", md_path, exc)
+            logger.error(
+                "transcript_highlight_failed: reason=read_error error_class=%s",
+                type(exc).__name__,
+            )
             return None
 
         data = transcript_footer.parse(content)
@@ -8820,7 +8969,10 @@ class FloatingSettingsPanel(QWidget):
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
-            logger.error("Failed to read transcript for rendering: %s: %s", md_path, exc)
+            logger.error(
+                "transcript_render_failed: reason=read_error error_class=%s",
+                type(exc).__name__,
+            )
             return None
 
         split_result = transcript_footer.split(content)
@@ -8938,7 +9090,7 @@ class FloatingSettingsPanel(QWidget):
             if item and item.data(Qt.ItemDataRole.UserRole) == md_str:
                 self._history_list.setCurrentItem(item)
                 return
-        logger.debug("Could not re-select history item for %s", md_path)
+        logger.debug("history_item_reselect_missed: path_present=%s", bool(md_path))
 
     def _on_history_context_menu(self, pos) -> None:
         """Show context menu on history list items."""
@@ -9019,7 +9171,10 @@ class FloatingSettingsPanel(QWidget):
         try:
             result = rename_recording(old_stem, new_stem)
         except Exception as exc:
-            logger.error("Rename failed for %s -> %s: %s", old_stem, new_stem, exc)
+            logger.error(
+                    "recording_rename_failed: error_class=%s",
+                    type(exc).__name__,
+                )
             QMessageBox.warning(
                 parent, "Rename Failed",
                 f"Could not rename recording.\n\n{exc}",
@@ -9036,14 +9191,14 @@ class FloatingSettingsPanel(QWidget):
                 f"Conflicting or failed files:\n{detail}",
             )
             logger.warning(
-                "Rename UI: %d failures for %s -> %s",
-                len(result.failed), old_stem, new_stem,
+                "recording_rename_partial: files_failed=%d",
+                len(result.failed),
             )
             return
 
         logger.info(
-            "Rename UI: successfully renamed %s -> %s (%d files)",
-            old_stem, new_stem, len(result.renamed),
+            "recording_renamed: files_renamed=%d",
+            len(result.renamed),
         )
 
         # Build expected new transcript path for reselection
@@ -9072,7 +9227,10 @@ class FloatingSettingsPanel(QWidget):
             from meetandread.recording.management import enumerate_recording_files, delete_recording_structured
             files = enumerate_recording_files(stem)
         except Exception as exc:
-            logger.error("Failed to enumerate recording files: %s", exc)
+            logger.error(
+                "recording_enum_failed: error_class=%s",
+                type(exc).__name__,
+            )
             files = []
 
         # R027: Release playback file handles *before* the confirmation
@@ -9083,8 +9241,8 @@ class FloatingSettingsPanel(QWidget):
             self._stop_playback()
         except Exception as stop_exc:
             logger.warning(
-                "Pre-delete playback stop failed for '%s': %s",
-                recording_name, stop_exc,
+                "pre_delete_playback_stop_failed: error_class=%s",
+                type(stop_exc).__name__,
             )
 
         file_count = len(files)
@@ -9105,11 +9263,14 @@ class FloatingSettingsPanel(QWidget):
         try:
             result = delete_recording_structured(stem)
             logger.info(
-                "Delete recording '%s': %d/%d files removed",
-                recording_name, result.success_count, file_count,
+                "recording_deleted: files_removed=%d files_total=%d",
+                result.success_count, file_count,
             )
         except Exception as exc:
-            logger.error("Failed to delete recording '%s': %s", recording_name, exc)
+            logger.error(
+                "recording_delete_failed: error_class=%s",
+                type(exc).__name__,
+            )
             QMessageBox.warning(
                 parent,
                 "Delete Failed",
@@ -9144,8 +9305,8 @@ class FloatingSettingsPanel(QWidget):
                 try:
                     retry_result = delete_recording_structured(stem)
                     logger.info(
-                        "Delete retry '%s': %d/%d removed",
-                        recording_name, retry_result.success_count,
+                        "recording_delete_retry: files_removed=%d files_total=%d",
+                        retry_result.success_count,
                         retry_result.success_count + retry_result.failure_count,
                     )
                     if not retry_result.all_succeeded:
@@ -9155,7 +9316,10 @@ class FloatingSettingsPanel(QWidget):
                             f"{retry_result.failure_count} file(s) remain.",
                         )
                 except Exception as exc:
-                    logger.error("Delete retry failed for '%s': %s", recording_name, exc)
+                    logger.error(
+                        "recording_delete_retry_failed: error_class=%s",
+                        type(exc).__name__,
+                    )
                     QMessageBox.warning(
                         parent, "Retry Failed",
                         f"Retry failed with error:\n\n{exc}",
@@ -9169,8 +9333,8 @@ class FloatingSettingsPanel(QWidget):
                     failed_paths = [p for p, _ in result.failed]
                     queue.enqueue_file_deletion(stem, paths=failed_paths)
                     logger.info(
-                        "Enqueued %d failed paths for cleanup: stem=%s",
-                        len(failed_paths), stem,
+                        "cleanup_enqueued: paths=%d",
+                        len(failed_paths),
                     )
                     QMessageBox.information(
                         parent, "Marked for Cleanup",
@@ -9178,7 +9342,10 @@ class FloatingSettingsPanel(QWidget):
                         "They will be removed automatically when no longer in use.",
                     )
                 except Exception as exc:
-                    logger.error("Cleanup enqueue failed: %s", exc)
+                    logger.error(
+                        "cleanup_enqueue_failed: error_class=%s",
+                        type(exc).__name__,
+                    )
                     QMessageBox.warning(
                         parent, "Cleanup Enqueue Failed",
                         f"Could not enqueue files for cleanup.\n\n{exc}",
@@ -9264,14 +9431,14 @@ class FloatingSettingsPanel(QWidget):
         parts = payload.split(":")
 
         if len(parts) != 2:
-            logger.warning("word_anchor_malformed: link=%s", link)
+            logger.warning("word_anchor_malformed: parts=%d", len(link.split(':')))
             return
 
         try:
             word_index = int(parts[0])
             start_ms = int(parts[1])
         except (ValueError, TypeError):
-            logger.warning("word_anchor_malformed: link=%s", link)
+            logger.warning("word_anchor_malformed: parts=%d", len(link.split(':')))
             return
 
         if word_index < 0 or start_ms < 0:
@@ -9483,7 +9650,10 @@ class FloatingSettingsPanel(QWidget):
                 wav_path, md_path, model_size,
             )
         except Exception as exc:
-            logger.error("Retranscribe startup failed: %s", exc, exc_info=True)
+            logger.error(
+                "retranscribe_startup_failed: panel=settings error_class=%s",
+                type(exc).__name__,
+            )
             # Restore all retranscribe state so the UI is not stuck
             self._is_retranscribing = False
             self._is_comparison_mode = False
@@ -9576,7 +9746,10 @@ class FloatingSettingsPanel(QWidget):
                 "Re-transcribe Failed",
                 f"Re-transcription failed:\n\n{error}",
             )
-            logger.error("Retranscribe failed: %s", error)
+            logger.error(
+                "retranscribe_failed: panel=settings error_class=%s",
+                type(error).__name__ if isinstance(error, Exception) else "str",
+            )
             return
 
         # Refresh history list — retranscribe adds a new sidecar recording
@@ -9589,7 +9762,9 @@ class FloatingSettingsPanel(QWidget):
         """Show side-by-side comparison of original vs re-transcribed transcript."""
         sidecar = Path(sidecar_path)
         if not sidecar.exists():
-            logger.warning("Sidecar not found for comparison: %s", sidecar_path)
+            logger.warning(
+                "retranscribe_comparison_skipped: panel=settings reason=sidecar_missing"
+            )
             return
 
         self._is_comparison_mode = True
@@ -9688,8 +9863,8 @@ class FloatingSettingsPanel(QWidget):
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
-                "Accepted retranscribe: %s model %s",
-                self._current_history_md_path, self._retranscribe_model_size,
+                "retranscribe_accepted: panel=settings model=%s",
+                self._retranscribe_model_size,
             )
         except FileNotFoundError:
             parent = self.parent() if self.parent() else self
@@ -9721,11 +9896,14 @@ class FloatingSettingsPanel(QWidget):
                 self._current_history_md_path, self._retranscribe_model_size,
             )
             logger.info(
-                "Rejected retranscribe: %s model %s",
-                self._current_history_md_path, self._retranscribe_model_size,
+                "retranscribe_rejected: panel=settings model=%s",
+                self._retranscribe_model_size,
             )
         except Exception as exc:
-            logger.warning("Error rejecting retranscribe: %s", exc)
+            logger.warning(
+                "retranscribe_reject_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
         self._hide_retranscribe_accept_reject()
         self._refresh_after_retranscribe()
