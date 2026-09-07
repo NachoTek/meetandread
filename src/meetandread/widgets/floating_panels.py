@@ -2133,7 +2133,7 @@ class FloatingTranscriptPanel(QWidget):
         except Exception as exc:
             logger.error(
                 "retranscribe_startup_failed: panel=transcript error_class=%s",
-                type(exc).__name__, exc_info=True,
+                type(exc).__name__,
             )
             # Restore all retranscribe state so the UI is not stuck
             self._is_retranscribing = False
@@ -5229,7 +5229,6 @@ class FloatingSettingsPanel(QWidget):
                 "settings_scroll_wrapper_failed: page=%s error_class=%s",
                 page_name,
                 type(exc).__name__,
-                exc_info=True,
             )
             return page  # type: ignore[return-value]
 
@@ -5907,8 +5906,11 @@ class FloatingSettingsPanel(QWidget):
 
         try:
             statuses = check_feature_dependencies()
-        except Exception:
-            logger.exception("diagnostics_check_failed:")
+        except Exception as exc:
+            logger.error(
+                "diagnostics_check_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return
 
         for status in statuses:
@@ -7830,7 +7832,7 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.error(
                 "post_process_retry_failed: error_class=%s",
-                type(exc).__name__, exc_info=True,
+                type(exc).__name__,
             )
             job_id = None
 
@@ -9650,7 +9652,7 @@ class FloatingSettingsPanel(QWidget):
         except Exception as exc:
             logger.error(
                 "retranscribe_startup_failed: panel=settings error_class=%s",
-                type(exc).__name__, exc_info=True,
+                type(exc).__name__,
             )
             # Restore all retranscribe state so the UI is not stuck
             self._is_retranscribing = False

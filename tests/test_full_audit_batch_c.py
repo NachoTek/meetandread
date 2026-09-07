@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from meetandread.recording.controller import ControllerState
 from meetandread.widgets.floating_panels import FloatingSettingsPanel
@@ -78,8 +78,27 @@ def _at_or_above_info(caplog, logger_name: str) -> list:
     ]
 
 
-def _all_messages(caplog, logger_name: str) -> list:
-    return [r.getMessage() for r in caplog.records if r.name == logger_name]
+# One formatter shared by the fully-formatted canaries. A fresh formatter
+# is intentionally NOT created per record: format() mutates internal
+# caching state, and reusing one instance mirrors what a real handler
+# (and thus the captured log file) produces, including any exception
+# text the logger appends via exc_info.
+_FORMATTER = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+
+def _formatted_output(caplog, logger_name: str) -> list:
+    """Fully formatted log lines — message PLUS appended exception text.
+
+    Privacy canaries must inspect this, not just ``getMessage()``: a
+    record logged with ``exc_info`` (or via ``logger.exception``) has
+    the raw exception message and traceback appended by the formatter,
+    which getMessage() alone never shows.
+    """
+    return [
+        _FORMATTER.format(r)
+        for r in caplog.records
+        if r.name == logger_name
+    ]
 
 
 @pytest.fixture
@@ -134,7 +153,7 @@ class TestToastManagerLogging:
         mgr = self._manager(qapp)
         with caplog.at_level(logging.DEBUG, logger=FP_LOG):
             mgr.show("frame-drops", PRIVACY_TITLE, "Body", duration_ms=100)
-        for msg in _all_messages(caplog, FP_LOG):
+        for msg in _formatted_output(caplog, FP_LOG):
             assert PRIVACY_TITLE not in msg
 
 
@@ -449,7 +468,7 @@ class TestMainWidgetLogging:
         assert any(
             m.startswith("phrase_result_received: conf=87 final=True") for m in debug_msgs
         )
-        for msg in _all_messages(caplog, MW_LOG):
+        for msg in _formatted_output(caplog, MW_LOG):
             assert "super secret canary" not in msg
 
     def test_recording_complete_info_summary(self, widget, caplog):
@@ -460,7 +479,7 @@ class TestMainWidgetLogging:
             )
         info_msgs = _info(caplog, MW_LOG)
         assert any(m.startswith("recording_saved: wav=1 transcript=1") for m in info_msgs)
-        for msg in _all_messages(caplog, MW_LOG):
+        for msg in _formatted_output(caplog, MW_LOG):
             assert "x.wav" not in msg and "x.md" not in msg
 
     def test_wasapi_retry_flow_named_events(self, widget, qapp, caplog):
@@ -488,7 +507,7 @@ class TestMainWidgetLogging:
             widget._on_speaker_name_pinned("spk0", "Super Secret Person Name")
         info_msgs = _info(caplog, MW_LOG)
         assert any(m == "speaker_name_pinned: label=spk0" for m in info_msgs)
-        for msg in _all_messages(caplog, MW_LOG):
+        for msg in _formatted_output(caplog, MW_LOG):
             assert "Super Secret Person Name" not in msg
 
 
@@ -700,3 +719,153 @@ class TestInfoSessionReadability:
             assert info_msgs == []  # per-state/per-action trail stays at DEBUG
         finally:
             tray._tray.deleteLater()
+
+
+# ---------------------------------------------------------------------------
+# Exception-payload privacy — formatted-output canaries (review round 1)
+# ---------------------------------------------------------------------------
+
+
+PRIVACY_PATH = "C:/Users/canary/Documents/meetandread/recordings/board-meeting.wav"
+
+
+class TestExceptionPayloadPrivacy:
+    """Exception payloads never carry paths/text into widget-layer logs.
+
+    Review finding: ``exc_info=True`` / ``logger.exception`` made the
+    formatter append raw exception messages and tracebacks, so a
+    file-related exception could put a Recording title/path into the
+    captured log even though the event message carried only
+    ``error_class=``. The widget layer now logs ``error_class=`` facts
+    with no exception payload on these capture-boundary paths (the
+    raising layer owns detailed diagnostics).
+
+    These canaries inspect FULLY FORMATTED output — message plus any
+    text a formatter would append — so an ``exc_info`` regression on
+    any of these paths fails here.
+    """
+
+    def _canary_exception(self):
+        return OSError(
+            f"cannot open recording file: {PRIVACY_PATH}"
+        )
+
+    def test_frame_drop_forward_failure_no_payload(self, qapp, caplog):
+        """_on_frames_dropped failure logs error_class only — no traceback."""
+        widget, _controller = _make_widget_with_mocked_controller(qapp)
+        try:
+            handler = MagicMock(side_effect=self._canary_exception())
+            widget.record_button.on_frames_dropped = handler
+            with caplog.at_level(logging.DEBUG, logger=MW_LOG):
+                widget._on_frames_dropped(7)
+        finally:
+            widget.close()
+        formatted = _formatted_output(caplog, MW_LOG)
+        error_lines = [m for m in formatted if "frame_drop_forward_failed" in m]
+        assert error_lines, formatted
+        assert any("error_class=OSError" in m for m in error_lines)
+        for line in formatted:
+            assert PRIVACY_PATH not in line, line
+            assert "Traceback" not in line, line
+
+    def test_device_change_notification_failure_no_payload(self, qapp, caplog):
+        """Hot-plug toast failure logs error_class only — no traceback."""
+        widget, _controller = _make_widget_with_mocked_controller(qapp)
+        try:
+            event = MagicMock()
+            event.event_type.value = "removed"
+            event.state = "inactive"
+            event.friendly_name = "Canary Device"
+            # Toast manager raising simulates the UI failure path
+            widget.toast_manager.show = MagicMock(side_effect=self._canary_exception())
+            with caplog.at_level(logging.DEBUG, logger=MW_LOG):
+                widget._on_device_changed(event)
+        finally:
+            widget.close()
+        formatted = _formatted_output(caplog, MW_LOG)
+        error_lines = [m for m in formatted if "device_change_notification_failed" in m]
+        assert error_lines, formatted
+        assert any("error_class=OSError" in m for m in error_lines)
+        for line in formatted:
+            assert PRIVACY_PATH not in line, line
+            assert "Traceback" not in line, line
+
+    def test_diagnostics_check_failure_no_payload(self, qapp, caplog):
+        """Diagnostics dependency check failure logs error_class only."""
+        panel = FloatingSettingsPanel()
+        try:
+            import meetandread.dependencies as deps_mod
+
+            with patch(
+                "meetandread.dependencies.check_feature_dependencies",
+                side_effect=self._canary_exception(),
+            ):
+                with caplog.at_level(logging.DEBUG, logger=FP_LOG):
+                    panel._refresh_diagnostics()
+        finally:
+            panel.close()
+        formatted = _formatted_output(caplog, FP_LOG)
+        error_lines = [m for m in formatted if "diagnostics_check_failed" in m]
+        assert error_lines, formatted
+        assert any("error_class=OSError" in m for m in error_lines)
+        for line in formatted:
+            assert PRIVACY_PATH not in line, line
+            assert "Traceback" not in line, line
+
+    def test_settings_scroll_wrapper_failure_no_payload(self, qapp, caplog):
+        """Scroll-wrapper construction failure logs error_class only."""
+        panel = FloatingSettingsPanel.__new__(FloatingSettingsPanel)
+        page = QWidget()
+        with patch(
+            "meetandread.widgets.floating_panels.QScrollArea",
+            side_effect=self._canary_exception(),
+        ):
+            with caplog.at_level(logging.DEBUG, logger=FP_LOG):
+                wrapped = panel._wrap_settings_page_for_scroll(page, "canary-page")
+        assert wrapped is page  # fell back to unwrapped page
+        formatted = _formatted_output(caplog, FP_LOG)
+        error_lines = [m for m in formatted if "settings_scroll_wrapper_failed" in m]
+        assert error_lines, formatted
+        assert any("error_class=OSError" in m for m in error_lines)
+        assert any("page=canary-page" in m for m in error_lines)
+        for line in formatted:
+            assert PRIVACY_PATH not in line, line
+            assert "Traceback" not in line, line
+
+    def test_widget_layer_emits_no_exc_info_anywhere(self):
+        """Structural guard: no logger.exception/exc_info remains in widgets/.
+
+        A grep-level assertion: if someone reintroduces an exception
+        payload on a capture-boundary path, this fails before any
+        privacy canary needs to catch it.
+        """
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys\n"
+                "hits = []\n"
+                "for f in sys.argv[1:]:\n"
+                "    for i, line in enumerate(open(f, encoding='utf-8'), 1):\n"
+                "        if 'logger.exception' in line or 'exc_info' in line:\n"
+                "            hits.append(f'{f}:{i}: {line.strip()}')\n"
+                "print('\\n'.join(hits))\n"
+                "sys.exit(1 if hits else 0)\n",
+                str(repo_root / "src" / "meetandread" / "widgets" / "main_widget.py"),
+                str(repo_root / "src" / "meetandread" / "widgets" / "floating_panels.py"),
+                str(repo_root / "src" / "meetandread" / "widgets" / "theme.py"),
+                str(repo_root / "src" / "meetandread" / "widgets" / "tray_icon.py"),
+                str(repo_root / "src" / "meetandread" / "widgets" / "icons.py"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            "widget layer must not log exception payloads "
+            "(logger.exception / exc_info):\n" + result.stdout
+        )

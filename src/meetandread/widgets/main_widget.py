@@ -1061,8 +1061,11 @@ to avoid clipping issues and enable proper text rendering.
                 message,
                 duration_ms=0,
             )
-        except Exception:
-            logger.exception("device_change_notification_failed:")
+        except Exception as exc:
+            logger.error(
+                "device_change_notification_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def _on_recovery_attempted(self, result) -> None:
         """Replace pending device feedback with the latest recovery outcome."""
@@ -1101,15 +1104,21 @@ to avoid clipping issues and enable proper text rendering.
                 message,
                 duration_ms=duration_ms,
             )
-        except Exception:
-            logger.exception("recovery_notification_failed:")
+        except Exception as exc:
+            logger.error(
+                "recovery_notification_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def _retry_recording_recovery(self) -> None:
         """Retry lost-source recovery without creating a new AudioSession."""
         try:
             self._controller.retry_recovery()
-        except Exception:
-            logger.exception("manual_recovery_retry_failed:")
+        except Exception as exc:
+            logger.error(
+                "manual_recovery_retry_failed: error_class=%s",
+                type(exc).__name__,
+            )
             self.toast_manager.show(
                 self._recovery_toast_id,
                 "Recording recovery failed",
@@ -1301,8 +1310,11 @@ to avoid clipping issues and enable proper text rendering.
                 handler(safe_count)
 
             self._maybe_show_frame_drop_toast(safe_count)
-        except Exception:
-            logger.exception("frame_drop_forward_failed:")
+        except Exception as exc:
+            logger.error(
+                "frame_drop_forward_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def _on_speaker_name_pinned(self, raw_label: str, name: str):
         """Handle user pinning a speaker name in the transcript panel.
@@ -1387,8 +1399,11 @@ to avoid clipping issues and enable proper text rendering.
         """
         try:
             self._controller.initialize_post_processing()
-        except Exception:
-            logger.exception("post_process_startup_failed:")
+        except Exception as exc:
+            logger.error(
+                "post_process_startup_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def maybe_show_dependency_banner(self):
         """Show a dismissible banner when Tier-2 dependencies are missing.
@@ -1403,8 +1418,11 @@ to avoid clipping issues and enable proper text rendering.
 
         try:
             unresolved = unresolved_dependencies()
-        except Exception:
-            logger.exception("dependency_banner_check_failed:")
+        except Exception as exc:
+            logger.error(
+                "dependency_banner_check_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return
         if not unresolved:
             return
@@ -1723,8 +1741,11 @@ to avoid clipping issues and enable proper text rendering.
         # Graceful controller shutdown — waits for finalizer with bounded timeout
         try:
             self._controller.shutdown(timeout=10.0)
-        except Exception:
-            logger.exception("controller_shutdown_failed: proceeding=exit")
+        except Exception as exc:
+            logger.error(
+                "controller_shutdown_failed: proceeding=exit error_class=%s",
+                type(exc).__name__,
+            )
         if self._tray_manager is not None:
             self._tray_manager.hide()
         QApplication.quit()
@@ -1791,8 +1812,11 @@ to avoid clipping issues and enable proper text rendering.
             # No tray manager — full exit with graceful shutdown
             try:
                 self._controller.shutdown(timeout=10.0)
-            except Exception:
-                logger.exception("controller_shutdown_failed: proceeding=close")
+            except Exception as exc:
+                logger.error(
+                    "controller_shutdown_failed: proceeding=close error_class=%s",
+                    type(exc).__name__,
+                )
             event.accept()
             QApplication.quit()
 
