@@ -496,8 +496,12 @@ to avoid clipping issues and enable proper text rendering.
                 + "\n\nYou can reconfigure them in Settings → Storage Paths.",
             )
         except Exception as exc:
+            # Routine diagnostic: validation is expected to be skipped in
+            # stripped/test environments where the config manager is not
+            # fully wired (e.g. SimpleNamespace widget seams) — not a
+            # problem with the app's storage paths. Stays below WARNING.
             logger.debug(
-                "storage_path_validation_skipped: error_class=%s",
+                "storage_path_validation_skipped_routine: error_class=%s",
                 type(exc).__name__,
             )
     
@@ -1331,7 +1335,10 @@ to avoid clipping issues and enable proper text rendering.
             raw_label: Raw speaker label from diarization (e.g. "spk0")
             name: User-chosen display name for this speaker
         """
-        logger.info("speaker_name_pinned: label=%s", raw_label)
+        # Privacy: raw_label may actually be a user-authored display label
+        # when no reverse mapping exists (floating_panels._prompt_speaker_name
+        # falls back to the display text), so never log label content.
+        logger.info("speaker_name_pinned: label_present=1")
 
         # Save the signature via controller
         self._controller.pin_speaker_name(raw_label, name)

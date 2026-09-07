@@ -6043,7 +6043,7 @@ class FloatingSettingsPanel(QWidget):
                     f"High {resource_name.upper()} usage: {value:.0f}% (threshold: {threshold:.0f}%)",
                 )
             except Exception as exc:
-                logger.debug(
+                logger.warning(
                     "resource_warning_tray_failed: error_class=%s",
                     type(exc).__name__,
                 )
@@ -6055,7 +6055,7 @@ class FloatingSettingsPanel(QWidget):
                     f"⚠ High {resource_name.upper()}: {value:.0f}%"
                 )
             except Exception as exc:
-                logger.debug(
+                logger.warning(
                     "resource_warning_widget_failed: error_class=%s",
                     type(exc).__name__,
                 )
@@ -6111,7 +6111,7 @@ class FloatingSettingsPanel(QWidget):
                 self._metric_throughput.setText("Throughput: —")
 
         except Exception as exc:
-            logger.debug(
+            logger.warning(
                 "recording_metrics_refresh_failed: error_class=%s",
                 type(exc).__name__,
             )

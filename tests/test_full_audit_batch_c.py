@@ -502,13 +502,49 @@ class TestMainWidgetLogging:
         widget._clear_retry_state()
 
     def test_speaker_pin_info_without_name(self, widget, caplog):
-        """Speaker pinning logs the raw label, never the user-chosen name."""
+        """Speaker pinning logs no label content and no user-chosen name."""
         with caplog.at_level(logging.DEBUG, logger=MW_LOG):
             widget._on_speaker_name_pinned("spk0", "Super Secret Person Name")
         info_msgs = _info(caplog, MW_LOG)
-        assert any(m == "speaker_name_pinned: label=spk0" for m in info_msgs)
+        assert any(
+            m == "speaker_name_pinned: label_present=1" for m in info_msgs
+        )
         for msg in _formatted_output(caplog, MW_LOG):
             assert "Super Secret Person Name" not in msg
+            assert "spk0" not in msg
+
+    def test_speaker_pin_unmatched_display_label_never_logged(
+        self, widget, caplog
+    ):
+        """Negative control: an unmatched display label stays out of logs.
+
+        Data flow (review round 2): when a stored display label has no
+        reverse mapping, _prompt_speaker_name forwards that display
+        label as raw_label — so the pinned event's label can be real
+        user-authored text, not just a synthetic spk-id. This drives
+        the pin handler with such a label and asserts the text never
+        appears in captured records, in getMessage AND in fully
+        formatted output (round-1 helper).
+        """
+        unmatched_display_label = "Zephyr Quillington III"
+        # Sanity: this is a user-authored shape with no spk-id mapping
+        assert not unmatched_display_label.startswith("spk")
+        assert not unmatched_display_label.startswith("SPK_")
+
+        with caplog.at_level(logging.DEBUG, logger=MW_LOG):
+            widget._on_speaker_name_pinned(
+                unmatched_display_label, "Another Secret Person Name"
+            )
+        info_msgs = _info(caplog, MW_LOG)
+        assert any(
+            m == "speaker_name_pinned: label_present=1" for m in info_msgs
+        )
+        for msg in _formatted_output(caplog, MW_LOG):
+            assert unmatched_display_label not in msg, msg
+            assert "Another Secret Person Name" not in msg, msg
+        # And the plain message bodies agree (no formatting-only escape)
+        for msg in (r.getMessage() for r in caplog.records if r.name == MW_LOG):
+            assert unmatched_display_label not in msg, msg
 
 
 # ---------------------------------------------------------------------------
