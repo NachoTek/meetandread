@@ -562,6 +562,35 @@ class TestCaptureDirectoryContract:
         with pytest.raises(CaptureModeError):
             parse_capture_flag(["--issue-capture", str(existing)])
 
+    def test_flag_rejects_non_empty_existing_directory(self, tmp_path):
+        """One capture directory == one run (fix round 1): a directory
+        that exists and holds ANYTHING is rejected at entry — a stale
+        completion marker must never make a killed reused run read as
+        a clean exit."""
+        from meetandread.capture_mode import CaptureModeError, parse_capture_flag
+
+        reused = tmp_path / "reused-capture"
+        reused.mkdir()
+        (reused / COMPLETION_MARKER_NAME).write_text(
+            '{"finished_at": "2026-09-06T10:00:00"}', encoding="utf-8"
+        )
+        with pytest.raises(CaptureModeError, match="not empty"):
+            parse_capture_flag(["--issue-capture", str(reused)])
+
+    def test_flag_accepts_existing_empty_directory(self, tmp_path):
+        from meetandread.capture_mode import parse_capture_flag
+
+        empty = tmp_path / "fresh-capture"
+        empty.mkdir()
+        assert parse_capture_flag(["--issue-capture", str(empty)]) == empty
+
+    def test_flag_accepts_missing_directory(self, tmp_path):
+        from meetandread.capture_mode import parse_capture_flag
+
+        assert parse_capture_flag(["--issue-capture", str(tmp_path / "nope")]) == (
+            tmp_path / "nope"
+        )
+
     def test_unknown_flags_ignored_by_capture_parse(self, tmp_path):
         """The capture parser must not choke on the app's other flags."""
         from meetandread.capture_mode import parse_capture_flag
@@ -688,3 +717,55 @@ class TestCaptureDirectoryContract:
         log = tmp_path / "capture.log"
         log.write_text("a\n\nb\n", encoding="utf-8")
         assert read_appendable_records(log) == ["a", "", "b"]
+
+    def test_same_second_second_start_fails_loudly_never_truncates(
+        self, isolated_logging, tmp_path
+    ):
+        """Fix round 1, collision half of one-dir-one-run: the capture
+        log file is created EXCLUSIVELY (O_CREAT|O_EXCL). A second run
+        starting in the same second resolves to the same filename and
+        must FAIL — the first run's stream is never truncated."""
+        from meetandread.capture_mode import (
+            CaptureModeError,
+            configure_capture_logging,
+        )
+
+        capture_dir = tmp_path / "cap"
+        fixed_now = datetime(2026, 9, 6, 11, 22, 33)
+        first = configure_capture_logging(capture_dir, now=fixed_now)
+        logging.getLogger("meetandread.first.run").info("first run record")
+        # NOTE: the first handler stays installed; simulate the second
+        # start's configure attempt directly (a second PROCESS would do
+        # exactly this against the same dir + filename).
+
+        # The first run's log file must be intact after the failed start.
+        with pytest.raises(CaptureModeError, match="already exists"):
+            configure_capture_logging(capture_dir, now=fixed_now)
+
+        content = first.read_text(encoding="utf-8")
+        assert "first run record" in content
+        # No half-written second file, no truncation: exactly one log.
+        logs = list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+        assert [p.name for p in logs] == [first.name]
+
+    def test_capture_logging_configured_seam(self, isolated_logging, tmp_path):
+        """The bootstrap/main idempotence seam: capture_logging_configured()
+        flips True exactly when a prompt-flush run handler is installed."""
+        from meetandread.capture_mode import (
+            capture_logging_configured,
+            configure_capture_logging,
+        )
+
+        assert capture_logging_configured() is False
+        configure_capture_logging(tmp_path / "cap")
+        assert capture_logging_configured() is True
+
+    def test_capture_logging_configured_false_for_plain_handler(
+        self, isolated_logging, tmp_path
+    ):
+        """A normal-run FileHandler is NOT the capture handler — the
+        seam must not confuse the two."""
+        from meetandread.capture_mode import capture_logging_configured
+
+        configure_logging(logs_dir=tmp_path)
+        assert capture_logging_configured() is False

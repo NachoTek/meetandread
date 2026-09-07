@@ -382,3 +382,386 @@ class TestNormalRunWithoutFlag:
                     _kill_hard(proc)
             else:
                 proc.wait()
+
+
+class TestStartupFailureIsCaptured:
+    """Fix round 1, finding 1: the bootstrap configures capture logging
+    BEFORE any app subsystem is imported, so an import-time startup
+    failure still produces a capture log holding the failure — the
+    startup-crash reporting case the review flagged as uncovered."""
+
+    def test_import_time_failure_lands_in_capture_log(self, tmp_path):
+        capture_dir = tmp_path / "capture" / "import-crash"
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+
+        # Poison the import of a module meetandread.main needs at import
+        # time (PyQt6.QtWidgets arrives before anything else heavy): a
+        # fake PyQt6 package raising at import is placed EARLIEST on
+        # sys.path via PYTHONPATH, ahead of the real site-packages.
+        poison_dir = tmp_path / "poisoned_pyqt"
+        (poison_dir / "PyQt6").mkdir(parents=True)
+        (poison_dir / "PyQt6" / "__init__.py").write_text(
+            "raise ImportError('poisoned PyQt6 import for capture-mode "
+            "startup-failure test')\n",
+            encoding="utf-8",
+        )
+        # PYTHONPATH order: poison first, then src (the sandbox helper
+        # set src; prepend the poison dir).
+        env["PYTHONPATH"] = f"{poison_dir}{os.pathsep}{env['PYTHONPATH']}"
+
+        proc = _launch_app(capture_dir, env, tmp_path / "app-stdout.txt")
+        # The child dies on its own (import failure); reap it.
+        try:
+            exit_code = proc.wait(timeout=STARTUP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            _kill_hard(proc)
+            pytest.fail(
+                "app did not exit after import-time startup failure: "
+                f"{_tail(tmp_path / 'app-stdout.txt')}"
+            )
+
+        # The process failed (nonzero exit — the poisoned import).
+        assert exit_code != 0
+
+        # THE assertion: the capture dir holds a DEBUG log (created
+        # exclusively by the bootstrap before any app import) that
+        # records the startup failure.
+        records = _read_log_records(capture_dir)
+        assert records, (
+            "capture log missing after import-time startup failure: "
+            f"{_tail(tmp_path / 'app-stdout.txt')}"
+        )
+        joined = "\n".join(records)
+        # The bootstrap logged the failure with traceback through the
+        # prompt-flush handler BEFORE re-raising.
+        assert "Startup failure: meetandread.main could not be imported" in joined
+        assert "poisoned PyQt6 import" in joined
+        # Full DEBUG from process start even for this doomed run.
+        assert any("Log level: DEBUG (capture mode: True)" in r for r in records)
+        # No clean-exit marker for a crashed startup, by construction.
+        assert read_completion_marker(capture_dir) is None
+
+
+class TestReusedCaptureDirectoryRejected:
+    """Fix round 1, finding 2: one capture directory == one run.
+
+    Negative control (a): a REUSED directory holding a stale completion
+    marker from a previous run is rejected at entry — before any
+    logging starts — so a killed reused run can never be read as a
+    clean exit through the stale marker.
+    """
+
+    def test_stale_marker_reused_dir_rejected_before_logging(self, tmp_path):
+        from meetandread.capture_mode import CaptureModeError, parse_capture_flag
+
+        reused = tmp_path / "capture" / "stale-run"
+        reused.mkdir(parents=True)
+        # A previous run's stale artifacts: marker + old log.
+        (reused / COMPLETION_MARKER_NAME).write_text(
+            '{"finished_at": "2026-09-06T10:00:00"}', encoding="utf-8"
+        )
+        (reused / f"{CAPTURE_LOG_PREFIX}20260906_100000.log").write_text(
+            "old run line\n", encoding="utf-8"
+        )
+
+        # Rejection happens at flag parse, before ANY logging side
+        # effect: no new capture log is created, nothing is touched.
+        with pytest.raises(CaptureModeError, match="not empty"):
+            parse_capture_flag([ISSUE_CAPTURE_FLAG, str(reused)])
+
+        # The stale marker is still the ONLY interpretation key, and it
+        # belongs to the OLD run's log; a forced-kill reused run can
+        # never add records that this marker would falsely cover.
+        marker = read_completion_marker(reused)
+        assert marker == {"finished_at": "2026-09-06T10:00:00"}
+        # And no NEW log file appeared for the rejected start.
+        logs = sorted(reused.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+        assert len(logs) == 1  # the old run's, untouched
+
+    def test_reused_dir_launch_exits_2_without_logging(self, tmp_path):
+        """End-to-end negative control: launching the real app against
+        a non-empty stale directory exits 2 (usage-error class) and
+        starts NO capture stream — the old artifacts survive intact."""
+        reused = tmp_path / "capture" / "stale-run"
+        reused.mkdir(parents=True)
+        old_marker = reused / COMPLETION_MARKER_NAME
+        old_marker.write_text(
+            '{"finished_at": "2026-09-06T10:00:00"}', encoding="utf-8"
+        )
+        old_log = reused / f"{CAPTURE_LOG_PREFIX}20260906_100000.log"
+        old_log.write_text("old run line\n", encoding="utf-8")
+
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+        proc = _launch_app(reused, env, tmp_path / "app-stdout.txt")
+        try:
+            exit_code = proc.wait(timeout=STARTUP_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            _kill_hard(proc)
+            pytest.fail(
+                "app did not exit after reused-dir rejection: "
+                f"{_tail(tmp_path / 'app-stdout.txt')}"
+            )
+
+        assert exit_code == 2, (
+            f"reused non-empty capture dir must exit 2, got {exit_code}: "
+            f"{_tail(tmp_path / 'app-stdout.txt')}"
+        )
+        # Nothing new was logged into the reused dir; the old run's
+        # artifacts are byte-identical.
+        assert old_log.read_text(encoding="utf-8") == "old run line\n"
+        assert read_completion_marker(reused) == {
+            "finished_at": "2026-09-06T10:00:00"
+        }
+        assert sorted(p.name for p in reused.iterdir()) == sorted(
+            [old_log.name, old_marker.name]
+        )
+
+    def test_empty_existing_dir_is_accepted(self, tmp_path):
+        """The reporter-created fresh dir (empty, pre-created) proceeds."""
+        from meetandread.capture_mode import parse_capture_flag
+
+        fresh = tmp_path / "capture" / "fresh-run"
+        fresh.mkdir(parents=True)
+        assert parse_capture_flag([ISSUE_CAPTURE_FLAG, str(fresh)]) == fresh
+
+
+class TestSameSecondCollision:
+    """Fix round 1, finding 2 (collision half): two starts resolving to
+    the same second-resolution log filename — the second start must
+    fail loudly (exclusive creation), and the first run's log must
+    survive intact."""
+
+    def test_second_same_second_start_fails_first_log_intact(self, tmp_path):
+        from meetandread.capture_mode import (
+            CaptureModeError,
+            configure_capture_logging,
+        )
+        from datetime import datetime
+
+        capture_dir = tmp_path / "capture" / "collision"
+        capture_dir.mkdir(parents=True)
+        fixed_now = datetime.now()  # same second for both starts
+
+        first_log = configure_capture_logging(capture_dir, now=fixed_now)
+        import logging as _logging
+
+        _logging.getLogger("meetandread.first.run").info(
+            "first run record that must survive"
+        )
+
+        with pytest.raises(CaptureModeError, match="already exists"):
+            configure_capture_logging(capture_dir, now=fixed_now)
+
+        # First run's log: intact, never truncated by mode='w'.
+        content = first_log.read_text(encoding="utf-8")
+        assert "first run record that must survive" in content
+        # Exactly one log file in the dir.
+        logs = list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+        assert [p.name for p in logs] == [first_log.name]
+
+    def test_two_subprocesses_same_second_second_exits_2(self, tmp_path):
+        """End-to-end: two real app launches into the SAME (empty at
+        first launch) directory, forced to the same filename second via
+        a frozen clock shim, assert the loser exits 2 and the winner's
+        log is intact."""
+        capture_dir = tmp_path / "capture" / "same-second"
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+        # Freeze both children's capture filename clock to the same
+        # second via the shim below.
+        stdout_a = open(tmp_path / "a-stdout.txt", "w", encoding="utf-8")
+        stdout_b = open(tmp_path / "b-stdout.txt", "w", encoding="utf-8")
+        cmd = [sys.executable, "-c", _FROZEN_CLOCK_SHIM, ISSUE_CAPTURE_FLAG, str(capture_dir)]
+        procs = []
+        try:
+            for fh in (stdout_a, stdout_b):
+                procs.append(
+                    subprocess.Popen(
+                        cmd,
+                        cwd=str(REPO_ROOT),
+                        env=env,
+                        stdout=fh,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    )
+                )
+            # Both children race; exactly one wins the exclusive log
+            # creation, the other exits 2 quickly (rejected at entry).
+            # The WINNER runs the full app (no clean exit required —
+            # the collision is decided at log-file creation), so: wait
+            # for the loser to exit, then hard-kill the winner.
+            deadline = time.monotonic() + STARTUP_TIMEOUT_S
+            exit_codes = {}
+            while len(exit_codes) < 2 and time.monotonic() < deadline:
+                for idx, proc in enumerate(procs):
+                    if idx in exit_codes:
+                        continue
+                    if proc.poll() is not None:
+                        exit_codes[idx] = proc.returncode
+                if exit_codes:
+                    break
+                time.sleep(0.25)
+            assert exit_codes, (
+                "neither collision child exited in time: "
+                f"a={_tail(tmp_path / 'a-stdout.txt')} "
+                f"b={_tail(tmp_path / 'b-stdout.txt')}"
+            )
+        finally:
+            for proc in procs:
+                if proc.poll() is None:
+                    _kill_hard(proc)
+            for fh in (stdout_a, stdout_b):
+                fh.close()
+
+        # The loser exits 2 with the clear stderr message.
+        codes = list(exit_codes.values())
+        assert codes == [2], (
+            f"expected exactly the collision loser (exit 2) to have "
+            f"exited, got {codes}: "
+            f"a={_tail(tmp_path / 'a-stdout.txt')} b={_tail(tmp_path / 'b-stdout.txt')}"
+        )
+        # Exactly one capture log exists, and it is intact (has records
+        # from exactly one run — no interleaved truncation).
+        log = _find_capture_log(capture_dir)
+        records = read_appendable_records(log)
+        assert "Log level: DEBUG (capture mode: True)" in "\n".join(records)
+        # Exactly one log file — the loser never created/truncated one.
+        assert len(list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))) == 1
+
+
+# Frozen-clock launch shim: identical to the production bootstrap path
+# except the filename clocks (datetime.now) are pinned in BOTH
+# capture_mode and logging_setup, forcing both children onto the same
+# second-resolution log filename (the collision under test).
+_FROZEN_CLOCK_SHIM = """
+import os, sys
+sys.path.insert(0, os.environ["PYTHONPATH"])
+import meetandread.single_instance as _si
+_orig_acquire = _si.acquire_single_instance_lock
+def _acquire_with_test_name(name=None):
+    if name is None or name == "meetandread":
+        name = os.environ.get("MAR_TEST_LOCK_NAME", name)
+    return _orig_acquire(name)
+_si.acquire_single_instance_lock = _acquire_with_test_name
+import datetime as _dt
+class _FrozenDatetime:
+    @staticmethod
+    def now(tz=None):
+        return _dt.datetime(2026, 9, 7, 12, 0, 0)
+import meetandread.capture_mode as _cm
+import meetandread.logging_setup as _ls
+_cm.datetime = _FrozenDatetime
+_ls.datetime = _FrozenDatetime
+import runpy
+runpy.run_module("meetandread.__main__", run_name="__main__", alter_sys=True)
+"""
+
+
+class TestRecordingLifecycleInsideCaptureMode:
+    """AC5 (fix round 1, finding 3): an actual Recording start->stop
+    inside Issue Capture Mode, driven through the existing CLI
+    fake-duration seam (tests/test_cli_fake_duration.py — it exists
+    precisely to drive recording without real audio). The capture
+    DEBUG log must show the recording lifecycle events."""
+
+    def test_record_start_stop_lifecycle_lands_in_capture_log(
+        self, tmp_path
+    ):
+        import wave
+
+        import numpy as np
+
+        # Fake audio input (same generator as test_cli_fake_duration).
+        input_wav = tmp_path / "input_3s.wav"
+        rate = 16000
+        t = np.linspace(0, 3.0, int(rate * 3.0), endpoint=False)
+        samples = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype(np.int16)
+        with wave.open(str(input_wav), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(rate)
+            wav_file.writeframes(pcm.tobytes())
+
+        capture_dir = tmp_path / "capture" / "recording-run"
+        output_dir = tmp_path / "recordings"
+        output_dir.mkdir()
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+
+        # Capture-mode recording shim: configure capture logging FIRST
+        # (the production bootstrap discipline — logging live before any
+        # audio subsystem import), then run the REAL recording pipeline
+        # through the CLI's record command (fake source, no real audio
+        # device needed): session.start -> frames -> session.stop ->
+        # WAV finalization.
+        cmd = [
+            sys.executable,
+            "-c",
+            _RECORDING_CAPTURE_SHIM,
+            "record",
+            "--fake", str(input_wav),
+            "--seconds", "3",
+            "--output-dir", str(output_dir),
+            "--capture-dir", str(capture_dir),
+        ]
+        result = subprocess.run(
+            cmd,
+            cwd=str(REPO_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, (
+            "capture-mode recording run failed "
+            f"(rc={result.returncode})\nstdout: {result.stdout[-2000:]}\n"
+            f"stderr: {result.stderr[-2000:]}"
+        )
+
+        # The recording produced a real WAV through the full pipeline.
+        wav_files = list(output_dir.glob("*.wav"))
+        assert wav_files, "no WAV produced by the capture-mode recording"
+
+        # THE AC5 assertion: the capture DEBUG log holds the recording
+        # lifecycle events of the run — session start, source start,
+        # stop, and finalization.
+        records = _read_log_records(capture_dir)
+        joined = "\n".join(records)
+        assert "Issue Capture Mode: streaming diagnostics into" in joined
+        assert "session_start: sources=[fake]" in joined, (
+            "recording start lifecycle missing from capture log"
+        )
+        assert "source_start: source=fake" in joined
+        assert "session_stop: state=stopping" in joined, (
+            "recording stop lifecycle missing from capture log"
+        )
+        assert "session_stop: state=finalized" in joined, (
+            "recording finalization missing from capture log"
+        )
+        # Ordering: start precedes stop in the stream.
+        assert joined.index("session_start: sources=[fake]") < joined.index(
+            "session_stop: state=finalized"
+        )
+        # Full DEBUG level was live for the recording run.
+        assert any(
+            "Log level: DEBUG (capture mode: True)" in r for r in records
+        )
+
+
+# Capture-mode recording shim: capture logging configured BEFORE the
+# audio subsystem import (bootstrap discipline), then the real CLI
+# record command runs inside it (fake source — the existing recording
+# seam, no real audio devices required).
+_RECORDING_CAPTURE_SHIM = """
+import os, sys
+sys.path.insert(0, os.environ["PYTHONPATH"])
+_args = sys.argv[1:]
+_i = _args.index("--capture-dir")
+_capture_dir = _args[_i + 1]
+_rest = _args[:_i] + _args[_i + 2:]
+import meetandread.capture_mode as _cm
+_cm.configure_capture_logging(__import__("pathlib").Path(_capture_dir))
+from meetandread.audio.cli import main as _cli_main
+sys.argv = ["meetandread.audio.cli"] + _rest
+sys.exit(_cli_main())
+"""
