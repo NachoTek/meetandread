@@ -304,42 +304,63 @@ def setup_signal_handlers(app, widget_ref=None):
             pass
 
 
-def main():
-    """Application entry point."""
-    # Issue Capture Mode entry (issue #104): parse the launch flag BEFORE
-    # any other startup step, so a capture run owns the whole process —
-    # logging included — from the first moment. Entry is at process start
-    # only; there is deliberately no mid-process capture API (ADR 0003).
+def main(capture_dir: Optional[Path] = None):
+    """Application entry point.
+
+    *capture_dir* is the already-parsed ``--issue-capture`` directory
+    when the process started through the lightweight bootstrap
+    (``meetandread.__main__``), which parsed the flag and configured
+    capture logging BEFORE importing this module; None means parse the
+    flag from the command line here (console-script entry point, or a
+    direct ``main()`` call — the pre-bootstrap behavior).
+    """
+    # Issue Capture Mode entry (issue #104): the launch flag is parsed
+    # BEFORE any other startup step, so a capture run owns the whole
+    # process — logging included — from the first moment. Entry is at
+    # process start only; there is deliberately no mid-process capture
+    # API (ADR 0003).
     from meetandread.capture_mode import (
         ISSUE_CAPTURE_FLAG,
         CaptureModeError,
+        capture_logging_configured,
         parse_capture_flag,
         write_completion_marker,
     )
 
-    try:
-        capture_dir = parse_capture_flag()
-    except CaptureModeError as exc:
-        # Pre-logging path: the root logger's lastResort handler routes
-        # ERROR to stderr (same as the single-instance refusal below).
-        logger.error("%s %s", ISSUE_CAPTURE_FLAG, exc)
-        sys.exit(2)
+    if capture_dir is None:
+        try:
+            capture_dir = parse_capture_flag()
+        except CaptureModeError as exc:
+            # Pre-logging path: the root logger's lastResort handler
+            # routes ERROR to stderr (same as the single-instance
+            # refusal below).
+            logger.error("%s %s", ISSUE_CAPTURE_FLAG, exc)
+            sys.exit(2)
 
     # Single-instance guard (issue #20): must run before QApplication so a
     # duplicate process exits before creating any UI or grabbing resources.
     from meetandread.single_instance import acquire_single_instance_lock
 
     if not acquire_single_instance_lock():
-        # setup_logging() has not run yet; logging's lastResort handler still
-        # routes ERROR to stderr, so the diagnostic path is preserved.
+        # setup_logging() may not have run yet (bootstrap-configured
+        # capture logging IS already live, per-record flushed); the root
+        # logger or lastResort handler routes ERROR to stderr, so the
+        # diagnostic path is preserved either way.
         logger.error(
             "meetandread is already running (or the single-instance lock could not be acquired) — exiting this instance."
         )
         sys.exit(1)
 
     # Setup logging first — capture mode (if requested) streams DEBUG into
-    # the capture directory from this point on.
-    setup_logging(capture_dir=capture_dir)
+    # the capture directory from this point on. Idempotence (fix round 1):
+    # when the bootstrap already configured capture logging (a
+    # _PromptFlushFileHandler is installed), do NOT reconfigure — a second
+    # configure would tear down the run handler mid-stream and refuse the
+    # same-second exclusive filename.
+    if capture_dir is not None and capture_logging_configured():
+        pass  # already streaming from process start
+    else:
+        setup_logging(capture_dir=capture_dir)
     logging.getLogger(__name__).info(
         "Starting meetandread%s",
         " (Issue Capture Mode)" if capture_dir is not None else "",

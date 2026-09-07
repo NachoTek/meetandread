@@ -8,15 +8,30 @@ when.
 ## The contract (consumed by #105-#110)
 
 Entry — **process start ONLY** (ADR 0003). The app is launched with
-``--issue-capture <DIR>``; the flag is parsed in ``main()`` before
-logging is configured. There is deliberately NO API for entering capture
-mode mid-process: diagnostics must cover the run from its first moment,
-and a process that could switch modes could not guarantee that.
+``--issue-capture <DIR>``; the lightweight bootstrap
+(``meetandread.__main__`` — the ``python -m`` and frozen-exe
+entrypoint) parses the flag and configures capture logging BEFORE the
+application subsystems (PyQt, widgets, native audio) are imported and
+before the single-instance lock is acquired, so even an import-time
+startup failure lands in the capture log. ``main()`` re-parses the
+flag for its own decisions but never reconfigures capture logging once
+the bootstrap has configured it (``capture_logging_configured``).
+There is deliberately NO API for entering capture mode mid-process:
+diagnostics must cover the run from its first moment, and a process
+that could switch modes could not guarantee that.
 
 With the flag:
 
 - ``<DIR>`` is created if missing; it is the single home for every
   capture artifact of the run.
+- One capture directory holds exactly ONE run (fix round 1 decision —
+  reject, do not reconcile): a directory that exists and is non-empty
+  is rejected at entry (``CaptureModeError``, exit 2), and the capture
+  log file itself is created exclusively (``O_CREAT | O_EXCL``), so a
+  same-second second start fails loudly instead of truncating the
+  first run's log. The Issue Reporter (#107) always passes a fresh
+  directory; a stale ``capture_complete.marker`` can therefore never
+  make a killed reused run read as a clean exit.
 - The run logs at full DEBUG app-wide (``logging_setup``), and the
   DEBUG log streams into ``<DIR>`` from process start.
 - Every completed record is **prompt-flushed** on write: each log emit
@@ -100,9 +115,13 @@ def parse_capture_flag(args: Optional[List[str]] = None) -> Optional[Path]:
 
     Raises:
         CaptureModeError: the flag names an existing path that is not a
-            directory. (Usage errors — e.g. the flag without a value —
-            are handled by argparse itself: usage message on stderr,
-            exit code 2, before the app starts.)
+            directory, or an existing NON-EMPTY directory — one capture
+            directory holds one run, by construction (a reused dir with
+            a stale completion marker could make a killed run read as
+            clean). An existing EMPTY directory is accepted.
+            (Usage errors — e.g. the flag without a value — are handled
+            by argparse itself: usage message on stderr, exit code 2,
+            before the app starts.)
     """
     parser = argparse.ArgumentParser(
         prog="meetandread",
@@ -127,11 +146,25 @@ def parse_capture_flag(args: Optional[List[str]] = None) -> Optional[Path]:
         raise CaptureModeError(
             f"{ISSUE_CAPTURE_FLAG}: '{capture_dir}' exists and is not a directory"
         )
+    if path.is_dir() and any(path.iterdir()):
+        raise CaptureModeError(
+            f"{ISSUE_CAPTURE_FLAG}: '{capture_dir}' exists and is not empty "
+            "— one capture directory holds one run; pass a fresh directory "
+            "(the Issue Reporter creates one per run)"
+        )
     return path
 
 
 class _PromptFlushFileHandler(logging.FileHandler):
-    """FileHandler that flushes AND fsyncs on every emit.
+    """FileHandler that creates its file EXCLUSIVELY, then flushes AND
+    fsyncs on every emit.
+
+    Exclusive creation (fix round 1): the log file is opened with
+    ``'x'`` (``O_CREAT | O_EXCL``), so a same-second second start — two
+    runs resolving to the same second-resolution filename — fails with
+    ``FileExistsError`` instead of silently truncating the first run's
+    log via ``'w'``. ``configure_capture_logging`` turns that failure
+    into a loud ``CaptureModeError`` (exit 2).
 
     The capture-directory durability contract (spec, amended #113): a
     completed record must be on disk promptly — never parked in the
@@ -143,6 +176,12 @@ class _PromptFlushFileHandler(logging.FileHandler):
     so per-record fsync is cheap insurance against power-loss and
     hard-kill windows that flush-only leaves open.
     """
+
+    def __init__(self, filename, mode=None, encoding="utf-8"):
+        # 'x' regardless of the requested mode (O_CREAT | O_EXCL): one
+        # log file per run; same-second collisions must fail loudly,
+        # never truncate.
+        super().__init__(filename, mode="x", encoding=encoding)
 
     def emit(self, record: logging.LogRecord) -> None:
         super().emit(record)
@@ -158,14 +197,31 @@ class _PromptFlushFileHandler(logging.FileHandler):
             pass
 
 
+def capture_logging_configured() -> bool:
+    """Has capture logging already been configured in this process?
+
+    The idempotence seam between the lightweight bootstrap
+    (``meetandread.__main__``) and ``main()``: the bootstrap configures
+    capture logging before any app subsystem is imported; ``main()``
+    must NOT configure it a second time (a second configure would tear
+    down and recreate the run handler, and exclusive file creation
+    would refuse the same-second filename anyway).
+    """
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, _PromptFlushFileHandler):
+            return True
+    return False
+
+
 def configure_capture_logging(
     capture_dir: Path, now: Optional[datetime] = None
 ) -> Path:
     """Configure full-DEBUG logging streaming into *capture_dir*.
 
-    Entry-discipline seam: called only from process start (``main``),
-    never mid-process. Creates the capture directory if missing, then
-    delegates to ``logging_setup.configure_logging`` with
+    Entry-discipline seam: called only from process start (the
+    ``__main__`` bootstrap, or ``main`` when the process started some
+    other way), never mid-process. Creates the capture directory if
+    missing, then delegates to ``logging_setup.configure_logging`` with
     ``logs_dir=capture_dir, capture_mode=True`` — so the capture log
     lives INSIDE the capture directory with the shared
     ``meetandread_capture_`` prefix (issue #104: the #98 prefix
@@ -176,18 +232,30 @@ def configure_capture_logging(
     (``handler_cls``), so no record ever passes through a flush-only
     handler.
 
+    Raises:
+        CaptureModeError: the capture log file already exists (a
+            same-second second start — one log file per run, by
+            construction; never truncate the first run's stream).
+
     Returns the capture log file path.
     """
     from meetandread.logging_setup import configure_logging
 
     capture_dir.mkdir(parents=True, exist_ok=True)
-    log_file = configure_logging(
-        logs_dir=capture_dir,
-        capture_mode=True,
-        now=now,
-        is_capture_dir=True,
-        handler_cls=_PromptFlushFileHandler,
-    )
+    try:
+        log_file = configure_logging(
+            logs_dir=capture_dir,
+            capture_mode=True,
+            now=now,
+            is_capture_dir=True,
+            handler_cls=_PromptFlushFileHandler,
+        )
+    except FileExistsError as exc:
+        raise CaptureModeError(
+            f"{ISSUE_CAPTURE_FLAG}: a capture log already exists in "
+            f"'{capture_dir}' (same-second second start?) — one capture "
+            "directory holds one run"
+        ) from exc
     logger.info(
         "Issue Capture Mode: streaming diagnostics into %s", capture_dir
     )

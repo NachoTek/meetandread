@@ -129,8 +129,12 @@ def _acquire_with_test_name(name=None):
         name = os.environ.get("MAR_TEST_LOCK_NAME", name)
     return _orig_acquire(name)
 _si.acquire_single_instance_lock = _acquire_with_test_name
-from meetandread.main import main
-main()
+import runpy
+# Replay the REAL production entrypoint (src/meetandread/__main__.py —
+# the lightweight bootstrap: flag parse -> capture logging -> import
+# meetandread.main -> main()), not a hand-rolled shortcut, so the tests
+# cover the exact startup path users and the frozen exe run.
+runpy.run_module("meetandread.__main__", run_name="__main__", alter_sys=True)
 """
 
 
