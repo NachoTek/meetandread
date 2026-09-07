@@ -165,6 +165,7 @@ def create_app_icon() -> QIcon:
     Returns a QIcon with a dark circle background, green gradient fill,
     and a white "M" letter in the center.
     """
+    logger.debug("icon_created: kind=app size_px=%d", _ICON_SIZE)
     pixmap = QPixmap(_ICON_SIZE, _ICON_SIZE)
     pixmap.fill(QColor(0, 0, 0, 0))  # transparent background
 
@@ -205,6 +206,7 @@ def create_recording_icon() -> QIcon:
     Uses the default app icon as base and draws a pulsing red dot in
     the bottom-right corner.
     """
+    logger.debug("icon_created: kind=recording size_px=%d", _ICON_SIZE)
     pixmap = QPixmap(_ICON_SIZE, _ICON_SIZE)
     pixmap.fill(QColor(0, 0, 0, 0))
 

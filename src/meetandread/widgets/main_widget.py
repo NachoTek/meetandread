@@ -36,6 +36,8 @@ from meetandread.config import get_config, set_config, save_config
 from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog, PostProcessFailureDialog
 from meetandread.widgets.theme import context_menu_css, current_palette
 
+logger = logging.getLogger(__name__)
+
 
 class _ControllerBridge(QObject):
     """Thread-safe signal bridge for controller callbacks.
@@ -96,8 +98,8 @@ class _WidgetVisualStateMachine:
         if new_state == self._current and self._progress >= 1.0:
             return  # already settled at this state
         if new_state != self._current:
-            logging.debug(
-                "WidgetVisualState: %s → %s (was progress=%.2f)",
+            logger.debug(
+                "widget_visual_state: from=%s to=%s progress=%.2f",
                 self._current.name, new_state.name, self._progress,
             )
             self._previous = self._current
@@ -314,7 +316,7 @@ to avoid clipping issues and enable proper text rendering.
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         
-        logging.debug("Main widget initialized with floating panels")
+        logger.debug("main_widget_init: floating_panels=ready")
     
     def _create_components(self):
         """Create all widget components."""
@@ -393,7 +395,7 @@ to avoid clipping issues and enable proper text rendering.
             self._floating_settings_panel.refresh_history_if_visible
         )
 
-        logging.debug("Created floating settings panel")
+        logger.debug("settings_panel_created: signal_wires=4")
 
         # CC overlay — compact caption panel for live transcript
         self._cc_overlay = CCOverlayPanel()
@@ -408,7 +410,7 @@ to avoid clipping issues and enable proper text rendering.
             pass
         # Connect segment signal for thread-safe delivery from _on_phrase_result
         self._cc_overlay.segment_ready.connect(self._on_cc_segment)
-        logging.debug("Created CC overlay panel")
+        logger.debug("cc_overlay_created: signal_wires=1")
 
         # Validate custom storage paths from config; warn and fall back on invalid
         self._validate_startup_storage_paths()
@@ -446,7 +448,9 @@ to avoid clipping issues and enable proper text rendering.
                     speaker_id=safe_speaker_id,
                 )
         except Exception as e:
-            logging.error("CC overlay update failed: %s", e)
+            logger.error(
+                "cc_overlay_update_failed: error_class=%s", type(e).__name__
+            )
 
     def _on_cc_font_size_changed(self, size_px: int) -> None:
         """Apply CC overlay font size change immediately."""
@@ -475,8 +479,8 @@ to avoid clipping issues and enable proper text rendering.
             # Reset invalid paths to None for runtime fallback
             for field, _reason in errors.items():
                 setattr(sp, field, None)
-                logging.warning(
-                    "startup_storage_path_reset field=%s reason=validation_failed",
+                logger.warning(
+                    "startup_storage_path_reset: field=%s reason=validation_failed",
                     field,
                 )
             cm._dirty_paths.add("storage_paths")
@@ -492,7 +496,10 @@ to avoid clipping issues and enable proper text rendering.
                 + "\n\nYou can reconfigure them in Settings → Storage Paths.",
             )
         except Exception as exc:
-            logging.debug("Storage path startup validation skipped: %s", exc)
+            logger.debug(
+                "storage_path_validation_skipped: error_class=%s",
+                type(exc).__name__,
+            )
     
     def _layout_components(self):
         """Position all components."""
@@ -530,14 +537,17 @@ to avoid clipping issues and enable proper text rendering.
                 # Restore saved position
                 x, y = settings.ui.widget_position
                 self.move(x, y)
-                logging.debug("Restored widget position: (%d, %d)", x, y)
-                
+                logger.debug("widget_position_restored: x=%d y=%d", x, y)
+
                 # Off-screen recovery: if saved position is no longer valid
                 # (e.g. monitor disconnected), snap to nearest valid position
                 self._recover_offscreen_position()
                 return
         except Exception as e:
-            logging.warning("Failed to restore position: %s", e)
+            logger.warning(
+                "widget_position_restore_failed: error_class=%s",
+                type(e).__name__,
+            )
         
         # Default: Start in bottom-right corner
         screen = QApplication.primaryScreen().geometry()
@@ -570,9 +580,8 @@ to avoid clipping issues and enable proper text rendering.
             primary = QApplication.primaryScreen().geometry()
             new_x = primary.x() + (primary.width() - self.width()) // 2
             new_y = primary.y() + (primary.height() - self.height()) // 2
-            logging.getLogger(__name__).info(
-                "Widget position (%d, %d) is off-screen. "
-                "Recovering to center of primary monitor (%d, %d).",
+            logger.info(
+                "widget_position_recovered: from_x=%d from_y=%d to_x=%d to_y=%d",
                 pos.x(), pos.y(), new_x, new_y,
             )
             self.move(new_x, new_y)
@@ -605,8 +614,8 @@ to avoid clipping issues and enable proper text rendering.
         self.setWindowOpacity(interpolated)
 
         if not props["settled"]:
-            logging.debug(
-                "Glass opacity: %.3f (state=%s progress=%.2f)",
+            logger.debug(
+                "glass_opacity_frame: opacity=%.3f state=%s progress=%.2f",
                 interpolated, target_state.name, self._visual_state.progress,
             )
 
@@ -653,8 +662,8 @@ to avoid clipping issues and enable proper text rendering.
             if self.record_button._state_t >= 1.0:
                 # Cross-fade settled — safe to reset phases
                 if self.pulse_phase != 0.0:
-                    logging.debug(
-                        "Phase decay complete: resetting pulse_phase=%.2f",
+                    logger.debug(
+                        "animation_phase_reset: pulse_phase=%.2f",
                         self.pulse_phase,
                     )
                     self.pulse_phase = 0.0
@@ -783,12 +792,15 @@ to avoid clipping issues and enable proper text rendering.
             from meetandread.audio.capture.devices import get_default_loopback_device
             if get_default_loopback_device() is None:
                 self.system_lobe.set_unavailable(True)
-                logging.info("System audio lobe marked unavailable — no loopback device")
+                logger.info("system_lobe_unavailable: reason=no_loopback_device")
             else:
-                logging.debug("System audio loopback device detected")
+                logger.debug("system_lobe_probe: loopback=available")
         except Exception as exc:
             # Optimistic: keep lobe available on probe errors
-            logging.warning("System audio probe failed, keeping lobe available: %s", exc)
+            logger.warning(
+                "system_lobe_probe_failed: error_class=%s lobe=available",
+                type(exc).__name__,
+            )
     
     def _pulse_lobes(self):
         """Animate both lobes with an opacity pulse for ~2 seconds.
@@ -880,8 +892,10 @@ to avoid clipping issues and enable proper text rendering.
         import time as _time
         import threading as _threading_mod
         _t0 = _time.monotonic()
-        logging.info("[UI-TIMER] state_change(%s) on thread: %s",
-                     state.name, _threading_mod.current_thread().name)
+        logger.debug(
+            "controller_state_change_begin: state=%s thread=%s",
+            state.name, _threading_mod.current_thread().name,
+        )
         if state == ControllerState.RECORDING:
             self.is_recording = True
             self.is_processing = False
@@ -892,8 +906,8 @@ to avoid clipping issues and enable proper text rendering.
             # Lock lobes during recording
             self.mic_lobe.set_locked(True)
             self.system_lobe.set_locked(True)
-            logging.debug("Lobes locked (RECORDING)")
-            
+            logger.debug("lobes_locked: reason=RECORDING")
+
             # Show CC overlay for live transcript (if auto-open enabled)
             if self._cc_overlay:
                 try:
@@ -904,7 +918,7 @@ to avoid clipping issues and enable proper text rendering.
                 except Exception:
                     auto_open = True
                 if auto_open:
-                    logging.debug("Showing CC overlay for recording (auto-open)")
+                    logger.debug("cc_overlay_auto_open: enabled=1")
                     self._cc_overlay.clear()
                     # Position near widget on first show if never positioned
                     if not self._cc_overlay.isVisible():
@@ -921,17 +935,17 @@ to avoid clipping issues and enable proper text rendering.
                             pass  # Graceful fallback in test/mock environments
                     self._cc_overlay.show_panel()
                 else:
-                    logging.debug("CC overlay auto-open disabled by setting")
+                    logger.debug("cc_overlay_auto_open: enabled=0")
 
             # Show floating transcript panel when recording starts (legacy)
             # (Removed — CC overlay is the only live transcript surface)
-            
+
         elif state == ControllerState.STARTING:
             # Lock lobes during startup phase too
             self.mic_lobe.set_locked(True)
             self.system_lobe.set_locked(True)
-            logging.debug("Lobes locked (STARTING)")
-            
+            logger.debug("lobes_locked: reason=STARTING")
+
         elif state == ControllerState.STOPPING:
             self.is_recording = False
             self.is_processing = True
@@ -942,8 +956,8 @@ to avoid clipping issues and enable proper text rendering.
             # CC overlay: start delayed fade-out (keeps final words visible)
             if self._cc_overlay:
                 self._cc_overlay.start_delayed_hide()
-                logging.debug("CC overlay: delayed hide scheduled (STOPPING)")
-            
+                logger.debug("cc_overlay_delayed_hide: reason=STOPPING")
+
         elif state == ControllerState.IDLE:
             self.is_recording = False
             self.is_processing = False
@@ -953,17 +967,17 @@ to avoid clipping issues and enable proper text rendering.
             # Unlock lobes when idle
             self.mic_lobe.set_locked(False)
             self.system_lobe.set_locked(False)
-            logging.debug("Lobes unlocked (IDLE)")
+            logger.debug("lobes_unlocked: reason=IDLE")
             # CC overlay: start delayed fade-out if still visible
             if self._cc_overlay and self._cc_overlay.isVisible():
                 self._cc_overlay.start_delayed_hide()
-                logging.debug("CC overlay: delayed hide scheduled (IDLE)")
-            
+                logger.debug("cc_overlay_delayed_hide: reason=IDLE")
+
         elif state == ControllerState.RETRYING:
             # WASAPI retry in progress - lock lobes to prevent source toggling
             self.mic_lobe.set_locked(True)
             self.system_lobe.set_locked(True)
-            logging.debug("Lobes locked (RETRYING)")
+            logger.debug("lobes_locked: reason=RETRYING")
         elif state == ControllerState.ERROR:
             self.is_recording = False
             self.is_processing = False
@@ -973,23 +987,28 @@ to avoid clipping issues and enable proper text rendering.
             # Unlock lobes on error so user can adjust
             self.mic_lobe.set_locked(False)
             self.system_lobe.set_locked(False)
-            logging.debug("Lobes unlocked (ERROR)")
+            logger.debug("lobes_unlocked: reason=ERROR")
             # CC overlay: start delayed fade-out on error
             if self._cc_overlay and self._cc_overlay.isVisible():
                 self._cc_overlay.start_delayed_hide()
-                logging.debug("CC overlay: delayed hide scheduled (ERROR)")
-        
+                logger.debug("cc_overlay_delayed_hide: reason=ERROR")
+
         # Forward state to tray icon manager
         if self._tray_manager is not None:
             self._tray_manager.update_recording_state(state)
-        
-        logging.info("[UI-TIMER] state_change(%s) done: %.1fms",
-                     state.name, (_time.monotonic() - _t0) * 1000)
+
+        logger.info("controller_state_changed: state=%s", state.name)
+        logger.debug(
+            "controller_state_change_end: state=%s duration_ms=%.1f",
+            state.name, (_time.monotonic() - _t0) * 1000,
+        )
     
     def _on_controller_error(self, error):
         """Handle controller errors."""
         self._show_error(error.message, is_recoverable=error.is_recoverable)
-        logging.error("Recording error: %s (recoverable: %s)", error.message, error.is_recoverable)
+        logger.error(
+            "controller_error_shown: recoverable=%s", bool(error.is_recoverable)
+        )
     
     def _on_phrase_result(self, result: SegmentResult):
         """Handle segment result from accumulating transcription processor.
@@ -1002,9 +1021,11 @@ to avoid clipping issues and enable proper text rendering.
         phrase_start = getattr(result, 'phrase_start', False)
         speaker_id = getattr(result, 'speaker_id', None)
 
-        logging.debug("Segment received [conf: %d%%, final: %s, phrase_start: %s, speaker_id: %s]",
-                      result.confidence, result.is_final, phrase_start,
-                      speaker_id if speaker_id else "None")
+        logger.debug(
+            "phrase_result_received: conf=%d final=%s phrase_start=%s speaker=%s",
+            result.confidence, bool(result.is_final), bool(phrase_start),
+            "present" if speaker_id else "none",
+        )
 
         if self._cc_overlay:
             # Emit signal (thread-safe, automatically queues to main thread)
@@ -1041,7 +1062,7 @@ to avoid clipping issues and enable proper text rendering.
                 duration_ms=0,
             )
         except Exception:
-            logging.exception("Error showing hot-plug device notification")
+            logger.exception("device_change_notification_failed:")
 
     def _on_recovery_attempted(self, result) -> None:
         """Replace pending device feedback with the latest recovery outcome."""
@@ -1081,14 +1102,14 @@ to avoid clipping issues and enable proper text rendering.
                 duration_ms=duration_ms,
             )
         except Exception:
-            logging.exception("Error showing hot-plug recovery notification")
+            logger.exception("recovery_notification_failed:")
 
     def _retry_recording_recovery(self) -> None:
         """Retry lost-source recovery without creating a new AudioSession."""
         try:
             self._controller.retry_recovery()
         except Exception:
-            logging.exception("Manual recording-device recovery failed")
+            logger.exception("manual_recovery_retry_failed:")
             self.toast_manager.show(
                 self._recovery_toast_id,
                 "Recording recovery failed",
@@ -1138,18 +1159,25 @@ to avoid clipping issues and enable proper text rendering.
         import time as _t
         import threading as _threading_mod
         _t0 = _t.monotonic()
-        logging.info("[UI-TIMER] recording_complete on thread: %s",
-                     _threading_mod.current_thread().name)
+        logger.debug(
+            "recording_complete_begin: thread=%s",
+            _threading_mod.current_thread().name,
+        )
         self.is_processing = False
         self.record_button.set_processing_state(False)
-        logging.info("Recording saved to: %s", wav_path)
+        logger.info(
+            "recording_saved: wav=1 transcript=%s",
+            "1" if transcript_path else "0",
+        )
         if transcript_path:
-            logging.info("Transcript saved to: %s", transcript_path)
+            logger.info("transcript_saved: path=1")
 
         # Notify that history data changed — connected panels refresh if visible
         self.history_data_changed.emit()
-        logging.info("[UI-TIMER] recording_complete done: %.1fms",
-                     (_t.monotonic() - _t0) * 1000)
+        logger.debug(
+            "recording_complete_end: duration_ms=%.1f",
+            (_t.monotonic() - _t0) * 1000,
+        )
 
     def _on_post_process_complete(self, job_id, transcript_path):
         """Handle post-processing completion (success or failure).
@@ -1162,9 +1190,9 @@ to avoid clipping issues and enable proper text rendering.
             transcript_path: Path to the enhanced transcript, or None on failure.
         """
         if transcript_path:
-            logging.info("Post-processing complete! Job: %s, transcript: %s", job_id, transcript_path)
+            logger.info("post_process_complete: outcome=success")
         else:
-            logging.warning("Post-processing job %s completed with failure (no transcript)", job_id)
+            logger.warning("post_process_complete: outcome=failure transcript=0")
             self._maybe_show_post_process_failure(job_id)
 
         # Update Performance tab WER display (Settings panel)
@@ -1190,7 +1218,10 @@ to avoid clipping issues and enable proper text rendering.
         try:
             failure = getter(job_id)
         except Exception as exc:
-            logging.warning("Post-process failure probe failed: %s", exc)
+            logger.warning(
+                "post_process_failure_probe_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return
         if not failure or not failure.get("user_initiated"):
             return
@@ -1221,8 +1252,8 @@ to avoid clipping issues and enable proper text rendering.
         first_warning = self._frame_drop_toast_last_count <= 0
         reminder_due = (now - self._frame_drop_toast_last_ts) >= self._frame_drop_toast_reminder_seconds
         if not first_warning and not reminder_due:
-            logging.info(
-                "Frame-drop toast throttled: count=%s previous_count=%s seconds_since_last=%.1f",
+            logger.debug(
+                "frame_drop_toast_throttled: count=%s previous_count=%s seconds_since_last=%.1f",
                 safe_count,
                 self._frame_drop_toast_last_count,
                 now - self._frame_drop_toast_last_ts,
@@ -1238,8 +1269,8 @@ to avoid clipping issues and enable proper text rendering.
         manager.show(self._frame_drop_toast_id, title, message, duration_ms=10000)
         self._frame_drop_toast_last_count = safe_count
         self._frame_drop_toast_last_ts = now
-        logging.info(
-            "Frame-drop toast emitted: count=%s first=%s reminder_due=%s",
+        logger.info(
+            "frame_drop_toast: count=%s first=%s reminder_due=%s",
             safe_count,
             first_warning,
             reminder_due,
@@ -1271,7 +1302,7 @@ to avoid clipping issues and enable proper text rendering.
 
             self._maybe_show_frame_drop_toast(safe_count)
         except Exception:
-            logging.exception("Error forwarding frame-drop count to UI")
+            logger.exception("frame_drop_forward_failed:")
 
     def _on_speaker_name_pinned(self, raw_label: str, name: str):
         """Handle user pinning a speaker name in the transcript panel.
@@ -1288,10 +1319,7 @@ to avoid clipping issues and enable proper text rendering.
             raw_label: Raw speaker label from diarization (e.g. "spk0")
             name: User-chosen display name for this speaker
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
-        logger.info("Speaker name pinned: %s -> '%s'", raw_label, name)
+        logger.info("speaker_name_pinned: label=%s", raw_label)
 
         # Save the signature via controller
         self._controller.pin_speaker_name(raw_label, name)
@@ -1360,7 +1388,7 @@ to avoid clipping issues and enable proper text rendering.
         try:
             self._controller.initialize_post_processing()
         except Exception:
-            logging.exception("Post-processing startup failed (non-fatal)")
+            logger.exception("post_process_startup_failed:")
 
     def maybe_show_dependency_banner(self):
         """Show a dismissible banner when Tier-2 dependencies are missing.
@@ -1376,7 +1404,7 @@ to avoid clipping issues and enable proper text rendering.
         try:
             unresolved = unresolved_dependencies()
         except Exception:
-            logging.exception("Dependency banner check failed")
+            logger.exception("dependency_banner_check_failed:")
             return
         if not unresolved:
             return
@@ -1488,9 +1516,9 @@ to avoid clipping issues and enable proper text rendering.
             self._retry_in_progress = True
             self._retry_attempt = 1
             self._controller.begin_start_retry_sequence()
-            logging.info(
-                "WASAPI endpoint unavailable - starting retry sequence for sources=%s",
-                sources
+            logger.info(
+                "wasapi_retry_sequence_start: sources=%s",
+                ",".join(sorted(sources)),
             )
         else:
             self._retry_attempt += 1
@@ -1520,11 +1548,11 @@ to avoid clipping issues and enable proper text rendering.
         self._retry_timer.setSingleShot(True)
         self._retry_timer.timeout.connect(lambda: self._perform_retry_attempt())
         self._retry_timer.start(int(backoff_seconds * 1000))
-        
-        logging.info(
-            "Retry attempt %d/3 scheduled in %.1fs for system audio",
+
+        logger.debug(
+            "wasapi_retry_scheduled: attempt=%d/3 backoff_s=%.1f",
             self._retry_attempt,
-            backoff_seconds
+            backoff_seconds,
         )
     
     def _perform_retry_attempt(self) -> None:
@@ -1534,10 +1562,9 @@ to avoid clipping issues and enable proper text rendering.
         """
         if not self._retry_in_progress:
             return  # Retry was cancelled
-        
-        logging.info(
-            "Executing retry attempt %d/3 for system audio",
-            self._retry_attempt
+
+        logger.debug(
+            "wasapi_retry_execute: attempt=%d/3", self._retry_attempt
         )
         
         # Dismiss retry toast before next attempt
@@ -1569,7 +1596,7 @@ to avoid clipping issues and enable proper text rendering.
         
         Called when user clicks record button during retry.
         """
-        logging.info("User cancelled WASAPI retry sequence")
+        logger.info("wasapi_retry_cancelled: attempt=%d", self._retry_attempt)
         
         # Stop retry timer
         if self._retry_timer:
@@ -1615,7 +1642,7 @@ to avoid clipping issues and enable proper text rendering.
         
         if result == QDialog.DialogCode.Accepted and dialog.accepted_fallback():
             # User accepted fallback - retry with mic-only
-            logging.info("User accepted mic-only fallback after system audio failure")
+            logger.info("wasapi_fallback: outcome=accepted_mic_only")
             
             # Record retry outcome
             self._controller.record_start_retry_outcome(
@@ -1637,7 +1664,7 @@ to avoid clipping issues and enable proper text rendering.
                 self._show_error("Microphone not selected - cannot start recording")
         else:
             # User cancelled - return to IDLE
-            logging.info("User cancelled fallback after system audio failure")
+            logger.info("wasapi_fallback: outcome=cancelled")
             
             # Record retry outcome as failed
             self._controller.record_start_retry_outcome(
@@ -1697,9 +1724,7 @@ to avoid clipping issues and enable proper text rendering.
         try:
             self._controller.shutdown(timeout=10.0)
         except Exception:
-            logging.getLogger(__name__).exception(
-                "Controller shutdown error (proceeding with exit)"
-            )
+            logger.exception("controller_shutdown_failed: proceeding=exit")
         if self._tray_manager is not None:
             self._tray_manager.hide()
         QApplication.quit()
@@ -1709,9 +1734,12 @@ to avoid clipping issues and enable proper text rendering.
         try:
             set_config('ui.widget_position', (self.x(), self.y()))
             save_config()
-            logging.debug("Saved widget position: (%d, %d)", self.x(), self.y())
+            logger.debug("widget_position_saved: x=%d y=%d", self.x(), self.y())
         except Exception as e:
-            logging.warning("Failed to save position: %s", e)
+            logger.warning(
+                "widget_position_save_failed: error_class=%s",
+                type(e).__name__,
+            )
     
     def showEvent(self, event):
         """Reset opacity to match current state when widget reappears."""
@@ -1721,8 +1749,10 @@ to avoid clipping issues and enable proper text rendering.
             self.setWindowOpacity(self._IDLE_OPACITY)
         else:
             self.setWindowOpacity(self._ACTIVE_OPACITY)
-        logging.debug("showEvent: opacity reset for state=%s",
-                      self._visual_state.current.name)
+        logger.debug(
+            "show_event: opacity_reset=1 state=%s",
+            self._visual_state.current.name,
+        )
 
     def hideEvent(self, event):
         """Reset opacity to 1.0 on hide so reappear isn't stale at low opacity."""
@@ -1754,9 +1784,7 @@ to avoid clipping issues and enable proper text rendering.
         
         if self._tray_manager is not None:
             # Close-to-tray: hide the widget instead of quitting
-            logging.getLogger(__name__).info(
-                "closeEvent: hiding widget to system tray"
-            )
+            logger.info("close_to_tray: hidden=1")
             self.hide()
             event.ignore()
         else:
@@ -1764,9 +1792,7 @@ to avoid clipping issues and enable proper text rendering.
             try:
                 self._controller.shutdown(timeout=10.0)
             except Exception:
-                logging.getLogger(__name__).exception(
-                    "Controller shutdown error in closeEvent (proceeding)"
-                )
+                logger.exception("controller_shutdown_failed: proceeding=close")
             event.accept()
             QApplication.quit()
 
@@ -1845,8 +1871,8 @@ class RecordButtonItem(QGraphicsEllipseItem):
             # Auto-recovery: if 1+ seconds since last drop, recover to NORMAL
             now = _time.monotonic()
             if (now - self._last_drop_time) >= self._HEALTH_RECOVERY_WINDOW:
-                logging.info(
-                    "Health state: WARNING → NORMAL (recovered after %.1fs)",
+                logger.debug(
+                    "waveform_health_recovered: after_s=%.1f",
                     now - self._last_drop_time,
                 )
                 self._health_state = self._HEALTH_NORMAL
@@ -1872,8 +1898,8 @@ class RecordButtonItem(QGraphicsEllipseItem):
         # Immediately reset health state when recording stops
         if not recording:
             if self._health_state != self._HEALTH_NORMAL:
-                logging.info(
-                    "Health state: %s → NORMAL (recording stopped)",
+                logger.debug(
+                    "waveform_health_reset: from=%s reason=recording_stopped",
                     self._health_state,
                 )
             self._health_state = self._HEALTH_NORMAL
@@ -2002,9 +2028,9 @@ class RecordButtonItem(QGraphicsEllipseItem):
         # Enter WARNING only at threshold
         if safe_count >= self._HEALTH_DROP_THRESHOLD:
             if self._health_state != self._HEALTH_WARNING:
-                logging.info(
-                    "Health state: %s → WARNING (frames_dropped=%d)",
-                    self._health_state, safe_count,
+                logger.warning(
+                    "waveform_health_warning: frames_dropped=%d",
+                    safe_count,
                 )
                 self._health_state = self._HEALTH_WARNING
                 # Start health_t from 0 so transition animates in

@@ -152,30 +152,35 @@ def current_palette() -> ThemePalette:
         from PyQt6.QtGui import QGuiApplication
         hints = QGuiApplication.styleHints()
         if hints is None:
-            logger.debug("Theme detection: no styleHints, falling back to dark")
+            logger.debug("theme_detected: scheme=dark reason=no_style_hints")
             _theme_cache = DARK_PALETTE
             return _theme_cache
         scheme = hints.colorScheme()
         if scheme is None:
-            logger.debug("Theme detection: scheme is None, falling back to dark")
+            logger.debug("theme_detected: scheme=dark reason=scheme_none")
             _theme_cache = DARK_PALETTE
             return _theme_cache
-        # Import the enum for comparison
-        from PyQt6.QtGui import QtColorScheme
-        if scheme == QtColorScheme.Dark:
-            logger.debug("Theme detected: Dark")
+        # Compare by enum member name: QtColorScheme is not importable from
+        # PyQt6.QtGui in all supported PyQt6 builds (e.g. 6.11 exposes the
+        # enum only via values returned by colorScheme()).
+        scheme_name = getattr(scheme, "name", None)
+        if scheme_name == "Dark":
+            logger.debug("theme_detected: scheme=dark")
             _theme_cache = DARK_PALETTE
             return _theme_cache
-        elif scheme == QtColorScheme.Light:
-            logger.info("Theme detected: Light")
+        elif scheme_name == "Light":
+            logger.info("theme_detected: scheme=light")
             _theme_cache = LIGHT_PALETTE
             return _theme_cache
         else:
-            logger.debug("Theme detected: Unknown, falling back to dark")
+            logger.debug("theme_detected: scheme=dark reason=unknown_scheme")
             _theme_cache = DARK_PALETTE
             return _theme_cache
     except (ImportError, RuntimeError) as exc:
-        logger.info("Theme detection unavailable (%s), falling back to dark", exc)
+        logger.warning(
+            "theme_detected: scheme=dark reason=unavailable error_class=%s",
+            type(exc).__name__,
+        )
         _theme_cache = DARK_PALETTE
         return _theme_cache
 
