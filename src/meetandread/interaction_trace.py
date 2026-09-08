@@ -1,0 +1,306 @@
+"""Interaction Trace core — the ordered record of semantic user actions
+inside Issue Capture Mode (issue #105, docs/specs/issue-reporting.md).
+
+Spec: story 24 and the "Captured content" section; the durability
+contract is the owner-approved amendment of spec review #113 (durable
+append semantics). Built ON the #104 capture-directory contract
+(``capture_mode``): same directory, same prompt-flush discipline, same
+torn-tail tolerance — never altering it.
+
+## The contract (consumed by the Diagnostics Bundle assembler #108)
+
+File — exactly one per capture directory:
+
+- ``interaction_trace.jsonl`` — append-only JSONL, one line per event,
+  created exclusively by ``install_interaction_trace`` at process start
+  (capture runs only). Every completed event is written, flushed, AND
+  fsynced to disk before the emit call returns, so a forced kill mid-run
+  preserves every completed event; at most the one record being written
+  at the instant of the kill is lost (the ``windows``-marked subprocess
+  tests are the authoritative proof).
+
+Assembly tolerates exactly one truncated final JSONL record:
+``read_trace_events`` reads through the #104 torn-record reader
+(``capture_mode.read_appendable_records``), so every complete record
+before a torn tail survives.
+
+## The closed event vocabulary (the whole set — nothing else is a trace event)
+
+- ``button_pressed``        — a button/lobe/toggle was clicked
+  (``target`` names it semantically).
+- ``menu_item_selected``    — a menu or context-menu entry was chosen.
+- ``shortcut_triggered``    — a keyboard shortcut fired.
+- ``panel_opened``          — a floating panel became visible.
+- ``panel_closed``          — a floating panel was hidden.
+- ``panel_moved``           — a panel finished a drag (``x``/``y`` ints).
+- ``panel_resized``         — a panel finished a resize (``w``/``h`` ints).
+- ``device_selected``       — an audio source was (de)selected
+  (``target``: ``microphone`` | ``system``; ``selected``: bool).
+- ``window_focus_changed``  — app window focus gained/lost (``focused``).
+- ``text_edited``           — free text was edited; carries ONLY
+  ``{"chars": <int>}`` — the typed content NEVER enters the trace, any
+  event payload, or any log line.
+
+Event schema — one JSON object per line:
+
+- ``ts``    — ISO-8601 local timestamp of the event.
+- ``event`` — one of the closed vocabulary above.
+- ``target`` — semantic name of the acted-on widget (enum-like, stable;
+  never user free text beyond short semantic names).
+- zero or more scalar extras (bool/int/float/str) specific to the event
+  kind, as documented per name above.
+
+Emission is fail-closed on shape (unknown event names or non-scalar
+extras are refused and logged at ERROR — the trace must stay a valid
+member of the closed vocabulary because a future relay's log-format
+validation gate checks exactly this set), and best-effort on I/O (a
+capture run must not die because a diagnostic write failed).
+
+## Normal runs
+
+Without capture mode there is no trace: ``install_interaction_trace``
+is called only from the capture-mode startup path (``main`` with a
+``--issue-capture`` dir), and ``emit_interaction_event`` /
+``record_text_edited`` without an installed writer are silent no-ops
+that create nothing anywhere.
+
+This module is stdlib-only by design (like ``capture_mode``): it is
+imported before/independently of any Qt or native-audio subsystem and
+stays fast-lane testable (ADR 0001).
+"""
+
+import json
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+from meetandread.capture_mode import read_appendable_records
+
+# Filename of the Interaction Trace inside the capture dir. One capture
+# directory holds one run (#104) and one trace; treat as stable contract.
+TRACE_FILE_NAME = "interaction_trace.jsonl"
+
+# The closed set of named user actions (see module docstring). This is
+# the vocabulary a future relay's log-format validation gate would check
+# against — extending it is a spec-level decision, never ad hoc.
+EVENT_VOCABULARY = frozenset(
+    {
+        "button_pressed",
+        "menu_item_selected",
+        "shortcut_triggered",
+        "panel_opened",
+        "panel_closed",
+        "panel_moved",
+        "panel_resized",
+        "device_selected",
+        "window_focus_changed",
+        "text_edited",
+    }
+)
+
+# The one payload extra ``text_edited`` permits — a char count, nothing
+# else (the typed content must never enter the trace or any log line).
+_TEXT_EDITED_EXTRAS = frozenset({"chars"})
+
+logger = logging.getLogger(__name__)
+
+
+class InteractionTraceError(Exception):
+    """The Interaction Trace cannot be installed as requested.
+
+    Raised only at process start (bad capture-dir state — a trace file
+    from another run, or a second conflicting directory); the entry
+    point treats it as a capture-mode startup failure.
+    """
+
+
+class _TraceWriter:
+    """Durable append-only JSONL writer: one event, one line, fsynced.
+
+    The file is opened once with ``O_APPEND | O_CREAT | O_EXCL`` (one
+    trace per capture run — same exclusivity discipline as the #104
+    capture log, never truncating or double-owning) and held for the
+    process lifetime. Each event is formatted, written as one
+    ``os.write`` call, flushed by the OS append semantics, and fsynced
+    BEFORE :meth:`emit` returns — the durability contract's write side
+    (a forced kill loses at most the one record being written at that
+    instant). ``os.write`` on an O_APPEND descriptor is the atomic
+    unit: there is no Python-side buffer that could hold a completed
+    record.
+    """
+
+    def __init__(self, path: Path):
+        self._path = Path(path)
+        self._closed = False
+        try:
+            self._fd = os.open(
+                str(self._path), os.O_APPEND | os.O_CREAT | os.O_EXCL | os.O_WRONLY
+            )
+        except FileExistsError as exc:
+            raise InteractionTraceError(
+                f"interaction trace file already exists: '{self._path}' "
+                "— one capture run holds one trace; pass a fresh capture "
+                "directory"
+            ) from exc
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def emit(self, payload: dict) -> bool:
+        """Append one JSON line durably; True when it reached the disk."""
+        if self._closed:
+            return False
+        line = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
+        try:
+            os.write(self._fd, line)
+            os.fsync(self._fd)
+            return True
+        except OSError:
+            logger.exception(
+                "interaction_trace_write_failed: file=%s", self._path.name
+            )
+            return False
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            try:
+                os.close(self._fd)
+            except OSError:
+                pass
+
+
+# The trace writer THIS process has installed (None in a normal run).
+# Process-global like the #104 capture claim: one run records one trace
+# into one capture directory, from process start to process death.
+_writer: Optional[_TraceWriter] = None
+
+
+def install_interaction_trace(capture_dir: Path) -> Path:
+    """Install the trace writer for THIS capture run; return the path.
+
+    Capture runs only — called once from the capture-mode startup path
+    (``main`` with a ``--issue-capture`` dir), before the widget tree
+    exists. Idempotent for the same directory (the same run re-asking);
+    a second, different directory is refused (one run, one trace, one
+    dir) as is a directory already holding a trace file (another run's).
+
+    Raises:
+        InteractionTraceError: conflicting install (see above).
+    """
+    global _writer
+    if _writer is not None:
+        if Path(_writer.path).parent == Path(capture_dir):
+            return _writer.path
+        _writer.close()
+        raise InteractionTraceError(
+            f"interaction trace already installed for "
+            f"'{_writer.path.parent}' — one run records one trace"
+        )
+    writer = _TraceWriter(Path(capture_dir) / TRACE_FILE_NAME)
+    _writer = writer
+    logger.info(
+        "Interaction Trace: recording user actions into %s", _writer.path
+    )
+    return _writer.path
+
+
+def trace_installed() -> bool:
+    """Is an Interaction Trace writer installed in this process?"""
+    return _writer is not None
+
+
+def emit_interaction_event(event: str, target: str, **extras) -> bool:
+    """Append one named event to the trace; True when written.
+
+    Fail-closed on shape, best-effort on I/O: an event outside the
+    closed vocabulary, a non-scalar extra, or a ``text_edited`` payload
+    that is not exactly ``{"chars": int}`` is refused (ERROR log) — the
+    trace must remain a valid member of the documented vocabulary. An
+    I/O failure logs but never propagates: diagnostics must not crash
+    the run being diagnosed.
+
+    Without an installed writer (a normal run) this is a silent no-op
+    returning False — no trace is recorded anywhere.
+    """
+    if _writer is None:
+        return False
+    if event not in EVENT_VOCABULARY:
+        logger.error(
+            "interaction_trace_refused: reason=unknown_event event=%s", event
+        )
+        return False
+    if event == "text_edited":
+        if set(extras) != set(_TEXT_EDITED_EXTRAS) or not isinstance(
+            extras["chars"], int
+        ) or isinstance(extras["chars"], bool):
+            logger.error(
+                "interaction_trace_refused: reason=text_edited_payload "
+                "event=text_edited"
+            )
+            return False
+    for value in extras.values():
+        if not isinstance(value, (bool, int, float, str)):
+            logger.error(
+                "interaction_trace_refused: reason=non_scalar_extra "
+                "event=%s",
+                event,
+            )
+            return False
+    payload = {
+        "ts": datetime.now().isoformat(),
+        "event": event,
+        "target": target,
+    }
+    payload.update(extras)
+    return _writer.emit(payload)
+
+
+def record_text_edited(text: str) -> bool:
+    """Record a free-text edit as exactly ``text edited (N chars)``.
+
+    THE privacy boundary of the trace: the length is the only thing
+    that leaves this call. The content never enters the trace, any
+    event payload, or any log line — this function never logs and never
+    formats the text anywhere. The Qt layer calls
+    :func:`record_text_edited_length` instead so it never even holds
+    the text; this entry point serves callers that already have the
+    string (and must be the ONLY thing they do with it).
+    """
+    return record_text_edited_length(len(text))
+
+
+def record_text_edited_length(length: int) -> bool:
+    """Record one ``text edited (N chars)`` event from a length alone.
+
+    The content-free twin of :func:`record_text_edited`: the Qt filter
+    computes the length at the call site and passes the int, so typed
+    content never leaves the widget at all.
+    """
+    return emit_interaction_event(
+        "text_edited", target="text_field", chars=length
+    )
+
+
+def read_trace_events(capture_dir: Path) -> List[dict]:
+    """Read the trace as parsed events; [] when absent or unreadable.
+
+    Reads through the #104 torn-record reader: a forced kill can tear
+    at most the final JSONL record, and every complete record before it
+    — the whole run up to the kill — is preserved. Non-JSON lines (a
+    torn tail that still ends in ``\\n``, or foreign content) are
+    dropped, not fatal: assembly (#108) owns full validation.
+    """
+    path = Path(capture_dir) / TRACE_FILE_NAME
+    events: List[dict] = []
+    for line in read_appendable_records(path):
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events

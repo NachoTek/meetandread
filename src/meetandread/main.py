@@ -363,6 +363,26 @@ def main(capture_dir: Optional[Path] = None):
         "Starting meetandread%s",
         " (Issue Capture Mode)" if capture_dir is not None else "",
     )
+
+    # Interaction Trace (issue #105): capture runs only — installed at
+    # process start, before the widget tree exists, so every semantic
+    # user action from the first moment of the run lands in
+    # <capture_dir>/interaction_trace.jsonl under the durability
+    # contract. A normal run installs nothing and records no trace.
+    # A conflicting install (a stale trace file from another run) is a
+    # capture-mode startup failure: same refusal class as the #104
+    # claim rejection (clear stderr, exit 2, no half-started run).
+    if capture_dir is not None:
+        from meetandread.interaction_trace import (
+            InteractionTraceError,
+            install_interaction_trace,
+        )
+
+        try:
+            install_interaction_trace(capture_dir)
+        except InteractionTraceError as exc:
+            logger.error("interaction trace: %s", exc)
+            sys.exit(2)
     
     # Enable high DPI support
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -372,6 +392,21 @@ def main(capture_dir: Optional[Path] = None):
     app = QApplication(sys.argv)
     app.setApplicationName("meetandread")
     app.setApplicationDisplayName("meetandread")
+
+    # Qt-side Interaction Trace wiring (issue #105): the application
+    # filter (window focus changes, text-edit char counts, generic
+    # buttons) installs only in a capture run — a normal run keeps a
+    # zero-diagnostic widget path. Diagnostics are best-effort here: a
+    # filter failure must not kill the diagnosed run.
+    if capture_dir is not None:
+        try:
+            from meetandread.interaction_trace_qt import (
+                install_interaction_trace_qt_filter,
+            )
+
+            install_interaction_trace_qt_filter(app)
+        except Exception as e:
+            logger.warning("Interaction Trace Qt filter not installed: %s", e)
 
     # Widget placeholder — updated after widget creation.
     # Signal handlers read this via a lambda so they always get the

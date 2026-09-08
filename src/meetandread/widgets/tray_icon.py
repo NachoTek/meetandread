@@ -14,6 +14,7 @@ from PyQt6.QtGui import QAction, QIcon
 from meetandread.recording.controller import ControllerState
 from meetandread.widgets.icons import create_app_icon, create_recording_icon
 from meetandread.widgets.theme import context_menu_css, current_palette
+from meetandread.interaction_trace import emit_interaction_event
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,9 @@ class TrayIconManager:
     def _handle_toggle_recording(self) -> None:
         """Handle Start/Stop Recording menu action."""
         logger.debug("tray_menu_action: action=toggle_recording")
+        emit_interaction_event(
+            "menu_item_selected", target="tray.toggle_recording"
+        )
         if self._on_toggle_recording is not None:
             self._on_toggle_recording()
 
@@ -216,6 +220,9 @@ class TrayIconManager:
         logger.debug("tray_menu_action: action=toggle_visibility")
         if self._widget is None:
             return
+        emit_interaction_event(
+            "menu_item_selected", target="tray.toggle_visibility"
+        )
 
         if self._widget.isVisible():
             # Hide widget and all floating panels
@@ -233,6 +240,7 @@ class TrayIconManager:
     def _handle_exit(self) -> None:
         """Handle Exit menu action."""
         logger.debug("tray_menu_action: action=exit")
+        emit_interaction_event("menu_item_selected", target="tray.exit")
         if self._on_exit is not None:
             self._on_exit()
 

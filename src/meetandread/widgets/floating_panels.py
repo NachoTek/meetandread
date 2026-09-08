@@ -33,6 +33,7 @@ from meetandread.speaker.identity_linking import (
     rename_identity as _rename_speaker_identity_in_file,
 )
 from meetandread.speaker.identity_management import scan_identity_usage as _scan_identity_usage
+from meetandread.interaction_trace import emit_interaction_event
 
 
 def clamp_to_screen(widget: QWidget, pos: QPoint) -> QPoint:
@@ -1798,9 +1799,24 @@ class FloatingTranscriptPanel(QWidget):
         retranscribe_action = menu.addAction("🔄  Re-transcribe Recording")
         rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
-        retranscribe_action.triggered.connect(lambda: self._on_retranscribe_clicked())
-        rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
-        delete_action.triggered.connect(lambda: self._delete_recording(item))
+        retranscribe_action.triggered.connect(lambda: (
+            emit_interaction_event(
+                "menu_item_selected", target="history.retranscribe"
+            ),
+            self._on_retranscribe_clicked(),
+        ))
+        rename_action.triggered.connect(lambda: (
+            emit_interaction_event(
+                "menu_item_selected", target="history.rename"
+            ),
+            self._rename_recording_dialog(item),
+        ))
+        delete_action.triggered.connect(lambda: (
+            emit_interaction_event(
+                "menu_item_selected", target="history.delete"
+            ),
+            self._delete_recording(item),
+        ))
         menu.exec(self._history_list.viewport().mapToGlobal(pos))
 
     def _on_delete_btn_clicked(self) -> None:
@@ -3295,6 +3311,7 @@ class CCOverlayPanel(QWidget):
         """
         self.cancel_delayed_hide()
         logger.debug("cc_overlay_state: visible=1")
+        emit_interaction_event("panel_opened", target="cc_overlay")
         self._start_fade_in()
 
     def hide_panel(self, immediate: bool = False) -> None:
@@ -3305,6 +3322,7 @@ class CCOverlayPanel(QWidget):
         """
         self.save_geometry()
         logger.debug("cc_overlay_state: visible=0 immediate=%s", bool(immediate))
+        emit_interaction_event("panel_closed", target="cc_overlay")
         if immediate:
             self.hide()
             self.setWindowOpacity(1.0)
@@ -5664,6 +5682,12 @@ class FloatingSettingsPanel(QWidget):
             self._title_dragging = False
             self._title_drag_pos = None
             self._title_bar.setCursor(Qt.CursorShape.ArrowCursor)
+            emit_interaction_event(
+                "panel_moved",
+                target="settings_panel",
+                x=self.x(),
+                y=self.y(),
+            )
 
     # ------------------------------------------------------------------
     # Edge-resize — mouse event handlers (fallback for direct panel clicks
@@ -5720,11 +5744,23 @@ class FloatingSettingsPanel(QWidget):
                 self._resize_start_pos = None
                 self._resize_start_geometry = None
                 self.setCursor(Qt.CursorShape.ArrowCursor)
+                emit_interaction_event(
+                    "panel_resized",
+                    target="settings_panel",
+                    w=self.width(),
+                    h=self.height(),
+                )
                 return
             if self._dragging:
                 self._dragging = False
                 self._drag_pos = None
                 self.setCursor(Qt.CursorShape.ArrowCursor)
+                emit_interaction_event(
+                    "panel_moved",
+                    target="settings_panel",
+                    x=self.x(),
+                    y=self.y(),
+                )
                 event.accept()
                 return
         super().mouseReleaseEvent(event)
@@ -5738,6 +5774,7 @@ class FloatingSettingsPanel(QWidget):
     def show_panel(self):
         """Show the panel with a 150ms fade-in and start monitoring if on Performance tab."""
         logger.debug("settings_panel_state: visible=1")
+        emit_interaction_event("panel_opened", target="settings_panel")
         self._start_fade_in()
         # Activate monitoring if Performance tab is visible
         if self._perf_tab_active:
@@ -5747,6 +5784,7 @@ class FloatingSettingsPanel(QWidget):
     def hide_panel(self):
         """Hide the panel with a 150ms fade-out and stop monitoring."""
         logger.debug("settings_panel_state: visible=0")
+        emit_interaction_event("panel_closed", target="settings_panel")
         self.save_geometry()
         self._stop_resource_monitor()
         self._metrics_timer.stop()
@@ -8569,6 +8607,9 @@ class FloatingSettingsPanel(QWidget):
                     "keyboard_shortcut_triggered: key=%s action=%s",
                     event.text() or str(key), action,
                 )
+                emit_interaction_event(
+                    "shortcut_triggered", target=f"history.{action}"
+                )
                 event.accept()
                 return
 
@@ -8602,6 +8643,9 @@ class FloatingSettingsPanel(QWidget):
                     logger.info(
                         "keyboard_shortcut_triggered: key=%s action=%s",
                         event.text() or str(key), action,
+                    )
+                    emit_interaction_event(
+                        "shortcut_triggered", target=f"history.{action}"
                     )
                     event.accept()
                     return
@@ -9105,9 +9149,24 @@ class FloatingSettingsPanel(QWidget):
         retranscribe_action = menu.addAction("🔄  Re-transcribe Recording")
         rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
-        retranscribe_action.triggered.connect(lambda: self._on_retranscribe_clicked())
-        rename_action.triggered.connect(lambda: self._rename_recording_dialog(item))
-        delete_action.triggered.connect(lambda: self._delete_recording(item))
+        retranscribe_action.triggered.connect(lambda: (
+            emit_interaction_event(
+                "menu_item_selected", target="history.retranscribe"
+            ),
+            self._on_retranscribe_clicked(),
+        ))
+        rename_action.triggered.connect(lambda: (
+            emit_interaction_event(
+                "menu_item_selected", target="history.rename"
+            ),
+            self._rename_recording_dialog(item),
+        ))
+        delete_action.triggered.connect(lambda: (
+            emit_interaction_event(
+                "menu_item_selected", target="history.delete"
+            ),
+            self._delete_recording(item),
+        ))
         menu.exec(self._history_list.viewport().mapToGlobal(pos))
 
     def _on_delete_btn_clicked(self) -> None:

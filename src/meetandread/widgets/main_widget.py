@@ -35,6 +35,7 @@ from meetandread.transcription.accumulating_processor import SegmentResult
 from meetandread.config import get_config, set_config, save_config
 from meetandread.widgets.floating_panels import FloatingSettingsPanel, CCOverlayPanel, ToastManager, ensure_on_screen, FallbackConfirmationDialog, PostProcessFailureDialog
 from meetandread.widgets.theme import context_menu_css, current_palette
+from meetandread.interaction_trace import emit_interaction_event
 
 logger = logging.getLogger(__name__)
 
@@ -1367,7 +1368,7 @@ to avoid clipping issues and enable proper text rendering.
             else:
                 ensure_on_screen(self._cc_overlay)
                 self._cc_overlay.show_panel()
-    
+
     def _toggle_settings_panel(self):
         """Toggle floating settings panel visibility.
 
@@ -1715,19 +1716,38 @@ to avoid clipping issues and enable proper text rendering.
         # Recording toggle
         toggle_text = "Stop Recording" if self.is_recording else "Start Recording"
         toggle_action = menu.addAction(toggle_text)
-        toggle_action.triggered.connect(self.toggle_recording)
+        toggle_action.triggered.connect(
+            lambda: (
+                emit_interaction_event(
+                    "menu_item_selected", target="menu.toggle_recording"
+                ),
+                self.toggle_recording(),
+            )
+        )
 
         menu.addSeparator()
 
         # Settings
         settings_action = menu.addAction("Settings")
-        settings_action.triggered.connect(self._toggle_settings_panel)
+        settings_action.triggered.connect(
+            lambda: (
+                emit_interaction_event(
+                    "menu_item_selected", target="menu.settings"
+                ),
+                self._toggle_settings_panel(),
+            )
+        )
 
         menu.addSeparator()
 
         # Exit
         exit_action = menu.addAction("Exit")
-        exit_action.triggered.connect(self._exit_application)
+        exit_action.triggered.connect(
+            lambda: (
+                emit_interaction_event("menu_item_selected", target="menu.exit"),
+                self._exit_application(),
+            )
+        )
 
         menu.exec(self.mapToGlobal(position))
     
@@ -2293,6 +2313,9 @@ class RecordButtonItem(QGraphicsEllipseItem):
         """Fire action on release, only if this wasn't a drag."""
         if event.button() == Qt.MouseButton.LeftButton:
             if not self.parent_widget.is_dragging and not self.parent_widget._click_consumed:
+                emit_interaction_event(
+                    "button_pressed", target="record_button"
+                )
                 self.parent_widget.toggle_recording()
             event.accept()
 
@@ -2423,6 +2446,15 @@ class ToggleLobeItem(QGraphicsEllipseItem):
             if not self.parent_widget.is_dragging and not self.parent_widget._click_consumed:
                 self.is_active = not self.is_active
                 self.update()
+                emit_interaction_event(
+                    "device_selected",
+                    target=(
+                        "microphone"
+                        if self.lobe_type == "microphone"
+                        else "system"
+                    ),
+                    selected=self.is_active,
+                )
                 self.parent_widget._on_lobe_toggled()
             event.accept()
 
