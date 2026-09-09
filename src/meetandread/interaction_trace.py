@@ -122,13 +122,13 @@ class _TraceWriter:
     The file is opened once with ``O_APPEND | O_CREAT | O_EXCL`` (one
     trace per capture run — same exclusivity discipline as the #104
     capture log, never truncating or double-owning) and held for the
-    process lifetime. Each event is formatted, written as one
-    ``os.write`` call, flushed by the OS append semantics, and fsynced
-    BEFORE :meth:`emit` returns — the durability contract's write side
-    (a forced kill loses at most the one record being written at that
-    instant). ``os.write`` on an O_APPEND descriptor is the atomic
-    unit: there is no Python-side buffer that could hold a completed
-    record.
+    process lifetime. Each event is formatted, persisted by a loop of
+    ``os.write`` calls that continues across short writes until the
+    full line is on disk (a zero-byte write is an error condition),
+    and fsynced BEFORE :meth:`emit` returns — the durability
+    contract's write side (a forced kill loses at most the one record
+    being written at that instant). There is no Python-side buffer
+    that could hold a completed record.
     """
 
     def __init__(self, path: Path):
@@ -150,12 +150,25 @@ class _TraceWriter:
         return self._path
 
     def emit(self, payload: dict) -> bool:
-        """Append one JSON line durably; True when it reached the disk."""
+        """Append one JSON line durably; True when it reached the disk.
+
+        ``os.write`` may legally short-write (or write zero bytes), so
+        the loop persists the FULL buffer — a partial count re-writes
+        the remainder, a zero-byte write is an error condition — and
+        only then fsyncs. True means the whole line is on disk.
+        """
         if self._closed:
             return False
         line = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
+        view = memoryview(line)
         try:
-            os.write(self._fd, line)
+            while view:
+                written = os.write(self._fd, view)
+                if written <= 0:
+                    raise OSError(
+                        f"trace write wrote {written} of {len(line)} bytes"
+                    )
+                view = view[written:]
             os.fsync(self._fd)
             return True
         except OSError:

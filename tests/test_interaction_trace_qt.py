@@ -245,6 +245,133 @@ class TestRealWidgetEvents:
         assert isinstance(resized[0]["w"], int) and isinstance(resized[0]["h"], int)
 
 
+class TestCCOverlayPanelTrace:
+    """The CC overlay is draggable AND resizable (unlike the settings
+    panel it also resizes through the grip eventFilter) — every one of
+    those end-of-gesture paths must land in the trace sink."""
+
+    def _cc_overlay(self, qapp):
+        from meetandread.widgets.floating_panels import CCOverlayPanel
+
+        panel = CCOverlayPanel()
+        panel.show()
+        panel.move(100, 100)
+        qapp.processEvents()
+        return panel
+
+    def _mouse(self, etype, local, global_pos):
+        return QMouseEvent(
+            etype,
+            QPointF(local), QPointF(global_pos),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+    def test_cc_overlay_drag_release_produces_panel_moved(
+        self, qapp, trace_sink
+    ):
+        panel = self._cc_overlay(qapp)
+        center = QPoint(panel.width() // 2, panel.height() // 2)
+        press_global = panel.mapToGlobal(center)
+        panel.mousePressEvent(
+            self._mouse(
+                QMouseEvent.Type.MouseButtonPress, center, press_global
+            )
+        )
+        moved_global = press_global + QPoint(40, 25)
+        move_local = panel.mapFromGlobal(moved_global)
+        panel.mouseMoveEvent(
+            self._mouse(
+                QMouseEvent.Type.MouseMove, move_local, moved_global
+            )
+        )
+        release_local = panel.mapFromGlobal(moved_global)
+        panel.mouseReleaseEvent(
+            self._mouse(
+                QMouseEvent.Type.MouseButtonRelease,
+                release_local,
+                moved_global,
+            )
+        )
+        events = read_trace_events(trace_sink)
+        moved = [e for e in events if e["event"] == "panel_moved"]
+        assert moved and moved[0]["target"] == "cc_overlay"
+        assert isinstance(moved[0]["x"], int) and isinstance(moved[0]["y"], int)
+
+    def test_cc_overlay_edge_resize_release_produces_panel_resized(
+        self, qapp, trace_sink
+    ):
+        panel = self._cc_overlay(qapp)
+        edge_pos = QPoint(panel.width() - 2, panel.height() // 2)
+        press_global = panel.mapToGlobal(edge_pos)
+        panel.mousePressEvent(
+            self._mouse(
+                QMouseEvent.Type.MouseButtonPress, edge_pos, press_global
+            )
+        )
+        moved_global = press_global + QPoint(50, 0)
+        move_local = panel.mapFromGlobal(moved_global)
+        panel.mouseMoveEvent(
+            self._mouse(
+                QMouseEvent.Type.MouseMove, move_local, moved_global
+            )
+        )
+        release_local = panel.mapFromGlobal(moved_global)
+        panel.mouseReleaseEvent(
+            self._mouse(
+                QMouseEvent.Type.MouseButtonRelease,
+                release_local,
+                moved_global,
+            )
+        )
+        events = read_trace_events(trace_sink)
+        resized = [e for e in events if e["event"] == "panel_resized"]
+        assert resized and resized[0]["target"] == "cc_overlay"
+        assert isinstance(resized[0]["w"], int) and isinstance(resized[0]["h"], int)
+
+    def test_cc_overlay_grip_resize_release_produces_panel_resized(
+        self, qapp, trace_sink
+    ):
+        """The resize-grip eventFilter path (the CC overlay's second,
+        settings-panel-absent resize funnel): real QMouseEvents sent
+        through QApplication to the real grip, routed by the installed
+        filter."""
+        panel = self._cc_overlay(qapp)
+        grip = panel._resize_grip
+        grip_center = QPoint(grip.width() // 2, grip.height() // 2)
+        press_global = grip.mapToGlobal(grip_center)
+        QApplication.sendEvent(
+            grip,
+            self._mouse(
+                QMouseEvent.Type.MouseButtonPress,
+                grip_center,
+                press_global,
+            ),
+        )
+        moved_global = press_global + QPoint(50, 50)
+        move_local = grip.mapFromGlobal(moved_global)
+        QApplication.sendEvent(
+            grip,
+            self._mouse(
+                QMouseEvent.Type.MouseMove, move_local, moved_global
+            ),
+        )
+        release_local = grip.mapFromGlobal(moved_global)
+        QApplication.sendEvent(
+            grip,
+            self._mouse(
+                QMouseEvent.Type.MouseButtonRelease,
+                release_local,
+                moved_global,
+            ),
+        )
+        qapp.processEvents()
+        events = read_trace_events(trace_sink)
+        resized = [e for e in events if e["event"] == "panel_resized"]
+        assert resized and resized[0]["target"] == "cc_overlay"
+        assert isinstance(resized[0]["w"], int) and isinstance(resized[0]["h"], int)
+
+
 # ---------------------------------------------------------------------------
 # The Qt application-level filter: focus changes, generic buttons,
 # text editing through FocusOut — never content

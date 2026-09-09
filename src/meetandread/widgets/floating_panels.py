@@ -3200,6 +3200,12 @@ class CCOverlayPanel(QWidget):
                     self._resize_start_pos = None
                     self._resize_start_geometry = None
                     self.setCursor(Qt.CursorShape.ArrowCursor)
+                    emit_interaction_event(
+                        "panel_resized",
+                        target="cc_overlay",
+                        w=self.width(),
+                        h=self.height(),
+                    )
                     return True  # consumed
 
         return False
@@ -3285,10 +3291,22 @@ class CCOverlayPanel(QWidget):
                 self._resize_start_pos = None
                 self._resize_start_geometry = None
                 self.setCursor(Qt.CursorShape.ArrowCursor)
+                emit_interaction_event(
+                    "panel_resized",
+                    target="cc_overlay",
+                    w=self.width(),
+                    h=self.height(),
+                )
             else:
                 self._dragging = False
                 self._drag_pos = None
                 self.setCursor(Qt.CursorShape.ArrowCursor)
+                emit_interaction_event(
+                    "panel_moved",
+                    target="cc_overlay",
+                    x=self.x(),
+                    y=self.y(),
+                )
             event.accept()
         else:
             super().mouseReleaseEvent(event)

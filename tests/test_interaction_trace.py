@@ -22,6 +22,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -196,6 +197,92 @@ class TestEmission:
         assert (installed / TRACE_FILE_NAME).read_text(
             encoding="utf-8"
         ) == ""
+
+
+# ---------------------------------------------------------------------------
+# Durability write side: full-buffer os.write loop (PR #123 review)
+# ---------------------------------------------------------------------------
+
+
+class TestDurabilityWriteSide:
+    """os.write may legally short-write (or write zero bytes); emit()
+    must persist the FULL buffer before fsync and True — a completed
+    event returned True with only part of the line on disk would be
+    silently lost on crash (the crash-durability contract violation
+    reproduced by the PR #123 automated review: 33 of 66 bytes)."""
+
+    PAYLOAD = {
+        "ts": "2026-09-07T10:00:00",
+        "event": "button_pressed",
+        "target": "record_button",
+    }
+
+    def _line(self) -> bytes:
+        return (
+            json.dumps(self.PAYLOAD, ensure_ascii=True) + "\n"
+        ).encode("utf-8")
+
+    def _writer(self, trace_dir):
+        install_interaction_trace(trace_dir)
+        return itrace._writer
+
+    def test_short_write_loops_until_full_line_persisted(self, trace_dir):
+        # 33-of-66-style first call (the reviewer's repro: a partial
+        # count half the line), then a further partial, then the rest.
+        writer = self._writer(trace_dir)
+        line = self._line()
+        half = len(line) // 2
+        buf = bytearray()
+        counts = iter([half, 10])
+
+        def fake_os_write(fd, data):
+            n = next(counts, len(data))
+            assert 0 <= n <= len(data)
+            buf.extend(data[:n])
+            return n
+
+        with patch.object(itrace.os, "write", side_effect=fake_os_write):
+            ok = writer.emit(self.PAYLOAD)
+        assert ok is True
+        assert bytes(buf) == line
+        assert bytes(buf).endswith(b"\n")
+
+    def test_no_true_before_buffer_fully_persisted(self, trace_dir):
+        # The first os.write writes zero bytes and the fd then refuses
+        # everything: emit must NOT report success, and no completed
+        # line (no newline) may be claimed as persisted.
+        writer = self._writer(trace_dir)
+        buf = bytearray()
+        state = {"first": True}
+
+        def stop_after_zero(fd, data):
+            if state["first"]:
+                state["first"] = False
+                return 0
+            raise OSError("write side closed")
+
+        with patch.object(itrace.os, "write", side_effect=stop_after_zero):
+            ok = writer.emit(self.PAYLOAD)
+        assert ok is False
+        assert bytes(buf) == b""
+
+    def test_zero_byte_write_is_error_not_success(self, trace_dir):
+        # A zero-byte os.write is an error condition, never success:
+        # no True while any of the buffer is unpersisted.
+        writer = self._writer(trace_dir)
+        buf = bytearray()
+
+        def zero_write(fd, data):
+            buf.extend(data[:0])
+            return 0
+
+        with patch.object(itrace.os, "write", side_effect=zero_write):
+            ok = writer.emit(self.PAYLOAD)
+        assert ok is False
+        assert bytes(buf) == b""
+        assert not (trace_dir / TRACE_FILE_NAME).read_bytes().endswith(
+            b"\n"
+        )
 
 
 # ---------------------------------------------------------------------------
