@@ -63,10 +63,14 @@ class InteractionTraceFilter(QObject):
     Installed exactly once per capture run via
     :func:`install_interaction_trace_qt_filter`; never in a normal run.
 
-    Text privacy: the filter tracks per-widget whether text changed
-    since the widget gained focus, and records ONE ``text_edited``
-    event (the final length) on ``FocusOut``. It never interpolates
-    the content into a log call, an event payload, or an exception
+    Text privacy: the filter tracks per-widget whether the text was
+    edited while focused (a content-free dirty flag fed by zero-arg
+    edit-notification slots — ``textEdited``/``textChanged``; the
+    string payload never crosses into the filter) plus the length at
+    focus-in, and records ONE ``text_edited`` event (the final
+    length) on ``FocusOut`` when either says "edited" — so a
+    same-length replacement still emits. It never interpolates the
+    content into a log call, an event payload, or an exception
     message — the count is computed and passed as an int, nothing
     else touches the text.
     """
@@ -108,6 +112,9 @@ class InteractionTraceFilter(QObject):
         if self._is_text_widget(watched):
             self._focused_text_widget = watched
             self._text_lengths[id(watched)] = self._text_length(watched)
+            # A stale dirty mark (widget deleted while focused, its id
+            # reused) must not leak into this fresh session.
+            self._text_dirty.discard(id(watched))
             self._watch_text_edits(watched)
             return
         if self._is_app_window(watched):

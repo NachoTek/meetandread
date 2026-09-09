@@ -46,6 +46,13 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 STARTUP_TIMEOUT_S = 60.0
 
+# Windows NTSTATUS 0xC0000005 as subprocess returncode: the known
+# teardown access violation (native audio/controller threads) the
+# #104 capture-mode subprocess tests also coexist with on headless
+# sandboxes — it strikes AFTER the event loop returns and the capture
+# artifacts (trace, marker) are already durably on disk.
+_TEARDOWN_ACCESS_VIOLATION = 0xC0000005
+
 # The canary the child types into a real text field. It must appear in
 # NEITHER the trace file NOR the capture DEBUG log — only its length.
 TYPED_CANARY = "SUBPROCESS-canary-Sebastopol-9931-typed-text"
@@ -442,7 +449,7 @@ class TestProductionWiringEndToEnd:
         # post-marker crash does not mask a wiring regression (the
         # mutation check: removing main()'s install_interaction_trace
         # fails this test at the events assertion, not at exit code).
-        assert exit_code in (0, 3221225477), (
+        assert exit_code in (0, _TEARDOWN_ACCESS_VIOLATION), (
             f"production run failed before the drive completed: "
             f"exit={exit_code} stdout: {_stdout_text(stdout_file)}"
         )
