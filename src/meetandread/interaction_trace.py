@@ -260,6 +260,24 @@ def trace_installed() -> bool:
     return _writer is not None
 
 
+def close_interaction_trace() -> None:
+    """Close the installed trace writer (process-exit teardown).
+
+    Best-effort and idempotent: closes the writer's fd and clears the
+    process-global install so every later emit is a no-op (``False``).
+    Called by the capture-mode exit path AFTER the Qt event filter is
+    removed and BEFORE ``QApplication`` destruction — the writer is
+    stdlib-only (no Qt object), but the ordering keeps every trace
+    emission strictly inside the live-application window so teardown
+    can never race a half-dead emitter (PR #123 fix round 3).
+    """
+    global _writer
+    if _writer is not None:
+        _writer.close()
+        _writer = None
+        logger.debug("interaction_trace_closed")
+
+
 def emit_interaction_event(event: str, target: str, **extras) -> bool:
     """Append one named event to the trace; True when written.
 

@@ -520,6 +520,29 @@ def main(capture_dir: Optional[Path] = None):
     # construction). Any hard exit (kill, native crash, sys.exit from a
     # dialog path) skips this point entirely.
     exit_code = app.exec()
+
+    # Interaction Trace teardown (issue #105, PR #123 fix round 3):
+    # remove the application-level Qt filter and close the trace
+    # writer BEFORE the QApplication object is destroyed. A Python-side
+    # event filter left installed at app destruction crashes natively
+    # (0xC0000005) when Qt delivers teardown events into the dying
+    # filter — this ordering keeps the filter and every trace emission
+    # strictly inside the live-application window. Capture runs only;
+    # best-effort so the exit path is never compromised.
+    if capture_dir is not None:
+        try:
+            from meetandread.interaction_trace import (
+                close_interaction_trace,
+            )
+            from meetandread.interaction_trace_qt import (
+                remove_interaction_trace_qt_filter,
+            )
+
+            remove_interaction_trace_qt_filter(app)
+            close_interaction_trace()
+        except Exception as e:
+            logger.warning("Interaction Trace teardown failed: %s", e)
+
     if capture_dir is not None and exit_code == 0:
         write_completion_marker(capture_dir)
     sys.exit(exit_code)

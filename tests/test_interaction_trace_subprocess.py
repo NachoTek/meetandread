@@ -46,13 +46,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 STARTUP_TIMEOUT_S = 60.0
 
-# Windows NTSTATUS 0xC0000005 as subprocess returncode: the known
-# teardown access violation (native audio/controller threads) the
-# #104 capture-mode subprocess tests also coexist with on headless
-# sandboxes — it strikes AFTER the event loop returns and the capture
-# artifacts (trace, marker) are already durably on disk.
-_TEARDOWN_ACCESS_VIOLATION = 0xC0000005
-
 # The canary the child types into a real text field. It must appear in
 # NEITHER the trace file NOR the capture DEBUG log — only its length.
 TYPED_CANARY = "SUBPROCESS-canary-Sebastopol-9931-typed-text"
@@ -440,18 +433,15 @@ class TestProductionWiringEndToEnd:
                 _kill_hard(proc)
             proc.wait()
 
-        # Exit discipline: the drive completed and app.exec() returned;
-        # the process may still die with the known teardown access
-        # violation (0xC0000005, native audio/controller threads) that
-        # the #104 capture-mode subprocess tests also coexist with on
-        # headless sandboxes. Everything BEFORE teardown — the wiring,
-        # the drive, the trace, the marker — is asserted below, so a
-        # post-marker crash does not mask a wiring regression (the
-        # mutation check: removing main()'s install_interaction_trace
-        # fails this test at the events assertion, not at exit code).
-        assert exit_code in (0, _TEARDOWN_ACCESS_VIOLATION), (
-            f"production run failed before the drive completed: "
-            f"exit={exit_code} stdout: {_stdout_text(stdout_file)}"
+        # Exit discipline: the production app must exit 0 — same
+        # contract as the #104 capture-mode subprocess siblings. The
+        # teardown-ordering fix (filter removed + writer closed BEFORE
+        # app destruction) makes the historical 0xC0000005 teardown
+        # crash a real failure again, guarding the fix (PR #123 fix
+        # round 3 unmasked this assertion).
+        assert exit_code == 0, (
+            f"production run failed to exit cleanly (teardown crash? "
+            f"exit={exit_code}): {_stdout_text(stdout_file)}"
         )
 
         events = read_trace_events(capture_dir)
