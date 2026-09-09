@@ -129,11 +129,34 @@ class _TraceWriter:
     contract's write side (a forced kill loses at most the one record
     being written at that instant). There is no Python-side buffer
     that could hold a completed record.
+
+    Write-path failure semantics (documented contract, PR #123
+    review):
+
+    - ``os.write`` short-write → keep writing the remainder (loop).
+    - zero-byte write → error condition (``False``, no fsync); the
+      record boundary is intact (nothing landed), so the writer stays
+      usable for later emits.
+    - error after a PARTIAL write (≥1 byte of the record landed, then
+      the write failed) → the file now ends in an unterminated
+      fragment; the writer is PERMANENTLY POISONED — every later
+      emit returns ``False`` without writing, so no later record can
+      append to the fragment and claim success for a line that would
+      read back as one malformed merged record. The fragment stays as
+      the single torn tail the reader already tolerates. Chosen over
+      best-effort boundary repair (writing a lone newline): after a
+      partial-write failure the storage itself is failing, so the
+      honest, fail-closed move is to stop claiming writes.
+    - error at ``fsync`` AFTER the full line reached the OS → the
+      record boundary is intact, so the writer is NOT poisoned;
+      ``False`` is returned (the durability promise was not met) and
+      later emits append cleanly.
     """
 
     def __init__(self, path: Path):
         self._path = Path(path)
         self._closed = False
+        self._poisoned = False
         try:
             self._fd = os.open(
                 str(self._path), os.O_APPEND | os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -156,8 +179,12 @@ class _TraceWriter:
         the loop persists the FULL buffer — a partial count re-writes
         the remainder, a zero-byte write is an error condition — and
         only then fsyncs. True means the whole line is on disk.
+
+        An error after a PARTIAL write poisons the writer (see the
+        class docstring): later emits return False without writing,
+        so nothing can append to the unterminated fragment.
         """
-        if self._closed:
+        if self._closed or self._poisoned:
             return False
         line = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
         view = memoryview(line)
@@ -173,6 +200,12 @@ class _TraceWriter:
             os.fsync(self._fd)
             return True
         except OSError:
+            if 0 < len(view) < len(line):
+                # PARTIAL write then failure: the file now ends in an
+                # unterminated fragment. Poison — never append to it.
+                # (A full write's later fsync failure leaves the view
+                # empty and the record boundary intact — not poisoned.)
+                self._poisoned = True
             logger.exception(
                 "interaction_trace_write_failed: file=%s", self._path.name
             )

@@ -79,6 +79,12 @@ class InteractionTraceFilter(QObject):
         # object resurrection, no content retention.
         self._text_lengths: dict = {}
         self._focused_text_widget: Optional[QObject] = None
+        # widget -> content-free dirty flag: set by edit/change
+        # notifications while focused (zero-arg slots — the signal
+        # payload, i.e. the text, is never received). A same-length
+        # replacement still sets it, so FocusOut emits even when the
+        # length is unchanged (PR #123 re-review finding 2).
+        self._text_dirty: set = set()
 
     # -- eventFilter ----------------------------------------------------
 
@@ -102,6 +108,7 @@ class InteractionTraceFilter(QObject):
         if self._is_text_widget(watched):
             self._focused_text_widget = watched
             self._text_lengths[id(watched)] = self._text_length(watched)
+            self._watch_text_edits(watched)
             return
         if self._is_app_window(watched):
             emit_interaction_event(
@@ -114,15 +121,21 @@ class InteractionTraceFilter(QObject):
         if self._is_text_widget(watched):
             if self._focused_text_widget is watched:
                 self._focused_text_widget = None
+            dirty = id(watched) in self._text_dirty
             before = self._text_lengths.get(id(watched))
             if before is not None:
                 after = self._text_length(watched)
-                if after != before:
+                if dirty or after != before:
                     # Exactly the "text edited (N chars)" contract: the
                     # final length is the event; the content never
-                    # leaves this method.
+                    # leaves this method. A dirty flag alone suffices —
+                    # the length comparison stays only to emit when the
+                    # widget changed without a notification (programmatic
+                    # setText before focus landed counts as an edit too).
                     record_text_edited_length(after)
                 self._text_lengths.pop(id(watched), None)
+            self._unwatch_text_edits(watched)
+            self._text_dirty.discard(id(watched))
             return
         if self._is_app_window(watched):
             emit_interaction_event(
@@ -130,6 +143,43 @@ class InteractionTraceFilter(QObject):
                 target=self._window_target(watched),
                 focused=False,
             )
+
+    def _watch_text_edits(self, widget: QObject) -> None:
+        """Start the content-free dirty watch for a focused text widget.
+
+        Connects zero-arg slots: Qt drops the string payload for
+        ``textEdited``/``textChanged`` at the boundary — the text
+        never crosses into this filter, honoring the privacy
+        invariant. ``QTextEdit`` has no ``textEdited``, its
+        ``textChanged`` is the user-edit equivalent; for editable
+        combos the inner ``QLineEdit`` carries the notifications.
+        """
+        if isinstance(widget, QLineEdit):
+            widget.textEdited.connect(self._mark_text_dirty)
+        elif isinstance(widget, QTextEdit):
+            widget.textChanged.connect(self._mark_text_dirty)
+        elif isinstance(widget, QComboBox):
+            inner = widget.lineEdit()
+            if inner is not None:
+                inner.textEdited.connect(self._mark_text_dirty)
+
+    def _unwatch_text_edits(self, widget: QObject) -> None:
+        try:
+            if isinstance(widget, QLineEdit):
+                widget.textEdited.disconnect(self._mark_text_dirty)
+            elif isinstance(widget, QTextEdit):
+                widget.textChanged.disconnect(self._mark_text_dirty)
+            elif isinstance(widget, QComboBox):
+                inner = widget.lineEdit()
+                if inner is not None:
+                    inner.textEdited.disconnect(self._mark_text_dirty)
+        except TypeError:
+            pass  # was never connected
+
+    def _mark_text_dirty(self) -> None:
+        """Zero-arg slot: an edit happened; no text is received."""
+        if self._focused_text_widget is not None:
+            self._text_dirty.add(id(self._focused_text_widget))
 
     def _handle_mouse_release(self, watched: QObject, event: QEvent) -> None:
         from PyQt6.QtCore import Qt

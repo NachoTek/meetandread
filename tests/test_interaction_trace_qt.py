@@ -509,6 +509,48 @@ class TestInteractionTraceFilter:
         events = read_trace_events(trace_sink)
         assert [e for e in events if e["event"] == "text_edited"] == []
 
+    def test_same_length_replacement_still_emits_char_count(
+        self, qapp, trace_sink
+    ):
+        """A same-length replacement is a real edit: the field HOLDS
+        text at focus-in, then the user selects all and types
+        DIFFERENT text of the SAME length — exactly one text_edited
+        event with the correct count, and no content in the trace."""
+        from meetandread.interaction_trace_qt import (
+            install_interaction_trace_qt_filter,
+        )
+
+        install_interaction_trace_qt_filter()
+        edit = QLineEdit()
+        # Text present BEFORE focus — the length at focus-in equals
+        # the length after the replacement (the reviewer's repro).
+        edit.setText(TEXT_CANARY)
+        edit.show()
+        try:
+            edit.setFocus()
+            qapp.processEvents()
+            edit.selectAll()
+            replacement = TEXT_CANARY[::-1]  # reversed: same length
+            assert len(replacement) == len(TEXT_CANARY)
+            edit.insert(replacement)
+            qapp.processEvents()
+            QApplication.sendEvent(edit, QEvent(QEvent.Type.FocusOut))
+            qapp.processEvents()
+        finally:
+            edit.hide()
+            edit.deleteLater()
+        events = read_trace_events(trace_sink)
+        text_events = [e for e in events if e["event"] == "text_edited"]
+        assert len(text_events) == 1, (
+            f"same-length replacement must still emit, got: {events}"
+        )
+        assert text_events[0]["chars"] == len(TEXT_CANARY)
+        raw_trace = (trace_sink / TRACE_FILE_NAME).read_text(
+            encoding="utf-8"
+        )
+        assert TEXT_CANARY not in raw_trace
+        assert replacement not in raw_trace
+
 
 # ---------------------------------------------------------------------------
 # The capture DEBUG log must carry no text content either (AC + brief:

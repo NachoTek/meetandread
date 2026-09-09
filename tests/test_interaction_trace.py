@@ -280,6 +280,69 @@ class TestDurabilityWriteSide:
         raw = (trace_dir / TRACE_FILE_NAME).read_bytes()
         assert raw == b""
 
+    def test_partial_write_failure_poisons_writer(self, trace_dir):
+        """The reviewer's exact repro (PR #123 re-review): a 10-byte
+        partial write then OSError. The failed record's unterminated
+        fragment is already on disk; a later emit MUST NOT append to
+        it and claim True for a line that reads back malformed."""
+        writer = self._writer(trace_dir)
+        line = self._line()
+        state = {"first": True}
+        real_os_write = itrace.os.write  # the true stdlib os.write
+
+        def partial_then_error(fd, data):
+            if state["first"]:
+                state["first"] = False
+                # Land exactly 10 bytes for real (through the captured
+                # stdlib function, not the patched module attribute),
+                # so the torn fragment is genuinely on disk.
+                real_os_write(fd, data[:10])
+                return 10
+            raise OSError("disk went away mid-record")
+
+        with patch.object(
+            itrace.os, "write", side_effect=partial_then_error
+        ):
+            ok = writer.emit(self.PAYLOAD)
+        assert ok is False
+
+        # Retry after the partial failure: the writer is poisoned —
+        # no append to the unterminated fragment, no True.
+        with patch.object(itrace.os, "write") as mock_write:
+            ok2 = writer.emit(self.PAYLOAD)
+        assert ok2 is False
+        mock_write.assert_not_called()
+
+        # And the on-disk evidence: exactly the torn fragment, nothing
+        # appended after it — no unreadable merged line exists.
+        raw = (trace_dir / TRACE_FILE_NAME).read_bytes()
+        assert raw == line[:10]
+        assert read_trace_events(trace_dir) == []
+
+    def test_full_write_then_fsync_failure_is_not_poisoned(self, trace_dir):
+        """Separate case, reasoned explicitly: fsync fails AFTER the
+        full line (newline included) reached the OS. The record
+        boundary is intact, so the writer stays usable — the next
+        emit appends cleanly and reports honestly. (The first,
+        fsync-failed record is still a complete line on disk; its
+        durability is merely weaker than promised.)"""
+        writer = self._writer(trace_dir)
+
+        # os.write full-success; os.fsync OSError after it.
+        with patch.object(
+            itrace.os, "fsync", side_effect=OSError("fsync failed")
+        ):
+            ok = writer.emit(self.PAYLOAD)
+        assert ok is False
+
+        # Writer NOT poisoned: the next emit goes through the real
+        # os.write/fsync and returns True.
+        ok2 = writer.emit(self.PAYLOAD)
+        assert ok2 is True
+        events = read_trace_events(trace_dir)
+        assert len(events) == 2
+        assert all(e["event"] == "button_pressed" for e in events)
+
 
 # ---------------------------------------------------------------------------
 # Durability contract + torn tail (pure side; kill proof is subprocess)

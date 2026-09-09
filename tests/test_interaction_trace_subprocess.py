@@ -33,7 +33,11 @@ from meetandread.capture_mode import (
     ISSUE_CAPTURE_FLAG,
     read_appendable_records,
 )
-from meetandread.interaction_trace import TRACE_FILE_NAME, read_trace_events
+from meetandread.interaction_trace import (
+    EVENT_VOCABULARY,
+    TRACE_FILE_NAME,
+    read_trace_events,
+)
 
 # Real app subprocesses: Windows native stack required (ADR 0001).
 pytestmark = pytest.mark.windows
@@ -291,6 +295,200 @@ class TestKillMidRunDurability:
         from meetandread.interaction_trace import EVENT_VOCABULARY
 
         assert set(kinds) <= set(EVENT_VOCABULARY)
+
+
+# ---------------------------------------------------------------------------
+# Production-wiring end-to-end: the REAL startup path installs the trace
+# (PR #123 re-review finding 3)
+# ---------------------------------------------------------------------------
+
+# In-child driver for the production-path test. Unlike the _EVENT_DRIVER_SHIM
+# (which patches the lock, calls _bootstrap(), and hand-installs the trace),
+# this child ONLY patches the single-instance lock name — everything else is
+# the unmodified production startup: meetandread.__main__ parses the flag,
+# configures capture logging, main() installs the Interaction Trace and the
+# Qt filter, builds the widget, and enters app.exec(). The injected
+# QApplication subclass replaces the event loop with a scripted drive of a
+# REAL QLineEdit (typed canary, same test discipline as the Qt seam tests),
+# then quits; the trace events land through the production wiring alone.
+_PRODUCTION_WIRING_SHIM = """
+import os, sys
+sys.path.insert(0, os.environ["PYTHONPATH"])
+import meetandread.single_instance as _si
+_orig_acquire = _si.acquire_single_instance_lock
+def _acquire_with_test_name(name=None):
+    if name is None or name == "meetandread":
+        name = os.environ.get("MAR_TEST_LOCK_NAME", name)
+    return _orig_acquire(name)
+_si.acquire_single_instance_lock = _acquire_with_test_name
+
+# Inject a QApplication subclass BEFORE meetandread.main is imported: main()
+# constructs QApplication(sys.argv) from its own imported name, so the drive
+# rides inside the production main() call itself (flag parse -> logging ->
+# trace install -> Qt filter -> widget -> "event loop").
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QTimer
+
+class _DrivenQApplication(QApplication):
+    def exec(self):
+        try:
+            from PyQt6.QtCore import QEvent
+            from PyQt6.QtWidgets import QLineEdit
+            edit = QLineEdit()
+            edit.show()
+            edit.setFocus()
+            self.processEvents()
+            edit.insert(os.environ["MAR_TRACE_CANARY"])
+            self.processEvents()
+            self.sendEvent(edit, QEvent(QEvent.Type.FocusOut))
+            self.processEvents()
+            edit.hide()
+            edit.deleteLater()
+            # A lobe toggle through the REAL funnel: the main widget owns it.
+            from PyQt6.QtCore import QPointF, Qt
+            from PyQt6.QtGui import QMouseEvent
+            widget = self.property("mar_main_widget")
+            if widget is not None:
+                widget.is_dragging = False
+                widget._click_consumed = False
+                release = QMouseEvent(
+                    QMouseEvent.Type.MouseButtonRelease,
+                    QPointF(10, 10), QPointF(10, 10),
+                    Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton,
+                    Qt.KeyboardModifier.NoModifier,
+                )
+                widget.mic_lobe.mouseReleaseEvent(release)
+            self.processEvents()
+            print("MAR_E2E_DRIVE_COMPLETE", flush=True)
+        except BaseException:
+            import traceback
+            traceback.print_exc()
+            print("MAR_E2E_DRIVE_FAILED", flush=True)
+        finally:
+            QTimer.singleShot(0, self.quit)
+        return super().exec()
+
+import meetandread.main as _main_mod
+_main_mod.QApplication = _DrivenQApplication
+
+# The drive needs the main widget: wrap MeetAndReadWidget construction the
+# way main() sees nothing of it, by exposing the instance after creation.
+_orig_init = _main_mod.MeetAndReadWidget.__init__
+def _init_exposing(self, *a, **k):
+    _orig_init(self, *a, **k)
+    app = QApplication.instance()
+    if app is not None:
+        app.setProperty("mar_main_widget", self)
+_main_mod.MeetAndReadWidget.__init__ = _init_exposing
+
+# THE production entrypoint — module execution of the real bootstrap, with
+# the capture flag in argv exactly as the Issue Reporter passes it.
+import runpy
+runpy.run_module(
+    "meetandread.__main__", run_name="__main__", alter_sys=True
+)
+"""
+
+
+class TestProductionWiringEndToEnd:
+    """AC: the production startup wiring (main.py) installs the trace;
+    a real user action lands as a named JSONL event in the capture dir.
+
+    Complements TestKillMidRunDurability (which uses the hand-installed
+    _EVENT_DRIVER_SHIM for kill-timing control): this test exercises the
+    wiring path only — flag parse -> capture logging -> main() ->
+    install_interaction_trace -> Qt filter -> widget -> driven actions.
+    """
+
+    def test_production_main_wiring_lands_events_in_trace(self, tmp_path):
+        capture_dir = tmp_path / "capture" / "e2e-wiring"
+        env = _sandbox_env(tmp_path, f"mar_e2e_{uuid.uuid4().hex}")
+        stdout_file = tmp_path / "app-stdout.txt"
+        with open(stdout_file, "w", encoding="utf-8", errors="replace") as fh:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    _PRODUCTION_WIRING_SHIM,
+                    ISSUE_CAPTURE_FLAG,
+                    str(capture_dir),
+                ],
+                cwd=str(REPO_ROOT),
+                env=env,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        try:
+            _wait_for(
+                lambda: "MAR_E2E_DRIVE_COMPLETE"
+                in _stdout_text(stdout_file),
+                STARTUP_TIMEOUT_S,
+                "production-wiring in-app drive to complete",
+            )
+            exit_code = proc.wait(timeout=STARTUP_TIMEOUT_S)
+        finally:
+            if proc.poll() is None:
+                _kill_hard(proc)
+            proc.wait()
+
+        # Exit discipline: the drive completed and app.exec() returned;
+        # the process may still die with the known teardown access
+        # violation (0xC0000005, native audio/controller threads) that
+        # the #104 capture-mode subprocess tests also coexist with on
+        # headless sandboxes. Everything BEFORE teardown — the wiring,
+        # the drive, the trace, the marker — is asserted below, so a
+        # post-marker crash does not mask a wiring regression (the
+        # mutation check: removing main()'s install_interaction_trace
+        # fails this test at the events assertion, not at exit code).
+        assert exit_code in (0, 3221225477), (
+            f"production run failed before the drive completed: "
+            f"exit={exit_code} stdout: {_stdout_text(stdout_file)}"
+        )
+
+        events = read_trace_events(capture_dir)
+        kinds = [e["event"] for e in events]
+
+        # The trace EXISTS and holds closed-vocabulary events — the
+        # production wiring installed it (main.py:375-409 path).
+        assert events, (
+            "no trace events: production startup never installed the "
+            f"trace — stdout: {_stdout_text(stdout_file)}"
+        )
+        assert set(kinds) <= set(EVENT_VOCABULARY)
+
+        # A real text edit through the production-installed Qt filter:
+        # exactly one text_edited char count for the canary.
+        text_events = [
+            e for e in events if e["event"] == "text_edited"
+        ]
+        assert len(text_events) == 1, (
+            f"expected exactly one text_edited event, got: {events}"
+        )
+        assert text_events[0]["chars"] == len(TYPED_CANARY)
+
+        # The lobe toggle through the real widget funnel.
+        assert "device_selected" in kinds
+
+        # Privacy: the canary is in neither the trace nor the log.
+        raw_trace = (capture_dir / TRACE_FILE_NAME).read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert TYPED_CANARY not in raw_trace
+        assert "Sebastopol" not in raw_trace
+        capture_log_raw = _find_capture_log(capture_dir).read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert TYPED_CANARY not in capture_log_raw
+        assert "Sebastopol" not in capture_log_raw
+
+        # Clean exit reached the marker contract (production path end);
+        # the marker is written by main() itself after app.exec()
+        # returns 0 — its presence proves the run finished main().
+        from meetandread.capture_mode import read_completion_marker
+
+        assert read_completion_marker(capture_dir) is not None
 
 
 class TestNormalRunNoTrace:
