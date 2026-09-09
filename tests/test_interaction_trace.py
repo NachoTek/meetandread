@@ -252,7 +252,6 @@ class TestDurabilityWriteSide:
         # everything: emit must NOT report success, and no completed
         # line (no newline) may be claimed as persisted.
         writer = self._writer(trace_dir)
-        buf = bytearray()
         state = {"first": True}
 
         def stop_after_zero(fd, data):
@@ -264,25 +263,22 @@ class TestDurabilityWriteSide:
         with patch.object(itrace.os, "write", side_effect=stop_after_zero):
             ok = writer.emit(self.PAYLOAD)
         assert ok is False
-        assert bytes(buf) == b""
+        assert (trace_dir / TRACE_FILE_NAME).read_bytes() == b""
 
     def test_zero_byte_write_is_error_not_success(self, trace_dir):
         # A zero-byte os.write is an error condition, never success:
-        # no True while any of the buffer is unpersisted.
+        # no True while any of the buffer is unpersisted, and no
+        # completed line (no trailing newline) in the trace file.
         writer = self._writer(trace_dir)
-        buf = bytearray()
 
         def zero_write(fd, data):
-            buf.extend(data[:0])
             return 0
 
         with patch.object(itrace.os, "write", side_effect=zero_write):
             ok = writer.emit(self.PAYLOAD)
         assert ok is False
-        assert bytes(buf) == b""
-        assert not (trace_dir / TRACE_FILE_NAME).read_bytes().endswith(
-            b"\n"
-        )
+        raw = (trace_dir / TRACE_FILE_NAME).read_bytes()
+        assert raw == b""
 
 
 # ---------------------------------------------------------------------------

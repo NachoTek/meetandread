@@ -166,7 +166,8 @@ class _TraceWriter:
                 written = os.write(self._fd, view)
                 if written <= 0:
                     raise OSError(
-                        f"trace write wrote {written} of {len(line)} bytes"
+                        f"trace write wrote {written} of {len(view)} "
+                        "remaining bytes"
                     )
                 view = view[written:]
             os.fsync(self._fd)
