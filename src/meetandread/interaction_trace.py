@@ -222,7 +222,8 @@ class _TraceWriter:
 
 # The trace writer THIS process has installed (None in a normal run).
 # Process-global like the #104 capture claim: one run records one trace
-# into one capture directory, from process start to process death.
+# into one capture directory, from process start to the end of the
+# event loop (close_interaction_trace ends the window at app teardown).
 _writer: Optional[_TraceWriter] = None
 
 
@@ -268,8 +269,10 @@ def close_interaction_trace() -> None:
     Called by the capture-mode exit path AFTER the Qt event filter is
     removed and BEFORE ``QApplication`` destruction — the writer is
     stdlib-only (no Qt object), but the ordering keeps every trace
-    emission strictly inside the live-application window so teardown
-    can never race a half-dead emitter (PR #123 fix round 3).
+    emission strictly inside the live-application window (the trace
+    runs from process start to the end of the event loop, not to
+    interpreter death) so teardown can never race a half-dead emitter
+    (PR #123 fix round 3).
     """
     global _writer
     if _writer is not None:

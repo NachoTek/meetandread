@@ -266,17 +266,18 @@ def install_interaction_trace_qt_filter(
 def remove_interaction_trace_qt_filter(
     app: Optional[QApplication] = None,
 ) -> None:
-    """Remove the installed filter and schedule its deletion.
+    """Remove the installed filter and drop this module's reference.
 
     Idempotent, best-effort. THE teardown discipline (PR #123 fix
     round 3): a Python-side event filter left installed when the
     QApplication is destroyed crashes natively (0xC0000005 — Qt
     delivers teardown events into the dying filter), so the capture
     exit path removes the filter BEFORE app destruction. The filter
-    QObject is parented to the app; ``deleteLater`` schedules its
-    C++ destruction on the next event-loop pass while both sides are
-    fully alive (no half-dead Python wrapper for teardown events to
-    hit).
+    QObject is parented to the app, so its C++ side is destroyed with
+    the app; ``deleteLater`` merely makes the Python reference's
+    deferred deletion explicit where an event loop is still running
+    (tests) — after ``app.exec()`` returns the removal itself is the
+    load-bearing step.
     """
     global _installed_filter
     filt = _installed_filter

@@ -531,14 +531,18 @@ def main(capture_dir: Optional[Path] = None):
     # best-effort so the exit path is never compromised.
     if capture_dir is not None:
         try:
-            from meetandread.interaction_trace import (
-                close_interaction_trace,
-            )
             from meetandread.interaction_trace_qt import (
                 remove_interaction_trace_qt_filter,
             )
 
             remove_interaction_trace_qt_filter(app)
+        except Exception as e:
+            logger.warning("Interaction Trace filter teardown failed: %s", e)
+        try:
+            from meetandread.interaction_trace import (
+                close_interaction_trace,
+            )
+
             close_interaction_trace()
         except Exception as e:
             logger.warning("Interaction Trace teardown failed: %s", e)
