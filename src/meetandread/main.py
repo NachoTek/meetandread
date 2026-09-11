@@ -551,16 +551,19 @@ def main(capture_dir: Optional[Path] = None):
     if capture_dir is not None and exit_code == 0:
         write_completion_marker(capture_dir)
 
-    # Deterministic hard exit (issue #124): do NOT "simplify" this back
-    # to sys.exit(exit_code). Letting the interpreter fall through into
-    # normal finalization tears down the live Qt object graph (the whole
-    # widget tree dies in GC order) — on the current sip/Qt stack
-    # (PyQt6-Qt6 6.11.2 / PyQt6-sip 13.12.0) that teardown is a race
-    # which intermittently crashes natively with 0xC0000005 during
-    # interpreter finalization AFTER sys.exit, in CI and locally (nightly
-    # run 34574666396 on head 3f57eff; PR #123's filter-removal ordering
-    # narrowed but cannot eliminate it). os._exit skips finalization
-    # entirely, making the exit deterministic. This is safe because:
+    # GATED deterministic exit (issue #124, PR #125 fix round 2).
+    #
+    # CAPTURE RUNS (capture_dir is not None) end in a hard exit: do NOT
+    # "simplify" this back to sys.exit(exit_code). Letting the
+    # interpreter fall through into normal finalization tears down the
+    # live Qt object graph (the whole widget tree dies in GC order) — on
+    # the current sip/Qt stack (PyQt6-Qt6 6.11.2 / PyQt6-sip 13.12.0)
+    # that teardown is a race which intermittently crashes natively with
+    # 0xC0000005 during interpreter finalization AFTER sys.exit, in CI
+    # and locally (nightly run 34574666396 on head 3f57eff; PR #123's
+    # filter-removal ordering narrowed but cannot eliminate it).
+    # os._exit skips finalization entirely, making the exit
+    # deterministic. This is safe because:
     # - every capture log record and trace event is already
     #   flushed+fsynced before its emit returns, and the completion
     #   marker is written above, BEFORE this point (#104/#105 durability
@@ -569,16 +572,24 @@ def main(capture_dir: Optional[Path] = None):
     #   (see single_instance.py module docstring);
     # - every test that runs main() does so as a subprocess; there are
     #   no in-process main() callers.
-    # This fires ONLY on the real app exit path (app.exec() returned) —
-    # the early sys.exit refusals above happen before any Qt object
-    # graph exists and stay as-is.
-    logger.debug("hard_exit: code=%d", exit_code)
-    try:
-        sys.stdout.flush()
-        sys.stderr.flush()
-    except OSError:
-        pass
-    os._exit(exit_code)
+    #
+    # NORMAL RUNS (capture_dir is None, issue #104): sys.exit with
+    # normal interpreter finalization — the pre-#124 behavior. No
+    # capture log or marker exists on this path, so the hard exit's
+    # safety arguments do not apply; a normal run keeps its normal exit.
+    #
+    # Both cases fire ONLY on the real app exit path (app.exec()
+    # returned) — the early sys.exit refusals above happen before any Qt
+    # object graph exists and stay as-is.
+    if capture_dir is not None:
+        logger.debug("hard_exit: code=%d", exit_code)
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except OSError:
+            pass
+        os._exit(exit_code)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
