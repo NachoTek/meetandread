@@ -284,6 +284,74 @@ class TestLaunchWithFlagCleanExit:
         assert (capture_dir / COMPLETION_MARKER_NAME).exists()
 
 
+class TestDeterministicHardExit:
+    """Issue #124: the post-event-loop exit is a deterministic hard exit.
+
+    PR #123's filter-removal ordering narrowed but cannot eliminate the
+    0xC0000005 interpreter/Qt teardown race, so main() now ends in
+    os._exit after the marker write. This test proves the deterministic
+    path is TAKEN on a clean exit (via the pre-exit debug record); that
+    the crash itself is gone is AC3 stress evidence, not automatable.
+    """
+
+    def test_clean_exit_uses_hard_exit_path(self, tmp_path):
+        capture_dir = tmp_path / "capture" / "hard-exit-run"
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+        proc = _launch_app(capture_dir, env, tmp_path / "app-stdout.txt")
+
+        try:
+            # Wait until the app is fully up (same milestone as the
+            # clean-exit test: the recording subsystem is running).
+            _wait_for(
+                lambda: "PostProcessingQueue worker started"
+                in "\n".join(_read_log_records(capture_dir)),
+                STARTUP_TIMEOUT_S,
+                "app fully started before the clean exit",
+            )
+
+            # Clean exit via SIGBREAK — the graceful user-stop signal,
+            # with the same idempotent retry as TestLaunchWithFlagCleanExit.
+            exit_code = None
+            for attempt in (1, 2):
+                os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+                try:
+                    exit_code = proc.wait(timeout=CLEAN_EXIT_TIMEOUT_S)
+                    break
+                except subprocess.TimeoutExpired:
+                    if attempt == 2:
+                        _kill_hard(proc)
+                        pytest.fail("app did not exit cleanly after SIGBREAK")
+                    time.sleep(1.0)
+        finally:
+            if proc.poll() is None:
+                _kill_hard(proc)
+            proc.wait()
+
+        assert exit_code == 0, (
+            "clean exit expected, got "
+            f"{exit_code}: {_tail(tmp_path / 'app-stdout.txt')}"
+        )
+
+        # The completion marker: written before the hard exit.
+        marker_data = read_completion_marker(capture_dir)
+        assert marker_data is not None, (
+            "completion marker missing after clean hard exit: "
+            f"{_tail(tmp_path / 'app-stdout.txt')}"
+        )
+        assert (capture_dir / COMPLETION_MARKER_NAME).exists()
+
+        # THE assertion: main() logged the hard-exit record immediately
+        # before os._exit. The capture log is prompt-flushed per record,
+        # so the record survives even though the process never runs
+        # interpreter finalization.
+        records = _read_log_records(capture_dir)
+        assert "hard_exit: code=0" in "\n".join(records), (
+            "hard_exit debug record missing from capture log — "
+            "the deterministic os._exit path was not taken: "
+            f"{_tail(tmp_path / 'app-stdout.txt')}"
+        )
+
+
 class TestKillMidRun:
     """AC4 (kill mid-run): prompt-flush durability."""
 
