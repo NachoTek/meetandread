@@ -846,6 +846,22 @@ class TestSameSecondCollision:
                 f"a={_tail(tmp_path / 'a-stdout.txt')} "
                 f"b={_tail(tmp_path / 'b-stdout.txt')}"
             )
+            # The winner must reach the asserted milestone BEFORE we kill
+            # it: the loser's exit-2 rejection is near-instant while the
+            # winner's full startup (Qt import, widget) takes seconds, so
+            # breaking on the loser's exit alone can race the kill ahead
+            # of the winner's second startup record (CI run 34745800503,
+            # issue #126). Wait for the record the final assertion checks.
+            _wait_for(
+                lambda: any(
+                    "Log level: DEBUG (capture mode: True)" in r
+                    for r in _read_log_records(capture_dir)
+                ),
+                STARTUP_TIMEOUT_S,
+                "winner's second startup record in the capture log "
+                "(winner died before logging it? see a-stdout.txt / "
+                "b-stdout.txt in the pytest tmp dir)",
+            )
         finally:
             for proc in procs:
                 if proc.poll() is None:
@@ -964,6 +980,19 @@ class TestConcurrentDifferentTimestampStarts:
                 "no collision loser exited 2 — claim race not decided: "
                 f"a={_tail(tmp_path / 'a-stdout.txt')} "
                 f"b={_tail(tmp_path / 'b-stdout.txt')}"
+            )
+            # Same discipline as the same-second test (issue #126): the
+            # winner must reach its capture banner — the LAST of the
+            # asserted startup records — before the finally-kill fires.
+            _wait_for(
+                lambda: any(
+                    "Issue Capture Mode: streaming diagnostics into" in r
+                    for r in _read_log_records(capture_dir)
+                ),
+                STARTUP_TIMEOUT_S,
+                "winner's capture banner in the capture log "
+                "(winner died before logging it? see a-stdout.txt / "
+                "b-stdout.txt in the pytest tmp dir)",
             )
         finally:
             for proc in procs:
