@@ -91,9 +91,7 @@ class VoiceSignatureStore:
         self._conn = conn
         is_memory = self._db_path == ":memory:"
         logger.info(
-            "Voice signature store opened (path=%s, memory=%s)",
-            self._db_path,
-            is_memory,
+            "signature_store_opened: memory=%s", is_memory,
         )
 
     @property
@@ -116,7 +114,7 @@ class VoiceSignatureStore:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None
-                logger.debug("Voice signature store closed")
+                logger.debug("signature_store_closed:")
 
     def save_signature(
         self,
@@ -147,8 +145,7 @@ class VoiceSignatureStore:
             )
             self.conn.commit()
         logger.debug(
-            "Saved signature for '%s' (segments=%d, dim=%d)",
-            name,
+            "signature_saved: segments=%d dim=%d",
             averaged_from_segments,
             len(embedding),
         )
@@ -168,7 +165,7 @@ class VoiceSignatureStore:
                     num_samples=row["num_samples"],
                 )
             )
-        logger.debug("Loaded %d signature(s)", len(profiles))
+        logger.debug("signatures_loaded: count=%d", len(profiles))
         return profiles
 
     def find_match(
@@ -204,7 +201,8 @@ class VoiceSignatureStore:
 
         if best_score < threshold or best_name is None:
             logger.debug(
-                "No match above threshold %.2f (best=%.4f)", threshold, best_score
+                "signature_no_match: threshold=%.2f best_score=%.4f",
+                threshold, best_score,
             )
             return None
 
@@ -217,7 +215,8 @@ class VoiceSignatureStore:
             confidence = "low"
 
         logger.debug(
-            "Match: '%s' score=%.4f confidence=%s", best_name, best_score, confidence
+            "signature_matched: score=%.4f confidence=%s",
+            best_score, confidence,
         )
         return SpeakerMatch(name=best_name, score=best_score, confidence=confidence)
 
@@ -234,9 +233,9 @@ class VoiceSignatureStore:
             self.conn.commit()
             deleted = cursor.rowcount > 0
         if deleted:
-            logger.debug("Deleted signature for '%s'", name)
+            logger.debug("signature_deleted:")
         else:
-            logger.debug("No signature found to delete for '%s'", name)
+            logger.debug("signature_delete_missed:")
         return deleted
 
     def update_signature(self, name: str, embedding: np.ndarray) -> bool:
@@ -261,7 +260,7 @@ class VoiceSignatureStore:
             ).fetchone()
 
             if row is None:
-                logger.debug("No existing signature for '%s' to update", name)
+                logger.debug("signature_update_missed:")
                 return False
 
             old_embedding = _blob_to_embedding(row["embedding"])
@@ -282,8 +281,7 @@ class VoiceSignatureStore:
             )
             self.conn.commit()
         logger.debug(
-            "Updated signature for '%s' (samples %d -> %d)",
-            name,
+            "signature_updated: samples_before=%d samples_after=%d",
             old_count,
             new_count,
         )
@@ -306,4 +304,6 @@ class VoiceSignatureStore:
         return row["cnt"]  # type: ignore[index]
 
     def __repr__(self) -> str:
-        return f"VoiceSignatureStore(db_path={self._db_path!r})"
+        return "VoiceSignatureStore(memory=%s)" % (
+            self._db_path == ":memory:"
+        )

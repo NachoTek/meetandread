@@ -76,7 +76,7 @@ class TestStoreLifecycle:
     def test_repr(self, store: VoiceSignatureStore) -> None:
         r = repr(store)
         assert "VoiceSignatureStore" in r
-        assert ":memory:" in r
+        assert "memory=" in r
 
 
 # ---------------------------------------------------------------------------

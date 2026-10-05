@@ -153,15 +153,17 @@ class AccumulatingTranscriptionProcessor:
     def load_model(self, progress_callback: Optional[Callable[[int], None]] = None) -> None:
         """Load the Whisper model."""
         from meetandread.transcription.engine import WhisperTranscriptionEngine
-        
-        logger.info("Loading %s model for accumulating transcription...", self.model_size)
+
+        logger.info(
+            "transcription_model_load_started: model=%s", self.model_size
+        )
         self._engine = WhisperTranscriptionEngine(
             model_size=self.model_size,
             device="cpu",
             compute_type="int8"
         )
         self._engine.load_model(progress_callback=progress_callback)
-        logger.info("%s model loaded successfully", self.model_size)
+        logger.info("transcription_model_loaded: model=%s", self.model_size)
     
     def start(self) -> None:
         """Start the transcription processing loop."""
@@ -186,8 +188,8 @@ class AccumulatingTranscriptionProcessor:
         # Create/reset VAD detector for this session
         self._vad = VoiceActivityDetector()
         self._last_vad_speech_state = None
-        logger.info("VAD detector created for new transcription session")
-        
+        logger.debug("vad_detector_created: backend_ready=%s", self._vad is not None)
+
         # Start processing thread
         self._processing_thread = threading.Thread(
             target=self._processing_loop,
@@ -195,16 +197,19 @@ class AccumulatingTranscriptionProcessor:
             name="AccumulatingTranscriptionProcessor"
         )
         self._processing_thread.start()
-        logger.info("Accumulating transcription processor started")
-        logger.info("Window size: %.1fs, Update frequency: %.1fs, Silence timeout: %.1fs",
-                    self.window_size, self.update_frequency, self.silence_timeout)
+        logger.info(
+            "transcription_session_started: model=%s window_size=%.1f "
+            "update_frequency=%.1f silence_timeout=%.1f",
+            self.model_size, self.window_size,
+            self.update_frequency, self.silence_timeout,
+        )
     
     def stop(self) -> None:
         """Stop the transcription processor."""
         if not self._is_running:
             return
         
-        logger.info("Stopping accumulating transcription processor...")
+        logger.info("transcription_session_stopping:")
         self._is_running = False
         self._stop_event.set()
         
@@ -215,8 +220,10 @@ class AccumulatingTranscriptionProcessor:
         # Don't transcribe remaining audio here - it's unsafe and can cause GGML_ASSERT failure
         # The processing loop will handle any remaining audio or we accept that the last phrase is lost
         
-        logger.info("Processor stopped. Total transcriptions: %d, Total audio chunks: %d",
-                    self._transcription_count, self._audio_chunks_fed)
+        logger.info(
+            "transcription_session_stopped: transcriptions=%d audio_chunks=%d",
+            self._transcription_count, self._audio_chunks_fed,
+        )
     
     def feed_audio(self, audio_chunk: np.ndarray) -> None:
         """
@@ -258,10 +265,9 @@ class AccumulatingTranscriptionProcessor:
         # Log sanitized speech/silence transitions (no raw audio values)
         if self._last_vad_speech_state is None or self._last_vad_speech_state != vad_is_speech:
             self._last_vad_speech_state = vad_is_speech
-            if vad_is_speech:
-                logger.info("VAD transition: silence -> speech")
-            else:
-                logger.info("VAD transition: speech -> silence")
+            logger.debug(
+                "vad_speech_state: speech=%s", vad_is_speech
+            )
         
         # Convert float32 to int16 bytes (what whisper.cpp expects)
         if audio_chunk.dtype == np.float32:
@@ -282,14 +288,18 @@ class AccumulatingTranscriptionProcessor:
         # Debug: log every 50 chunks and every 10 seconds of audio
         if self._audio_chunks_fed % 50 == 0:
             buffer_duration = len(self._phrase_bytes) / (16000 * 2)  # bytes / (samples/sec * bytes/sample)
-            logger.debug("Fed chunk #%d: %d samples, buffer: %.1fs",
-                         self._audio_chunks_fed, len(audio_chunk), buffer_duration)
+            logger.debug(
+                "audio_chunks_progress: chunks=%d last_chunk_samples=%d buffer_seconds=%.1f",
+                self._audio_chunks_fed, len(audio_chunk), buffer_duration,
+            )
         
         # Trim buffer if it exceeds window size (keep most recent audio)
         if len(self._phrase_bytes) > self._max_buffer_bytes:
             excess = len(self._phrase_bytes) - self._max_buffer_bytes
             self._phrase_bytes = self._phrase_bytes[excess:]
-            logger.debug("Trimmed buffer to maintain %ds window", self.window_size)
+            logger.debug(
+                "buffer_trimmed: window_seconds=%.1f", self.window_size
+            )
     
     def _processing_loop(self) -> None:
         """Main processing loop - runs in background thread."""
@@ -313,9 +323,11 @@ class AccumulatingTranscriptionProcessor:
                     silence_debug_counter += 1
                     if silence_debug_counter >= 10:
                         silence_debug_counter = 0
-                        logger.debug("Silence check - %.1fs since audio, %.1fs buffer",
-                                     time_since_audio, buffer_duration)
-                    
+                        logger.debug(
+                            "silence_check: seconds_since_audio=%.1f buffer_seconds=%.1f",
+                            time_since_audio, buffer_duration,
+                        )
+
                     # Transcribe if:
                     # 1. Silence timeout reached AND we have enough audio (phrase complete)
                     # 2. Update frequency reached and we have enough audio (> min_phrase_duration)
@@ -325,17 +337,23 @@ class AccumulatingTranscriptionProcessor:
                         if buffer_duration >= self._min_phrase_duration:
                             should_transcribe = True
                             phrase_complete = True
-                            logger.debug("Silence detected (%.1fs >= %.1fs), finalizing phrase (%.1fs buffer)",
-                                         time_since_audio, self.silence_timeout, buffer_duration)
+                            logger.debug(
+                                "silence_phrase_complete: seconds_since_audio=%.1f silence_timeout=%.1f buffer_seconds=%.1f",
+                                time_since_audio, self.silence_timeout, buffer_duration,
+                            )
                         else:
-                            logger.debug("Silence detected but buffer too small (%.1fs < %.1fs), skipping",
-                                         buffer_duration, self._min_phrase_duration)
+                            logger.debug(
+                                "silence_phrase_skipped_short: buffer_seconds=%.1f min_phrase_seconds=%.1f",
+                                buffer_duration, self._min_phrase_duration,
+                            )
                     elif time_since_update >= self.update_frequency and buffer_duration >= self._min_phrase_duration:
                         # Update frequency reached - transcribe but continue phrase
                         should_transcribe = True
                         phrase_complete = False
-                        logger.debug("Update frequency reached (%.1fs), transcribing %.1fs buffer",
-                                     time_since_update, buffer_duration)
+                        logger.debug(
+                            "update_frequency_reached: seconds_since_update=%.1f buffer_seconds=%.1f",
+                            time_since_update, buffer_duration,
+                        )
                 
                 if should_transcribe and self._engine:
                     transcribe_start = _time.time()
@@ -346,7 +364,10 @@ class AccumulatingTranscriptionProcessor:
                     # CRITICAL FIX: Reset timing state when phrase is complete
                     # This prevents duplicate transcriptions after silence
                     if phrase_complete:
-                        logger.debug("=== PHRASE COMPLETE (%.2fs for transcription) ===", transcribe_time)
+                        logger.debug(
+                            "phrase_finalized: transcription_seconds=%.2f",
+                            transcribe_time,
+                        )
                         self._phrase_bytes = bytes()  # Clear buffer
                         self._last_audio_time = None  # CRITICAL: Reset to prevent duplicate transcriptions
                         self._last_transcribed_text = ""  # Reset dedup
@@ -354,13 +375,16 @@ class AccumulatingTranscriptionProcessor:
                         self._new_phrase_started = True  # Flag: next transcription starts new phrase
                         self._last_emitted_segment_index = -1  # Reset segment tracking for new phrase
                         self._last_emitted_text = ""  # Reset text tracking for new phrase
-                        logger.debug("State reset - waiting for new audio")
+                        logger.debug("phrase_state_reset:")
                 
                 # Sleep to prevent CPU spinning (check every 100ms)
                 _time.sleep(0.1)
                 
-            except Exception as e:
-                logger.error("Transcription loop error: %s: %s", type(e).__name__, e)
+            except Exception as exc:
+                logger.error(
+                    "transcription_loop_error: error_class=%s",
+                    type(exc).__name__,
+                )
                 _time.sleep(0.5)
         
         logger.debug("Processing loop ended")
@@ -380,6 +404,11 @@ class AccumulatingTranscriptionProcessor:
         
         try:
             full_buffer_duration = len(self._phrase_bytes) / (16000 * 2)
+            if force_complete:
+                logger.debug(
+                    "phrase_finalize_started: buffer_seconds=%.1f",
+                    full_buffer_duration,
+                )
             
             # Use only the tail of the buffer for transcription — fixed-size
             # sliding window.  This keeps transcription time constant regardless
@@ -390,8 +419,10 @@ class AccumulatingTranscriptionProcessor:
                 bytes_to_transcribe = self._phrase_bytes
             
             window_duration = len(bytes_to_transcribe) / (16000 * 2)
-            logger.debug("Transcribing %.1fs window (full buffer: %.1fs)",
-                         window_duration, full_buffer_duration)
+            logger.debug(
+                "transcription_pass_window: window_seconds=%.1f full_buffer_seconds=%.1f",
+                window_duration, full_buffer_duration,
+            )
             
             # Check if this is the start of a new phrase
             phrase_start = self._new_phrase_started
@@ -413,10 +444,12 @@ class AccumulatingTranscriptionProcessor:
             from meetandread.transcription.engine import TranscriptionError
 
             if isinstance(result, TranscriptionError):
-                # Log sanitized error — never log audio content or transcript text
+                # The typed message is exception-derived and can embed paths
+                # or transcript fragments — log the category only; never log
+                # audio content or transcript text.
                 logger.error(
-                    "Transcription failed [%s]: %s",
-                    result.error_type, result.message,
+                    "transcription_pass_failed: error_type=%s",
+                    result.error_type,
                 )
                 # Do NOT emit any SegmentResult on error
                 return
@@ -439,14 +472,16 @@ class AccumulatingTranscriptionProcessor:
                 #
                 # The CC overlay's _render() rebuilds from scratch on each
                 # update, so re-emitting all segments is safe and cheap.
-                logger.debug("Emitting %d segments (re-transcription of %.1fs window)",
-                             len(segments), window_duration)
+                logger.debug(
+                    "segments_emitted: count=%d window_seconds=%.1f",
+                    len(segments), window_duration,
+                )
 
                 for i, seg in enumerate(segments):
                     seg_text = seg.text.strip()
 
                     if not seg_text or seg_text == "[BLANK_AUDIO]":
-                        logger.debug("Skipping blank/[BLANK_AUDIO] segment %d", i)
+                        logger.debug("blank_segment_skipped: index=%d", i)
                         continue
 
                     # Calculate timing relative to recording start
@@ -471,22 +506,39 @@ class AccumulatingTranscriptionProcessor:
                     if self.on_result:
                         try:
                             self.on_result(result_obj)
-                        except Exception as e:
-                            logger.error("on_result callback failed: %s", e)
+                        except Exception as exc:
+                            # The exception message can embed transcript text
+                            # (the result carries it) — log the class only.
+                            logger.error(
+                                "on_result_callback_failed: index=%d error_class=%s",
+                                i, type(exc).__name__,
+                            )
 
-                    logger.debug("Segment %d: conf=%d%%, final=%s, phrase_start=%s",
-                                 i, seg.confidence, force_complete, i == 0 and phrase_start)
+                    logger.debug(
+                        "segment_emitted: index=%d conf=%d final=%s phrase_start=%s",
+                        i, seg.confidence, force_complete,
+                        i == 0 and phrase_start,
+                    )
 
                 # Track for stats only — no longer used for dedup
                 self._last_emitted_segment_index = len(segments) - 1
-                
-                logger.debug("Transcribed %d total segments in %.2fs",
-                             len(segments), transcribe_time)
+
+                logger.debug(
+                    "transcription_pass_done: segments=%d transcription_seconds=%.2f",
+                    len(segments), transcribe_time,
+                )
             else:
-                logger.debug("No transcription result for %.1fs of audio", window_duration)
+                logger.debug(
+                    "transcription_pass_empty: window_seconds=%.1f",
+                    window_duration,
+                )
                 
-        except Exception as e:
-            logger.error("Transcription error: %s: %s", type(e).__name__, e)
+        except Exception as exc:
+            # Exception payloads can embed paths or model internals —
+            # log the class only (typed detail travels via TranscriptionError).
+            logger.error(
+                "transcription_pass_failed: error_class=%s", type(exc).__name__
+            )
     
     def get_results(self) -> List[SegmentResult]:
         """Get all pending results (non-blocking)."""

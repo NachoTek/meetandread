@@ -4,8 +4,11 @@ Provides thread-safe audio buffering with automatic trimming and timestamp track
 Designed for real-time transcription pipelines.
 """
 
+import logging
 import threading
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class AudioRingBuffer:
@@ -51,10 +54,19 @@ class AudioRingBuffer:
             # Concatenate new audio
             self._buffer = np.concatenate([self._buffer, chunk])
             self._total_samples_seen += len(chunk)
-            
+
             # Trim from left if exceeds max size (keep most recent)
             if len(self._buffer) > self.max_samples:
+                trimmed = len(self._buffer) - self.max_samples
                 self._buffer = self._buffer[-self.max_samples:]
+                logger.debug(
+                    "buffer_auto_trimmed: trimmed_samples=%d max_samples=%d",
+                    int(trimmed), int(self.max_samples),
+                )
+            logger.debug(
+                "buffer_appended: chunk_samples=%d total_samples=%d",
+                int(len(chunk)), int(self._total_samples_seen),
+            )
     
     def get_recent(self, seconds: float) -> np.ndarray:
         """Get the most recent N seconds of audio.
@@ -68,7 +80,15 @@ class AudioRingBuffer:
         with self._lock:
             samples = int(seconds * self.sample_rate)
             if len(self._buffer) >= samples:
+                logger.debug(
+                    "buffer_read: requested_samples=%d returned_samples=%d",
+                    int(samples), int(samples),
+                )
                 return self._buffer[-samples:].copy()
+            logger.debug(
+                "buffer_read: requested_samples=%d returned_samples=%d",
+                int(samples), int(len(self._buffer)),
+            )
             return self._buffer.copy()
     
     def get_samples(self, n_samples: int) -> np.ndarray:
@@ -93,7 +113,12 @@ class AudioRingBuffer:
         """
         with self._lock:
             if committed_samples > 0 and len(self._buffer) > 0:
+                removed = min(committed_samples, len(self._buffer))
                 self._buffer = self._buffer[committed_samples:]
+                logger.debug(
+                    "buffer_trimmed: removed_samples=%d remaining_samples=%d",
+                    int(removed), int(len(self._buffer)),
+                )
     
     def get_total_duration(self) -> float:
         """Get total duration of audio currently in buffer.

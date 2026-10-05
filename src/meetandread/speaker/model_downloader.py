@@ -98,10 +98,13 @@ def _verify_checksum(path: Path, expected: str, label: str = "") -> bool:
     """
     actual = sha256_checksum(path)
     if actual == expected:
-        logger.debug("Checksum verified for %s: %s", label or path.name, actual[:16])
+        logger.debug(
+            "model_checksum_verified: model=%s digest_prefix=%s",
+            label or path.name, actual[:16],
+        )
         return True
     logger.warning(
-        "Checksum mismatch for %s: expected %s, got %s",
+        "model_checksum_mismatch: model=%s expected_prefix=%s actual_prefix=%s",
         label or path.name,
         expected[:16],
         actual[:16],
@@ -138,19 +141,24 @@ def _download_file(
     if dest.exists():
         if expected_sha256:
             if _verify_checksum(dest, expected_sha256, label or dest.name):
-                logger.info("Cached %s verified, skipping download", label or dest.name)
+                logger.info(
+                    "model_cache_verified: model=%s", label or dest.name
+                )
                 return
             # Corrupt cache — delete and re-download
             logger.warning(
-                "Deleting corrupt cached file %s (checksum mismatch)",
-                dest,
+                "model_cache_corrupt_deleted: model=%s", label or dest.name
             )
             dest.unlink()
         else:
-            logger.debug("Already cached: %s (%s)", label or dest.name, dest)
+            logger.debug(
+                "model_cache_hit_unverified: model=%s", label or dest.name
+            )
             return
 
-    logger.info("Downloading %s from %s", label or dest.name, url)
+    logger.info(
+        "model_download_started: model=%s", label or dest.name
+    )
     tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
     try:
         urllib.request.urlretrieve(url, tmp_dest)  # nosec B310
@@ -168,12 +176,17 @@ def _download_file(
 
         shutil.move(str(tmp_dest), str(dest))
         logger.info(
-            "Downloaded %s (%.1f MB)",
+            "model_download_complete: model=%s size_mb=%.1f",
             label or dest.name,
             dest.stat().st_size / 1e6,
         )
-    except Exception:
+    except Exception as exc:
         # Clean up partial download on failure
+        logger.warning(
+            "model_download_failed: model=%s error_class=%s",
+            label or dest.name,
+            type(exc).__name__,
+        )
         if tmp_dest.exists():
             tmp_dest.unlink()
         raise
@@ -196,11 +209,11 @@ def ensure_segmentation_model(cache_dir: Optional[Path] = None) -> Path:
         if _verify_checksum(
             model_onnx, SEGMENTATION_MODEL_ONNX_SHA256, "segmentation model.onnx"
         ):
-            logger.info("Segmentation model already cached at %s", model_dir)
+            logger.info("segmentation_model_cached:")
             return model_dir
         # Corrupt extracted model — remove directory and re-download
         logger.warning(
-            "Deleting corrupt segmentation model directory %s", model_dir
+            "segmentation_model_corrupt_deleted:"
         )
         shutil.rmtree(str(model_dir), ignore_errors=True)
 
@@ -214,7 +227,7 @@ def ensure_segmentation_model(cache_dir: Optional[Path] = None) -> Path:
         # after extraction).
     )
 
-    logger.info("Extracting segmentation model to %s", cache)
+    logger.info("segmentation_model_extracting:")
     with tarfile.open(str(tarball_path), "r:bz2") as tar:
         # Validate members before extraction to prevent path traversal (B202)
         for member in tar.getmembers():
@@ -233,8 +246,7 @@ def ensure_segmentation_model(cache_dir: Optional[Path] = None) -> Path:
         model_onnx, SEGMENTATION_MODEL_ONNX_SHA256, "segmentation model.onnx"
     ):
         logger.error(
-            "Extracted segmentation model.onnx has wrong checksum — "
-            "removing and raising"
+            "segmentation_model_checksum_failed_extracted:"
         )
         shutil.rmtree(str(model_dir), ignore_errors=True)
         raise RuntimeError(
@@ -242,7 +254,7 @@ def ensure_segmentation_model(cache_dir: Optional[Path] = None) -> Path:
         )
 
     logger.info(
-        "Segmentation model ready (%.1f MB)",
+        "segmentation_model_ready: size_mb=%.1f",
         model_onnx.stat().st_size / 1e6,
     )
     return model_dir
@@ -275,10 +287,10 @@ def ensure_all_models(cache_dir: Optional[Path] = None) -> dict:
         segmentation_dir: Path to the segmentation model directory
         embedding_model:  Path to the embedding .onnx file
     """
-    logger.info("Ensuring all speaker diarization models are available…")
+    logger.info("models_ensure_started:")
     seg_dir = ensure_segmentation_model(cache_dir)
     emb_path = ensure_embedding_model(cache_dir)
-    logger.info("All speaker diarization models ready.")
+    logger.info("models_ready:")
     return {
         "segmentation_dir": seg_dir,
         "embedding_model": emb_path,
