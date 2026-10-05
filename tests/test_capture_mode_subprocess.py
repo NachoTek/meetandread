@@ -42,6 +42,7 @@ from meetandread.capture_mode import (
     read_appendable_records,
     read_completion_marker,
 )
+from meetandread.logging_setup import NORMAL_LOG_PREFIX
 
 # Real app subprocesses: Windows native stack required (ADR 0001).
 pytestmark = pytest.mark.windows
@@ -284,6 +285,74 @@ class TestLaunchWithFlagCleanExit:
         assert (capture_dir / COMPLETION_MARKER_NAME).exists()
 
 
+class TestDeterministicHardExit:
+    """Issue #124: the post-event-loop exit is a deterministic hard exit.
+
+    PR #123's filter-removal ordering narrowed but cannot eliminate the
+    0xC0000005 interpreter/Qt teardown race, so main() now ends in
+    os._exit after the marker write. This test proves the deterministic
+    path is TAKEN on a clean exit (via the pre-exit debug record); that
+    the crash itself is gone is AC3 stress evidence, not automatable.
+    """
+
+    def test_clean_exit_uses_hard_exit_path(self, tmp_path):
+        capture_dir = tmp_path / "capture" / "hard-exit-run"
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+        proc = _launch_app(capture_dir, env, tmp_path / "app-stdout.txt")
+
+        try:
+            # Wait until the app is fully up (same milestone as the
+            # clean-exit test: the recording subsystem is running).
+            _wait_for(
+                lambda: "PostProcessingQueue worker started"
+                in "\n".join(_read_log_records(capture_dir)),
+                STARTUP_TIMEOUT_S,
+                "app fully started before the clean exit",
+            )
+
+            # Clean exit via SIGBREAK — the graceful user-stop signal,
+            # with the same idempotent retry as TestLaunchWithFlagCleanExit.
+            exit_code = None
+            for attempt in (1, 2):
+                os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+                try:
+                    exit_code = proc.wait(timeout=CLEAN_EXIT_TIMEOUT_S)
+                    break
+                except subprocess.TimeoutExpired:
+                    if attempt == 2:
+                        _kill_hard(proc)
+                        pytest.fail("app did not exit cleanly after SIGBREAK")
+                    time.sleep(1.0)
+        finally:
+            if proc.poll() is None:
+                _kill_hard(proc)
+            proc.wait()
+
+        assert exit_code == 0, (
+            "clean exit expected, got "
+            f"{exit_code}: {_tail(tmp_path / 'app-stdout.txt')}"
+        )
+
+        # The completion marker: written before the hard exit.
+        marker_data = read_completion_marker(capture_dir)
+        assert marker_data is not None, (
+            "completion marker missing after clean hard exit: "
+            f"{_tail(tmp_path / 'app-stdout.txt')}"
+        )
+        assert (capture_dir / COMPLETION_MARKER_NAME).exists()
+
+        # THE assertion: main() logged the hard-exit record immediately
+        # before os._exit. The capture log is prompt-flushed per record,
+        # so the record survives even though the process never runs
+        # interpreter finalization.
+        records = _read_log_records(capture_dir)
+        assert "hard_exit: code=0" in "\n".join(records), (
+            "hard_exit debug record missing from capture log — "
+            "the deterministic os._exit path was not taken: "
+            f"{_tail(tmp_path / 'app-stdout.txt')}"
+        )
+
+
 class TestKillMidRun:
     """AC4 (kill mid-run): prompt-flush durability."""
 
@@ -383,6 +452,103 @@ class TestNormalRunWithoutFlag:
                     _kill_hard(proc)
             else:
                 proc.wait()
+
+
+class TestNormalRunExitPath:
+    """Issue #124, PR #125 fix round 2: the deterministic hard exit is
+    GATED on capture mode. A normal (no-flag) run keeps its pre-#124
+    exit — sys.exit with normal interpreter finalization — because the
+    hard exit's safety arguments (prompt-flushed capture log, marker
+    written first) only exist on the capture path (#104). This test
+    proves the two paths are distinct by asserting the hard-exit debug
+    record is ABSENT from a normal run's log (its mirror,
+    TestDeterministicHardExit, asserts the record is PRESENT in a
+    capture run); the record is emitted immediately before os._exit, so
+    its absence proves the hard-exit branch was not taken on a clean
+    no-flag exit."""
+
+    def test_no_flag_clean_exit_takes_normal_sys_exit_path(
+        self, tmp_path
+    ):
+        env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
+
+        # Force meetandread.main's logger to DEBUG in the child (via a
+        # sitecustomize pre-hook, earliest on PYTHONPATH): the hard_exit
+        # record is DEBUG and a normal run logs at INFO, so without this
+        # the absence assertion below would pass vacuously even if the
+        # ungated branch fired.
+        debug_dir = tmp_path / "debug_main_logger"
+        debug_dir.mkdir()
+        (debug_dir / "sitecustomize.py").write_text(
+            _DEBUG_MAIN_LOGGER_SITECUSTOMIZE, encoding="utf-8"
+        )
+        env["PYTHONPATH"] = f"{debug_dir}{os.pathsep}{env['PYTHONPATH']}"
+
+        proc = _launch_app(None, env, tmp_path / "app-stdout.txt")
+
+        try:
+            # The normal run's log lands under the sandboxed home
+            # (INFO level; the hard-exit record is DEBUG, so this test
+            # must not rely on level filtering alone — it forces DEBUG
+            # for meetandread.main in the child below so a record
+            # logged by a buggy ungated hard exit WOULD land in the
+            # file. Absence then proves the branch was not taken).
+            logs_dir = (
+                tmp_path / "home" / "Documents" / "meetandread" / "logs"
+            )
+            _wait_for(
+                lambda: logs_dir.is_dir()
+                and any(logs_dir.glob(f"{NORMAL_LOG_PREFIX}*.log")),
+                STARTUP_TIMEOUT_S,
+                "normal-run log in the normal logs dir",
+            )
+
+            # App fully up (same milestone the capture tests use).
+            def _normal_records():
+                logs = list(logs_dir.glob(f"{NORMAL_LOG_PREFIX}*.log"))
+                if not logs:
+                    return []
+                return read_appendable_records(logs[0])
+
+            _wait_for(
+                lambda: "PostProcessingQueue worker started"
+                in "\n".join(_normal_records()),
+                STARTUP_TIMEOUT_S,
+                "app fully started before the clean exit",
+            )
+
+            # Clean exit via SIGBREAK, with the same idempotent retry
+            # as the capture-mode tests.
+            exit_code = None
+            for attempt in (1, 2):
+                os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+                try:
+                    exit_code = proc.wait(timeout=CLEAN_EXIT_TIMEOUT_S)
+                    break
+                except subprocess.TimeoutExpired:
+                    if attempt == 2:
+                        _kill_hard(proc)
+                        pytest.fail("app did not exit cleanly after SIGBREAK")
+                    time.sleep(1.0)
+        finally:
+            if proc.poll() is None:
+                _kill_hard(proc)
+            proc.wait()
+
+        assert exit_code == 0, (
+            "clean exit expected, got "
+            f"{exit_code}: {_tail(tmp_path / 'app-stdout.txt')}"
+        )
+
+        # THE assertion: the hard-exit debug record is ABSENT from the
+        # normal run's log — the sys.exit branch was taken, not the
+        # os._exit branch (the mirrored capture test proves presence).
+        joined = "\n".join(_normal_records())
+        assert "hard_exit: code=" not in joined, (
+            "hard_exit debug record present in a NO-FLAG run's log — "
+            "the capture-gated hard exit fired on a normal run "
+            f"(path separation broken): {_tail(tmp_path / 'app-stdout.txt')}"
+        )
 
 
 class TestStartupFailureIsCaptured:
@@ -958,6 +1124,18 @@ class TestRecordingLifecycleInsideCaptureMode:
         assert any(
             "Log level: DEBUG (capture mode: True)" in r for r in records
         )
+
+
+# sitecustomize pre-hook for the no-flag exit-path test: forces the
+# meetandread.main logger to DEBUG (the normal run configures the root
+# at INFO, which would filter a hard_exit record by level and make the
+# test's absence assertion vacuous). The child interpreter loads this
+# from PYTHONPATH before any app code; NOTSET on the module logger
+# means the level applies without touching the run's root INFO level.
+_DEBUG_MAIN_LOGGER_SITECUSTOMIZE = """
+import logging
+logging.getLogger("meetandread.main").setLevel(logging.DEBUG)
+"""
 
 
 # Capture-mode recording shim: capture logging configured BEFORE the
