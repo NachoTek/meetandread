@@ -144,12 +144,17 @@ def _propagate_signatures(
     try:
         from meetandread.speaker.signatures import VoiceSignatureStore
     except ImportError:
-        logger.info("VoiceSignatureStore unavailable — skipping %s propagation", verb)
+        logger.info(
+            "signature_propagation_skipped: reason=store_unavailable verb=%s",
+            verb,
+        )
         return
 
     db_path = _resolve_signature_db(md_path)
     if db_path is None:
-        logger.info("No signature database found — skipping %s propagation", verb)
+        logger.info(
+            "signature_propagation_skipped: reason=no_db verb=%s", verb
+        )
         return
 
     try:
@@ -171,16 +176,19 @@ def _propagate_signatures(
     except Exception as exc:
         # Log only the exception class — the message could embed a path or name.
         logger.warning(
-            "Failed to propagate %s signatures: %s", verb, type(exc).__name__
+            "signature_propagation_failed: verb=%s error_class=%s",
+            verb, type(exc).__name__,
         )
         return
 
     if propagated:
         logger.info(
-            "Propagated %s to signature store (%d profile(s))", verb, propagated
+            "signature_propagated: verb=%s profiles=%d", verb, propagated
         )
     else:
-        logger.info("No profiles matched for %s propagation", verb)
+        logger.info(
+            "signature_propagation_no_match: verb=%s", verb
+        )
 
 
 def _propagate_link_to_signature_store(
@@ -195,7 +203,7 @@ def _propagate_link_to_signature_store(
         resolved_labels = _resolve_unknown_speaker_labels(md_path)
         if not resolved_labels:
             logger.info(
-                "No SPK labels found in transcript for __unknown__ — skipping propagation"
+                "signature_propagation_skipped: reason=no_spk_labels verb=link"
             )
             return
         replacements = [(label, identity_name) for label in resolved_labels]
@@ -231,7 +239,9 @@ def link_identity(md_path: Path, raw_label: str, identity_name: str) -> None:
     content = md_path.read_text(encoding="utf-8")
     split_result = transcript_footer.split(content)
     if split_result is None:
-        logger.warning("No metadata footer found — cannot link identity")
+        logger.warning(
+            "identity_link_rejected: reason=malformed_metadata"
+        )
         return
 
     md_body, data = split_result
@@ -273,6 +283,10 @@ def link_identity(md_path: Path, raw_label: str, identity_name: str) -> None:
     _dedup_speaker_matches_keys(sm, actual_key)
 
     atomic_write(md_path, transcript_footer.join(updated_body, data))
+    logger.debug(
+        "identity_link_applied: words=%d segments=%d",
+        words_updated, segments_updated,
+    )
 
     if raw_label != "__unknown__":
         _propagate_link_to_signature_store(md_path, raw_label, identity_name)
@@ -306,6 +320,10 @@ def rename_identity(md_path: Path, old_name: str, new_name: str) -> None:
     updated_body = _replace_speaker_heading(md_body, old_name, new_name)
 
     atomic_write(md_path, transcript_footer.join(updated_body, data))
+    logger.debug(
+        "identity_rename_applied: words=%d segments=%d",
+        words_updated, segments_updated,
+    )
 
 
 def propagate_rename_to_signature_store(

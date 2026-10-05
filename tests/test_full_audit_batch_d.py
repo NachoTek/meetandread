@@ -1,0 +1,953 @@
+"""Full-audit batch D logging tests (issue #102).
+
+Transcription pipeline (engine, audio ring buffer, accumulating
+processor) and speaker subsystem (diarizer, signatures store, identity
+management, identity linking, model downloader) instrumentation audit.
+
+Per module: (a) DEBUG-trail tests for named internal events (segment
+emission, model selection/load, post-processing stages, diarization
+runs, speaker-profile operations), (b) INFO quietness (per-step events
+must not appear at INFO — an INFO-level recording run shows a readable
+operational summary with no per-event DEBUG spam), (c) operational
+facts asserted at INFO. Mirrors the caplog prior art of batches A/B/C
+(tests/test_full_audit_batch_{a,b,c}.py).
+
+Capture-boundary transcript exclusion (amended spec, Logging +
+Privacy sections): DEBUG events for transcription and speaker
+processing are semantic only — segment counts/durations, model names,
+stage transitions, speaker-label operations — and never carry
+Transcript text or Recording titles into the log stream. Privacy
+canaries drive distinctive transcript text, speaker names, and paths
+through each seam and assert they never appear in the trail at any
+level (formatted output included, mirroring the batch-C negative
+controls).
+
+Runs at the pure-logic seam (spec: docs/specs/issue-reporting.md —
+"existing seams reused, no new ones"); the authoritative pass runs
+under the Windows venv (ADR 0001).
+"""
+
+import logging
+import sys
+import wave
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pytest
+
+from meetandread.speaker.diarizer import (
+    cleanup_diarization_segments,
+    DEFAULT_GAP_MERGE_THRESHOLD,
+    DEFAULT_SHORT_SEGMENT_THRESHOLD,
+    Diarizer,
+)
+from meetandread.speaker import model_downloader
+from meetandread.speaker.models import SpeakerSegment
+
+from meetandread.transcription.accumulating_processor import (
+    AccumulatingTranscriptionProcessor,
+    SegmentResult,
+)
+from meetandread.transcription.audio_buffer import AudioRingBuffer
+from meetandread.transcription.engine import (
+    TranscriptionError,
+    TranscriptionSuccess,
+    WhisperTranscriptionEngine,
+)
+from meetandread.transcription.vad import VoiceActivityDetector
+
+
+# ---------------------------------------------------------------------------
+# caplog helpers (batch B/C prior art)
+# ---------------------------------------------------------------------------
+
+
+def _debug(caplog, logger_name: str) -> list:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == logger_name and r.levelno == logging.DEBUG
+    ]
+
+
+def _info(caplog, logger_name: str) -> list:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == logger_name and r.levelno == logging.INFO
+    ]
+
+
+def _at_or_above_info(caplog, logger_name: str) -> list:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == logger_name and r.levelno >= logging.INFO
+    ]
+
+
+def _formatted_output(caplog, logger_name: str) -> list:
+    """Fully formatted log lines — message PLUS appended exception text.
+
+    Privacy canaries must inspect this, not just ``getMessage()``: a
+    record logged with ``exc_info`` has the raw exception message and
+    traceback appended by the formatter, which getMessage() alone never
+    shows (batch C prior art).
+    """
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    return [
+        formatter.format(r)
+        for r in caplog.records
+        if r.name == logger_name
+    ]
+
+
+def _starts_with(messages: list, prefix: str) -> list:
+    return [m for m in messages if m.startswith(prefix)]
+
+
+# ---------------------------------------------------------------------------
+# Privacy canaries
+# ---------------------------------------------------------------------------
+
+CANARY_TRANSCRIPT = "CANARY_TranscriptTextSecret"
+CANARY_SPEAKER_NAME = "CanarySpeakerName"
+CANARY_WAV_STEM = "canary-secret-board-meeting"
+
+ENGINE_LOG = "meetandread.transcription.engine"
+BUFFER_LOG = "meetandread.transcription.audio_buffer"
+PROC_LOG = "meetandread.transcription.accumulating_processor"
+DIARIZER_LOG = "meetandread.speaker.diarizer"
+SIG_LOG = "meetandread.speaker.signatures"
+IDM_LOG = "meetandread.speaker.identity_management"
+IDL_LOG = "meetandread.speaker.identity_linking"
+DL_LOG = "meetandread.speaker.model_downloader"
+
+
+# ---------------------------------------------------------------------------
+# Audio fixtures
+# ---------------------------------------------------------------------------
+
+
+def _tone(duration_s: float = 1.0, sr: int = 16000, freq: float = 440.0,
+          amplitude: float = 0.5) -> np.ndarray:
+    n = int(sr * duration_s)
+    t = np.linspace(0, duration_s, n, endpoint=False)
+    return (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+
+def _silence(duration_s: float = 1.0, sr: int = 16000) -> np.ndarray:
+    return np.zeros(int(sr * duration_s), dtype=np.float32)
+
+
+def _make_engine_loaded() -> WhisperTranscriptionEngine:
+    engine = WhisperTranscriptionEngine(model_size="tiny")
+    engine._model_loaded = True
+    engine._model = MagicMock()
+    return engine
+
+
+def _make_segment_mock(text: str = "hello", confidence: float = 0.9,
+                       t0: int = 0, t1: int = 100):
+    seg = MagicMock()
+    seg.text = text
+    seg.probability = confidence
+    seg.t0 = t0
+    seg.t1 = t1
+    return seg
+
+
+def _make_processor() -> AccumulatingTranscriptionProcessor:
+    """Processor with VAD initialized, no background thread (prior art)."""
+    proc = AccumulatingTranscriptionProcessor()
+    proc._is_running = True
+    proc._stop_event.clear()
+    proc._recording_start_time = datetime.utcnow()
+    proc._vad = VoiceActivityDetector()
+    proc._last_vad_speech_state = None
+    return proc
+
+
+# ===========================================================================
+# transcription/engine.py
+# ===========================================================================
+
+
+class TestEngineLogging:
+    def test_transcribe_emits_named_debug_events(self, caplog) -> None:
+        engine = _make_engine_loaded()
+        engine._model.transcribe.return_value = [_make_segment_mock()]
+        with caplog.at_level(logging.DEBUG, logger=ENGINE_LOG):
+            engine.transcribe_chunk(_tone(0.5))
+        debugs = _debug(caplog, ENGINE_LOG)
+        assert _starts_with(debugs, "engine_chunk_accepted:")
+        assert _starts_with(debugs, "engine_result_segments:")
+
+    def test_segment_event_counts_only(self, caplog) -> None:
+        engine = _make_engine_loaded()
+        engine._model.transcribe.return_value = [
+            _make_segment_mock(text=CANARY_TRANSCRIPT)
+        ]
+        with caplog.at_level(logging.DEBUG, logger=ENGINE_LOG):
+            engine.transcribe_chunk(_tone(0.5))
+        seg_events = _starts_with(_debug(caplog, ENGINE_LOG), "engine_result_segments:")
+        assert seg_events
+        assert "segments=" in seg_events[0]
+
+    def test_model_load_info_summary(self, tmp_path: Path, caplog,
+                                      monkeypatch) -> None:
+        engine = WhisperTranscriptionEngine(model_size="tiny")
+        monkeypatch.setattr(
+            engine, "_get_model_path", lambda: self._write_model(tmp_path)
+        )
+        monkeypatch.setattr(
+            "meetandread.transcription.engine.WhisperModel",
+            lambda *a, **k: MagicMock(),
+        )
+        with caplog.at_level(logging.INFO, logger=ENGINE_LOG):
+            engine.load_model()
+        infos = _info(caplog, ENGINE_LOG)
+        assert _starts_with(infos, "engine_model_loaded:")
+
+    def test_download_started_info_event(self, tmp_path: Path, caplog,
+                                          monkeypatch) -> None:
+        engine = WhisperTranscriptionEngine(model_size="tiny")
+        model_path = tmp_path / "ggml-tiny.bin"
+        with patch("urllib.request.urlretrieve") as fake_retrieve:
+            with caplog.at_level(logging.INFO, logger=ENGINE_LOG):
+                engine._download_model(model_path)
+        infos = _info(caplog, ENGINE_LOG)
+        assert _starts_with(infos, "engine_model_download_started:")
+        assert fake_retrieve.called
+
+    def test_info_quietness(self, tmp_path: Path, caplog, monkeypatch) -> None:
+        engine = _make_engine_loaded()
+        engine._model.transcribe.return_value = [_make_segment_mock()]
+        with caplog.at_level(logging.INFO, logger=ENGINE_LOG):
+            engine.transcribe_chunk(_tone(0.5))
+        msgs = [r.getMessage() for r in caplog.records if r.name == ENGINE_LOG]
+        assert not _starts_with(msgs, "engine_chunk_accepted:")
+        assert not _starts_with(msgs, "engine_result_segments:")
+
+    def test_canary_transcript_never_logged(self, caplog) -> None:
+        engine = _make_engine_loaded()
+        engine._model.transcribe.return_value = [
+            _make_segment_mock(text=CANARY_TRANSCRIPT)
+        ]
+        with caplog.at_level(logging.DEBUG, logger=ENGINE_LOG):
+            engine.transcribe_chunk(_tone(0.5))
+        for line in _formatted_output(caplog, ENGINE_LOG):
+            assert CANARY_TRANSCRIPT not in line
+
+    @staticmethod
+    def _write_model(tmp_path: Path) -> Path:
+        p = tmp_path / "ggml-tiny.bin"
+        p.write_bytes(b"\x00" * 16)
+        return p
+
+
+# ===========================================================================
+# transcription/audio_buffer.py
+# ===========================================================================
+
+
+class TestAudioRingBufferLogging:
+    def test_lifecycle_debug_events(self, caplog) -> None:
+        buf = AudioRingBuffer(max_seconds=2)
+        with caplog.at_level(logging.DEBUG, logger=BUFFER_LOG):
+            buf.append(_tone(1.0))
+            buf.get_recent(0.5)
+            buf.trim_committed(8000)
+        debugs = _debug(caplog, BUFFER_LOG)
+        assert _starts_with(debugs, "buffer_appended:")
+        assert _starts_with(debugs, "buffer_read:")
+        assert _starts_with(debugs, "buffer_trimmed:")
+
+    def test_trim_event_carries_counts(self, caplog) -> None:
+        buf = AudioRingBuffer(max_seconds=5)
+        buf.append(_tone(2.0))
+        with caplog.at_level(logging.DEBUG, logger=BUFFER_LOG):
+            buf.trim_committed(8000)
+        trims = _starts_with(_debug(caplog, BUFFER_LOG), "buffer_trimmed:")
+        assert trims
+        assert "remaining_samples=" in trims[0]
+
+    def test_auto_trim_debug_event(self, caplog) -> None:
+        buf = AudioRingBuffer(max_seconds=1)
+        with caplog.at_level(logging.DEBUG, logger=BUFFER_LOG):
+            for _ in range(3):
+                buf.append(_tone(1.0))
+        assert _starts_with(_debug(caplog, BUFFER_LOG), "buffer_auto_trimmed:")
+
+    def test_info_quietness(self, caplog) -> None:
+        buf = AudioRingBuffer(max_seconds=2)
+        with caplog.at_level(logging.INFO, logger=BUFFER_LOG):
+            buf.append(_tone(1.0))
+            buf.get_recent(0.5)
+            buf.trim_committed(8000)
+        msgs = [r.getMessage() for r in caplog.records if r.name == BUFFER_LOG]
+        assert not _starts_with(msgs, "buffer_appended:")
+        assert not _starts_with(msgs, "buffer_trimmed:")
+
+
+# ===========================================================================
+# transcription/accumulating_processor.py
+# ===========================================================================
+
+
+class TestAccumulatingProcessorLogging:
+    def _make_processor_with_engine(
+        self, transcript_text: str = "hello"
+    ) -> AccumulatingTranscriptionProcessor:
+        proc = _make_processor()
+        engine = MagicMock(spec=WhisperTranscriptionEngine)
+        engine.transcribe_chunk.return_value = TranscriptionSuccess(
+            segments=[
+                SimpleNamespace(
+                    text=transcript_text,
+                    confidence=90,
+                    start=0.0,
+                    end=0.5,
+                    words=[],
+                )
+            ]  # type: ignore[arg-type]
+        )
+        proc._engine = engine
+        # One second of accumulated phrase audio so the pass is not a no-op.
+        proc._phrase_bytes = b"\x00\x01" * 16000
+        return proc
+
+    def test_start_emits_info_summary(self, caplog) -> None:
+        proc = AccumulatingTranscriptionProcessor(
+            window_size=60.0, update_frequency=2.0, silence_timeout=3.0
+        )
+        try:
+            with caplog.at_level(logging.INFO, logger=PROC_LOG):
+                proc.start()
+        finally:
+            proc.stop()
+        infos = _info(caplog, PROC_LOG)
+        assert _starts_with(infos, "transcription_session_started:")
+
+    def test_stop_emits_info_summary(self, caplog) -> None:
+        proc = self._make_processor_with_engine()
+        with caplog.at_level(logging.INFO, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=False)
+            proc.stop()
+        infos = _info(caplog, PROC_LOG)
+        assert _starts_with(infos, "transcription_session_stopped:")
+
+    def test_transcription_pass_debug_events(self, caplog) -> None:
+        proc = self._make_processor_with_engine(transcript_text=CANARY_TRANSCRIPT)
+        with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=False)
+        debugs = _debug(caplog, PROC_LOG)
+        assert _starts_with(debugs, "transcription_pass_window:")
+        assert _starts_with(debugs, "transcription_pass_done:")
+
+    def test_phrase_finalize_debug_event(self, caplog) -> None:
+        proc = self._make_processor_with_engine()
+        proc._new_phrase_started = True
+        proc._last_audio_time = datetime.utcnow()
+        with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=True)
+        debugs = _debug(caplog, PROC_LOG)
+        assert _starts_with(debugs, "phrase_finalized:")
+
+    def test_vad_transition_debug_not_info(self, caplog) -> None:
+        proc = _make_processor()
+        with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+            proc.feed_audio(_silence(0.03))
+            proc.feed_audio(_tone(0.03, amplitude=0.5))
+        debugs = _debug(caplog, PROC_LOG)
+        assert _starts_with(debugs, "vad_speech_state:")
+
+    def test_info_quietness(self, caplog) -> None:
+        proc = self._make_processor_with_engine()
+        with caplog.at_level(logging.INFO, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=False)
+            proc.feed_audio(_tone(0.03))
+        msgs = [r.getMessage() for r in caplog.records if r.name == PROC_LOG]
+        assert not _starts_with(msgs, "transcription_pass_window:")
+        assert not _starts_with(msgs, "vad_speech_state:")
+        assert not _starts_with(msgs, "buffer_trimmed:")
+
+    def test_canary_transcript_never_logged(self, caplog) -> None:
+        proc = self._make_processor_with_engine(transcript_text=CANARY_TRANSCRIPT)
+        with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=False)
+        for line in _formatted_output(caplog, PROC_LOG):
+            assert CANARY_TRANSCRIPT not in line
+
+
+# ===========================================================================
+# speaker/diarizer.py — cleanup pass
+# ===========================================================================
+
+
+class TestCleanupLogging:
+    def test_merge_events_debug(self, caplog) -> None:
+        segments = [
+            SpeakerSegment(start=0.0, end=1.0, speaker="spk0"),
+            SpeakerSegment(start=1.1, end=2.0, speaker="spk0"),
+        ]
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            out = cleanup_diarization_segments(
+                segments,
+                gap_merge_threshold=DEFAULT_GAP_MERGE_THRESHOLD,
+                short_segment_threshold=DEFAULT_SHORT_SEGMENT_THRESHOLD,
+            )
+        assert len(out) == 1
+        debugs = _debug(caplog, DIARIZER_LOG)
+        assert _starts_with(debugs, "cleanup_gap_merged:")
+
+    def test_negative_duration_skipped_debug(self, caplog) -> None:
+        segments = [
+            SpeakerSegment(start=2.0, end=1.0, speaker="spk0"),
+            SpeakerSegment(start=0.0, end=1.0, speaker="spk1"),
+        ]
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            cleanup_diarization_segments(segments)
+        debugs = _debug(caplog, DIARIZER_LOG)
+        assert _starts_with(debugs, "cleanup_negative_segment_skipped:")
+
+    def test_cleanup_info_quietness(self, caplog) -> None:
+        segments = [
+            SpeakerSegment(start=0.0, end=1.0, speaker="spk0"),
+            SpeakerSegment(start=1.1, end=2.0, speaker="spk0"),
+        ]
+        with caplog.at_level(logging.INFO, logger=DIARIZER_LOG):
+            cleanup_diarization_segments(segments)
+        msgs = [r.getMessage() for r in caplog.records if r.name == DIARIZER_LOG]
+        assert not _starts_with(msgs, "cleanup_gap_merged:")
+
+
+# ===========================================================================
+# speaker/diarizer.py — diarize run
+# ===========================================================================
+
+
+class TestDiarizerRunLogging:
+    def _mock_diarizer(self, tmp_path: Path, monkeypatch) -> Diarizer:
+        d = Diarizer(cache_dir=tmp_path)
+        fake_sd = MagicMock()
+        fake_sd.sample_rate = 16000
+        fake_result = MagicMock()
+        fake_result.sort_by_start_time.return_value = [
+            SimpleNamespace(start=0.0, end=1.5, speaker="spk0")
+        ]
+        fake_result.num_speakers = 1
+        fake_result.num_segments = 1
+        fake_sd.process.return_value = fake_result
+        fake_extractor = MagicMock()
+        stream = MagicMock()
+        fake_extractor.create_stream.return_value = stream
+        fake_extractor.is_ready.return_value = True
+        fake_extractor.compute.return_value = np.ones(256, dtype=np.float32)
+        d._sd = fake_sd
+        d._extractor = fake_extractor
+        d._models = {}
+        monkeypatch.setattr(Diarizer, "_read_wav", lambda self, p: (_tone(2.0), 16000))
+        return d
+
+    def test_diarize_info_summary(self, tmp_path: Path, caplog,
+                                   monkeypatch) -> None:
+        d = self._mock_diarizer(tmp_path, monkeypatch)
+        wav = tmp_path / f"{CANARY_WAV_STEM}.wav"
+        with caplog.at_level(logging.INFO, logger=DIARIZER_LOG):
+            result = d.diarize(wav)
+        assert result.succeeded
+        infos = _info(caplog, DIARIZER_LOG)
+        assert _starts_with(infos, "diarization_complete:")
+
+    def test_diarize_debug_events(self, tmp_path: Path, caplog,
+                                   monkeypatch) -> None:
+        d = self._mock_diarizer(tmp_path, monkeypatch)
+        wav = tmp_path / "test.wav"
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            d.diarize(wav)
+        debugs = _debug(caplog, DIARIZER_LOG)
+        assert _starts_with(debugs, "diarization_audio_loaded:")
+        assert _starts_with(debugs, "embedding_extracted:")
+
+    def test_info_quietness(self, tmp_path: Path, caplog, monkeypatch) -> None:
+        d = self._mock_diarizer(tmp_path, monkeypatch)
+        with caplog.at_level(logging.INFO, logger=DIARIZER_LOG):
+            d.diarize(tmp_path / "test.wav")
+        msgs = [r.getMessage() for r in caplog.records if r.name == DIARIZER_LOG]
+        assert not _starts_with(msgs, "diarization_audio_loaded:")
+        assert not _starts_with(msgs, "embedding_extracted:")
+
+    def test_canary_wav_stem_never_logged(self, tmp_path: Path, caplog,
+                                           monkeypatch) -> None:
+        d = self._mock_diarizer(tmp_path, monkeypatch)
+        wav = tmp_path / f"{CANARY_WAV_STEM}.wav"
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            d.diarize(wav)
+        for line in _formatted_output(caplog, DIARIZER_LOG):
+            assert CANARY_WAV_STEM not in line
+
+
+# ===========================================================================
+# speaker/signatures.py
+# ===========================================================================
+
+
+class TestSignatureStoreLogging:
+    def test_open_info_summary(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        with caplog.at_level(logging.INFO, logger=SIG_LOG):
+            with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+                store.save_signature("spk0", np.ones(8, dtype=np.float32))
+        infos = _info(caplog, SIG_LOG)
+        assert _starts_with(infos, "signature_store_opened:")
+
+    def test_save_debug_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            with caplog.at_level(logging.DEBUG, logger=SIG_LOG):
+                store.save_signature(CANARY_SPEAKER_NAME, np.ones(8, dtype=np.float32))
+        debugs = _debug(caplog, SIG_LOG)
+        assert _starts_with(debugs, "signature_saved:")
+
+    def test_match_debug_events(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        emb = np.ones(8, dtype=np.float32)
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            store.save_signature("spk0", emb)
+            with caplog.at_level(logging.DEBUG, logger=SIG_LOG):
+                match = store.find_match(emb)
+        assert match is not None
+        debugs = _debug(caplog, SIG_LOG)
+        assert _starts_with(debugs, "signature_matched:")
+
+    def test_no_match_debug_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        emb = np.ones(8, dtype=np.float32)
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            store.save_signature("spk0", emb)
+            with caplog.at_level(logging.DEBUG, logger=SIG_LOG):
+                match = store.find_match(-emb)
+        assert match is None
+        debugs = _debug(caplog, SIG_LOG)
+        assert _starts_with(debugs, "signature_no_match:")
+
+    def test_delete_debug_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            store.save_signature("spk0", np.ones(8, dtype=np.float32))
+            with caplog.at_level(logging.DEBUG, logger=SIG_LOG):
+                assert store.delete_signature("spk0") is True
+        debugs = _debug(caplog, SIG_LOG)
+        assert _starts_with(debugs, "signature_deleted:")
+
+    def test_update_debug_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            store.save_signature("spk0", np.ones(8, dtype=np.float32))
+            with caplog.at_level(logging.DEBUG, logger=SIG_LOG):
+                assert store.update_signature("spk0", np.ones(8, dtype=np.float32)) is True
+        debugs = _debug(caplog, SIG_LOG)
+        assert _starts_with(debugs, "signature_updated:")
+
+    def test_info_quietness(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        emb = np.ones(8, dtype=np.float32)
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            store.save_signature("spk0", emb)
+            with caplog.at_level(logging.INFO, logger=SIG_LOG):
+                store.save_signature("spk1", emb)
+                store.find_match(emb)
+                store.delete_signature("spk1")
+        msgs = [r.getMessage() for r in caplog.records if r.name == SIG_LOG]
+        assert not _starts_with(msgs, "signature_saved:")
+        assert not _starts_with(msgs, "signature_matched:")
+        assert not _starts_with(msgs, "signature_no_match:")
+        assert not _starts_with(msgs, "signature_deleted:")
+
+    def test_canary_speaker_name_never_logged(self, tmp_path: Path,
+                                               caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        emb = np.ones(8, dtype=np.float32)
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            with caplog.at_level(logging.DEBUG, logger=SIG_LOG):
+                store.save_signature(CANARY_SPEAKER_NAME, emb)
+                store.find_match(emb)
+                store.update_signature(CANARY_SPEAKER_NAME, emb)
+                store.delete_signature(CANARY_SPEAKER_NAME)
+        for line in _formatted_output(caplog, SIG_LOG):
+            assert CANARY_SPEAKER_NAME not in line
+
+    def test_no_absolute_paths_in_events(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        with caplog.at_level(logging.DEBUG, logger=SIG_LOG):
+            with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")):
+                pass
+        for line in _formatted_output(caplog, SIG_LOG):
+            assert str(tmp_path) not in line
+
+
+# ===========================================================================
+# speaker/identity_management.py
+# ===========================================================================
+
+
+def _write_identity_transcript(
+    transcripts_dir: Path, name: str, count: int = 1
+) -> Path:
+    """Write a minimal transcript .md with `count` speaker-id mentions."""
+    from meetandread.transcription import transcript_footer
+
+    words = [
+        {
+            "text": f"w{i}",
+            "start": 0.0 + i,
+            "end": 0.5 + i,
+            "confidence": 90,
+            "speaker_id": name,
+        }
+        for i in range(count)
+    ]
+    content = transcript_footer.join(
+        f"# Transcript\n\n**{name}**\n\nbody\n",
+        {"words": words, "bookmarks": []},
+    )
+    p = transcripts_dir / f"meeting-{name.lower()}.md"
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+class TestIdentityManagementLogging:
+    def _make_store(self, tmp_path: Path):
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        return VoiceSignatureStore(db_path=str(tmp_path / "idm.db"))
+
+    def test_scan_debug_events(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_management import scan_identity_usage
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        _write_identity_transcript(transcripts, "spk0", count=2)
+        with caplog.at_level(logging.DEBUG, logger=IDM_LOG):
+            scan_identity_usage(transcripts, ["spk0"])
+        debugs = _debug(caplog, IDM_LOG)
+        assert _starts_with(debugs, "identity_scan_file:")
+
+    def test_scan_info_summary(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_management import scan_identity_usage
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        _write_identity_transcript(transcripts, "spk0")
+        with caplog.at_level(logging.INFO, logger=IDM_LOG):
+            scan_identity_usage(transcripts, ["spk0"])
+        infos = _info(caplog, IDM_LOG)
+        assert _starts_with(infos, "identity_scan_complete:")
+
+    def test_rename_info_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_management import rename_identity
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        _write_identity_transcript(transcripts, "spk0")
+        with self._make_store(tmp_path) as store:
+            store.save_signature("spk0", np.ones(8, dtype=np.float32))
+            with caplog.at_level(logging.INFO, logger=IDM_LOG):
+                rename_identity(store, transcripts, "spk0", "NewName")
+        infos = _info(caplog, IDM_LOG)
+        assert _starts_with(infos, "identity_renamed:")
+
+    def test_merge_info_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_management import merge_identities
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        _write_identity_transcript(transcripts, "spk0")
+        with self._make_store(tmp_path) as store:
+            store.save_signature("spk0", np.ones(8, dtype=np.float32))
+            store.save_signature("spk1", np.ones(8, dtype=np.float32))
+            with caplog.at_level(logging.INFO, logger=IDM_LOG):
+                merge_identities(store, transcripts, "spk0", "spk1")
+        infos = _info(caplog, IDM_LOG)
+        assert _starts_with(infos, "identity_merged:")
+
+    def test_delete_info_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_management import delete_identity
+
+        with self._make_store(tmp_path) as store:
+            store.save_signature("spk0", np.ones(8, dtype=np.float32))
+            with caplog.at_level(logging.INFO, logger=IDM_LOG):
+                delete_identity(store, tmp_path, "spk0")
+        infos = _info(caplog, IDM_LOG)
+        assert _starts_with(infos, "identity_deleted:")
+
+    def test_prune_info_events(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_management import (
+            prune_unused_identities,
+        )
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        with self._make_store(tmp_path) as store:
+            store.save_signature("unused0", np.ones(8, dtype=np.float32))
+            store.save_signature("unused1", np.ones(8, dtype=np.float32))
+            with caplog.at_level(logging.INFO, logger=IDM_LOG):
+                summary = prune_unused_identities(store, transcripts)
+        assert summary.deleted == 2
+        infos = _info(caplog, IDM_LOG)
+        assert _starts_with(infos, "identity_prune_complete:")
+
+    def test_canary_identity_name_never_logged(self, tmp_path: Path,
+                                                caplog) -> None:
+        from meetandread.speaker.identity_management import (
+            delete_identity,
+            rename_identity,
+            scan_identity_usage,
+        )
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        _write_identity_transcript(transcripts, CANARY_SPEAKER_NAME)
+        with self._make_store(tmp_path) as store:
+            store.save_signature(CANARY_SPEAKER_NAME, np.ones(8, dtype=np.float32))
+            store.save_signature("other", np.ones(8, dtype=np.float32))
+            with caplog.at_level(logging.DEBUG, logger=IDM_LOG):
+                scan_identity_usage(transcripts, [CANARY_SPEAKER_NAME, "other"])
+                rename_identity(
+                    store, transcripts, CANARY_SPEAKER_NAME, "renamed"
+                )
+                delete_identity(store, transcripts, "renamed")
+        for line in _formatted_output(caplog, IDM_LOG):
+            assert CANARY_SPEAKER_NAME not in line
+
+    def test_scan_info_quietness(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_management import scan_identity_usage
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        _write_identity_transcript(transcripts, "spk0")
+        with caplog.at_level(logging.INFO, logger=IDM_LOG):
+            scan_identity_usage(transcripts, ["spk0"])
+        msgs = [r.getMessage() for r in caplog.records if r.name == IDM_LOG]
+        assert not _starts_with(msgs, "identity_scan_file:")
+
+
+# ===========================================================================
+# speaker/identity_linking.py
+# ===========================================================================
+
+
+def _make_link_transcript(tmp_path: Path, label: str = "SPK_0") -> Path:
+    from meetandread.transcription import transcript_footer
+
+    words = [
+        {
+            "text": "hi",
+            "start": 0.0,
+            "end": 0.5,
+            "confidence": 90,
+            "speaker_id": label,
+        }
+    ]
+    content = transcript_footer.join(
+        f"# Transcript\n\n**{label}**\n\nHello\n",
+        {"words": words, "bookmarks": []},
+    )
+    p = tmp_path / "link.md"
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+class TestIdentityLinkingLogging:
+    def test_link_debug_events(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_linking import link_identity
+
+        md = _make_link_transcript(tmp_path)
+        with caplog.at_level(logging.DEBUG, logger=IDL_LOG):
+            link_identity(md, "SPK_0", "Alice")
+        debugs = _debug(caplog, IDL_LOG)
+        assert _starts_with(debugs, "identity_link_applied:")
+
+    def test_rename_debug_events(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_linking import rename_identity
+
+        md = _make_link_transcript(tmp_path, "Alice")
+        with caplog.at_level(logging.DEBUG, logger=IDL_LOG):
+            rename_identity(md, "Alice", "Bob")
+        debugs = _debug(caplog, IDL_LOG)
+        assert _starts_with(debugs, "identity_rename_applied:")
+
+    def test_no_db_skip_info(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_linking import (
+            propagate_rename_to_signature_store,
+        )
+
+        md = tmp_path / "t.md"
+        md.write_text("# dummy\n\n---\n\n<!-- METADATA: {} -->\n", encoding="utf-8")
+        with patch(
+            "meetandread.audio.storage.paths.get_recordings_dir",
+            return_value=tmp_path / "nodb",
+        ):
+            with caplog.at_level(logging.INFO, logger=IDL_LOG):
+                propagate_rename_to_signature_store(md, "Old", "New")
+        infos = _info(caplog, IDL_LOG)
+        assert _starts_with(infos, "signature_propagation_skipped:")
+
+    def test_propagate_info_event(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_linking import (
+            propagate_rename_to_signature_store,
+        )
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        md = _make_link_transcript(tmp_path, "Alice")
+        db = tmp_path / "speaker_signatures.db"
+        with VoiceSignatureStore(db_path=str(db)) as store:
+            store.save_signature("Alice", np.ones(8, dtype=np.float32))
+        with caplog.at_level(logging.INFO, logger=IDL_LOG):
+            propagate_rename_to_signature_store(md, "Alice", "Bob")
+        infos = _info(caplog, IDL_LOG)
+        assert _starts_with(infos, "signature_propagated:")
+
+    def test_canary_identity_name_never_logged(self, tmp_path: Path,
+                                                caplog) -> None:
+        from meetandread.speaker.identity_linking import link_identity
+
+        md = _make_link_transcript(tmp_path)
+        with caplog.at_level(logging.DEBUG, logger=IDL_LOG):
+            link_identity(md, "SPK_0", CANARY_SPEAKER_NAME)
+        for line in _formatted_output(caplog, IDL_LOG):
+            assert CANARY_SPEAKER_NAME not in line
+
+    def test_info_quietness(self, tmp_path: Path, caplog) -> None:
+        from meetandread.speaker.identity_linking import link_identity
+
+        md = _make_link_transcript(tmp_path)
+        with caplog.at_level(logging.INFO, logger=IDL_LOG):
+            link_identity(md, "SPK_0", "Alice")
+        msgs = [r.getMessage() for r in caplog.records if r.name == IDL_LOG]
+        assert not _starts_with(msgs, "identity_link_applied:")
+
+
+# ===========================================================================
+# speaker/model_downloader.py
+# ===========================================================================
+
+
+class TestModelDownloaderLogging:
+    def _embed_bytes(self) -> bytes:
+        import hashlib
+
+        return bytes(range(256)) * 4
+
+    def test_cached_verified_info(self, tmp_path: Path, caplog) -> None:
+        import hashlib
+
+        data = self._embed_bytes()
+        dest = tmp_path / "emb.onnx"
+        dest.write_bytes(data)
+        with caplog.at_level(logging.INFO, logger=DL_LOG):
+            model_downloader._download_file(
+                "http://example.com/emb.onnx",
+                dest,
+                expected_sha256=hashlib.sha256(data).hexdigest(),
+                label="embedding model",
+            )
+        infos = _info(caplog, DL_LOG)
+        assert _starts_with(infos, "model_cache_verified:")
+
+    def test_download_started_info(self, tmp_path: Path, caplog) -> None:
+        import hashlib
+
+        data = self._embed_bytes()
+        dest = tmp_path / "emb.onnx"
+        with patch(
+            "urllib.request.urlretrieve",
+            side_effect=lambda url, path, reporthook=None: Path(path).write_bytes(data),
+        ):
+            with caplog.at_level(logging.INFO, logger=DL_LOG):
+                model_downloader._download_file(
+                    "http://example.com/emb.onnx",
+                    dest,
+                    expected_sha256=hashlib.sha256(data).hexdigest(),
+                    label="embedding model",
+                )
+        infos = _info(caplog, DL_LOG)
+        assert _starts_with(infos, "model_download_started:")
+        assert _starts_with(infos, "model_download_complete:")
+
+    def test_checksum_mismatch_warning(self, tmp_path: Path, caplog) -> None:
+        dest = tmp_path / "emb.onnx"
+        dest.write_bytes(self._embed_bytes())
+        with caplog.at_level(logging.WARNING, logger=DL_LOG):
+            ok = model_downloader._verify_checksum(
+                dest, "0" * 64, "embedding model"
+            )
+        assert ok is False
+        warns = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == DL_LOG and r.levelno == logging.WARNING
+        ]
+        assert _starts_with(warns, "model_checksum_mismatch:")
+
+    def test_checksum_ok_debug(self, tmp_path: Path, caplog) -> None:
+        import hashlib
+
+        data = self._embed_bytes()
+        dest = tmp_path / "emb.onnx"
+        dest.write_bytes(data)
+        with caplog.at_level(logging.DEBUG, logger=DL_LOG):
+            ok = model_downloader._verify_checksum(
+                dest, hashlib.sha256(data).hexdigest(), "embedding model"
+            )
+        assert ok is True
+        debugs = _debug(caplog, DL_LOG)
+        assert _starts_with(debugs, "model_checksum_verified:")
+
+    def test_ensure_all_models_info_events(self, tmp_path: Path,
+                                            caplog) -> None:
+        with patch.object(
+            model_downloader,
+            "ensure_segmentation_model",
+            return_value=tmp_path / "seg",
+        ):
+            with patch.object(
+                model_downloader,
+                "ensure_embedding_model",
+                return_value=tmp_path / "emb.onnx",
+            ):
+                with caplog.at_level(logging.INFO, logger=DL_LOG):
+                    model_downloader.ensure_all_models(cache_dir=tmp_path)
+        infos = _info(caplog, DL_LOG)
+        assert _starts_with(infos, "models_ensure_started:")
+        assert _starts_with(infos, "models_ready:")
+
+    def test_no_paths_in_events(self, tmp_path: Path, caplog) -> None:
+        import hashlib
+
+        data = self._embed_bytes()
+        dest = tmp_path / "emb.onnx"
+        dest.write_bytes(data)
+        with caplog.at_level(logging.DEBUG, logger=DL_LOG):
+            model_downloader._download_file(
+                "http://example.com/emb.onnx",
+                dest,
+                expected_sha256=hashlib.sha256(data).hexdigest(),
+                label="embedding model",
+            )
+        for line in _formatted_output(caplog, DL_LOG):
+            assert str(tmp_path) not in line
+            assert "emb.onnx" not in line

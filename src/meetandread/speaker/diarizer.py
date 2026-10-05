@@ -255,17 +255,21 @@ def cleanup_diarization_segments(
         segments = sorted(segments, key=lambda s: s.start)
     except (TypeError, AttributeError):
         # Malformed segments — return as-is rather than crash
-        logger.warning("cleanup_diarization_segments: failed to sort segments, returning unchanged")
+        logger.warning(
+            "cleanup_sort_failed: error_class=%s returning=unchanged",
+            "AttributeError",
+        )
         return list(segments)
 
     # --- Pass 1: merge adjacent same-speaker gaps -------------------------
     merged: list[SpeakerSegment] = []
+    gap_merges = 0
     for seg in segments:
         # Skip segments with invalid time ranges
         if seg.end < seg.start:
             logger.debug(
-                "cleanup: skipping negative-duration segment %.3f–%.3f (%s)",
-                seg.start, seg.end, seg.speaker,
+                "cleanup_negative_segment_skipped: start=%.3f end=%.3f",
+                seg.start, seg.end,
             )
             continue
         if not merged:
@@ -281,8 +285,12 @@ def cleanup_diarization_segments(
                 end=max(prev.end, seg.end),
                 speaker=prev.speaker,
             )
+            gap_merges += 1
         else:
             merged.append(seg)
+
+    if gap_merges:
+        logger.debug("cleanup_gap_merged: count=%d", gap_merges)
 
     if len(merged) <= 2:
         # Not enough segments for short-segment absorption
@@ -290,6 +298,7 @@ def cleanup_diarization_segments(
 
     # --- Pass 2: absorb same-speaker short noise splits -------------------
     result: list[SpeakerSegment] = []
+    absorbed = 0
     i = 0
     while i < len(merged):
         seg = merged[i]
@@ -316,12 +325,16 @@ def cleanup_diarization_segments(
                     end=max(prev.end, nxt.end),
                     speaker=prev.speaker,
                 )
+                absorbed += 1
                 # Skip the next segment too — it's been absorbed
                 i += 2
                 continue
 
         result.append(seg)
         i += 1
+
+    if absorbed:
+        logger.debug("cleanup_short_absorbed: count=%d", absorbed)
 
     return result
 
@@ -401,7 +414,8 @@ class Diarizer:
                 return self.diarize(wav_path)
             except Exception as e:
                 logger.error(
-                    "Frozen in-process diarization failed: %s", e, exc_info=True
+                    "frozen_diarization_failed: error_class=%s", type(e).__name__,
+                    exc_info=True,
                 )
                 return DiarizationResult(
                     error=f"In-process diarization failed: {e}"
@@ -429,8 +443,8 @@ class Diarizer:
             ]
 
             logger.info(
-                "Running diarization in subprocess for %s (threshold=%.2f)",
-                wav_path.name, self._clustering_threshold,
+                "diarization_subprocess_started: clustering_threshold=%.2f",
+                self._clustering_threshold,
             )
 
             proc = subprocess.run(
@@ -442,7 +456,7 @@ class Diarizer:
             if proc.returncode != 0:
                 stderr_text = proc.stderr.decode("utf-8", errors="replace")[:500]
                 logger.error(
-                    "Diarization subprocess failed (exit %d): %s",
+                    "diarization_subprocess_exit_error: exit_code=%d stderr=%.200s",
                     proc.returncode, stderr_text,
                 )
                 return DiarizationResult(error=f"Subprocess exit {proc.returncode}: {stderr_text}")
@@ -461,7 +475,7 @@ class Diarizer:
             if data.get("error"):
                 elapsed = time.monotonic() - t0
                 logger.error(
-                    "Diarization subprocess error after %.1fs: %s",
+                    "diarization_subprocess_error: wall_seconds=%.1f error=%.200s",
                     elapsed, data["error"],
                 )
                 return DiarizationResult(error=data["error"])
@@ -482,8 +496,8 @@ class Diarizer:
 
             elapsed = time.monotonic() - t0
             logger.info(
-                "Subprocess diarization complete: %d segments, %d speakers, "
-                "%.1fs audio in %.1fs wall time",
+                "diarization_subprocess_complete: segments=%d speakers=%d "
+                "audio_seconds=%.1f wall_seconds=%.1f",
                 len(segments), data.get("num_speakers", 0),
                 data.get("duration_seconds", 0), elapsed,
             )
@@ -497,12 +511,16 @@ class Diarizer:
 
         except subprocess.TimeoutExpired:
             elapsed = time.monotonic() - t0
+            logger.error(
+                "diarization_subprocess_timeout: wall_seconds=%.1f", elapsed
+            )
             return DiarizationResult(error=f"Diarization subprocess timed out after {elapsed:.0f}s")
         except Exception as exc:
             elapsed = time.monotonic() - t0
             logger.error(
-                "Subprocess diarization failed after %.1fs: %s",
-                elapsed, exc, exc_info=True,
+                "diarization_subprocess_failed: wall_seconds=%.1f error_class=%s",
+                elapsed, type(exc).__name__,
+                exc_info=True,
             )
             return DiarizationResult(error=str(exc))
 
@@ -531,9 +549,9 @@ class Diarizer:
             # --- Read audio ---------------------------------------------------
             audio, sr = self._read_wav(wav_path)
             duration = len(audio) / sr
-            logger.info(
-                "Loaded WAV: %s (%.1fs, %d Hz, %d samples)",
-                wav_path.name, duration, sr, len(audio),
+            logger.debug(
+                "diarization_audio_loaded: duration_seconds=%.1f sample_rate=%d",
+                duration, sr,
             )
 
             # --- Resample if needed -------------------------------------------
@@ -542,14 +560,15 @@ class Diarizer:
 
                 audio = soxr.resample(audio, sr, self._sd.sample_rate)
                 sr = self._sd.sample_rate
-                logger.debug("Resampled to %d Hz", sr)
+                logger.debug("diarization_resampled: sample_rate=%d", sr)
 
             # --- Run diarization ----------------------------------------------
             raw_result = self._sd.process(audio)
             sorted_segments = raw_result.sort_by_start_time()
             elapsed = time.monotonic() - t0
             logger.info(
-                "Diarization complete: %d segments, %d speakers, %.1fs audio in %.1fs wall time",
+                "diarization_complete: segments=%d speakers=%d "
+                "audio_seconds=%.1f wall_seconds=%.1f",
                 raw_result.num_segments,
                 raw_result.num_speakers,
                 duration,
@@ -567,8 +586,8 @@ class Diarizer:
             segments = cleanup_diarization_segments(segments)
             if len(segments) != pre_count:
                 logger.info(
-                    "Diarization cleanup: %d -> %d segments "
-                    "(gap_threshold=%.2fs, short_threshold=%.2fs)",
+                    "diarization_cleanup: segments_before=%d segments_after=%d "
+                    "gap_threshold=%.2fs short_threshold=%.2fs",
                     pre_count, len(segments),
                     DEFAULT_GAP_MERGE_THRESHOLD, DEFAULT_SHORT_SEGMENT_THRESHOLD,
                 )
@@ -586,8 +605,8 @@ class Diarizer:
         except Exception as exc:
             elapsed = time.monotonic() - t0
             logger.error(
-                "Diarization failed for %s after %.1fs: %s",
-                wav_path, elapsed, exc,
+                "diarization_failed: wall_seconds=%.1f error_class=%s",
+                elapsed, type(exc).__name__,
                 exc_info=True,
             )
             return DiarizationResult(error=str(exc))
@@ -609,7 +628,7 @@ class Diarizer:
         emb_path = self._models["embedding_model"]
 
         segmentation_onnx = seg_dir / "model.onnx"
-        logger.info("Loading diarization models from %s", seg_dir.parent)
+        logger.info("diarization_models_loading:")
 
         # Build OfflineSpeakerDiarization config
         config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
@@ -645,7 +664,7 @@ class Diarizer:
 
         elapsed = time.monotonic() - t0
         logger.info(
-            "Diarization models loaded in %.1fs (sample_rate=%d)",
+            "diarization_models_loaded: wall_seconds=%.1f sample_rate=%d",
             elapsed, self._sd.sample_rate,
         )
 
@@ -714,13 +733,13 @@ class Diarizer:
                         num_segments=len(segs),
                     )
                     logger.debug(
-                        "Extracted embedding for %s (%d segments, dim=%d)",
-                        speaker_label, len(segs), len(embedding),
+                        "embedding_extracted: segments=%d dim=%d",
+                        len(segs), len(embedding),
                     )
             except Exception as exc:
                 logger.warning(
-                    "Failed to extract embedding for %s: %s",
-                    speaker_label, exc,
+                    "embedding_extraction_failed: error_class=%s",
+                    type(exc).__name__,
                 )
 
         return signatures
@@ -757,7 +776,7 @@ class Diarizer:
         # Skip speakers with very little total audio (< 1s is unreliable)
         if total_duration < 1.0:
             logger.debug(
-                "Skipping short speaker audio (%.1fs)", total_duration
+                "embedding_skipped_short: audio_seconds=%.1f", total_duration
             )
             return None
 
@@ -768,8 +787,7 @@ class Diarizer:
 
         if not self._extractor.is_ready(stream):
             logger.debug(
-                "Extractor not ready for %.1fs of audio — too short for model window",
-                total_duration,
+                "embedding_padded_retry: audio_seconds=%.1f", total_duration
             )
             # Pad with silence to try again (repeat audio to fill window)
             padded = np.concatenate([combined, np.zeros(sample_rate, dtype=np.float32)])

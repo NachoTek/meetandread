@@ -401,25 +401,25 @@ class TestSanitizedTransitionLogging:
         """Transition from silence to speech is logged."""
         proc = _make_processor()
 
-        with caplog.at_level(logging.INFO, logger="meetandread.transcription.accumulating_processor"):
+        with caplog.at_level(logging.DEBUG, logger="meetandread.transcription.accumulating_processor"):
             proc.feed_audio(_make_silence())
             proc.feed_audio(_make_tone(amplitude=0.5))
 
         messages = [r.message for r in caplog.records]
-        assert any("silence -> speech" in m for m in messages)
+        assert any("vad_speech_state" in m and "speech=True" in m for m in messages)
 
     def test_speech_to_silence_logged(self, caplog):
         """Transition from speech to silence is logged."""
         proc = _make_processor()
 
-        with caplog.at_level(logging.INFO, logger="meetandread.transcription.accumulating_processor"):
+        with caplog.at_level(logging.DEBUG, logger="meetandread.transcription.accumulating_processor"):
             proc.feed_audio(_make_tone(amplitude=0.5))
             # Feed many silence frames to get past WebRTC hangover
             for _ in range(20):
                 proc.feed_audio(_make_silence())
 
         messages = [r.message for r in caplog.records]
-        assert any("speech -> silence" in m for m in messages)
+        assert any("vad_speech_state" in m and "speech=False" in m for m in messages)
 
     def test_no_raw_audio_in_logs(self, caplog):
         """Logs must not contain raw audio energy values."""

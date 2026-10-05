@@ -179,25 +179,25 @@ class WhisperTranscriptionEngine:
         url = self.MODEL_URLS.get(self.model_size)
         if not url:
             raise ValueError(f"Unknown model size: {self.model_size}")
-        
-        logger.info(f"Downloading model {self.model_size} from {url}")
+
+        logger.info("engine_model_download_started: model=%s", self.model_size)
         logger.info("This may take a few minutes depending on your connection...")
-        
+
         try:
             # Download with progress reporting
             import urllib.request
-            
+
             def download_progress(block_num, block_size, total_size):
                 downloaded = block_num * block_size
                 percent = min(100, int(downloaded * 100 / total_size)) if total_size > 0 else 0
                 if block_num % 100 == 0:  # Log every 100 blocks to avoid spam
-                    logger.info(f"Downloaded {percent}%")
-            
+                    logger.info("Downloaded %d%%", percent)
+
             urllib.request.urlretrieve(url, model_path, reporthook=download_progress)  # nosec B310
-            logger.info(f"Model downloaded to {model_path}")
-            
+            logger.info("engine_model_download_complete: model=%s", self.model_size)
+
         except Exception as e:
-            logger.error(f"Failed to download model: {e}")
+            logger.error("engine_model_download_failed: model=%s error_class=%s", self.model_size, type(e).__name__)
             if model_path.exists():
                 model_path.unlink()  # Clean up partial download
             raise
@@ -223,7 +223,7 @@ class WhisperTranscriptionEngine:
                 "Install with: pip install pywhispercpp"
             )
         
-        logger.info(f"Loading Whisper model: {self.model_size}")
+        logger.info("engine_model_load_started: model=%s", self.model_size)
         if progress_callback:
             progress_callback(0)
         
@@ -251,10 +251,10 @@ class WhisperTranscriptionEngine:
             if progress_callback:
                 progress_callback(100)
             
-            logger.info(f"Model loaded successfully from {model_path}")
-            
+            logger.info("engine_model_loaded: model=%s", self.model_size)
+
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+            logger.error("engine_model_load_failed: model=%s error_class=%s", self.model_size, type(e).__name__)
             raise
     
     def is_model_loaded(self) -> bool:
@@ -414,6 +414,11 @@ class WhisperTranscriptionEngine:
         if len(audio_np) == 0:
             return TranscriptionSuccess(segments=[])
 
+        logger.debug(
+            "engine_chunk_accepted: samples=%d word_level=%s",
+            int(len(audio_np)), bool(word_level),
+        )
+
         # Save audio to temp file (whisper.cpp requires file path)
         temp_path = None
         try:
@@ -434,6 +439,7 @@ class WhisperTranscriptionEngine:
             result = self._model.transcribe(temp_path, **transcribe_kwargs)
 
             if not result:
+                logger.debug("engine_result_segments: segments=0")
                 return TranscriptionSuccess(segments=[])
 
             # Convert pywhispercpp Segments to our TranscriptionSegments
@@ -478,6 +484,9 @@ class WhisperTranscriptionEngine:
                     words=[word],
                 ))
 
+            logger.debug(
+                "engine_result_segments: segments=%d", len(segments)
+            )
             return TranscriptionSuccess(segments=segments)
 
         except Exception as e:
@@ -490,8 +499,11 @@ class WhisperTranscriptionEngine:
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
-                except Exception:
-                    logger.debug("Temp file cleanup failed: %s", temp_path)
+                except Exception as exc:
+                    logger.debug(
+                        "engine_temp_cleanup_failed: error_class=%s",
+                        type(exc).__name__,
+                    )
 
     @staticmethod
     def _categorize_error(exc: Exception) -> Tuple[str, str]:

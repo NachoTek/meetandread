@@ -141,7 +141,9 @@ def scan_identity_usage(
     }
 
     if not transcripts_dir.is_dir():
-        logger.warning("Transcripts directory does not exist: %s", transcripts_dir)
+        logger.warning(
+            "identity_scan_dir_missing: transcripts_dir_present=False"
+        )
         return usage
 
     md_files = sorted(transcripts_dir.glob("*.md"))
@@ -156,7 +158,8 @@ def scan_identity_usage(
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
             logger.warning(
-                "Cannot read transcript (skipping): error=%s", exc
+                "identity_scan_file_unreadable: error_class=%s",
+                type(exc).__name__,
             )
             skipped_count += 1
             continue
@@ -164,6 +167,7 @@ def scan_identity_usage(
         data = transcript_footer.parse(content)
         if data is None:
             skipped_count += 1
+            logger.debug("identity_scan_file_skipped: reason=malformed")
             continue
 
         # Count word-level mentions per identity in this transcript
@@ -175,6 +179,11 @@ def scan_identity_usage(
 
         if not per_identity_counts:
             continue
+
+        logger.debug(
+            "identity_scan_file: matched_identities=%d",
+            len(per_identity_counts),
+        )
 
         # Get file mtime
         try:
@@ -199,12 +208,12 @@ def scan_identity_usage(
 
     if skipped_count:
         logger.info(
-            "Identity scan: %d file(s) skipped (malformed/unreadable)",
+            "identity_scan_skipped_files: count=%d",
             skipped_count,
         )
 
     logger.info(
-        "Identity scan complete: %d identities, %d transcript(s)",
+        "identity_scan_complete: identities=%d transcripts=%d",
         len(identity_names),
         len(md_files),
     )
@@ -356,7 +365,10 @@ def rename_identity(
         try:
             store.delete_signature(new_name)
         except Exception as rollback_exc:
-            logger.debug("Rollback delete failed for %s: %s", new_name, rollback_exc)
+            logger.debug(
+                "identity_rename_rollback_failed: error_class=%s",
+                type(rollback_exc).__name__,
+            )
         raise RenameError(f"Failed to delete old profile: {exc}") from exc
 
     # Rewrite transcripts
@@ -365,7 +377,7 @@ def rename_identity(
     )
 
     logger.info(
-        "Renamed identity: %d transcript(s) rewritten",  # PII-safe: no names
+        "identity_renamed: transcripts_rewritten=%d",  # PII-safe: no names
         len(_find_transcripts_with_label(transcripts_dir, new_name)),
     )
 
@@ -444,15 +456,14 @@ def merge_identities(
         store.delete_signature(source_name)
     except Exception as exc:
         logger.warning(
-            "Merge: failed to delete source from store after rewrite "
-            "(target is already updated): error=%s",
-            exc,
+            "identity_merge_source_delete_failed: error_class=%s",
+            type(exc).__name__,
         )
         # Target was saved successfully, transcripts were rewritten —
         # not a fatal error.  Source will be orphaned but not corrupting.
 
     logger.info(
-        "Merged identity into target: %d file(s) rewritten",
+        "identity_merged: transcripts_rewritten=%d",
         len(rewrite_errors) if rewrite_errors else 0,
     )
 
@@ -508,7 +519,7 @@ def delete_identity(
     if not deleted:
         raise DeleteError("Identity not found in store (concurrent delete?)")
 
-    logger.info("Deleted identity from store")  # PII-safe
+    logger.info("identity_deleted:")  # PII-safe
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +563,7 @@ def prune_unused_identities(
 
     if not unused:
         logger.info(
-            "Identity prune: no unused identities out of %d scanned",
+            "identity_prune_none_unused: total_scanned=%d",
             summary.total_scanned,
         )
         return summary
@@ -566,19 +577,17 @@ def prune_unused_identities(
                 # Signature was gone already (concurrent prune or race)
                 summary.failed += 1
                 summary.failed_identities.append(name)
-                logger.info(
-                    "Identity prune: signature already gone for 1 identity"
-                )
+                logger.info("identity_prune_race: signatures_deleted=0")
         except Exception as exc:
             summary.failed += 1
             summary.failed_identities.append(name)
             logger.warning(
-                "Identity prune: deletion failed for 1 identity: error=%s",
-                exc,
+                "identity_prune_delete_failed: error_class=%s",
+                type(exc).__name__,
             )
 
     logger.info(
-        "Identity prune complete: %d deleted, %d failed, %d total scanned",
+        "identity_prune_complete: deleted=%d failed=%d total_scanned=%d",
         summary.deleted,
         summary.failed,
         summary.total_scanned,
@@ -622,9 +631,9 @@ def _rewrite_transcripts_safely(
         except (OSError, IdentityManagementError) as exc:
             failed.append(f"{md_path}: {exc}")
             logger.warning(
-                "%s: failed to rewrite transcript: error=%s",
-                operation.capitalize(),
-                exc,
+                "identity_rewrite_failed: operation=%s error_class=%s",
+                operation,
+                type(exc).__name__,
             )
 
     if failed and not rewritten:
