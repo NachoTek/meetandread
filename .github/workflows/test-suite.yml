@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   lint-and-test:
-    runs-on: [self-hosted, windows]
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@v4
 
