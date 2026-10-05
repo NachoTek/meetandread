@@ -31,20 +31,17 @@ jobs:
           # Dispatch label -> (action, route) (issue #93). One send path:
           # same secret, same HMAC, same curl — only the action field and
           # route URL differ between review variants. The gateway routes
-          # by URL path, so each variant has its own route. Route names
-          # are the gateway's devvm-* webhook vocabulary (renamed from
-          # the legacy meetandread-pr / meetandread-pr-specreview paths
-          # after 2026-09-13; the legacy paths 404).
+          # by URL path, so each variant has its own route.
           LABEL="${{ github.event.label.name }}"
           case "$LABEL" in
             ready-for-codereview)
               ACTION="review_requested"
-              WEBHOOK_URL="https://homelab.nachotek.com/hooks/devvm-meetandread-review-requested"
+              WEBHOOK_URL="https://homelab.nachotek.com/hooks/meetandread-pr"
               echo "ready-for-codereview label added to PR #$PR_NUMBER"
               ;;
             ready-for-specreview)
               ACTION="spec_review_requested"
-              WEBHOOK_URL="https://homelab.nachotek.com/hooks/devvm-meetandread-review-requested"
+              WEBHOOK_URL="https://homelab.nachotek.com/hooks/meetandread-pr-specreview"
               echo "ready-for-specreview label added to PR #$PR_NUMBER"
               ;;
             *)
