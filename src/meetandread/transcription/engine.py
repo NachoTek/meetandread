@@ -495,7 +495,13 @@ class WhisperTranscriptionEngine:
 
         except Exception as e:
             error_type, message = self._categorize_error(e)
-            logger.error("Transcription error [%s]: %s", error_type, message)
+            # The typed message is exception-derived and can embed paths or
+            # transcript fragments — log the category only; detail travels
+            # in the returned TranscriptionError, never in the log stream.
+            logger.error(
+                "engine_transcription_error: error_type=%s error_class=%s",
+                error_type, type(e).__name__,
+            )
             return TranscriptionError(error_type=error_type, message=message)
 
         finally:

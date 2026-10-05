@@ -29,8 +29,9 @@ under the Windows venv (ADR 0001).
 
 import logging
 import sys
+import time as _time_mod
 import wave
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -355,7 +356,44 @@ class TestAccumulatingProcessorLogging:
         with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
             proc._transcribe_accumulated(force_complete=True)
         debugs = _debug(caplog, PROC_LOG)
-        assert _starts_with(debugs, "phrase_finalized:")
+        assert _starts_with(debugs, "phrase_finalize_started:")
+
+    def test_loop_emits_exactly_one_phrase_finalized(self, caplog) -> None:
+        """One phrase completion = exactly one phrase_finalized event with
+        both duration fields (re-review finding 3, PR #129: the pass and
+        the loop previously emitted the same name twice with incompatible
+        schemas). Drives the real processing loop, not the pass directly.
+        """
+        proc = self._make_processor_with_engine()
+        # Silence timeout already elapsed -> loop finalizes on first tick.
+        proc._last_audio_time = datetime.utcnow() - timedelta(seconds=10)
+        proc._phrase_bytes = b"\x00\x01" * 16000  # >= min phrase duration
+
+        real_sleep = _time_mod.sleep
+        ticks = {"n": 0}
+
+        def sleep_or_stop(seconds: float) -> None:
+            # Let the first few iterations run at real cadence; once the
+            # phrase is finalized (buffer cleared) stop the loop so the
+            # test terminates deterministically.
+            ticks["n"] += 1
+            if not proc._phrase_bytes or ticks["n"] > 50:
+                proc._stop_event.set()
+                return
+            real_sleep(seconds)
+
+        with patch(
+            "meetandread.transcription.accumulating_processor._time.sleep",
+            side_effect=sleep_or_stop,
+        ):
+            with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+                proc._processing_loop()
+        finalized = _starts_with(_debug(caplog, PROC_LOG), "phrase_finalized:")
+        assert len(finalized) == 1
+        assert "transcription_seconds=" in finalized[0]
+        started = _starts_with(_debug(caplog, PROC_LOG), "phrase_finalize_started:")
+        assert len(started) == 1
+        assert "buffer_seconds=" in started[0]
 
     def test_vad_transition_debug_not_info(self, caplog) -> None:
         proc = _make_processor()
@@ -421,6 +459,50 @@ class TestAccumulatingProcessorLogging:
             for line in _formatted_output(caplog, PROC_LOG)
             if " - ERROR - " in line
         )
+
+    def test_returned_transcription_error_canary_never_logged(
+        self, caplog
+    ) -> None:
+        """The typed TranscriptionError.message is exception-derived and can
+        embed paths/transcript fragments — the processor must log the
+        category only (re-review finding 1, PR #129).
+        """
+        proc = self._make_processor_with_engine()
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+            error_type="model_error",
+            message=f"model exploded on {CANARY_TRANSCRIPT} in {CANARY_WAV_STEM}.wav",
+        )
+        with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=False)
+        for line in _formatted_output(caplog, PROC_LOG):
+            assert CANARY_TRANSCRIPT not in line
+            assert CANARY_WAV_STEM not in line
+        error_events = [
+            line for line in _formatted_output(caplog, PROC_LOG)
+            if "transcription_pass_failed:" in line
+        ]
+        assert error_events
+        assert "error_type=model_error" in error_events[0]
+
+    def test_engine_error_event_canary_never_logged(self, caplog) -> None:
+        """Engine failure logs the typed category only — never the
+        exception-derived message (re-review finding 1, PR #129).
+        """
+        engine = _make_engine_loaded()
+        engine._model.transcribe.side_effect = RuntimeError(
+            f"cannot read {CANARY_WAV_STEM}.wav with {CANARY_TRANSCRIPT}"
+        )
+        with caplog.at_level(logging.DEBUG, logger=ENGINE_LOG):
+            result = engine.transcribe_chunk(_tone(0.5))
+        assert isinstance(result, TranscriptionError)
+        for line in _formatted_output(caplog, ENGINE_LOG):
+            assert CANARY_TRANSCRIPT not in line
+            assert CANARY_WAV_STEM not in line
+        error_events = [
+            line for line in _formatted_output(caplog, ENGINE_LOG)
+            if "engine_transcription_error:" in line
+        ]
+        assert error_events
 
 
 # ===========================================================================
@@ -825,24 +907,37 @@ class TestIdentityManagementLogging:
     def test_merge_summary_counts_failures_separately(
         self, tmp_path: Path, caplog
     ) -> None:
-        """A failed rewrite must not inflate the rewritten count."""
-        from meetandread.speaker.identity_management import merge_identities
+        """A failed rewrite must not inflate the rewritten count.
+
+        The rewrite failure is forced at the atomic_write seam (chmod-based
+        approaches are not portable: atomic_write replaces the target via a
+        sibling temp file, which succeeds whenever the directory is
+        writable, e.g. under privileged POSIX users).
+        """
+        from meetandread.speaker import identity_management as idm
+        from meetandread.speaker.identity_management import MergeError, merge_identities
 
         transcripts = tmp_path / "transcripts"
         transcripts.mkdir()
-        md = _write_identity_transcript(transcripts, "spk0")
-        md.chmod(0o000)  # force rewrite failure on the single file
-        try:
-            with self._make_store(tmp_path) as store:
-                store.save_signature("spk0", np.ones(8, dtype=np.float32))
-                store.save_signature("spk1", np.ones(8, dtype=np.float32))
-                with pytest.raises(Exception):
-                    merge_identities(store, transcripts, "spk0", "spk1")
-        finally:
-            md.chmod(0o644)
+        _write_identity_transcript(transcripts, "spk0")
+        with self._make_store(tmp_path) as store:
+            store.save_signature("spk0", np.ones(8, dtype=np.float32))
+            store.save_signature("spk1", np.ones(8, dtype=np.float32))
+            with patch.object(
+                idm, "atomic_write", side_effect=OSError("disk full")
+            ):
+                with caplog.at_level(logging.INFO, logger=IDM_LOG):
+                    with pytest.raises(MergeError):
+                        merge_identities(store, transcripts, "spk0", "spk1")
         infos = _info(caplog, IDM_LOG)
         merged = _starts_with(infos, "identity_merged:")
         assert not merged  # all rewrites failed -> MergeError, no summary
+        warnings = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == IDM_LOG and r.levelno == logging.WARNING
+        ]
+        assert _starts_with(warnings, "identity_rewrite_failed:")
 
     def test_delete_info_event(self, tmp_path: Path, caplog) -> None:
         from meetandread.speaker.identity_management import delete_identity
@@ -1131,30 +1226,57 @@ LANE_D_LOGGERS = [
 
 
 class TestSameFlowRecordingTrail:
-    """Drive one representative Recording flow — engine transcribes a
-    chunk, the ring buffer holds audio, the accumulating processor
-    finalizes a phrase, diarization runs and matches a profile — and
-    assert the two level contracts of the issue at the flow level:
+    """Drive one representative Recording flow through EVERY scoped module
+    lane — engine, ring buffer, accumulating processor, diarizer,
+    signature store, identity management, identity linking, model
+    downloader — and assert the two level contracts of the issue at the
+    flow level:
 
-    - DEBUG: the full event trail a maintainer needs (one event per
-      module lane at minimum).
+    - DEBUG: the full event trail a maintainer needs (at least one
+      expected named event per lane — not just "some record").
     - INFO: a readable operational summary — the INFO records that DO
       appear are the named summaries, and none of the per-event DEBUG
       vocabulary leaks up to INFO.
     """
 
+    # One expected DEBUG event per lane — proves the lane actually ran.
+    LANE_DEBUG_EVENTS = {
+        ENGINE_LOG: "engine_chunk_accepted:",
+        BUFFER_LOG: "buffer_appended:",
+        PROC_LOG: "transcription_pass_window:",
+        DIARIZER_LOG: "diarization_audio_loaded:",
+        SIG_LOG: "signature_saved:",
+        IDM_LOG: "identity_scan_file:",
+        IDL_LOG: "identity_link_applied:",
+        DL_LOG: "model_checksum_verified:",
+    }
+
     def _run_flow(self, tmp_path: Path, monkeypatch) -> None:
-        # Ring buffer
+        import hashlib
+
+        # --- Model downloader lane: cached artifact verified ----------
+        emb_data = bytes(range(256)) * 4
+        emb_dest = tmp_path / "models" / "emb.onnx"
+        emb_dest.parent.mkdir(exist_ok=True)
+        emb_dest.write_bytes(emb_data)
+        model_downloader._download_file(
+            "http://example.com/emb.onnx",
+            emb_dest,
+            expected_sha256=hashlib.sha256(emb_data).hexdigest(),
+            label="embedding model",
+        )
+
+        # --- Ring buffer lane ----------------------------------------
         buf = AudioRingBuffer(max_seconds=2)
         buf.append(_tone(1.0))
         buf.get_recent(0.5)
 
-        # Engine pass
+        # --- Engine lane ----------------------------------------------
         engine = _make_engine_loaded()
         engine._model.transcribe.return_value = [_make_segment_mock()]
         engine.transcribe_chunk(_tone(0.5))
 
-        # Accumulating processor pass + phrase finalize
+        # --- Accumulating processor lane: pass + phrase finalize -------
         proc = _make_processor()
         eng = MagicMock(spec=WhisperTranscriptionEngine)
         eng.transcribe_chunk.return_value = TranscriptionSuccess(
@@ -1173,7 +1295,7 @@ class TestSameFlowRecordingTrail:
         proc._transcribe_accumulated(force_complete=False)
         proc._transcribe_accumulated(force_complete=True)
 
-        # Diarization run
+        # --- Diarization lane ------------------------------------------
         d = Diarizer(cache_dir=tmp_path)
         fake_sd = MagicMock()
         fake_sd.sample_rate = 16000
@@ -1198,21 +1320,42 @@ class TestSameFlowRecordingTrail:
         result = d.diarize(tmp_path / f"{CANARY_WAV_STEM}.wav")
         assert result.succeeded
 
-        # Speaker-profile match
+        # --- Signature store lane: profile save + match -----------------
         from meetandread.speaker.signatures import VoiceSignatureStore
 
         with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
             store.save_signature("spk0", np.ones(8, dtype=np.float32))
             store.find_match(np.ones(8, dtype=np.float32))
 
+        # --- Identity management lane: scan + rename --------------------
+        from meetandread.speaker.identity_management import (
+            rename_identity as idm_rename,
+            scan_identity_usage,
+        )
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        _write_identity_transcript(transcripts, "spk0")
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store2:
+            scan_identity_usage(transcripts, ["spk0"])
+            idm_rename(store2, transcripts, "spk0", CANARY_SPEAKER_NAME)
+
+        # --- Identity linking lane: link a raw label --------------------
+        from meetandread.speaker.identity_linking import link_identity
+
+        md = _make_link_transcript(tmp_path)
+        link_identity(md, "SPK_0", CANARY_SPEAKER_NAME)
+
     def test_debug_flow_shows_full_trail(self, tmp_path: Path, caplog,
                                           monkeypatch) -> None:
         with caplog.at_level(logging.DEBUG):
             self._run_flow(tmp_path, monkeypatch)
-        for logger_name in (ENGINE_LOG, BUFFER_LOG, PROC_LOG, DIARIZER_LOG,
-                            SIG_LOG):
+        for logger_name, expected_prefix in self.LANE_DEBUG_EVENTS.items():
             debugs = _debug(caplog, logger_name)
             assert debugs, f"no DEBUG trail from {logger_name}"
+            assert _starts_with(debugs, expected_prefix), (
+                f"{logger_name} never emitted {expected_prefix!r}"
+            )
 
     def test_info_flow_is_quiet_summary(self, tmp_path: Path, caplog,
                                          monkeypatch) -> None:
@@ -1227,6 +1370,7 @@ class TestSameFlowRecordingTrail:
             "buffer_auto_trimmed:",
             "transcription_pass_window:",
             "transcription_pass_done:",
+            "phrase_finalize_started:",
             "phrase_finalized:",
             "vad_speech_state:",
             "segments_emitted:",
@@ -1236,6 +1380,11 @@ class TestSameFlowRecordingTrail:
             "signature_saved:",
             "signature_matched:",
             "signature_no_match:",
+            "identity_scan_file:",
+            "identity_link_applied:",
+            "identity_rename_applied:",
+            "model_checksum_verified:",
+            "model_cache_hit_unverified:",
         )
         for logger_name in LANE_D_LOGGERS:
             for msg in _info(caplog, logger_name):
@@ -1243,6 +1392,10 @@ class TestSameFlowRecordingTrail:
                     assert not msg.startswith(prefix), (
                         f"DEBUG vocabulary leaked to INFO: {msg!r}"
                     )
+        # The flow's INFO records are named summaries, not prose.
+        for logger_name in LANE_D_LOGGERS:
+            for msg in _info(caplog, logger_name):
+                assert msg, f"empty INFO record from {logger_name}"
 
     def test_flow_canaries_at_debug(self, tmp_path: Path, caplog,
                                      monkeypatch) -> None:
@@ -1255,4 +1408,7 @@ class TestSameFlowRecordingTrail:
                 )
                 assert CANARY_WAV_STEM not in line, (
                     f"recording-title canary leaked via {logger_name}"
+                )
+                assert CANARY_SPEAKER_NAME not in line, (
+                    f"speaker-name canary leaked via {logger_name}"
                 )

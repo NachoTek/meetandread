@@ -380,8 +380,11 @@ class AccumulatingTranscriptionProcessor:
                 # Sleep to prevent CPU spinning (check every 100ms)
                 _time.sleep(0.1)
                 
-            except Exception as e:
-                logger.error("Transcription loop error: %s: %s", type(e).__name__, e)
+            except Exception as exc:
+                logger.error(
+                    "transcription_loop_error: error_class=%s",
+                    type(exc).__name__,
+                )
                 _time.sleep(0.5)
         
         logger.debug("Processing loop ended")
@@ -403,7 +406,7 @@ class AccumulatingTranscriptionProcessor:
             full_buffer_duration = len(self._phrase_bytes) / (16000 * 2)
             if force_complete:
                 logger.debug(
-                    "phrase_finalized: buffer_seconds=%.1f",
+                    "phrase_finalize_started: buffer_seconds=%.1f",
                     full_buffer_duration,
                 )
             
@@ -441,10 +444,12 @@ class AccumulatingTranscriptionProcessor:
             from meetandread.transcription.engine import TranscriptionError
 
             if isinstance(result, TranscriptionError):
-                # Log sanitized error — never log audio content or transcript text
+                # The typed message is exception-derived and can embed paths
+                # or transcript fragments — log the category only; never log
+                # audio content or transcript text.
                 logger.error(
-                    "Transcription failed [%s]: %s",
-                    result.error_type, result.message,
+                    "transcription_pass_failed: error_type=%s",
+                    result.error_type,
                 )
                 # Do NOT emit any SegmentResult on error
                 return

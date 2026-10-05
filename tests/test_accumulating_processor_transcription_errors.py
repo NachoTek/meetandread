@@ -305,7 +305,8 @@ class TestEngineErrorLogging:
     """Engine logs sanitized error on transcription failure."""
 
     def test_error_logged_with_type_and_sanitized_message(self, caplog):
-        """TranscriptionError logs error_type and sanitized message."""
+        """Engine logs a named event with the typed category — never the
+        exception-derived message (batch D capture boundary)."""
         engine = _make_engine_loaded()
         engine._model.transcribe.side_effect = RuntimeError("model crash")
 
@@ -313,7 +314,18 @@ class TestEngineErrorLogging:
             result = engine.transcribe_chunk(_audio())
 
         assert isinstance(result, TranscriptionError)
-        assert any("Transcription error" in r.message for r in caplog.records)
+        assert any(
+            r.message.startswith("engine_transcription_error:")
+            and "error_type=model_error" in r.message
+            for r in caplog.records
+            if r.name == "meetandread.transcription.engine"
+        )
+        # The exception message must not enter the log stream.
+        assert not any(
+            "model crash" in r.getMessage()
+            for r in caplog.records
+            if r.name == "meetandread.transcription.engine"
+        )
 
 
 # ===========================================================================
@@ -419,7 +431,8 @@ class TestProcessorHandlesError:
         assert proc._transcription_count == initial_count + 1
 
     def test_error_logged_sanitized(self, caplog):
-        """TranscriptionError is logged with sanitized type and message."""
+        """TranscriptionError is logged with the typed category only —
+        never the exception-derived message (batch D capture boundary)."""
         proc = self._make_processor_with_engine()
         proc._engine.transcribe_chunk.return_value = TranscriptionError(
             error_type='oom', message='Out of memory during transcription'
@@ -430,8 +443,18 @@ class TestProcessorHandlesError:
         with caplog.at_level(logging.ERROR, logger="meetandread.transcription.accumulating_processor"):
             proc._transcribe_accumulated(force_complete=False)
 
-        assert any("Transcription failed" in r.message for r in caplog.records)
-        assert any("oom" in r.message for r in caplog.records)
+        assert any(
+            r.message.startswith("transcription_pass_failed:")
+            and "error_type=oom" in r.message
+            for r in caplog.records
+            if r.name == "meetandread.transcription.accumulating_processor"
+        )
+        # The typed message must not enter the log stream.
+        assert not any(
+            "Out of memory during transcription" in r.getMessage()
+            for r in caplog.records
+            if r.name == "meetandread.transcription.accumulating_processor"
+        )
 
     def test_error_no_callback_invoked(self):
         """on_result callback is NOT invoked for TranscriptionError."""
