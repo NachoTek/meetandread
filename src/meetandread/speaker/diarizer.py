@@ -253,11 +253,11 @@ def cleanup_diarization_segments(
     # Defensive sort by start time
     try:
         segments = sorted(segments, key=lambda s: s.start)
-    except (TypeError, AttributeError):
+    except (TypeError, AttributeError) as exc:
         # Malformed segments — return as-is rather than crash
         logger.warning(
             "cleanup_sort_failed: error_class=%s returning=unchanged",
-            "AttributeError",
+            type(exc).__name__,
         )
         return list(segments)
 
@@ -413,9 +413,10 @@ class Diarizer:
             try:
                 return self.diarize(wav_path)
             except Exception as e:
+                # Exception payloads can embed the recording path/title —
+                # log the class only; the detail lives in the returned result.
                 logger.error(
-                    "frozen_diarization_failed: error_class=%s", type(e).__name__,
-                    exc_info=True,
+                    "frozen_diarization_failed: error_class=%s", type(e).__name__
                 )
                 return DiarizationResult(
                     error=f"In-process diarization failed: {e}"
@@ -455,9 +456,11 @@ class Diarizer:
 
             if proc.returncode != 0:
                 stderr_text = proc.stderr.decode("utf-8", errors="replace")[:500]
+                # stderr can embed the recording path/title — never log it;
+                # the detail lives in the returned DiarizationResult.
                 logger.error(
-                    "diarization_subprocess_exit_error: exit_code=%d stderr=%.200s",
-                    proc.returncode, stderr_text,
+                    "diarization_subprocess_exit_error: exit_code=%d stderr_bytes=%d",
+                    proc.returncode, len(proc.stderr),
                 )
                 return DiarizationResult(error=f"Subprocess exit {proc.returncode}: {stderr_text}")
 
@@ -474,9 +477,12 @@ class Diarizer:
 
             if data.get("error"):
                 elapsed = time.monotonic() - t0
+                # The child's error string is built from str(exc) and can
+                # embed the recording path/title — never log it; the detail
+                # lives in the returned DiarizationResult.
                 logger.error(
-                    "diarization_subprocess_error: wall_seconds=%.1f error=%.200s",
-                    elapsed, data["error"],
+                    "diarization_subprocess_error: wall_seconds=%.1f error_class=child_error",
+                    elapsed,
                 )
                 return DiarizationResult(error=data["error"])
 
@@ -517,10 +523,11 @@ class Diarizer:
             return DiarizationResult(error=f"Diarization subprocess timed out after {elapsed:.0f}s")
         except Exception as exc:
             elapsed = time.monotonic() - t0
+            # Exception payloads can embed the recording path/title —
+            # log the class only; the detail lives in the returned result.
             logger.error(
                 "diarization_subprocess_failed: wall_seconds=%.1f error_class=%s",
                 elapsed, type(exc).__name__,
-                exc_info=True,
             )
             return DiarizationResult(error=str(exc))
 
@@ -604,10 +611,11 @@ class Diarizer:
 
         except Exception as exc:
             elapsed = time.monotonic() - t0
+            # Exception payloads can embed the recording path/title —
+            # log the class only; the detail lives in the returned result.
             logger.error(
                 "diarization_failed: wall_seconds=%.1f error_class=%s",
                 elapsed, type(exc).__name__,
-                exc_info=True,
             )
             return DiarizationResult(error=str(exc))
 

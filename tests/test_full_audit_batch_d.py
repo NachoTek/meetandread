@@ -382,6 +382,46 @@ class TestAccumulatingProcessorLogging:
         for line in _formatted_output(caplog, PROC_LOG):
             assert CANARY_TRANSCRIPT not in line
 
+    def test_callback_raise_canary_transcript_never_logged(self, caplog) -> None:
+        """A callback that raises USING the result text must not leak it.
+
+        Review finding (PR #129): on_result receives the SegmentResult
+        carrying transcript text; logging its exception verbatim would
+        write that text into the capture log. The event must carry the
+        error class only.
+        """
+        proc = self._make_processor_with_engine(transcript_text=CANARY_TRANSCRIPT)
+
+        def bad_callback(result: SegmentResult) -> None:
+            raise RuntimeError(f"callback exploded on {result.text}")
+
+        proc.on_result = bad_callback
+        with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=False)
+        for line in _formatted_output(caplog, PROC_LOG):
+            assert CANARY_TRANSCRIPT not in line
+        error_lines = [
+            line
+            for line in _formatted_output(caplog, PROC_LOG)
+            if " - ERROR - " in line
+        ]
+        assert any("on_result_callback_failed:" in line for line in error_lines)
+
+    def test_transcription_pass_exception_named_event(self, caplog) -> None:
+        """An unexpected pass failure logs a named event, error_class only."""
+        proc = self._make_processor_with_engine()
+        proc._engine.transcribe_chunk.side_effect = OSError("disk on fire")
+        with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
+            proc._transcribe_accumulated(force_complete=False)
+        for line in _formatted_output(caplog, PROC_LOG):
+            assert "disk on fire" not in line
+        assert any(
+            line.startswith("transcription_pass_failed:")
+            or " transcription_pass_failed:" in line
+            for line in _formatted_output(caplog, PROC_LOG)
+            if " - ERROR - " in line
+        )
+
 
 # ===========================================================================
 # speaker/diarizer.py — cleanup pass
@@ -487,6 +527,98 @@ class TestDiarizerRunLogging:
         wav = tmp_path / f"{CANARY_WAV_STEM}.wav"
         with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
             d.diarize(wav)
+        for line in _formatted_output(caplog, DIARIZER_LOG):
+            assert CANARY_WAV_STEM not in line
+
+
+class TestDiarizerErrorPathCanaries:
+    """Review findings (PR #129): error paths must not leak recording
+    paths/titles — exception payloads, subprocess stderr, and the child's
+    error string can all embed the wav path, and exc_info appends the raw
+    traceback. Named events carry error_class/counts only; the detail
+    stays in the returned DiarizationResult.
+    """
+
+    def _make_wav(self, tmp_path: Path) -> Path:
+        wav = tmp_path / f"{CANARY_WAV_STEM}.wav"
+        wav.write_bytes(b"RIFF")
+        return wav
+
+    def test_frozen_path_never_logs_exception_payload(
+        self, tmp_path: Path, caplog, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        d = Diarizer(cache_dir=tmp_path)
+        boom = RuntimeError(f"cannot open {tmp_path / (CANARY_WAV_STEM + '.wav')}")
+        monkeypatch.setattr(Diarizer, "diarize", lambda self, p: (_ for _ in ()).throw(boom))
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            result = d.diarize_subprocess(self._make_wav(tmp_path))
+        assert not result.succeeded
+        for line in _formatted_output(caplog, DIARIZER_LOG):
+            assert CANARY_WAV_STEM not in line
+
+    def test_subprocess_stderr_never_logged(
+        self, tmp_path: Path, caplog, monkeypatch
+    ) -> None:
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        d = Diarizer(cache_dir=tmp_path)
+        monkeypatch.setattr(Diarizer, "_ensure_initialized", lambda self: None)
+
+        fake_proc = MagicMock(
+            returncode=3,
+            stderr=f"Traceback ... open('{CANARY_WAV_STEM}.wav') failed".encode(),
+            stdout=b"",
+        )
+        monkeypatch.setattr(
+            "subprocess.run", lambda *a, **k: fake_proc
+        )
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            result = d.diarize_subprocess(self._make_wav(tmp_path))
+        assert not result.succeeded
+        for line in _formatted_output(caplog, DIARIZER_LOG):
+            assert CANARY_WAV_STEM not in line
+        error_events = [
+            line for line in _formatted_output(caplog, DIARIZER_LOG)
+            if "diarization_subprocess_exit_error:" in line
+        ]
+        assert error_events
+
+    def test_subprocess_json_error_never_logged(
+        self, tmp_path: Path, caplog, monkeypatch
+    ) -> None:
+        import json as _json
+        import struct as _struct
+
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        d = Diarizer(cache_dir=tmp_path)
+        monkeypatch.setattr(Diarizer, "_ensure_initialized", lambda self: None)
+
+        payload = _json.dumps(
+            {"error": f"Diarization failed: missing {CANARY_WAV_STEM}.wav"}
+        ).encode("utf-8")
+        fake_proc = MagicMock(
+            returncode=0,
+            stderr=b"",
+            stdout=_struct.pack("<I", len(payload)) + payload,
+        )
+        monkeypatch.setattr(
+            "subprocess.run", lambda *a, **k: fake_proc
+        )
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            result = d.diarize_subprocess(self._make_wav(tmp_path))
+        assert not result.succeeded
+        for line in _formatted_output(caplog, DIARIZER_LOG):
+            assert CANARY_WAV_STEM not in line
+
+    def test_inprocess_failure_never_logs_exception_payload(
+        self, tmp_path: Path, caplog, monkeypatch
+    ) -> None:
+        d = Diarizer(cache_dir=tmp_path)
+        boom = RuntimeError(f"WAV file not found: {tmp_path / (CANARY_WAV_STEM + '.wav')}")
+        monkeypatch.setattr(Diarizer, "_read_wav", lambda self, p: (_ for _ in ()).throw(boom))
+        with caplog.at_level(logging.DEBUG, logger=DIARIZER_LOG):
+            result = d.diarize(self._make_wav(tmp_path))
+        assert not result.succeeded
         for line in _formatted_output(caplog, DIARIZER_LOG):
             assert CANARY_WAV_STEM not in line
 
@@ -668,7 +800,9 @@ class TestIdentityManagementLogging:
             with caplog.at_level(logging.INFO, logger=IDM_LOG):
                 rename_identity(store, transcripts, "spk0", "NewName")
         infos = _info(caplog, IDM_LOG)
-        assert _starts_with(infos, "identity_renamed:")
+        renamed = _starts_with(infos, "identity_renamed:")
+        assert renamed
+        assert "transcripts_rewritten=1" in renamed[0]
 
     def test_merge_info_event(self, tmp_path: Path, caplog) -> None:
         from meetandread.speaker.identity_management import merge_identities
@@ -682,7 +816,33 @@ class TestIdentityManagementLogging:
             with caplog.at_level(logging.INFO, logger=IDM_LOG):
                 merge_identities(store, transcripts, "spk0", "spk1")
         infos = _info(caplog, IDM_LOG)
-        assert _starts_with(infos, "identity_merged:")
+        merged = _starts_with(infos, "identity_merged:")
+        assert merged
+        # One matching transcript rewritten: the summary reports the
+        # SUCCESSFUL rewrite count, never the failure count (PR #129).
+        assert "transcripts_rewritten=1" in merged[0]
+
+    def test_merge_summary_counts_failures_separately(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """A failed rewrite must not inflate the rewritten count."""
+        from meetandread.speaker.identity_management import merge_identities
+
+        transcripts = tmp_path / "transcripts"
+        transcripts.mkdir()
+        md = _write_identity_transcript(transcripts, "spk0")
+        md.chmod(0o000)  # force rewrite failure on the single file
+        try:
+            with self._make_store(tmp_path) as store:
+                store.save_signature("spk0", np.ones(8, dtype=np.float32))
+                store.save_signature("spk1", np.ones(8, dtype=np.float32))
+                with pytest.raises(Exception):
+                    merge_identities(store, transcripts, "spk0", "spk1")
+        finally:
+            md.chmod(0o644)
+        infos = _info(caplog, IDM_LOG)
+        merged = _starts_with(infos, "identity_merged:")
+        assert not merged  # all rewrites failed -> MergeError, no summary
 
     def test_delete_info_event(self, tmp_path: Path, caplog) -> None:
         from meetandread.speaker.identity_management import delete_identity
@@ -951,3 +1111,148 @@ class TestModelDownloaderLogging:
         for line in _formatted_output(caplog, DL_LOG):
             assert str(tmp_path) not in line
             assert "emb.onnx" not in line
+
+
+# ===========================================================================
+# Same-flow coverage: one Recording through transcription + speaker
+# post-processing, at both INFO and DEBUG (issue #102 AC2/AC3)
+# ===========================================================================
+
+LANE_D_LOGGERS = [
+    ENGINE_LOG,
+    BUFFER_LOG,
+    PROC_LOG,
+    DIARIZER_LOG,
+    SIG_LOG,
+    IDM_LOG,
+    IDL_LOG,
+    DL_LOG,
+]
+
+
+class TestSameFlowRecordingTrail:
+    """Drive one representative Recording flow — engine transcribes a
+    chunk, the ring buffer holds audio, the accumulating processor
+    finalizes a phrase, diarization runs and matches a profile — and
+    assert the two level contracts of the issue at the flow level:
+
+    - DEBUG: the full event trail a maintainer needs (one event per
+      module lane at minimum).
+    - INFO: a readable operational summary — the INFO records that DO
+      appear are the named summaries, and none of the per-event DEBUG
+      vocabulary leaks up to INFO.
+    """
+
+    def _run_flow(self, tmp_path: Path, monkeypatch) -> None:
+        # Ring buffer
+        buf = AudioRingBuffer(max_seconds=2)
+        buf.append(_tone(1.0))
+        buf.get_recent(0.5)
+
+        # Engine pass
+        engine = _make_engine_loaded()
+        engine._model.transcribe.return_value = [_make_segment_mock()]
+        engine.transcribe_chunk(_tone(0.5))
+
+        # Accumulating processor pass + phrase finalize
+        proc = _make_processor()
+        eng = MagicMock(spec=WhisperTranscriptionEngine)
+        eng.transcribe_chunk.return_value = TranscriptionSuccess(
+            segments=[
+                SimpleNamespace(
+                    text=CANARY_TRANSCRIPT,
+                    confidence=90,
+                    start=0.0,
+                    end=0.5,
+                    words=[],
+                )
+            ]
+        )
+        proc._engine = eng
+        proc._phrase_bytes = b"\x00\x01" * 16000
+        proc._transcribe_accumulated(force_complete=False)
+        proc._transcribe_accumulated(force_complete=True)
+
+        # Diarization run
+        d = Diarizer(cache_dir=tmp_path)
+        fake_sd = MagicMock()
+        fake_sd.sample_rate = 16000
+        fake_result = MagicMock()
+        fake_result.sort_by_start_time.return_value = [
+            SimpleNamespace(start=0.0, end=1.5, speaker="spk0")
+        ]
+        fake_result.num_speakers = 1
+        fake_result.num_segments = 1
+        fake_sd.process.return_value = fake_result
+        fake_extractor = MagicMock()
+        stream = MagicMock()
+        fake_extractor.create_stream.return_value = stream
+        fake_extractor.is_ready.return_value = True
+        fake_extractor.compute.return_value = np.ones(8, dtype=np.float32)
+        d._sd = fake_sd
+        d._extractor = fake_extractor
+        d._models = {}
+        monkeypatch.setattr(
+            Diarizer, "_read_wav", lambda self, p: (_tone(2.0), 16000)
+        )
+        result = d.diarize(tmp_path / f"{CANARY_WAV_STEM}.wav")
+        assert result.succeeded
+
+        # Speaker-profile match
+        from meetandread.speaker.signatures import VoiceSignatureStore
+
+        with VoiceSignatureStore(db_path=str(tmp_path / "sig.db")) as store:
+            store.save_signature("spk0", np.ones(8, dtype=np.float32))
+            store.find_match(np.ones(8, dtype=np.float32))
+
+    def test_debug_flow_shows_full_trail(self, tmp_path: Path, caplog,
+                                          monkeypatch) -> None:
+        with caplog.at_level(logging.DEBUG):
+            self._run_flow(tmp_path, monkeypatch)
+        for logger_name in (ENGINE_LOG, BUFFER_LOG, PROC_LOG, DIARIZER_LOG,
+                            SIG_LOG):
+            debugs = _debug(caplog, logger_name)
+            assert debugs, f"no DEBUG trail from {logger_name}"
+
+    def test_info_flow_is_quiet_summary(self, tmp_path: Path, caplog,
+                                         monkeypatch) -> None:
+        with caplog.at_level(logging.INFO):
+            self._run_flow(tmp_path, monkeypatch)
+        debug_prefixes = (
+            "engine_chunk_accepted:",
+            "engine_result_segments:",
+            "buffer_appended:",
+            "buffer_read:",
+            "buffer_trimmed:",
+            "buffer_auto_trimmed:",
+            "transcription_pass_window:",
+            "transcription_pass_done:",
+            "phrase_finalized:",
+            "vad_speech_state:",
+            "segments_emitted:",
+            "segment_emitted:",
+            "diarization_audio_loaded:",
+            "embedding_extracted:",
+            "signature_saved:",
+            "signature_matched:",
+            "signature_no_match:",
+        )
+        for logger_name in LANE_D_LOGGERS:
+            for msg in _info(caplog, logger_name):
+                for prefix in debug_prefixes:
+                    assert not msg.startswith(prefix), (
+                        f"DEBUG vocabulary leaked to INFO: {msg!r}"
+                    )
+
+    def test_flow_canaries_at_debug(self, tmp_path: Path, caplog,
+                                     monkeypatch) -> None:
+        with caplog.at_level(logging.DEBUG):
+            self._run_flow(tmp_path, monkeypatch)
+        for logger_name in LANE_D_LOGGERS:
+            for line in _formatted_output(caplog, logger_name):
+                assert CANARY_TRANSCRIPT not in line, (
+                    f"transcript canary leaked via {logger_name}"
+                )
+                assert CANARY_WAV_STEM not in line, (
+                    f"recording-title canary leaked via {logger_name}"
+                )

@@ -181,7 +181,7 @@ class WhisperTranscriptionEngine:
             raise ValueError(f"Unknown model size: {self.model_size}")
 
         logger.info("engine_model_download_started: model=%s", self.model_size)
-        logger.info("This may take a few minutes depending on your connection...")
+        logger.info("engine_model_download_hint: model=%s", self.model_size)
 
         try:
             # Download with progress reporting
@@ -191,7 +191,9 @@ class WhisperTranscriptionEngine:
                 downloaded = block_num * block_size
                 percent = min(100, int(downloaded * 100 / total_size)) if total_size > 0 else 0
                 if block_num % 100 == 0:  # Log every 100 blocks to avoid spam
-                    logger.info("Downloaded %d%%", percent)
+                    logger.info(
+                        "engine_model_download_progress: percent=%d", percent
+                    )
 
             urllib.request.urlretrieve(url, model_path, reporthook=download_progress)  # nosec B310
             logger.info("engine_model_download_complete: model=%s", self.model_size)
@@ -347,8 +349,10 @@ class WhisperTranscriptionEngine:
             else:
                 text_parts.append(str(result))
                 
-        except Exception as e:
-            logger.warning(f"Error parsing whisper result: {e}")
+        except Exception as exc:
+            logger.warning(
+                "engine_result_parse_failed: error_class=%s", type(exc).__name__
+            )
             if isinstance(result, str):
                 text_parts.append(result)
             else:

@@ -372,13 +372,13 @@ def rename_identity(
         raise RenameError(f"Failed to delete old profile: {exc}") from exc
 
     # Rewrite transcripts
-    _rewrite_transcripts_safely(
+    renamed = _rewrite_transcripts_safely(
         transcripts_dir, old_name, new_name, operation="rename"
     )
 
     logger.info(
         "identity_renamed: transcripts_rewritten=%d",  # PII-safe: no names
-        len(_find_transcripts_with_label(transcripts_dir, new_name)),
+        len(renamed),
     )
 
 
@@ -447,7 +447,7 @@ def merge_identities(
         raise MergeError(f"Failed to save merged profile: {exc}") from exc
 
     # Rewrite transcripts (source → target) before deleting source
-    rewrite_errors = _rewrite_transcripts_safely(
+    rewritten = _rewrite_transcripts_safely(
         transcripts_dir, source_name, target_name, operation="merge"
     )
 
@@ -463,8 +463,7 @@ def merge_identities(
         # not a fatal error.  Source will be orphaned but not corrupting.
 
     logger.info(
-        "identity_merged: transcripts_rewritten=%d",
-        len(rewrite_errors) if rewrite_errors else 0,
+        "identity_merged: transcripts_rewritten=%d", len(rewritten)
     )
 
 

@@ -501,9 +501,12 @@ class AccumulatingTranscriptionProcessor:
                     if self.on_result:
                         try:
                             self.on_result(result_obj)
-                        except Exception as e:
+                        except Exception as exc:
+                            # The exception message can embed transcript text
+                            # (the result carries it) — log the class only.
                             logger.error(
-                                "on_result callback failed: %s", e
+                                "on_result_callback_failed: index=%d error_class=%s",
+                                i, type(exc).__name__,
                             )
 
                     logger.debug(
@@ -525,8 +528,12 @@ class AccumulatingTranscriptionProcessor:
                     window_duration,
                 )
                 
-        except Exception as e:
-            logger.error("Transcription error: %s: %s", type(e).__name__, e)
+        except Exception as exc:
+            # Exception payloads can embed paths or model internals —
+            # log the class only (typed detail travels via TranscriptionError).
+            logger.error(
+                "transcription_pass_failed: error_class=%s", type(exc).__name__
+            )
     
     def get_results(self) -> List[SegmentResult]:
         """Get all pending results (non-blocking)."""
