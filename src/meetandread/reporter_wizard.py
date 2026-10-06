@@ -89,6 +89,21 @@ from meetandread.reporter import (
 # excluded from the app's retention cleanup by living apart.
 DEFAULT_DATA_BASE = Path.home() / ".meetandread-reporter"
 
+
+def resolve_data_base(data_base: Optional[Path] = None) -> Path:
+    """Resolve the reporter's data base: explicit argument, else the
+    ``MAR_REPORTER_DATA_BASE`` env override (packaging #111 / tests),
+    else the default under the user's home. The app's #110
+    resume-on-launch offer resolves the SAME way — the app and the
+    reporter must agree on where capture runs live."""
+    if data_base is not None:
+        return Path(data_base)
+    env_base = os.environ.get("MAR_REPORTER_DATA_BASE")
+    if env_base:
+        return Path(env_base)
+    return DEFAULT_DATA_BASE
+
+
 # How long the single-instance gate waits between re-probes.
 _SINGLE_INSTANCE_POLL_S = 1.0
 
@@ -301,12 +316,7 @@ def run_wizard(
     the next reporter startup can always resume from it.
     """
     if data_base is None:
-        # Packaging (#111) and tests steer the reporter's data base
-        # via the environment; default is ~/.meetandread-reporter.
-        env_base = os.environ.get("MAR_REPORTER_DATA_BASE")
-        data_base = (
-            Path(env_base) if env_base else DEFAULT_DATA_BASE
-        )
+        data_base = resolve_data_base()
     data_base = Path(data_base)
     data_base.mkdir(parents=True, exist_ok=True)
 

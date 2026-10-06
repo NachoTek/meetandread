@@ -109,7 +109,7 @@ if os.environ.get("MAR_TEST_REPLY"):
 
     class _ScriptedMsgBox(_QB):
         def exec(self, *a, **k):
-            if "Unsubmitted Issue Report" in self.windowTitle():
+            if "Unsubmitted Diagnostics Bundle" in self.windowTitle():
                 return _reply
             return _QB.StandardButton.Ok.value
 

@@ -394,7 +394,7 @@ class TestRecoverySkipsResolved:
     run whose submission story is already resolved (submitted or
     discarded) — the offer loop moves to the next candidate."""
 
-    def _make_resolved(self, base: Path, state: str) -> Path:
+    def _make_resolved(self, base: Path, state=None) -> Path:
         import meetandread.manual_submission as msub
         from meetandread.reporter import write_termination_record
 
@@ -415,12 +415,13 @@ class TestRecoverySkipsResolved:
         (d / "diagnostics_bundle.txt").write_text(
             "diagnostics bundle v1\n", encoding="utf-8"
         )
-        msub.write_submission_state(
-            d,
-            msub.SubmissionState.SUBMITTED
-            if state == "submitted"
-            else msub.SubmissionState.DISCARDED,
-        )
+        if state is not None:
+            msub.write_submission_state(
+                d,
+                msub.SubmissionState.SUBMITTED
+                if state == "submitted"
+                else msub.SubmissionState.DISCARDED,
+            )
         return d
 
     @pytest.mark.parametrize("state", ["submitted", "discarded"])
@@ -444,9 +445,7 @@ class TestRecoverySkipsResolved:
         assert "run-resolved" not in out.text()
 
     def test_unresolved_run_still_offered(self, tmp_path):
-        d = self._make_resolved(tmp_path, "none-of-these")
-        # Overwrite with an unresolved (absent) state: delete record.
-        (d / "submission_state.json").unlink()
+        self._make_resolved(tmp_path)  # no state → unresolved
         inp = ScriptedInput(["y", "n"])
         out = Lines()
         result = wizard.run_wizard(

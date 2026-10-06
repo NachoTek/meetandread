@@ -243,31 +243,27 @@ def check_and_offer_diagnostics_resume(
             find_unsubmitted_bundles,
             write_submission_state,
         )
-        from meetandread.reporter_wizard import DEFAULT_DATA_BASE
+        from meetandread.reporter_wizard import resolve_data_base
 
-        # The same env override the reporter program honors (#111
-        # packaging / tests steer the data base): the app and the
-        # reporter must agree on where capture runs live.
-        env_base = os.environ.get("MAR_REPORTER_DATA_BASE")
-        base = Path(
-            data_base
-            if data_base is not None
-            else (Path(env_base) if env_base else DEFAULT_DATA_BASE)
-        )
+        base = resolve_data_base(data_base)
         pending = find_unsubmitted_bundles(base)
         if not pending:
             return None
         capture_dir = pending[0]
 
         msg_box = QMessageBox(parent)
-        msg_box.setWindowTitle("meetandread — Unsubmitted Issue Report")
-        msg_box.setText("An issue report is waiting to be submitted")
+        msg_box.setWindowTitle(
+            "meetandread — Unsubmitted Diagnostics Bundle"
+        )
+        msg_box.setText(
+            "An unsubmitted Diagnostics Bundle is waiting"
+        )
         msg_box.setInformativeText(
-            "A diagnostics capture run finished and its report was "
-            "never submitted (the Issue Reporter closed before "
-            "completion).\n\n"
-            "Resume the submission now? You can also discard the "
-            "report, or leave it for later."
+            "A diagnostics capture run finished and its Diagnostics\n"
+            "Bundle was never submitted (the Issue Reporter closed\n"
+            "before completion).\n\n"
+            "Resume the submission now? You can also discard the\n"
+            "bundle, or leave it for later."
         )
         msg_box.setStandardButtons(
             QMessageBox.StandardButton.Yes
@@ -307,6 +303,15 @@ def check_and_offer_diagnostics_resume(
             return None
         if ms.copy_to_clipboard(draft.clipboard_text):
             logger.info("diagnostics_resume: clipboard=path")
+        else:
+            # The clipboard is the attach-by-hand path: a failure
+            # must surface the bundle's location, not swallow it.
+            QMessageBox.information(
+                parent,
+                "meetandread — Copy by hand",
+                "Could not reach the clipboard. Copy this path by\n"
+                f"hand:\n\n{draft.clipboard_text}",
+            )
         if ms.open_new_issue_form(draft.url):
             write_submission_state(
                 capture_dir, SubmissionState.SUBMITTED
@@ -329,7 +334,7 @@ def check_and_offer_diagnostics_resume(
 
 
 def check_hardware_requirements():
-    """Check if the system meets minimum hardware requirements.:
+    """Check if the system meets minimum hardware requirements.
     
     Shows a warning dialog if the system is below minimum specs.
     The dialog is informational only — the app still starts.

@@ -29,6 +29,7 @@ Covers:
 """
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -40,12 +41,6 @@ from meetandread.reporter import RunOutcome, write_termination_record
 
 from tests.test_diagnostics_bundle import make_complete
 from tests.test_manual_submission import IDS, _reviewed
-
-REPLY = {
-    "resume": "resume",
-    "discard": "discard",
-    "not_now": "not_now",
-}
 
 
 def _mock_msg_box(reply: str):
@@ -62,6 +57,11 @@ def _mock_msg_box(reply: str):
     class _MockMsgBox:
         StandardButton = _RealMsgBox.StandardButton
         Icon = _RealMsgBox.Icon
+        # Class-level informational dialog recorder (the offer's
+        # clipboard/browser failure fallbacks use the static API).
+        information = staticmethod(
+            lambda *a, **k: infos.append(a) or None
+        )
 
         def __init__(self, *args, **kwargs):
             self.exec = lambda: {
@@ -79,6 +79,8 @@ def _mock_msg_box(reply: str):
             self.setIcon = lambda *a: None
             instances.append(self)
 
+    infos: list = []
+    _MockMsgBox.infos = infos  # type: ignore[attr-defined]
     _MockMsgBox.instances = instances  # type: ignore[attr-defined]
     return _MockMsgBox
 
@@ -93,18 +95,14 @@ def _make_unsubmitted(base: Path) -> Path:
         d,
         outcome=RunOutcome.USER_STOP,
         exit_code=0,
-        started_at=__import__("datetime").datetime(
-            2026, 9, 10, 10, 0, 0
-        ),
-        ended_at=__import__("datetime").datetime(
-            2026, 9, 10, 10, 2, 30
-        ),
+        started_at=datetime(2026, 9, 10, 10, 0, 0),
+        ended_at=datetime(2026, 9, 10, 10, 2, 30),
         marker_present=True,
     )
     return d
 
 
-def _run_offer(monkeypatch, tmp_path, reply: str, staged: Path):
+def _run_offer(monkeypatch, reply: str, staged: Path):
     """Patch the offer's seams and run it; returns (result, opened,
     copied, dialog_count)."""
     opened, copied = [], []
@@ -182,7 +180,7 @@ class TestResume:
         base = tmp_path / "data"
         d = _make_unsubmitted(base)
         result, opened, copied, dialogs = _run_offer(
-            monkeypatch, tmp_path, "yes", base
+            monkeypatch, "yes", base
         )
         # The offer dialog appeared exactly once.
         assert len(dialogs) == 1
@@ -219,7 +217,7 @@ class TestResume:
             dbundle, "create_reviewable_bundle", fail_reassemble
         )
         result, opened, copied, dialogs = _run_offer(
-            monkeypatch, tmp_path, "yes", base
+            monkeypatch, "yes", base
         )
         assert result == d
         assert len(opened) == 1
@@ -234,11 +232,39 @@ class TestResume:
         with caplog.at_level(
             logging.INFO, logger="meetandread.main"
         ):
-            _run_offer(monkeypatch, tmp_path, "yes", base)
+            _run_offer(monkeypatch, "yes", base)
         assert any(
             "diagnostics_resume" in rec.message
             or "diagnostics_resume" in rec.getMessage()
             for rec in caplog.records
+        )
+
+    def test_clipboard_failure_surfaces_the_path(self, monkeypatch,
+                                                 tmp_path):
+        # The clipboard is the attach-by-hand path: when it fails the
+        # offer must surface the bundle's location to the user, not
+        # swallow it (the browser may have opened with no way to
+        # attach the file).
+        base = tmp_path / "data"
+        d = _make_unsubmitted(base)
+        opened = ["https://github.com/NachoTek/meetandread/issues/new?x"]
+        monkeypatch.setattr(
+            msub, "open_new_issue_form",
+            lambda url: opened.append(url) or True,
+        )
+        monkeypatch.setattr(
+            msub, "copy_to_clipboard", lambda text: False
+        )
+        box = _mock_msg_box("yes")
+        monkeypatch.setattr(main_mod, "QMessageBox", box)
+        result = main_mod.check_and_offer_diagnostics_resume(
+            data_base=base, parent=None
+        )
+        assert result == d
+        # The fallback dialog carried the bundle path.
+        assert any(
+            str(d / BUNDLE_FILE_NAME) in " ".join(str(a) for a in args)
+            for args in box.infos
         )
 
 
@@ -248,7 +274,7 @@ class TestDeclineAndDiscard:
         base = tmp_path / "data"
         d = _make_unsubmitted(base)
         result, opened, copied, dialogs = _run_offer(
-            monkeypatch, tmp_path, "no", base
+            monkeypatch, "no", base
         )
         assert result is None
         assert opened == []  # nothing left the machine
@@ -261,7 +287,7 @@ class TestDeclineAndDiscard:
         base = tmp_path / "data"
         d = _make_unsubmitted(base)
         result, opened, copied, dialogs = _run_offer(
-            monkeypatch, tmp_path, "discard", base
+            monkeypatch, "discard", base
         )
         assert result is None
         assert opened == []
@@ -274,7 +300,7 @@ class TestDeclineAndDiscard:
         # capture data (retention/cleanup is #112's lane).
         base = tmp_path / "data"
         d = _make_unsubmitted(base)
-        _run_offer(monkeypatch, tmp_path, "discard", base)
+        _run_offer(monkeypatch, "discard", base)
         assert (d / BUNDLE_FILE_NAME).is_file()
         assert (d / "capture_run.claim").is_file()
 
