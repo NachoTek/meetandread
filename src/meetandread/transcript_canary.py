@@ -65,14 +65,19 @@ import hashlib
 import json
 import logging
 import os
+import string
 from pathlib import Path
-from typing import Optional, Set
+from typing import List, Optional, Set
 
 from meetandread.capture_mode import read_appendable_records
 
 # Filename of the canary registry inside the capture dir. The bundle
 # assembler consumes this name; treat it as stable contract.
 CANARY_FILE_NAME = "transcript_canary.jsonl"
+
+# Punctuation stripped from token EDGES during tokenization (leaks
+# arrive wrapped in quotes, parens, commas — see _tokenize).
+_PUNCT = string.punctuation
 
 # Word n-gram size for canary matching. 5 words: long enough that
 # incidental overlap with ordinary log prose is negligible, short
@@ -86,15 +91,31 @@ _GRAM_HEX_CHARS = 16
 logger = logging.getLogger(__name__)
 
 
+def _tokenize(text: str) -> List[str]:
+    """Whitespace-split with edge punctuation stripped per token.
+
+    Leaks arrive embedded in formatting — JSON quotes, parentheses,
+    trailing commas (``"died transcribing Sebastopol canary``,
+    ``(chunk 3),``). Stripping each token's surrounding punctuation
+    lets the n-grams survive that wrapping; interior characters are
+    untouched (a punctuation-insensitive mash would over-match).
+    """
+    return [
+        token.strip(_PUNCT)
+        for token in text.split()
+        if token.strip(_PUNCT)
+    ]
+
+
 def canary_ngrams(text: str, size: int = CANARY_NGRAM_SIZE) -> Set[str]:
     """Reduce *text* to its set of hashed word n-grams.
 
     Pure and deterministic (no salt — see module docstring):
-    whitespace-normalized, lowercased words; every window of *size*
+    punctuation-stripped, lowercased words; every window of *size*
     consecutive words is hashed to a truncated SHA-256 hex digest.
     Text with fewer than *size* words yields the empty set.
     """
-    words = text.split()
+    words = _tokenize(text)
     grams: Set[str] = set()
     for start in range(0, len(words) - size + 1):
         window = " ".join(words[start : start + size]).lower()
