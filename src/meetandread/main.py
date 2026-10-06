@@ -3,7 +3,6 @@ meetandread - Windows Desktop Audio Transcription Widget
 Main application entry point.
 """
 
-import json
 import os
 import sys
 import queue
@@ -526,26 +525,18 @@ def main(capture_dir: Optional[Path] = None):
 
     # Environment info refinement (issue #108): the bootstrap wrote
     # the artifact with stdlib-only facts; now that the app side is
-    # up, refine the hardware class from the REAL detected specs. A
-    # fresh artifact is impossible (one run, one artifact — ADR
-    # 0005), so the refinement rewrites the same file; detection
-    # failure leaves the bootstrap's "unknown" in place.
+    # up, refine the hardware class from the REAL detected specs —
+    # via environment_info's own prompt-flush discipline (the one
+    # sanctioned rewrite; detection failure leaves the bootstrap's
+    # "unknown" in place).
     if capture_dir is not None:
         try:
             from meetandread.environment_info import (
-                collect_environment_info,
+                refine_environment_info,
             )
 
-            facts = collect_environment_info()
-            env_path = capture_dir / "environment.json"
-            env_path.write_text(
-                json.dumps(facts) + "\n",
-                encoding="utf-8",
-            )
-            logger.debug(
-                "environment_info_refined: hardware_class=%s",
-                facts["hardware_class"],
-            )
+            refine_environment_info(capture_dir)
+            logger.debug("environment_info_refined:")
         except Exception as e:
             logger.warning(
                 "environment_info_refine_failed: error_class=%s",

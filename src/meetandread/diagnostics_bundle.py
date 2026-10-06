@@ -115,11 +115,8 @@ _EMAIL_RE = re.compile(
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 )
 
-# Windows drive-letter home tree: C:\Users\<name>\... (case-blind).
-_WIN_HOME_RE_TEMPLATE = r"[a-z]:[/\\]+users[/\\]+[^/\\\s]+"
-
 # POSIX home trees: /home/<name>/..., /Users/<name>/...
-_POSIX_HOME_RE = re.compile(r"/(?:home|Users)/[^/\s]+")
+_POSIX_HOME_RE = re.compile(r"/(?:home|users|Users)/[^/\s]+")
 
 
 @dataclass(frozen=True)
@@ -224,22 +221,34 @@ def redact_text(text: str, ids: IdentifierSet) -> str:
 
     home = _safe_identifier(ids.home_dir)
     if home:
-        escaped = re.escape(home).replace(r"\\", r"[/\\]")
-        out = re.sub(
-            escaped, _HOME_TOKEN, out, flags=re.IGNORECASE
+        escaped = re.escape(home)
+        # The exact home dir matches with either slash orientation
+        # (Windows paths appear both ways in logs); keep the path's
+        # own separators by matching each separator permissively.
+        pattern = re.sub(
+            r"[/\\]+", r"[/\\\\]+", escaped
         )
+        out = re.sub(pattern, _HOME_TOKEN, out, flags=re.IGNORECASE)
+    # Generic home trees (any user's, in either slash orientation or
+    # case): C:\Users\<name>\..., C:/users/<name>/..., /home/<name>/.
+    # The trailing separator is preserved so the rewrite stays a
+    # path-shaped token.
     out = re.sub(
-        _WIN_HOME_RE_TEMPLATE + r"(?![^\\\s])",
-        _HOME_TOKEN + r"\\",
+        r"(?i)[a-z]:[/\\]+users[/\\]+[^/\\\s]+[/\\]",
+        _HOME_TOKEN + "/",
         out,
-        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"(?i)[a-z]:[/\\]+users[/\\]+[^/\\\s]+$",
+        _HOME_TOKEN,
+        out,
     )
     out = _POSIX_HOME_RE.sub(_HOME_TOKEN, out)
 
     machine = _safe_identifier(ids.machine_name)
     if machine:
         out = re.sub(
-            re.escape(machine),
+            r"\b" + re.escape(machine) + r"\b",
             _MACHINE_TOKEN,
             out,
             flags=re.IGNORECASE,
@@ -356,7 +365,9 @@ def assemble_bundle(
     # Raw (pre-redaction) component texts — the canary scan runs over
     # RAW content (a leak is a leak whether or not redaction would
     # happen to rewrite it; and identifier rewriting must not be able
-    # to mask a transcript leak).
+    # to mask a transcript leak). The user-authored description and
+    # the run name are checked like every other component: a pasted
+    # transcript fragment in the description must fail assembly too.
     raw_components = {
         "environment": (
             json.dumps(environment, sort_keys=True)
@@ -371,10 +382,15 @@ def assemble_bundle(
         "interaction_trace": _format_jsonl(trace_events),
         "resource_snapshots": _format_jsonl(snapshots),
         "debug_log": "\n".join(log_lines),
+        "description": description or "",
+        "run_name": d.name,
     }
 
-    # Canary scan: every component, fail-closed, leak-free detail.
-    for component in COMPONENT_ORDER:
+    # Canary scan: every component (the five constituents plus the
+    # description and run-name headers), fail-closed, leak-free
+    # detail.
+    scan_targets = tuple(COMPONENT_ORDER) + ("description", "run_name")
+    for component in scan_targets:
         hits = scan_text_for_canary_hits(
             raw_components[component], known=canary
         )
@@ -561,6 +577,8 @@ def render_review(bundle: AssembledBundle) -> str:
         "It contains NO audio and NO transcript content.",
         "Usernames, home-directory paths, email addresses, and machine",
         "identifiers have been redacted everywhere they appeared.",
+        "(The bundle file below carries the COMPLETE contents; long",
+        "sections are previewed here for readability.)",
         "",
         "-" * 60,
         "",

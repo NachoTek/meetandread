@@ -139,6 +139,41 @@ def read_environment_info(capture_dir: Path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+def refine_environment_info(
+    capture_dir: Path, specs_provider=None
+) -> Path:
+    """Refine the EXISTING artifact with the detected hardware class.
+
+    The app-side second stage: ``main()`` calls this once the real
+    hardware detector is importable, upgrading the bootstrap's
+    ``unknown`` class to the detected one. REWRITES the same file
+    with the same prompt-flush discipline (a fresh artifact is
+    impossible — one run, one artifact, ADR 0005; the refinement is
+    the one sanctioned rewrite because the artifact must not predate
+    the hardware facts it reports). A missing artifact (the bootstrap
+    never wrote one) is created — a direct ``main()`` call bypassing
+    the bootstrap still deserves complete environment info.
+    """
+    current = read_environment_info(capture_dir) or {}
+    facts = collect_environment_info(specs_provider=specs_provider)
+    facts["app_version"] = (
+        current.get("app_version") or facts["app_version"]
+    )
+    facts["os"] = current.get("os") or facts["os"]
+    payload = {
+        "app_version": str(facts["app_version"]),
+        "os": str(facts["os"]),
+        "hardware_class": str(facts["hardware_class"]),
+    }
+    path = Path(capture_dir) / ENVIRONMENT_FILE_NAME
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    return path
+
+
 def _stdlib_environment_facts() -> dict:
     """The stdlib-only half: app version and OS, no heavy imports."""
     import meetandread

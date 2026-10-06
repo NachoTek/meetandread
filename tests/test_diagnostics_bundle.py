@@ -236,6 +236,18 @@ class TestRedaction:
         assert "Alice" not in out
         assert "<redacted:home>" in out
 
+    def test_home_tree_slash_and_case_variants_rewritten(self):
+        # Windows paths appear with either separator and any casing.
+        for probe in (
+            "C:/users/Zoe/temp/file.txt",
+            "C:\\USERS\\Zoe\\temp\\file.txt",
+            "c:/Users/Zoe",
+            "copied from C:/Users/Alice/data",
+        ):
+            out = redact_text(probe, IDS)
+            assert "Zoe" not in out and "Alice" not in out, probe
+            assert "<redacted:home>" in out, probe
+
     def test_posix_home_tree_rewritten(self):
         out = redact_text("/home/alice/run.log and /Users/carol/x", IDS)
         assert "alice" not in out and "carol" not in out
@@ -539,6 +551,19 @@ class TestFailClosedCanary:
         result = create_reviewable_bundle(d, identifiers=IDS)
         assert isinstance(result, dbundle.AssemblyFailure)
         assert result.component == "environment"
+        assert not (d / BUNDLE_FILE_NAME).exists()
+
+    def test_canary_leak_in_description_blocks_artifact(self, tmp_path):
+        # A pasted transcript fragment in the user's own description
+        # is a leak like any other — checked, fail-closed.
+        d = make_complete(tmp_path, canary_texts=[SECRET])
+        (d / "description.txt").write_text(
+            f"it printed {SECRET} on screen\n", encoding="utf-8"
+        )
+        result = create_reviewable_bundle(d, identifiers=IDS)
+        assert isinstance(result, dbundle.AssemblyFailure)
+        assert result.reason == "canary_leak"
+        assert result.component == "description"
         assert not (d / BUNDLE_FILE_NAME).exists()
 
     def test_recording_title_canary_blocks_artifact(self, tmp_path):

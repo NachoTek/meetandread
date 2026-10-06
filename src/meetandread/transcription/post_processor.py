@@ -1185,16 +1185,9 @@ class PostProcessingQueue:
         # n-grams (the leak-detection registry); no-op in a normal
         # run, and the text itself never enters any diagnostics
         # artifact.
-        try:
-            from meetandread.transcript_canary import record_canary_text
+        from meetandread.transcript_canary import record_canary_segments
 
-            for segment in segments:
-                record_canary_text(getattr(segment, "text", ""))
-        except Exception as _canary_exc:
-            logger.debug(
-                "transcript_canary_sample_failed: error_class=%s",
-                type(_canary_exc).__name__,
-            )
+        record_canary_segments(segments)
 
         words = []
         for segment in segments:

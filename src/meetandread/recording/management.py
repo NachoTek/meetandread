@@ -223,15 +223,9 @@ def rename_recording(
     # n-grams so bundle assembly can PROVE no title leaked into the
     # diagnostics. No-op in a normal run; the stem itself never
     # enters any diagnostics artifact (logs below stay redacted).
-    try:
-        from meetandread.transcript_canary import record_canary_text
+    from meetandread.transcript_canary import record_canary_text
 
-        record_canary_text(new_stem)
-    except Exception as _canary_exc:
-        logger.debug(
-            "transcript_canary_sample_failed: error_class=%s",
-            type(_canary_exc).__name__,
-        )
+    record_canary_text(new_stem)
 
     rec_dir, tra_dir = _resolve_dirs(recordings_dir, transcripts_dir)
 

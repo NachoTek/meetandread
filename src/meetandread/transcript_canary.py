@@ -234,6 +234,28 @@ def record_canary_text(text: str) -> int:
     return written
 
 
+def record_canary_segments(segments) -> int:
+    """Sample every segment's ``.text`` (a batch of transcript
+    fragments); returns the total grams written.
+
+    The single sampling seam for callers holding a list of engine
+    segments (live phrases, post-processing, retranscription):
+    non-string/missing text and every sampling failure are swallowed
+    here — diagnostics must never crash the run being diagnosed.
+    """
+    total = 0
+    try:
+        for segment in segments or ():
+            text = getattr(segment, "text", "")
+            if isinstance(text, str):
+                total += record_canary_text(text)
+    except Exception:
+        # Best-effort by contract; a broken iterator must not kill
+        # the diagnosed run.
+        return total
+    return total
+
+
 def close_canary_registry() -> None:
     """Close the installed registry writer (process-exit teardown).
 
