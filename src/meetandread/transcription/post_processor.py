@@ -1179,7 +1179,20 @@ class PostProcessingQueue:
         """
         store = TranscriptStore()
         store.start_recording()
-        
+
+        # Transcript canary sampling (issue #108): in a capture run,
+        # post-processing's transcript text is registered as hashed
+        # n-grams (the leak-detection registry); no-op in a normal
+        # run, and the text itself never enters any diagnostics
+        # artifact.
+        try:
+            from meetandread.transcript_canary import record_canary_text
+
+            for segment in segments:
+                record_canary_text(getattr(segment, "text", ""))
+        except Exception:
+            pass
+
         words = []
         for segment in segments:
             if hasattr(segment, 'words') and segment.words:

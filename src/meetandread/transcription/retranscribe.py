@@ -331,6 +331,19 @@ class RetranscribeRunner:
         store = TranscriptStore()
         store.start_recording()
 
+        # Transcript canary sampling (issue #108): in a capture run,
+        # retranscription's transcript text is registered as hashed
+        # n-grams (the leak-detection registry); no-op in a normal
+        # run, and the text itself never enters any diagnostics
+        # artifact.
+        try:
+            from meetandread.transcript_canary import record_canary_text
+
+            for segment in segments:
+                record_canary_text(getattr(segment, "text", ""))
+        except Exception:
+            pass
+
         words: list[Word] = []
         for segment in segments:
             if hasattr(segment, "words") and segment.words:
