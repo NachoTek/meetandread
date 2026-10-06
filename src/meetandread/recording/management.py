@@ -227,8 +227,11 @@ def rename_recording(
         from meetandread.transcript_canary import record_canary_text
 
         record_canary_text(new_stem)
-    except Exception:
-        pass
+    except Exception as _canary_exc:
+        logger.debug(
+            "transcript_canary_sample_failed: error_class=%s",
+            type(_canary_exc).__name__,
+        )
 
     rec_dir, tra_dir = _resolve_dirs(recordings_dir, transcripts_dir)
 

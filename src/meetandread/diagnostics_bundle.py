@@ -508,6 +508,9 @@ def create_reviewable_bundle(
 # log; the SCREEN preview caps it so the review stays readable (and
 # a multi-megabyte capture log cannot bury the wizard's console).
 REVIEW_LOG_PREVIEW_LINES = 40
+# Trace/snapshot preview caps for the same reason (the JSONL sections
+# of a minutes-long run can dwarf the log).
+REVIEW_JSONL_PREVIEW_LINES = 12
 
 
 def render_review(bundle: AssembledBundle) -> str:
@@ -521,18 +524,27 @@ def render_review(bundle: AssembledBundle) -> str:
     written artifact carries the complete log.
     """
     text = bundle.text
-    marker = "== debug log"
-    head, sep, tail = text.partition(marker)
-    if sep:
+    for marker in (
+        "== debug log",
+        "== interaction trace",
+        "== resource snapshots",
+    ):
+        head, sep, tail = text.partition(marker)
+        if not sep:
+            continue
         lines = tail.splitlines()
         # Re-attach the header line (lines[0] is the rest of it).
         header, body = lines[0], lines[1:]
-        if len(body) > REVIEW_LOG_PREVIEW_LINES:
+        cap = (
+            REVIEW_LOG_PREVIEW_LINES
+            if marker == "== debug log"
+            else REVIEW_JSONL_PREVIEW_LINES
+        )
+        if len(body) > cap:
             preview = [header] + [
-                f"  (... {len(body) - REVIEW_LOG_PREVIEW_LINES} earlier "
-                "log lines elided — the full log is in the bundle "
-                "file ...)"
-            ] + body[-REVIEW_LOG_PREVIEW_LINES:]
+                f"  (... {len(body) - cap} further lines elided — "
+                "the full section is in the bundle file ...)"
+            ] + body[-cap:]
             text = head + marker + "\n".join(preview)
     header = [
         "=" * 60,

@@ -112,6 +112,10 @@ _Avoid_: Report (ambiguous with the GitHub issue), log file (the bundle contains
 The automatic scrubbing of the Diagnostics Bundle before it is shown to the user or submitted: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and Recording titles never enter the bundle at all — excluded at the capture boundary, not by scrubbing the log afterwards. Runs before the review screen — nothing leaves the machine unredacted. Assembly is fail-closed: if assembly or redaction fails, no submittable bundle is produced — raw capture data is never the fallback. Missing details (e.g. a specific Recording file) are requested later through GitHub during triage.
 _Avoid_: Sanitization, anonymization (we do not promise anonymity)
 
+**Canary registry (`transcript_canary.jsonl`)**:
+The capture-side registry that PROVES transcript exclusion: during a capture run, every fragment of transcript text and every Recording title the app handles is reduced to hashed word n-grams (SHA-256, truncated — plaintext never touches the file) and appended to the registry in the capture directory. Bundle assembly re-computes the n-grams of every bundle component and fails closed on any intersection: a hit means the capture boundary failed and no submittable artifact is produced.
+_Avoid_: Blocklist, transcript filter (the registry detects, it never scrubs)
+
 **Manual Submission**:
 The user-driven submission path for a Diagnostics Bundle: open the user's default browser on the repository's New Issue form pre-filled with the summary, and hand them the bundle file to attach (GitHub URLs cannot pre-attach files). The user files from their own GitHub account, so they are automatically subscribed to their issue.
 _Avoid_: Direct submission, relay (a possible future alternative path)

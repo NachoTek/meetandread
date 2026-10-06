@@ -1190,8 +1190,11 @@ class PostProcessingQueue:
 
             for segment in segments:
                 record_canary_text(getattr(segment, "text", ""))
-        except Exception:
-            pass
+        except Exception as _canary_exc:
+            logger.debug(
+                "transcript_canary_sample_failed: error_class=%s",
+                type(_canary_exc).__name__,
+            )
 
         words = []
         for segment in segments:

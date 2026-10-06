@@ -1879,8 +1879,11 @@ class RecordingController:
             from meetandread.transcript_canary import record_canary_text
 
             record_canary_text(result.text)
-        except Exception:
-            pass
+        except Exception as _canary_exc:
+            logger.debug(
+                "transcript_canary_sample_failed: error_class=%s",
+                type(_canary_exc).__name__,
+            )
 
         # Attempt live speaker matching (conservative; attaches name only
         # for high-confidence known-speaker matches)
