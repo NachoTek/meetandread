@@ -504,7 +504,10 @@ def create_reviewable_bundle(
     if isinstance(result, AssemblyFailure):
         return result
     path = Path(capture_dir) / BUNDLE_FILE_NAME
-    with open(path, "w", encoding="utf-8") as fh:
+    # newline="" pins LF: the artifact on disk is byte-identical to
+    # the redacted text shown at review (#109 attaches exactly those
+    # bytes; text-mode CRLF translation would diverge them).
+    with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(result.text)
         fh.flush()
         os.fsync(fh.fileno())
