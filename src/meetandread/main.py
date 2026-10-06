@@ -207,8 +207,129 @@ def check_and_offer_recovery(parent=None):
     return len(recovered_files), False
 
 
+def check_and_offer_diagnostics_resume(
+    parent=None,
+    data_base: Optional[Path] = None,
+    capture_mode: bool = False,
+) -> Optional[Path]:
+    """Detect an unsubmitted Diagnostics Bundle and offer to resume
+    its submission (issue #110 — reporter-death resilience).
+
+    If the Issue Reporter died mid-flow after a bundle exists on
+    disk, the next normal application launch notices the
+    assembled-but-unsubmitted bundle and offers to resume the
+    submission — from the saved bundle, no re-reproduction — with a
+    clear option to discard instead. Declining ("Not now") leaves
+    normal startup otherwise unaffected: the bundle simply stays
+    offerable on a later launch. Reporter startup remains the
+    designated recovery path (ADR 0003, amended); this offer is the
+    spec's optional "may also offer to resume" path.
+
+    Resume REUSES the same review and Manual Submission
+    implementation (no parallel submission path): the submission
+    draft is built from the reviewed on-disk artifact exactly like
+    the wizard's submit step, and the same IO seams (clipboard +
+    browser) fire. Resolving the offer writes the submission-state
+    record so it is never re-offered.
+
+    Never raises: an internal failure logs and returns None — the
+    offer must not break startup.
+    """
+    if capture_mode:
+        return None
+    try:
+        from meetandread.manual_submission import (
+            SubmissionState,
+            find_unsubmitted_bundles,
+            write_submission_state,
+        )
+        from meetandread.reporter_wizard import DEFAULT_DATA_BASE
+
+        # The same env override the reporter program honors (#111
+        # packaging / tests steer the data base): the app and the
+        # reporter must agree on where capture runs live.
+        env_base = os.environ.get("MAR_REPORTER_DATA_BASE")
+        base = Path(
+            data_base
+            if data_base is not None
+            else (Path(env_base) if env_base else DEFAULT_DATA_BASE)
+        )
+        pending = find_unsubmitted_bundles(base)
+        if not pending:
+            return None
+        capture_dir = pending[0]
+
+        msg_box = QMessageBox(parent)
+        msg_box.setWindowTitle("meetandread — Unsubmitted Issue Report")
+        msg_box.setText("An issue report is waiting to be submitted")
+        msg_box.setInformativeText(
+            "A diagnostics capture run finished and its report was "
+            "never submitted (the Issue Reporter closed before "
+            "completion).\n\n"
+            "Resume the submission now? You can also discard the "
+            "report, or leave it for later."
+        )
+        msg_box.setStandardButtons(
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.No
+        )
+        msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+
+        reply = msg_box.exec()
+
+        if reply == QMessageBox.StandardButton.Discard:
+            write_submission_state(
+                capture_dir, SubmissionState.DISCARDED
+            )
+            logger.info(
+                "diagnostics_resume: action=discarded"
+            )
+            return None
+        if reply != QMessageBox.StandardButton.Yes:
+            logger.info("diagnostics_resume: action=postponed")
+            return None
+
+        # Resume: the same Manual Submission flow the wizard's
+        # submit step runs, from the reviewed artifact on disk.
+        import meetandread.manual_submission as ms
+
+        draft = ms.build_submission(capture_dir)
+        if isinstance(draft, ms.SubmissionUnavailable):
+            # The artifact vanished since the scan (or review failed
+            # closed on a prior resume): fail closed here too — no
+            # browser, no clipboard, no state written.
+            logger.warning(
+                "diagnostics_resume_unavailable: detail=%s",
+                draft.detail,
+            )
+            return None
+        if ms.copy_to_clipboard(draft.clipboard_text):
+            logger.info("diagnostics_resume: clipboard=path")
+        if ms.open_new_issue_form(draft.url):
+            write_submission_state(
+                capture_dir, SubmissionState.SUBMITTED
+            )
+            logger.info("diagnostics_resume: action=submitted")
+        else:
+            QMessageBox.information(
+                parent,
+                "meetandread — Copy by hand",
+                "Could not open a browser. Copy this address by "
+                f"hand:\n\n{draft.url}",
+            )
+        return capture_dir
+    except Exception as e:
+        logger.warning(
+            "diagnostics_resume_offer_failed: error_class=%s",
+            type(e).__name__,
+        )
+        return None
+
+
 def check_hardware_requirements():
-    """Check if the system meets minimum hardware requirements.
+    """Check if the system meets minimum hardware requirements.:
     
     Shows a warning dialog if the system is below minimum specs.
     The dialog is informational only — the app still starts.
@@ -560,6 +681,22 @@ def main(capture_dir: Optional[Path] = None):
         # Log error but don't block startup
         logger.warning(
             "recovery_check_failed: error_class=%s",
+            type(e).__name__,
+        )
+
+    # Reporter-death resilience (issue #110): on a NORMAL launch,
+    # notice an assembled-but-unsubmitted Diagnostics Bundle left by
+    # a dead Issue Reporter and offer to resume its submission from
+    # the saved bundle (no re-reproduction). Never blocks startup;
+    # capture runs skip the offer entirely (their submission flow is
+    # supervised by the reporter's own wizard).
+    try:
+        check_and_offer_diagnostics_resume(
+            parent=None, capture_mode=capture_dir is not None
+        )
+    except Exception as e:
+        logger.warning(
+            "diagnostics_resume_check_failed: error_class=%s",
             type(e).__name__,
         )
 

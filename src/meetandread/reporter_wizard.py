@@ -138,8 +138,19 @@ def offer_recovery(
     record (``resume_capture``, which also reconciles a staged
     description) so the flow can continue to review exactly as if the
     run had been supervised to its end.
+
+    Runs whose submission story is already resolved (#110's
+    ``submission_state.json`` — submitted or discarded) are never
+    re-offered: their capture is done AND their submission is done,
+    so there is nothing left to resume.
     """
-    resumable = find_resumable_captures(data_base)
+    from meetandread.manual_submission import read_submission_state
+
+    resumable = [
+        d
+        for d in find_resumable_captures(data_base)
+        if read_submission_state(d) is None
+    ]
     if not resumable:
         return None
     from meetandread.diagnostics_bundle import AssemblyFailure
@@ -520,6 +531,12 @@ def submit_capture(
             f"  {draft.url}"
         )
     else:
+        # The form opened (#110): the run's submission story is
+        # resolved — record it so no future offer (reporter recovery
+        # or the app's next-launch resume) re-offers a filed report.
+        ms.write_submission_state(
+            capture_dir, ms.SubmissionState.SUBMITTED
+        )
         print_fn(
             "\nThe New Issue form is open in your browser.\n"
             "IMPORTANT: GitHub cannot attach files automatically —\n"
