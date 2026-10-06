@@ -282,7 +282,7 @@ class ConfigManager:
         if result:
             saved_count = len(self._dirty_paths)
             self._dirty_paths.clear()
-            logger.info("config_saved: paths=%d", saved_count)
+            logger.info("config_manager_saved: paths=%d", saved_count)
         else:
             logger.error("config_save_failed: reason=persistence_error")
 

@@ -147,7 +147,7 @@ def enumerate_recording_files(
     found = [p for p in candidates if p.is_file()]
 
     logger.debug(
-        "files_enumerated: stem_redacted count=%d kinds=%s",
+        "files_enumerated: stem_redacted=1 count=%d kinds=%s",
         len(found),
         sorted({p.suffix for p in found}),
     )
@@ -232,8 +232,10 @@ def rename_recording(
     for old_path, new_path in pairs:
         if new_path.exists():
             reason = f"Target already exists: {new_path.name}"
-            logger.warning("rename_conflict: target_exists files_pending=%d",
-                           len(pairs))
+            logger.warning(
+                "rename_conflict: reason=target_exists files_pending=%d",
+                len(pairs),
+            )
             result.failed.append((str(new_path), reason))
 
     if result.failed:

@@ -99,8 +99,10 @@ class HardwareDetector:
         available_ram_gb = mem.available / (1024 ** 3)
 
         # Detect CPU
-        cpu_count_logical = psutil.cpu_count(logical=True) or 1
-        cpu_count_physical = psutil.cpu_count(logical=False) or cpu_count_logical
+        cpu_count_logical = psutil.cpu_count(logical=True)
+        cpu_count_physical = (
+            psutil.cpu_count(logical=False) or cpu_count_logical
+        )
 
         # Detect CPU frequency (may not be available on all platforms)
         cpu_freq = psutil.cpu_freq()

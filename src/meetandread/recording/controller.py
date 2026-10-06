@@ -244,14 +244,17 @@ class RecordingController:
         if safe_count == 0:
             return  # no-op for zero
 
-        logger.info(
+        logger.debug(
             "frame_drops_forwarded: aggregate=%d", safe_count
         )
         if self.on_frames_dropped:
             try:
                 self.on_frames_dropped(safe_count)
-            except Exception:
-                logger.exception("on_frames_dropped callback error (recording continues)")
+            except Exception as e:
+                logger.error(
+                    "frames_dropped_callback_failed: error_class=%s",
+                    type(e).__name__,
+                )
 
     def _on_session_error(self, exc: Exception) -> None:
         """Internal handler for session consumer thread crashes.
@@ -264,7 +267,7 @@ class RecordingController:
         try:
             error_class = type(exc).__name__
             logger.error(
-                "Audio session consumer crash: error_class=%s, state=%s",
+                "session_consumer_crash: error_class=%s state=%s",
                 error_class,
                 self._state.name,
             )
@@ -273,7 +276,10 @@ class RecordingController:
                 is_recoverable=True,
             )
         except Exception:
-            logger.exception("Error in _on_session_error handler")
+            logger.error(
+                "session_error_handler_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def _set_state(self, state: ControllerState) -> None:
         """Update state and notify listeners."""
@@ -806,7 +812,10 @@ class RecordingController:
             try:
                 state_cb(ControllerState.RECORDING)
             except Exception as exc:
-                logger.error("State change callback failed: %s", exc)
+                logger.error(
+                    "state_change_callback_failed: error_class=%s",
+                    type(exc).__name__,
+                )
         return result
 
     def _hotplug_diagnostics(self) -> Dict[str, Any]:
@@ -866,7 +875,7 @@ class RecordingController:
         # Clear any previous error
         self.clear_error()
         self._set_state(ControllerState.STARTING)
-        logger.debug("Starting recording...")
+        logger.debug("recording_start_requested:")
 
         # Preempt any in-flight post-processing from a previous recording
         # (ADR-0002, issue #63): the live Recording always outranks
@@ -890,7 +899,7 @@ class RecordingController:
         try:
             # Initialize transcription if enabled
             if self.enable_transcription:
-                logger.debug("Initializing transcription...")
+                logger.debug("transcription_init_requested:")
                 error = self._init_transcription()
                 if error:
                     # Log warning but continue with recording
@@ -940,9 +949,9 @@ class RecordingController:
                 else:
                     if raw_provider:
                         logger.warning(
-                            "Invalid denoising provider '%s' in config, "
-                            "falling back to '%s'",
-                            raw_provider, denoise_provider,
+                            "denoising_provider_invalid: reason=not_allowed "
+                            "fallback=%s",
+                            denoise_provider,
                         )
 
                 # Validate budget - must be a positive number
@@ -952,13 +961,14 @@ class RecordingController:
                 else:
                     if raw_budget is not None and raw_budget != 200:
                         logger.warning(
-                            "Invalid denoising latency budget %r in config, "
-                            "falling back to %.0fms",
-                            raw_budget, denoise_budget_ms,
+                            "denoising_budget_invalid: reason=not_positive "
+                            "fallback_ms=%.0f",
+                            denoise_budget_ms,
                         )
             except Exception as exc:
                 logger.warning(
-                    "Failed to read denoising config, using defaults: %s", exc
+                    "denoising_config_read_failed: error_class=%s",
+                    type(exc).__name__,
                 )
 
             # Tag mic sources with denoise=True when denoising is enabled
@@ -989,20 +999,22 @@ class RecordingController:
             # Wire audio callback to feed transcription processor
             if self.enable_transcription and self._transcription_processor:
                 config.on_audio_frame = self.feed_audio_for_transcription
-                logger.debug("Audio callback wired to transcription processor")
+                logger.debug("audio_callback_wired: target=transcription_processor")
 
             self._snapshot_active_sources(source_configs)
             self._session = AudioSession()
             self._session.start(config)
-            logger.debug("Audio session started")
+            logger.debug("audio_session_started:")
 
             # Start transcription if available
             if self._transcription_processor:
-                logger.debug("Starting transcription processor...")
-                logger.debug("Transcription processor exists: %s", self._transcription_processor is not None)
-                logger.debug("Processor on_result callback: %s", self._transcription_processor.on_result is not None)
+                logger.debug("transcription_processor_starting:")
+                logger.debug(
+                    "transcription_processor_ready: has_on_result_callback=%s",
+                    self._transcription_processor.on_result is not None,
+                )
                 self._transcription_processor.start()
-                logger.debug("Transcription processor started")
+                logger.debug("transcription_processor_started:")
 
             self._audio_chunks_fed = 0
             self._reset_live_speaker_state()
@@ -1835,7 +1847,7 @@ class RecordingController:
             return
         if self._post_processor is not None:
             return
-        logger.debug("Initializing post-processing queue")
+        logger.debug("post_processing_queue_init:")
         self._post_processor = PostProcessingQueue(
             settings=settings,
             on_progress=self._on_post_process_progress,
@@ -1852,9 +1864,11 @@ class RecordingController:
         Args:
             result: SegmentResult with text, confidence, and completion status
         """
-        logger.debug("Segment received [conf: %d%%, final: %s, idx: %s]",
-                     result.confidence, result.is_final,
-                     result.segment_index)
+        logger.debug(
+            "segment_received: confidence_percent=%d is_final=%s "
+            "segment_index=%s",
+            result.confidence, result.is_final, result.segment_index,
+        )
 
         # Attempt live speaker matching (conservative; attaches name only
         # for high-confidence known-speaker matches)
@@ -1879,22 +1893,28 @@ class RecordingController:
                     # then start fresh live buffer
                     self._transcript_store.commit_live_phrase()
                     self._transcript_store.set_live_phrase_words(words)
-                    logger.debug("New phrase: %d words (total: %d)",
-                                 len(words),
-                                 self._transcript_store.get_word_count())
+                    logger.debug(
+                        "phrase_started: words=%d total_words=%d",
+                        len(words),
+                        self._transcript_store.get_word_count(),
+                    )
                 elif result.is_final:
                     # Final transcription — commit the live phrase
                     self._transcript_store.set_live_phrase_words(words)
                     self._transcript_store.commit_live_phrase()
-                    logger.debug("Final phrase: %d words (total: %d)",
-                                 len(words),
-                                 self._transcript_store.get_word_count())
+                    logger.debug(
+                        "phrase_committed: words=%d total_words=%d",
+                        len(words),
+                        self._transcript_store.get_word_count(),
+                    )
                 else:
                     # Re-transcription — replace the live phrase buffer
                     self._transcript_store.set_live_phrase_words(words)
-                    logger.debug("Updated phrase: %d words (total: %d)",
-                                 len(words),
-                                 self._transcript_store.get_word_count())
+                    logger.debug(
+                        "phrase_updated: words=%d total_words=%d",
+                        len(words),
+                        self._transcript_store.get_word_count(),
+                    )
 
         # Notify UI callback
         if self.on_phrase_result:
@@ -1947,7 +1967,10 @@ class RecordingController:
             job_id: The job identifier
             progress: Progress percentage (0-100)
         """
-        logger.debug("Post-processing job %s: %d%%", job_id, progress)
+        logger.debug(
+            "post_process_progress: job_id=%s percent=%d",
+            job_id, progress,
+        )
 
     def _on_post_process_complete_callback(self, job_id: str, result: dict) -> None:
         """Handle post-processing completion (success or failure).
@@ -2102,7 +2125,11 @@ class RecordingController:
             self._audio_chunks_fed += 1
             if self._audio_chunks_fed % 100 == 0:
                 stats = self._transcription_processor.get_stats()
-                logger.debug("Fed %d audio chunks, buffer: %.1fs", self._audio_chunks_fed, stats.get("buffer_duration", 0))
+                logger.debug(
+                    "audio_chunks_fed: count=%d buffer_seconds=%.1f",
+                    self._audio_chunks_fed,
+                    stats.get("buffer_duration", 0),
+                )
 
         # Buffer raw PCM for live speaker matching (only while recording)
         if self._state == ControllerState.RECORDING and audio_chunk is not None:
@@ -3015,7 +3042,7 @@ class RecordingController:
                 },
             }
         except Exception:
-            logger.debug("Diagnostics: session stats unavailable")
+            logger.debug("diagnostics_unavailable: section=session")
         # Device hot-plug recovery diagnostics (sanitized - no audio/transcript/secrets)
         diag["hotplug"] = self._hotplug_diagnostics()
         diag["retry"] = self._retry_diagnostics()
@@ -3034,7 +3061,7 @@ class RecordingController:
                     vs = vad()
                     diag["vad"] = vs
             except Exception:
-                logger.debug("Diagnostics: transcription stats unavailable")
+                logger.debug("diagnostics_unavailable: section=transcription")
 
         # Transcript store stats
         if self._transcript_store:
@@ -3045,7 +3072,7 @@ class RecordingController:
                     "words_with_speaker": sum(1 for w in words if w.speaker_id is not None),
                 }
             except Exception:
-                logger.debug("Diagnostics: transcript store stats unavailable")
+                logger.debug("diagnostics_unavailable: section=transcript_store")
 
         # Diarization result metadata
         with self._state_lock:
@@ -3069,7 +3096,7 @@ class RecordingController:
                     "labels": sorted(raw_labels),
                 }
             except Exception:
-                logger.debug("Diagnostics: diarization stats unavailable")
+                logger.debug("diagnostics_unavailable: section=diarization")
 
         # Live speaker matching diagnostics (sanitized - no names/embeddings)
         with self._buffer_lock:

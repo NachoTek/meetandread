@@ -132,6 +132,7 @@ CTRL_LOG = "meetandread.recording.controller"
 MGMT_LOG = "meetandread.recording.management"
 CLEANUP_LOG = "meetandread.recording.cleanup_queue"
 MAIN_LOG = "meetandread.main"
+SI_LOG = "meetandread.single_instance"
 
 
 def _make_specs(
@@ -169,11 +170,7 @@ def fresh_config_manager(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(ConfigManager, "_initialized", False)
 
 
-@pytest.fixture()
-def _fresh_dependency_cache():
-    reset_availability_cache()
-    yield
-    reset_availability_cache()# ===========================================================================
+# ===========================================================================
 # config/persistence.py
 # ===========================================================================
 
@@ -266,7 +263,7 @@ class TestConfigManagerLogging:
         with caplog.at_level(logging.INFO, logger=MANAGER_LOG):
             manager.save()
         infos = _info(caplog, MANAGER_LOG)
-        assert _starts_with(infos, "config_saved:")
+        assert _starts_with(infos, "config_manager_saved:")
 
     def test_storage_path_validation_failure_named_event(
         self, tmp_path, caplog
@@ -475,7 +472,7 @@ class TestBenchmarkLogging:
         with caplog.at_level(logging.INFO, logger=BENCH_LOG):
             runner.run()
         infos = _info(caplog, BENCH_LOG)
-        assert _starts_with(infos, "benchmark_started:")
+        assert _starts_with(infos, "benchmark_run_started:")
         assert _starts_with(infos, "benchmark_complete:")
 
     def test_info_quietness(self, tmp_path, caplog) -> None:
@@ -836,10 +833,64 @@ class TestControllerQueueLogging:
         controller = self._make_controller()
         controller._session = MagicMock()
         controller._session.get_stats.side_effect = RuntimeError("boom")
-        with caplog.at_level(logging.INFO, logger=CTRL_LOG):
+        with caplog.at_level(logging.DEBUG, logger=CTRL_LOG):
             controller.get_diagnostics()
-        msgs = [r.getMessage() for r in caplog.records if r.name == CTRL_LOG]
-        assert not _starts_with(msgs, "diagnostics_unavailable:")
+        # The unavailable-section records exist at DEBUG...
+        debugs = _starts_with(
+            _debug(caplog, CTRL_LOG), "diagnostics_unavailable:"
+        )
+        assert debugs
+        # ...and never at INFO or above.
+        at_info = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == CTRL_LOG and r.levelno >= logging.INFO
+        ]
+        assert not _starts_with(at_info, "diagnostics_unavailable:")
+
+
+# ===========================================================================
+# single_instance.py — guard decision events
+# ===========================================================================
+
+
+class TestSingleInstanceLogging:
+    def test_acquire_success_named_debug_event(self, caplog) -> None:
+        import meetandread.single_instance as si
+
+        si._release_lock_for_tests()
+        try:
+            if sys.platform != "win32":
+                pytest.skip("windows-only guard path")
+            with caplog.at_level(logging.DEBUG, logger=SI_LOG):
+                si.acquire_single_instance_lock(name="mar_test_batch_e")
+        finally:
+            si._release_lock_for_tests()
+        assert _starts_with(
+            _debug(caplog, SI_LOG), "single_instance_lock:"
+        )
+
+    def test_already_exists_named_info_event(self, caplog) -> None:
+        import meetandread.single_instance as si
+
+        si._release_lock_for_tests()
+        if sys.platform != "win32":
+            pytest.skip("windows-only guard path")
+        # A second acquire against the held mutex reports already_exists.
+        si.acquire_single_instance_lock(name="mar_test_batch_e")
+        try:
+            with caplog.at_level(logging.INFO, logger=SI_LOG):
+                assert not si.acquire_single_instance_lock(
+                    name="mar_test_batch_e"
+                )
+        finally:
+            si._release_lock_for_tests()
+        infos = _info(caplog, SI_LOG)
+        assert any(
+            m.startswith("single_instance_lock:")
+            and "reason=already_exists" in m
+            for m in infos
+        )
 
 
 # ===========================================================================

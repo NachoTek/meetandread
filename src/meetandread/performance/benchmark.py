@@ -210,7 +210,10 @@ class BenchmarkRunner:
             if self._on_progress:
                 self._on_progress(10)
 
-            logger.info("benchmark_started: chunk_seconds=%.1f", self._chunk_duration_s)
+            logger.info(
+                "benchmark_run_started: mode=blocking "
+                "chunk_seconds=%.1f", self._chunk_duration_s,
+            )
             audio = self._load_audio()
             total_samples = len(audio)
             sample_rate = 16000

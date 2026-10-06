@@ -217,7 +217,7 @@ class ResourceMonitor:
             except ImportError:
                 logger.warning(
                     "resource_monitor_start_failed: reason=no_qt_timer "
-                    "(use poll() manually)"
+                    "hint=use_poll_manually"
                 )
                 return
 

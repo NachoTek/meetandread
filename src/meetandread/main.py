@@ -263,15 +263,18 @@ def setup_signal_handlers(app, widget_ref=None):
         if widget_ref is not None:
             try:
                 widget = widget_ref()
-            except Exception:
-                logger.debug("widget_ref() failed during shutdown", exc_info=True)
+            except Exception as exc:
+                logger.debug(
+                    "widget_ref_failed: error_class=%s",
+                    type(exc).__name__,
+                )
         if widget is not None:
             try:
                 widget._exit_application()
-            except Exception:
+            except Exception as exc:
                 logger.debug(
-                    "_exit_application failed in signal handler, "
-                    "falling back to app.quit()"
+                    "graceful_exit_failed: error_class=%s fallback=app_quit",
+                    type(exc).__name__,
                 )
                 app.quit()
         else:
@@ -340,8 +343,13 @@ def main(capture_dir: Optional[Path] = None):
         except CaptureModeError as exc:
             # Pre-logging path: the root logger's lastResort handler
             # routes ERROR to stderr (same as the single-instance
-            # refusal below).
-            logger.error("%s %s", ISSUE_CAPTURE_FLAG, exc)
+            # refusal below). The exception message can embed the
+            # user's capture path, so only the class travels (privacy
+            # boundary at WARNING and above).
+            logger.error(
+                "%s rejected: error_class=%s",
+                ISSUE_CAPTURE_FLAG, type(exc).__name__,
+            )
             sys.exit(2)
 
     # Single-instance guard (issue #20): must run before QApplication so a
@@ -366,8 +374,12 @@ def main(capture_dir: Optional[Path] = None):
     # same-second exclusive filename.
     if capture_dir is None or not capture_logging_configured():
         setup_logging(capture_dir=capture_dir)
+    # Named startup event: the suffix " (Issue Capture Mode)" is load-
+    # bearing — the capture-mode subprocess tests wait for this exact
+    # record to prove the startup sequence reached the logged stage.
     logging.getLogger(__name__).info(
-        "Starting meetandread%s",
+        "app_startup: mode=%s banner=Starting meetandread%s",
+        "issue_capture" if capture_dir is not None else "normal",
         " (Issue Capture Mode)" if capture_dir is not None else "",
     )
 
@@ -388,7 +400,10 @@ def main(capture_dir: Optional[Path] = None):
         try:
             install_interaction_trace(capture_dir)
         except InteractionTraceError as exc:
-            logger.error("interaction trace: %s", exc)
+            logger.error(
+                "interaction_trace_install_failed: error_class=%s",
+                type(exc).__name__,
+            )
             sys.exit(2)
     
     # Enable high DPI support

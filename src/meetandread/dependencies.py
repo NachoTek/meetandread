@@ -116,8 +116,8 @@ def is_dependency_available(dep: FeatureDependency) -> bool:
     except Exception as exc:  # ImportError covers DLL load failures
         logger.info(
             "dependency_unavailable: dependency=%s feature=%s "
-            "error_class=%s degraded=%s",
-            dep.name, dep.feature, type(exc).__name__, dep.feature,
+            "error_class=%s",
+            dep.name, dep.feature, type(exc).__name__,
         )
         available = False
 

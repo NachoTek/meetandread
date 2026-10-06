@@ -153,7 +153,7 @@ class SettingsPersistence:
 
             if not content.strip():
                 logger.warning(
-                    "config_load_failed: reason=empty_file, using defaults"
+                    "config_load_failed: reason=empty_file action=defaults_used"
                 )
                 return None
 
@@ -161,7 +161,7 @@ class SettingsPersistence:
 
             if not isinstance(data, dict):
                 logger.warning(
-                    "config_load_failed: reason=not_a_dict, using defaults"
+                    "config_load_failed: reason=not_a_dict action=defaults_used"
                 )
                 return None
 
@@ -174,14 +174,14 @@ class SettingsPersistence:
         except json.JSONDecodeError as e:
             logger.warning(
                 "config_load_failed: reason=invalid_json "
-                "error_class=%s, using defaults",
+                "error_class=%s action=defaults_used",
                 type(e).__name__,
             )
             return None
         except Exception as e:
             logger.error(
-                "config_load_failed: reason=read_error error_class=%s, "
-                "using defaults",
+                "config_load_failed: reason=read_error error_class=%s "
+                "action=defaults_used",
                 type(e).__name__,
             )
             return None
