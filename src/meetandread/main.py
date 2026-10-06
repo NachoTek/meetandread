@@ -396,12 +396,31 @@ def main(capture_dir: Optional[Path] = None):
             InteractionTraceError,
             install_interaction_trace,
         )
+        from meetandread.resource_snapshots import (
+            SnapshotSeriesError,
+            install_snapshot_series,
+        )
 
         try:
             install_interaction_trace(capture_dir)
         except InteractionTraceError as exc:
             logger.error(
                 "interaction_trace_install_failed: error_class=%s",
+                type(exc).__name__,
+            )
+            sys.exit(2)
+        # Resource Snapshot series (issue #106): same startup
+        # discipline as the trace — the series FILE is created
+        # exclusively at process start so a stale series from another
+        # run is a capture-mode startup failure (exit 2), never a
+        # half-started run writing into a foreign directory. The
+        # driving ResourceMonitor starts below, once the QApplication
+        # exists (its QTimer needs a Qt event loop host).
+        try:
+            install_snapshot_series(capture_dir)
+        except SnapshotSeriesError as exc:
+            logger.error(
+                "snapshot_series_install_failed: error_class=%s",
                 type(exc).__name__,
             )
             sys.exit(2)
@@ -430,6 +449,27 @@ def main(capture_dir: Optional[Path] = None):
         except Exception as e:
             logger.warning(
                 "interaction_trace_qt_filter_failed: error_class=%s",
+                type(e).__name__,
+            )
+
+        # Resource Snapshot series monitor (issue #106): start the
+        # ResourceMonitor driving the series installed above. The
+        # monitor needs a QTimer, so this runs after the QApplication
+        # exists; its first poll fires immediately on start, landing
+        # the series' first record at the first moment of the run.
+        # Best-effort (a diagnostics failure must not kill the
+        # diagnosed run): the capture DEBUG log and trace still cover
+        # the run if the monitor cannot start.
+        try:
+            from meetandread.resource_snapshots import start_snapshot_series
+
+            if not start_snapshot_series():
+                logger.warning(
+                    "snapshot_series_start_failed: reason=monitor_not_running"
+                )
+        except Exception as e:
+            logger.warning(
+                "snapshot_series_start_failed: error_class=%s",
                 type(e).__name__,
             )
 
@@ -600,6 +640,21 @@ def main(capture_dir: Optional[Path] = None):
                 "interaction_trace_teardown_failed: error_class=%s",
                 type(e).__name__,
             )
+        # Resource Snapshot series teardown (issue #106): stop the
+        # driving monitor and close the series writer BEFORE the
+        # completion marker — every diagnostic emission stays strictly
+        # inside the live-application window (same ordering rationale
+        # as the trace teardown above; the monitor's parentless QTimer
+        # must not fire into a dying QApplication).
+        try:
+            from meetandread.resource_snapshots import close_snapshot_series
+
+            close_snapshot_series()
+        except Exception as e:
+            logger.warning(
+                "snapshot_series_teardown_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     if capture_dir is not None and exit_code == 0:
         write_completion_marker(capture_dir)
@@ -617,10 +672,11 @@ def main(capture_dir: Optional[Path] = None):
     # filter-removal ordering narrowed but cannot eliminate it).
     # os._exit skips finalization entirely, making the exit
     # deterministic. This is safe because:
-    # - every capture log record and trace event is already
-    #   flushed+fsynced before its emit returns, and the completion
-    #   marker is written above, BEFORE this point (#104/#105 durability
-    #   contract; TestKillMidRun proves even taskkill /F loses nothing);
+    # - every capture log record, trace event, and snapshot record is
+    #   already flushed+fsynced before its emit returns, and the completion
+    #   marker is written above, BEFORE this point (#104/#105/#106
+    #   durability contract; TestKillMidRun proves even taskkill /F loses
+    #   nothing);
     # - the single-instance mutex is OS-released when the process dies
     #   (see single_instance.py module docstring);
     # - every test that runs main() does so as a subprocess; there are
