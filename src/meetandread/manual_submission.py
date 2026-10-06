@@ -47,13 +47,17 @@ against fixture capture directories with zero subprocesses (spec,
 Testing Decisions §3; ADR 0001).
 """
 
+import json
+import os
 import subprocess
 import sys
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from meetandread.diagnostics_bundle import (
     BUNDLE_FILE_NAME,
@@ -61,7 +65,10 @@ from meetandread.diagnostics_bundle import (
     default_identifiers,
     redact_text,
 )
-from meetandread.reporter import read_description
+from meetandread.reporter import (
+    CAPTURES_DIRNAME,
+    read_description,
+)
 
 # The repository's New Issue form (spec, Repo facts: NachoTek/
 # meetandread, public — the reason the body carries no local path).
@@ -201,6 +208,111 @@ def build_submission(
         clipboard_text=str(bundle_path),
         bundle_path=bundle_path,
     )
+
+
+# ---------------------------------------------------------------------------
+# Submission state + reporter-death detection (issue #110)
+# ---------------------------------------------------------------------------
+
+# Filename of the submission-state record inside a capture directory.
+# Written once, at the moment the run's submission story is resolved
+# (the browser opened on the prefilled form, or the user discarded the
+# offer); treat as stable contract. Absent = the submission is still
+# pending — the state the #110 detection seam looks for.
+SUBMISSION_STATE_FILE_NAME = "submission_state.json"
+
+
+class SubmissionState(str, Enum):
+    """How a capture run's submission story ended (issue #110).
+
+    The state machine deliberately has exactly two resolved states —
+    there is no "not yet" member because absence of the record IS the
+    pending state (same derivation discipline as the capture-directory
+    contract: state comes from artifacts on disk, never side memory).
+    """
+
+    SUBMITTED = "submitted"
+    DISCARDED = "discarded"
+
+
+def write_submission_state(
+    capture_dir: Path, state: SubmissionState
+) -> Path:
+    """Write the submission-state record; return its path.
+
+    Prompt-flushed like every artifact (the reporter could die right
+    after resolving an offer — the resolution must survive). The
+    resolved-at timestamp records WHEN the story ended, for triage.
+    """
+    payload = {
+        "state": state.value,
+        "resolved_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    path = Path(capture_dir) / SUBMISSION_STATE_FILE_NAME
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    return path
+
+
+def read_submission_state(capture_dir: Path) -> Optional[str]:
+    """Read the submission state; None when absent or unreadable.
+
+    A torn/unreadable record reads as UNRESOLVED (None): corruption
+    must keep the offer available, never silently resolve it — the
+    same fail-open-for-recovery discipline as the termination record's
+    reader.
+    """
+    path = Path(capture_dir) / SUBMISSION_STATE_FILE_NAME
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    state = data.get("state")
+    if state in tuple(s.value for s in SubmissionState):
+        return state
+    return None
+
+
+def find_unsubmitted_bundles(base: Path) -> List[Path]:
+    """Find capture directories with an unsubmitted bundle, newest
+    first (issue #110's detection seam).
+
+    A directory qualifies when review left the submittable artifact on
+    disk (``diagnostics_bundle.txt`` — exactly what
+    :func:`build_submission` consumes) and no submission-state record
+    resolves the story yet. Any capture state qualifies — including
+    ``incomplete`` (the reporter died mid-run) and ``done`` (it died
+    between submit-offer and answer): #110's lane is precisely the
+    runs whose CAPTURE succeeded but whose SUBMISSION never resolved.
+    A missing base is an empty scan, never an error (the app may run
+    on a machine that has never seen the reporter).
+    """
+    captures = Path(base) / CAPTURES_DIRNAME
+    if not captures.is_dir():
+        return []
+    try:
+        entries = sorted(captures.iterdir(), reverse=True)
+    except OSError:
+        return []
+    found: List[Path] = []
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        if not (entry / BUNDLE_FILE_NAME).is_file():
+            continue
+        if read_submission_state(entry) is not None:
+            continue
+        found.append(entry)
+    return found
 
 
 # ---------------------------------------------------------------------------
