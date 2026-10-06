@@ -105,6 +105,7 @@ class TestWizardHappyPath:
                 "",  # empty description → re-ask
                 "Settings panel froze the app",
                 "",  # Press Enter to finish reproducing
+                "n",  # decline the submit step (#109)
             ]
         )
         out = Lines()
@@ -142,6 +143,7 @@ class TestWizardHappyPath:
             [
                 "It crashes on startup",
                 "",  # finish reproducing
+                "n",  # decline the submit step (#109)
             ]
         )
         out = Lines()
@@ -179,7 +181,7 @@ class TestWizardRecovery:
         self, tmp_path
     ):
         d = self._make_incomplete(tmp_path)
-        inp = ScriptedInput(["y"])  # Resume it? [Y/n]
+        inp = ScriptedInput(["y", "n"])  # resume; decline submit
         out = Lines()
         result = wizard.run_wizard(
             data_base=tmp_path,
@@ -201,6 +203,7 @@ class TestWizardRecovery:
                 "n",  # decline resume
                 "Fresh description",
                 "",  # finish reproducing
+                "n",  # decline the submit step (#109)
             ]
         )
         out = Lines()
@@ -215,7 +218,7 @@ class TestWizardRecovery:
         assert read_termination_record(run.capture_dir) is not None
 
     def test_no_resumable_runs_straight_to_describe(self, tmp_path):
-        inp = ScriptedInput(["A problem", ""])
+        inp = ScriptedInput(["A problem", "", "n"])
         out = Lines()
         run = wizard.run_wizard(
             data_base=tmp_path,
@@ -234,7 +237,7 @@ class TestWizardSingleInstanceGate:
             wizard, "app_is_running", lambda: next(states, False)
         )
         monkeypatch.setattr(wizard, "_SINGLE_INSTANCE_POLL_S", 0.01)
-        inp = ScriptedInput(["desc", ""])
+        inp = ScriptedInput(["desc", "", "n"])
         out = Lines()
         run = wizard.run_wizard(
             data_base=tmp_path,
@@ -248,7 +251,7 @@ class TestWizardSingleInstanceGate:
         assert "Closed. Continuing." in text
 
     def test_no_running_app_skips_gate_silently(self, tmp_path):
-        inp = ScriptedInput(["desc", ""])
+        inp = ScriptedInput(["desc", "", "n"])
         out = Lines()
         run = wizard.run_wizard(
             data_base=tmp_path,
@@ -293,7 +296,7 @@ class TestReviewStep:
     def test_review_step_shows_bundle_and_writes_artifact(
         self, tmp_path
     ):
-        inp = ScriptedInput(["desc", ""])
+        inp = ScriptedInput(["desc", "", "n"])  # n: decline submit
         out = Lines()
         run = wizard.run_wizard(
             data_base=tmp_path,
@@ -314,7 +317,7 @@ class TestReviewStep:
         assert "clean_stop" in written or "user_stop" in written
 
     def test_review_step_on_crash_still_reviews(self, tmp_path):
-        inp = ScriptedInput(["desc", ""])
+        inp = ScriptedInput(["desc", "", "n"])  # n: decline submit
         out = Lines()
         run = wizard.run_wizard(
             data_base=tmp_path,
@@ -340,6 +343,7 @@ class TestReviewStep:
         from meetandread.transcript_canary import canary_ngrams
 
         secret = "Sebastopol canary spoken words recorded"
+        # No third answer needed: the fail-closed review never asks.
         inp = ScriptedInput(["desc", ""])
         out = Lines()
 
@@ -389,7 +393,7 @@ class TestReviewStep:
         (d / "capture_run.claim").write_text(
             '{"started_at": "2026-09-09T09:00:00"}\n', encoding="utf-8"
         )
-        inp = ScriptedInput(["y"])
+        inp = ScriptedInput(["y", "n"])  # resume; decline submit
         out = Lines()
         result = wizard.run_wizard(
             data_base=tmp_path,

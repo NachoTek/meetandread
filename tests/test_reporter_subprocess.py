@@ -405,6 +405,13 @@ class TestSupervisedCleanRun:
             answers.wait_prompt()
             answers.answer("")
 
+            # Review (#108) then the submit offer (#109): decline the
+            # browser open (the test harness must not launch a real
+            # browser; the wizard prints the not-opened message and
+            # the flow completes).
+            answers.wait_prompt()
+            answers.answer("n")
+
             _wait_for(
                 lambda: "MAR_WIZARD_DONE" in _stdout_text(tmp_path),
                 STARTUP_TIMEOUT_S + CLEAN_EXIT_TIMEOUT_S,
@@ -502,9 +509,12 @@ class TestSupervisedCrashRun:
 
             # Now the user comes back and presses Enter; the wizard
             # observes the dead app, classifies the crash, records it,
-            # and completes — the reporter survived.
+            # and completes — the reporter survived. The submit offer
+            # (#109) follows the review: decline it (no browser).
             answers.wait_prompt()
             answers.answer("")
+            answers.wait_prompt()
+            answers.answer("n")
             _wait_for(
                 lambda: "MAR_WIZARD_DONE" in _stdout_text(tmp_path),
                 STARTUP_TIMEOUT_S,
@@ -610,6 +620,10 @@ class TestStandaloneRecovery:
         try:
             answers.wait_prompt()
             answers.answer("y")
+            # The resumed run's review passes and the submit offer
+            # (#109) appears: decline it (no browser in tests).
+            answers.wait_prompt()
+            answers.answer("n")
             _wait_for(
                 lambda: "MAR_WIZARD_DONE" in _stdout_text(tmp_path),
                 STARTUP_TIMEOUT_S,

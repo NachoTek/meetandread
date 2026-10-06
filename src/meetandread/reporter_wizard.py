@@ -1,11 +1,11 @@
 """Issue Reporter wizard — the console front-end over the supervisor
-core (issue #107/#108, docs/specs/issue-reporting.md, ADR 0003/0004).
+core (issues #107/#108/#109, docs/specs/issue-reporting.md,
+ADR 0003/0004).
 
 Stdlib-only like ``reporter.py`` (the defense discipline binds the
 whole reporter program): no audio stack, no Qt. The wizard owns the
-user-facing flow — describe → launch → reproduce → stop → review —
-with submit deferred to #109 (the flow prints where it will slot in,
-so a user is never left guessing).
+user-facing flow — describe → launch → reproduce → stop → review →
+submit — end to end.
 
 ## Flow
 
@@ -32,7 +32,13 @@ so a user is never left guessing).
    ever shown), and show the user "here is what will be sent". On
    any assembly/redaction failure the user is told submission is
    unavailable and NO artifact is written (fail-closed, ADR 0004).
-   Submission (#109) continues from the written bundle.
+7. **Submit** (issue #109, the review approval): after the review
+   screen, ask to open the prefilled GitHub New Issue form in the
+   user's default browser — the ONLY outbound action of the whole
+   feature (ADR 0004) — and copy the bundle's full local path to
+   the clipboard. The public prefilled body carries only the neutral
+   bundle filename and attach-by-hand instructions; the local path
+   stays on the clipboard and the screen.
 
 ## Crash handling (the reporter must be hard to kill)
 
@@ -90,6 +96,14 @@ InputFn = Callable[[str], str]
 PrintFn = Callable[..., None]
 
 
+def _ask_yes(input_fn: InputFn, prompt: str) -> bool:
+    """A [Y/n] prompt: empty or yes-family answers are Yes (the
+    wizard's recovery, submit — every step whose default is proceed).
+    """
+    answer = input_fn(prompt).strip().lower()
+    return answer in ("", "y", "yes")
+
+
 def _install_excepthook() -> None:
     """Reporter-level crash handling: an uncaught Python exception
     prints where the capture data lives before the process dies, so
@@ -128,20 +142,27 @@ def offer_recovery(
     resumable = find_resumable_captures(data_base)
     if not resumable:
         return None
+    from meetandread.diagnostics_bundle import AssemblyFailure
+
     for candidate in resumable:
         state = scan_capture_state(candidate)
         print_fn(
             f"\nFound an interrupted capture run from a previous "
             f"session:\n  {candidate}\n  (state: {state.state_name})"
         )
-        answer = input_fn("Resume it? [Y/n] ").strip().lower()
-        if answer in ("", "y", "yes"):
+        if _ask_yes(input_fn, "Resume it? [Y/n] "):
             resume_capture(candidate, data_base)
             print_fn(
                 "Resumed. The captured diagnostics are ready for "
                 "review."
             )
-            review_capture(candidate, print_fn)
+            result = review_capture(candidate, print_fn)
+            # The resumed run's submission (#109) continues from the
+            # re-reviewed bundle exactly like a fresh run's.
+            if not isinstance(result, AssemblyFailure):
+                submit_capture(
+                    result, candidate, input_fn, print_fn
+                )
             return candidate
         print_fn("Skipped.")
     print_fn("No more interrupted runs — starting a fresh flow.")
@@ -366,9 +387,14 @@ def run_wizard(
     #    what will be sent. Fail-closed: on any assembly/redaction
     #    failure NO artifact is written and the user is told
     #    submission is unavailable — never a raw fallback.
-    review_capture(
+    result = review_capture(
         capture_dir, print_fn, identifiers=None
     )
+    # 8. Submit (issue #109): with the review passed and the bundle
+    #    on disk, offer the manual submission (browser + clipboard).
+    #    Unreachable on the fail-closed path (no artifact → no
+    #    submission offer).
+    submit_capture(result, capture_dir, input_fn, print_fn)
     return run
 
 
@@ -417,11 +443,92 @@ def review_capture(
     print_fn(render_review(result))
     print_fn(
         f"\nDiagnostics Bundle (redacted, ready to submit):\n"
-        f"  {result.path}\n"
-        "(The submission step arrives with the next update; nothing\n"
-        "leaves your machine.)"
+        f"  {result.path}"
     )
     return result
+
+
+def submit_capture(
+    review_result,
+    capture_dir: Path,
+    input_fn: InputFn,
+    print_fn: PrintFn,
+    identifiers=None,
+) -> "object":
+    """The #109 Manual Submission step: after the review screen (the
+    user's approval of "here is what will be sent"), copy the
+    bundle's full local path to the clipboard and offer to open the
+    prefilled GitHub New Issue form in the default browser.
+
+    The browser open is the single outbound action of the whole
+    reporting feature (ADR 0004) — and it happens only on the
+    user's Yes. The clipboard copy (local, private) runs for every
+    answered prompt so the path is on the clipboard whether or not
+    the browser opens: attaching the bundle by hand must remain one
+    paste away on every branch. Returns the submission draft, the
+    fail-closed ``SubmissionUnavailable``, or None when review
+    itself failed closed (for tests).
+    """
+    from meetandread import manual_submission as ms
+    from meetandread.diagnostics_bundle import AssemblyFailure
+
+    if isinstance(review_result, AssemblyFailure):
+        # Review failed closed: there is nothing submittable. The
+        # review step already told the user why; nothing opens, the
+        # clipboard stays untouched.
+        return None
+    draft = ms.build_submission(
+        capture_dir,
+        identifiers=identifiers,
+    )
+    if isinstance(draft, ms.SubmissionUnavailable):
+        # The artifact vanished between review and submit (or the
+        # review result was not from this directory) — fail closed,
+        # same verdict shape as the review step's.
+        print_fn(
+            "\nSubmission is UNAVAILABLE: the reviewed Diagnostics\n"
+            f"Bundle artifact is missing. {draft.detail}"
+        )
+        return draft
+    print_fn(
+        "\nReady to file the issue.\n"
+        "The browser will open on the GitHub New Issue form with\n"
+        "the title and description filled in — filed from YOUR\n"
+        "GitHub account (which also subscribes you to answers)."
+    )
+    proceed = _ask_yes(input_fn, "Open the issue form now? [Y/n] ")
+    # The path is on the clipboard on EVERY branch from here (the
+    # clipboard is local and private — unlike the browser open, it
+    # needs no approval): attach-by-hand stays one paste away.
+    if ms.copy_to_clipboard(draft.clipboard_text):
+        print_fn(f"Bundle path (on your clipboard):\n"
+                 f"  {draft.clipboard_text}")
+    else:
+        print_fn(
+            "(could not reach the clipboard — copy this path by\n"
+            f" hand: {draft.clipboard_text})"
+        )
+    if not proceed:
+        print_fn(
+            "Browser not opened — nothing has left your machine.\n"
+            f"The bundle stays ready on disk:\n  {draft.bundle_path}"
+        )
+        return draft
+    if not ms.open_new_issue_form(draft.url):
+        print_fn(
+            "\nCould not open a browser. Copy this address by hand:\n"
+            f"  {draft.url}"
+        )
+    else:
+        print_fn(
+            "\nThe New Issue form is open in your browser.\n"
+            "IMPORTANT: GitHub cannot attach files automatically —\n"
+            "ATTACH THE BUNDLE FILE BY HAND before submitting:\n"
+            f"  file to attach: {ms.BUNDLE_FILE_NAME}\n"
+            "  (drag it into the GitHub form; its full path is on\n"
+            "  your clipboard and shown above)"
+        )
+    return draft
 
 
 def main(argv: Optional[List[str]] = None) -> int:
