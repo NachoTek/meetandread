@@ -24,6 +24,7 @@ recordings (recovery dialogs), config, or Documents tree, and
 concurrent test runs cannot collide on the single-instance mutex.
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -283,6 +284,27 @@ class TestLaunchWithFlagCleanExit:
         assert marker_data is not None, "completion marker missing after clean exit"
         assert "finished_at" in marker_data
         assert (capture_dir / COMPLETION_MARKER_NAME).exists()
+
+        # Environment info (issue #108): written at bootstrap with
+        # stdlib facts, refined by main() with the detected hardware
+        # class — a bundle constituent present from process start.
+        env_path = capture_dir / "environment.json"
+        assert env_path.exists(), "environment.json missing after run"
+        env_data = json.loads(env_path.read_text(encoding="utf-8"))
+        assert set(env_data) == {
+            "app_version", "os", "hardware_class"
+        }
+        assert env_data["app_version"]
+        assert env_data["hardware_class"] in (
+            "low", "medium", "high", "unknown"
+        )
+
+        # Transcript canary registry (issue #108): created at
+        # bootstrap (hashed grams only — never plaintext).
+        canary_path = capture_dir / "transcript_canary.jsonl"
+        assert canary_path.exists(), (
+            "transcript_canary.jsonl missing after run"
+        )
 
 
 class TestDeterministicHardExit:

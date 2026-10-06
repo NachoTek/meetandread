@@ -504,14 +504,36 @@ def create_reviewable_bundle(
 # ---------------------------------------------------------------------------
 
 
+# Review-screen debug-log preview: the bundle FILE carries the full
+# log; the SCREEN preview caps it so the review stays readable (and
+# a multi-megabyte capture log cannot bury the wizard's console).
+REVIEW_LOG_PREVIEW_LINES = 40
+
+
 def render_review(bundle: AssembledBundle) -> str:
     """Render the review screen from the REDACTED artifact itself.
 
     The user sees the bundle's own contents — never anything
     unredacted — plus the plain-language privacy statement (no audio,
     no transcript content, identifiers redacted) that lets a user
-    report with confidence (stories 11-14).
+    report with confidence (stories 11-14). The debug-log section is
+    previewed (its final lines, with the elided count noted); the
+    written artifact carries the complete log.
     """
+    text = bundle.text
+    marker = "== debug log"
+    head, sep, tail = text.partition(marker)
+    if sep:
+        lines = tail.splitlines()
+        # Re-attach the header line (lines[0] is the rest of it).
+        header, body = lines[0], lines[1:]
+        if len(body) > REVIEW_LOG_PREVIEW_LINES:
+            preview = [header] + [
+                f"  (... {len(body) - REVIEW_LOG_PREVIEW_LINES} earlier "
+                "log lines elided — the full log is in the bundle "
+                "file ...)"
+            ] + body[-REVIEW_LOG_PREVIEW_LINES:]
+            text = head + marker + "\n".join(preview)
     header = [
         "=" * 60,
         "REVIEW — here is what will be sent",
@@ -531,4 +553,4 @@ def render_review(bundle: AssembledBundle) -> str:
         "-" * 60,
         "",
     ]
-    return "\n".join(header) + bundle.text
+    return "\n".join(header) + text

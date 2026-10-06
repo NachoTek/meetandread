@@ -442,6 +442,29 @@ class TestSupervisedCleanRun:
         )
         assert "user-stop description" in desc
 
+        # The #108 review step ran in the wizard: the assembled,
+        # redacted bundle was written into the capture directory (the
+        # review screen shows exactly this artifact), the wizard's
+        # output named it, and the bundle itself contains no username
+        # from the sandboxed profile.
+        bundle = capture_dir / "diagnostics_bundle.txt"
+        assert bundle.is_file(), "review step wrote no bundle artifact"
+        bundle_text = bundle.read_text(encoding="utf-8")
+        assert "diagnostics bundle v1" in bundle_text
+        assert "== environment ==" in bundle_text
+        assert "== termination ==" in bundle_text
+        assert "user_stop" in bundle_text
+        assert env["USERNAME"] not in bundle_text, (
+            "sandbox username leaked into the bundle"
+        )
+        assert str(Path(env["USERPROFILE"])) not in bundle_text, (
+            "sandbox home path leaked into the bundle"
+        )
+        out_full = (tmp_path / "reporter-stdout.txt").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        assert "what will be sent" in out_full
+
 
 # ---------------------------------------------------------------------------
 # 2. Supervised crash run (hard kill mid-run; reporter survives)
@@ -508,6 +531,18 @@ class TestSupervisedCrashRun:
         # The run's artifacts survived the crash for the bundle.
         assert (capture_dir / CLAIM_FILE_NAME).is_file()
         assert list(capture_dir.glob(f"{CAPTURE_LOG_PREFIX}*.log"))
+
+        # The #108 review step assembled the CRASHED run's directory
+        # too — incompleteness is a value, never an assembly failure:
+        # the bundle exists and records the crash.
+        bundle = capture_dir / "diagnostics_bundle.txt"
+        assert bundle.is_file(), (
+            "review step wrote no bundle for the crashed run"
+        )
+        crash_text = bundle.read_text(encoding="utf-8")
+        assert "crash" in crash_text
+        assert "completion marker: absent" in crash_text
+        assert env["USERNAME"] not in crash_text
         # The wizard TOLD the user the crash was captured.
         assert "exited unexpectedly" in out
 
