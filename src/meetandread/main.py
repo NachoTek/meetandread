@@ -522,7 +522,27 @@ def main(capture_dir: Optional[Path] = None):
             "hardware_detection_failed: error_class=%s",
             type(e).__name__,
         )
-    
+
+    # Environment info refinement (issue #108): the bootstrap wrote
+    # the artifact with stdlib-only facts; now that the app side is
+    # up, refine the hardware class from the REAL detected specs —
+    # via environment_info's own prompt-flush discipline (the one
+    # sanctioned rewrite; detection failure leaves the bootstrap's
+    # "unknown" in place).
+    if capture_dir is not None:
+        try:
+            from meetandread.environment_info import (
+                refine_environment_info,
+            )
+
+            refine_environment_info(capture_dir)
+            logger.debug("environment_info_refined:")
+        except Exception as e:
+            logger.warning(
+                "environment_info_refine_failed: error_class=%s",
+                type(e).__name__,
+            )
+
     # Check hardware requirements and warn if below minimum
     try:
         check_hardware_requirements()
@@ -653,6 +673,20 @@ def main(capture_dir: Optional[Path] = None):
         except Exception as e:
             logger.warning(
                 "snapshot_series_teardown_failed: error_class=%s",
+                type(e).__name__,
+            )
+        # Transcript canary registry teardown (issue #108): close the
+        # registry writer in the same teardown window — sampling stops
+        # with the application it guards.
+        try:
+            from meetandread.transcript_canary import (
+                close_canary_registry,
+            )
+
+            close_canary_registry()
+        except Exception as e:
+            logger.warning(
+                "transcript_canary_teardown_failed: error_class=%s",
                 type(e).__name__,
             )
 

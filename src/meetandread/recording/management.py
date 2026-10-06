@@ -218,6 +218,15 @@ def rename_recording(
     _validate_stem(old_stem)
     _validate_stem(new_stem)
 
+    # Recording-title canary sampling (issue #108): in a capture run,
+    # the user-chosen title (the new stem) is registered as hashed
+    # n-grams so bundle assembly can PROVE no title leaked into the
+    # diagnostics. No-op in a normal run; the stem itself never
+    # enters any diagnostics artifact (logs below stay redacted).
+    from meetandread.transcript_canary import record_canary_text
+
+    record_canary_text(new_stem)
+
     rec_dir, tra_dir = _resolve_dirs(recordings_dir, transcripts_dir)
 
     result = RenameResult(old_stem=old_stem, new_stem=new_stem)

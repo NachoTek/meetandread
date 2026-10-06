@@ -133,7 +133,7 @@ class TestWizardHappyPath:
         text = out.text()
         assert "describe the problem" in text.lower()
         assert "reproduce the problem" in text.lower()
-        assert "Diagnostics saved" in text
+        assert "what will be sent" in text  # the #108 review step
 
     def test_crashed_app_wizard_completes_and_records_crash(
         self, tmp_path
@@ -282,3 +282,121 @@ class TestMainCrashHandling:
     def test_main_happy_path_returns_0(self, monkeypatch):
         monkeypatch.setattr(wizard, "run_wizard", lambda **k: None)
         assert wizard.main([]) == 0
+
+
+class TestReviewStep:
+    """The #108 review step: after the run (or a resume), the wizard
+    assembles the Diagnostics Bundle and shows the user exactly what
+    will be sent — the redacted artifact itself, or the fail-closed
+    "submission unavailable" verdict."""
+
+    def test_review_step_shows_bundle_and_writes_artifact(
+        self, tmp_path
+    ):
+        inp = ScriptedInput(["desc", ""])
+        out = Lines()
+        run = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CLEAN),
+            input_fn=inp,
+            print_fn=out,
+        )
+        assert run is not None
+        text = out.text()
+        assert "what will be sent" in text
+        assert "NO audio and NO transcript" in text
+        assert "diagnostics_bundle.txt" in text
+        bundle = run.capture_dir / "diagnostics_bundle.txt"
+        assert bundle.exists()
+        written = bundle.read_text(encoding="utf-8")
+        # The review shows the redacted artifact itself.
+        assert "== environment ==" in written
+        assert "clean_stop" in written or "user_stop" in written
+
+    def test_review_step_on_crash_still_reviews(self, tmp_path):
+        inp = ScriptedInput(["desc", ""])
+        out = Lines()
+        run = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CRASH),
+            input_fn=inp,
+            print_fn=out,
+        )
+        assert run is not None
+        assert run.outcome == RunOutcome.CRASH
+        assert (run.capture_dir / "diagnostics_bundle.txt").exists()
+        assert "what will be sent" in out.text()
+        assert "crash" in (
+            run.capture_dir / "diagnostics_bundle.txt"
+        ).read_text(encoding="utf-8")
+
+    def test_review_step_fail_closed_blocks_submission(self, tmp_path):
+        # Seed a poisoned canary leak into a capture log that appears
+        # during the run: assembly must fail closed, the wizard tells
+        # the user submission is unavailable, and NO artifact exists.
+        import json as _json
+
+        import meetandread.diagnostics_bundle
+        from meetandread.transcript_canary import canary_ngrams
+
+        secret = "Sebastopol canary spoken words recorded"
+        inp = ScriptedInput(["desc", ""])
+        out = Lines()
+
+        real_create = (
+            meetandread.diagnostics_bundle.create_reviewable_bundle
+        )
+
+        def leaky_create(capture_dir, identifiers=None):
+            log = capture_dir / "meetandread_capture_20260910_100000.log"
+            if not log.exists():
+                log.write_text(
+                    f"leak: {secret}\n", encoding="utf-8"
+                )
+                body = "".join(
+                    _json.dumps({"gram": g}) + "\n"
+                    for g in sorted(canary_ngrams(secret))
+                )
+                (capture_dir / "transcript_canary.jsonl").write_text(
+                    body, encoding="utf-8"
+                )
+            return real_create(capture_dir, identifiers=identifiers)
+
+        meetandread.diagnostics_bundle.create_reviewable_bundle = (
+            leaky_create
+        )
+        try:
+            run = wizard.run_wizard(
+                data_base=tmp_path,
+                app_command=_stub_command(STUB_APP_CLEAN),
+                input_fn=inp,
+                print_fn=out,
+            )
+        finally:
+            meetandread.diagnostics_bundle.create_reviewable_bundle = (
+                real_create
+            )
+        assert run is not None
+        assert not (run.capture_dir / "diagnostics_bundle.txt").exists()
+        text = out.text()
+        assert "UNAVAILABLE" in text
+        assert "canary_leak" in text
+
+    def test_resume_path_reviews_too(self, tmp_path):
+        captures = tmp_path / "captures"
+        d = captures / "run-old"
+        d.mkdir(parents=True)
+        (d / "capture_run.claim").write_text(
+            '{"started_at": "2026-09-09T09:00:00"}\n', encoding="utf-8"
+        )
+        inp = ScriptedInput(["y"])
+        out = Lines()
+        result = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CLEAN),
+            input_fn=inp,
+            print_fn=out,
+        )
+        assert result is None
+        assert "what will be sent" in out.text()
+        assert (d / "diagnostics_bundle.txt").exists()

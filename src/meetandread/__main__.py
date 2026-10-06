@@ -55,6 +55,28 @@ def _bootstrap() -> None:
         _CAPTURE_FLAG_PARSED = capture_dir
         if capture_dir is not None:
             configure_capture_logging(capture_dir)
+            # Capture-side #108 artifacts, written BEFORE any app
+            # subsystem import so even a startup crash's bundle
+            # carries them: the environment info (stdlib-only half —
+            # hardware class is refined later by main()) and the
+            # transcript canary registry (hashed grams only, ready
+            # for the capture boundary's sampling funnels).
+            from meetandread.environment_info import (
+                _stdlib_environment_facts,
+                write_environment_info,
+            )
+            from meetandread.transcript_canary import (
+                install_canary_registry,
+            )
+
+            facts = _stdlib_environment_facts()
+            write_environment_info(
+                capture_dir,
+                app_version=facts["app_version"],
+                os_name=facts["os"],
+                hardware_class=facts["hardware_class"],
+            )
+            install_canary_registry(capture_dir)
     except CaptureModeError as exc:
         # Pre-logging path: the root logger's lastResort handler routes
         # ERROR to stderr (same discipline as main()'s refusals).

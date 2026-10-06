@@ -1870,6 +1870,15 @@ class RecordingController:
             result.confidence, result.is_final, result.segment_index,
         )
 
+        # Transcript canary sampling (issue #108): in a capture run,
+        # the segment text — THE transcript content the bundle must
+        # never contain — is registered as hashed n-grams so assembly
+        # can PROVE no leak. No-op in a normal run; the text itself
+        # never reaches any log line or diagnostics artifact.
+        from meetandread.transcript_canary import record_canary_text
+
+        record_canary_text(result.text)
+
         # Attempt live speaker matching (conservative; attaches name only
         # for high-confidence known-speaker matches)
         try:
