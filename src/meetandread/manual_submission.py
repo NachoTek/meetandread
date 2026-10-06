@@ -121,7 +121,7 @@ class SubmissionUnavailable:
 SubmissionResult = Union[SubmissionDraft, SubmissionUnavailable]
 
 
-def _clip(text: str, limit: int) -> str:
+def _truncate_marked(text: str, limit: int) -> str:
     """Trim *text* to *limit* chars, marking the cut. Word-safe when
     possible (the marker makes an over-long description visibly
     truncated, never silently shorn)."""
@@ -171,16 +171,24 @@ def build_submission(
     # to a single line (a query-param title has no newlines).
     if description:
         first_line = description.strip().splitlines()[0].strip()
-        title = _clip(first_line, MAX_TITLE_LEN)
+        title = _truncate_marked(first_line, MAX_TITLE_LEN)
     else:
         title = FALLBACK_TITLE
 
     # The body: description (full, redacted) + attach instructions.
+    # The instructions are budgeted FIRST — an over-long description
+    # shrinks (markedly truncated), but the neutral filename and the
+    # attach-by-hand instructions ALWAYS survive into the prefilled
+    # body (AC: the body states plainly that the user must attach
+    # the bundle by hand — a cut tail must never delete them).
     if description:
-        body = _clip(
-            description.strip() + "\n\n" + _BODY_INSTRUCTIONS,
-            MAX_BODY_LEN,
+        budget = MAX_BODY_LEN - (
+            len(_BODY_INSTRUCTIONS) + 2
         )
+        trimmed = _truncate_marked(
+            description.strip(), max(budget, 0)
+        )
+        body = trimmed + "\n\n" + _BODY_INSTRUCTIONS
     else:
         body = _BODY_INSTRUCTIONS
 

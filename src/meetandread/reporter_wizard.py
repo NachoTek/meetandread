@@ -96,6 +96,14 @@ InputFn = Callable[[str], str]
 PrintFn = Callable[..., None]
 
 
+def _ask_yes(input_fn: InputFn, prompt: str) -> bool:
+    """A [Y/n] prompt: empty or yes-family answers are Yes (the
+    wizard's recovery, submit — every step whose default is proceed).
+    """
+    answer = input_fn(prompt).strip().lower()
+    return answer in ("", "y", "yes")
+
+
 def _install_excepthook() -> None:
     """Reporter-level crash handling: an uncaught Python exception
     prints where the capture data lives before the process dies, so
@@ -134,14 +142,15 @@ def offer_recovery(
     resumable = find_resumable_captures(data_base)
     if not resumable:
         return None
+    from meetandread.diagnostics_bundle import AssemblyFailure
+
     for candidate in resumable:
         state = scan_capture_state(candidate)
         print_fn(
             f"\nFound an interrupted capture run from a previous "
             f"session:\n  {candidate}\n  (state: {state.state_name})"
         )
-        answer = input_fn("Resume it? [Y/n] ").strip().lower()
-        if answer in ("", "y", "yes"):
+        if _ask_yes(input_fn, "Resume it? [Y/n] "):
             resume_capture(candidate, data_base)
             print_fn(
                 "Resumed. The captured diagnostics are ready for "
@@ -150,7 +159,7 @@ def offer_recovery(
             result = review_capture(candidate, print_fn)
             # The resumed run's submission (#109) continues from the
             # re-reviewed bundle exactly like a fresh run's.
-            if not hasattr(result, "reason"):
+            if not isinstance(result, AssemblyFailure):
                 submit_capture(
                     result, candidate, input_fn, print_fn
                 )
@@ -445,21 +454,25 @@ def submit_capture(
     input_fn: InputFn,
     print_fn: PrintFn,
     identifiers=None,
-):
+) -> "object":
     """The #109 Manual Submission step: after the review screen (the
-    user's approval of "here is what will be sent"), offer to open
-    the prefilled GitHub New Issue form in the default browser and
-    copy the bundle's full local path to the clipboard.
+    user's approval of "here is what will be sent"), copy the
+    bundle's full local path to the clipboard and offer to open the
+    prefilled GitHub New Issue form in the default browser.
 
     The browser open is the single outbound action of the whole
     reporting feature (ADR 0004) — and it happens only on the
-    user's Yes. Declining keeps everything on disk and on screen;
-    the bundle can still be submitted by hand any time. Returns the
-    submission result for tests.
+    user's Yes. The clipboard copy (local, private) runs for every
+    answered prompt so the path is on the clipboard whether or not
+    the browser opens: attaching the bundle by hand must remain one
+    paste away on every branch. Returns the submission draft, the
+    fail-closed ``SubmissionUnavailable``, or None when review
+    itself failed closed (for tests).
     """
     from meetandread import manual_submission as ms
+    from meetandread.diagnostics_bundle import AssemblyFailure
 
-    if hasattr(review_result, "reason"):
+    if isinstance(review_result, AssemblyFailure):
         # Review failed closed: there is nothing submittable. The
         # review step already told the user why; nothing opens, the
         # clipboard stays untouched.
@@ -483,13 +496,22 @@ def submit_capture(
         "the title and description filled in — filed from YOUR\n"
         "GitHub account (which also subscribes you to answers)."
     )
-    answer = input_fn(
-        "Open the issue form now? [Y/n] "
-    ).strip().lower()
-    if answer not in ("", "y", "yes"):
+    proceed = _ask_yes(input_fn, "Open the issue form now? [Y/n] ")
+    # The path is on the clipboard on EVERY branch from here (the
+    # clipboard is local and private — unlike the browser open, it
+    # needs no approval): attach-by-hand stays one paste away.
+    if ms.copy_to_clipboard(draft.clipboard_text):
+        print_fn(f"Bundle path (on your clipboard):\n"
+                 f"  {draft.clipboard_text}")
+    else:
         print_fn(
-            "Not opened. Nothing has left your machine. The bundle\n"
-            f"stays ready on disk:\n  {draft.bundle_path}"
+            "(could not reach the clipboard — copy this path by\n"
+            f" hand: {draft.clipboard_text})"
+        )
+    if not proceed:
+        print_fn(
+            "Browser not opened — nothing has left your machine.\n"
+            f"The bundle stays ready on disk:\n  {draft.bundle_path}"
         )
         return draft
     if not ms.open_new_issue_form(draft.url):
@@ -503,15 +525,8 @@ def submit_capture(
             "IMPORTANT: GitHub cannot attach files automatically —\n"
             "ATTACH THE BUNDLE FILE BY HAND before submitting:\n"
             f"  file to attach: {ms.BUNDLE_FILE_NAME}\n"
-            "  (its full path is below and was copied to your\n"
-            "  clipboard)"
-        )
-    if ms.copy_to_clipboard(draft.clipboard_text):
-        print_fn(f"  clipboard: {draft.clipboard_text}")
-    else:
-        print_fn(
-            "  (could not reach the clipboard — copy this path by\n"
-            f"  hand: {draft.clipboard_text})"
+            "  (drag it into the GitHub form; its full path is on\n"
+            "  your clipboard and shown above)"
         )
     return draft
 

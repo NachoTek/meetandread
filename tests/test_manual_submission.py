@@ -174,6 +174,12 @@ class TestPrefilledIssue:
         assert len(draft.body) <= msub.MAX_BODY_LEN
         # The truncation keeps the head of the user's words.
         assert draft.title.startswith("freeze freeze")
+        # THE attach contract survives truncation: an over-long
+        # description shrinks, but the neutral filename and the
+        # attach-by-hand instructions always reach the prefilled
+        # body (a cut tail must never delete them).
+        assert BUNDLE_FILE_NAME in draft.body
+        assert "attach" in draft.body.lower()
 
     def test_multiline_description_flattens_into_title(self, tmp_path):
         d = _reviewed(tmp_path, "line one\nline two\nline three")
@@ -315,7 +321,7 @@ class TestSubmitStep:
         assert "attach" in text.lower()
         assert "clipboard" in text.lower()
 
-    def test_declining_keeps_artifacts_and_opens_nothing(
+    def test_declining_still_copies_path_but_opens_nothing(
         self, tmp_path, monkeypatch
     ):
         run, text, opened, copied = self._run_wizard_to_submit(
@@ -323,7 +329,12 @@ class TestSubmitStep:
         )
         assert run is not None
         assert opened == []
-        assert copied == []
+        # The clipboard copy is local and needs no approval: the
+        # path is on the clipboard on EVERY branch, so attaching by
+        # hand stays one paste away even without the browser.
+        assert copied == [
+            str(run.capture_dir / BUNDLE_FILE_NAME)
+        ]
         # Everything the user needs stays on screen and on disk.
         assert (run.capture_dir / BUNDLE_FILE_NAME).is_file()
         assert BUNDLE_FILE_NAME in text
@@ -335,12 +346,17 @@ class TestSubmitStep:
             tmp_path, "y", monkeypatch
         )
         assert run is not None
+        # Snapshot the on-disk bytes the submit step offered BEFORE
+        # any re-assembly — then re-assemble and require the fresh
+        # artifact to match those exact bytes (the submit step never
+        # rewrote the file the user reviewed).
         bundle_path = run.capture_dir / BUNDLE_FILE_NAME
+        on_disk = bundle_path.read_bytes()
         reviewed = create_reviewable_bundle(
             run.capture_dir, identifiers=IDS
         )
         assert not hasattr(reviewed, "reason")
-        assert bundle_path.read_bytes() == reviewed.text.encode(  # type: ignore[union-attr]
+        assert on_disk == reviewed.text.encode(  # type: ignore[union-attr]
             "utf-8"
         )
 
