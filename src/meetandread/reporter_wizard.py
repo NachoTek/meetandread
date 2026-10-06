@@ -1,11 +1,11 @@
 """Issue Reporter wizard — the console front-end over the supervisor
-core (issue #107, docs/specs/issue-reporting.md, ADR 0003).
+core (issue #107/#108, docs/specs/issue-reporting.md, ADR 0003/0004).
 
 Stdlib-only like ``reporter.py`` (the defense discipline binds the
 whole reporter program): no audio stack, no Qt. The wizard owns the
-user-facing flow — describe → launch → reproduce → stop — with
-review/submit deferred to #108/#109 (the flow prints where they will
-slot in, so a user is never left guessing).
+user-facing flow — describe → launch → reproduce → stop → review —
+with submit deferred to #109 (the flow prints where it will slot in,
+so a user is never left guessing).
 
 ## Flow
 
@@ -27,8 +27,12 @@ slot in, so a user is never left guessing).
    path the capture-mode tests drive) and waits for the clean exit.
    If the app crashed on its own, the wizard reports the crash and
    CONTINUES — the crash itself is always reportable.
-6. **End**: print the termination outcome and the capture directory;
-   review/submission (#108/#109) continues from the directory alone.
+6. **Review** (issue #108): assemble the Diagnostics Bundle from the
+   capture directory alone (redaction first — nothing unredacted is
+   ever shown), and show the user "here is what will be sent". On
+   any assembly/redaction failure the user is told submission is
+   unavailable and NO artifact is written (fail-closed, ADR 0004).
+   Submission (#109) continues from the written bundle.
 
 ## Crash handling (the reporter must be hard to kill)
 
@@ -135,10 +139,9 @@ def offer_recovery(
             resume_capture(candidate, data_base)
             print_fn(
                 "Resumed. The captured diagnostics are ready for "
-                "review.\n(The review and submission steps arrive with "
-                "the next update; the capture directory above holds "
-                "everything.)"
+                "review."
             )
+            review_capture(candidate, print_fn)
             return candidate
         print_fn("Skipped.")
     print_fn("No more interrupted runs — starting a fresh flow.")
@@ -347,8 +350,8 @@ def run_wizard(
     except OSError:
         print_fn("(Could not save the description alongside the run.)")
 
-    # 6. Report the outcome; review/submit continue from the
-    #    directory alone (#108/#109).
+    # 6. Report the outcome; review continues from the directory
+    #    alone (#108; submission is #109).
     if run.final_outcome() == RunOutcome.CRASH:
         print_fn(
             f"\nmeetandread exited unexpectedly (code {run.exit_code}).\n"
@@ -357,12 +360,68 @@ def run_wizard(
         )
     else:
         print_fn("\nCapture run finished cleanly.")
-    print_fn(
-        f"\nDiagnostics saved in:\n  {capture_dir}\n"
-        "(The review screen and submission flow arrive with the next\n"
-        "update; nothing leaves your machine.)"
+
+    # 7. Review screen (issue #108): assemble the Diagnostics Bundle
+    #    from the directory alone (any state), show the user exactly
+    #    what will be sent. Fail-closed: on any assembly/redaction
+    #    failure NO artifact is written and the user is told
+    #    submission is unavailable — never a raw fallback.
+    review_capture(
+        capture_dir, print_fn, identifiers=None
     )
     return run
+
+
+def review_capture(
+    capture_dir: Path,
+    print_fn: PrintFn,
+    identifiers=None,
+):
+    """Assemble the bundle and render the review screen.
+
+    The #108 seam in the wizard: the pure core
+    (``diagnostics_bundle``) does everything; this layer only prints.
+    On success the review screen shows the REDACTED artifact itself
+    ("here's what will be sent") — nothing unredacted is ever
+    displayed. On failure the user is told submission is unavailable
+    and why (component named, no leaked content in the message).
+    Returns the assembly result for tests.
+    """
+    from meetandread.diagnostics_bundle import (
+        AssemblyFailure,
+        create_reviewable_bundle,
+        default_identifiers,
+        render_review,
+    )
+
+    ids = identifiers if identifiers is not None else (
+        default_identifiers()
+    )
+    print_fn("\nAssembling the Diagnostics Bundle...")
+    result = create_reviewable_bundle(capture_dir, identifiers=ids)
+    if isinstance(result, AssemblyFailure):
+        print_fn(
+            "\nSubmission is UNAVAILABLE for this capture run.\n"
+            f"Reason: {result.reason}"
+            + (
+                f" (component: {result.component})"
+                if result.component
+                else ""
+            )
+            + f"\n{result.detail}\n"
+            "No report file was created — nothing unreviewed or\n"
+            "unredacted will leave your machine. The capture data\n"
+            "remains on disk for a manual inspection."
+        )
+        return result
+    print_fn(render_review(result))
+    print_fn(
+        f"\nDiagnostics Bundle (redacted, ready to submit):\n"
+        f"  {result.path}\n"
+        "(The submission step arrives with the next update; nothing\n"
+        "leaves your machine.)"
+    )
+    return result
 
 
 def main(argv: Optional[List[str]] = None) -> int:
