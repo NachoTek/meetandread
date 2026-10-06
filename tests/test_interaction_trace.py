@@ -26,6 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
+import meetandread.durable_jsonl as djsonl
 import meetandread.interaction_trace as itrace
 from meetandread.interaction_trace import (
     EVENT_VOCABULARY,
@@ -241,7 +242,7 @@ class TestDurabilityWriteSide:
             buf.extend(data[:n])
             return n
 
-        with patch.object(itrace.os, "write", side_effect=fake_os_write):
+        with patch.object(djsonl.os, "write", side_effect=fake_os_write):
             ok = writer.emit(self.PAYLOAD)
         assert ok is True
         assert bytes(buf) == line
@@ -260,7 +261,7 @@ class TestDurabilityWriteSide:
                 return 0
             raise OSError("write side closed")
 
-        with patch.object(itrace.os, "write", side_effect=stop_after_zero):
+        with patch.object(djsonl.os, "write", side_effect=stop_after_zero):
             ok = writer.emit(self.PAYLOAD)
         assert ok is False
         assert (trace_dir / TRACE_FILE_NAME).read_bytes() == b""
@@ -274,7 +275,7 @@ class TestDurabilityWriteSide:
         def zero_write(fd, data):
             return 0
 
-        with patch.object(itrace.os, "write", side_effect=zero_write):
+        with patch.object(djsonl.os, "write", side_effect=zero_write):
             ok = writer.emit(self.PAYLOAD)
         assert ok is False
         raw = (trace_dir / TRACE_FILE_NAME).read_bytes()
@@ -288,7 +289,7 @@ class TestDurabilityWriteSide:
         writer = self._writer(trace_dir)
         line = self._line()
         state = {"first": True}
-        real_os_write = itrace.os.write  # the true stdlib os.write
+        real_os_write = djsonl.os.write  # the true stdlib os.write
 
         def partial_then_error(fd, data):
             if state["first"]:
@@ -301,14 +302,14 @@ class TestDurabilityWriteSide:
             raise OSError("disk went away mid-record")
 
         with patch.object(
-            itrace.os, "write", side_effect=partial_then_error
+            djsonl.os, "write", side_effect=partial_then_error
         ):
             ok = writer.emit(self.PAYLOAD)
         assert ok is False
 
         # Retry after the partial failure: the writer is poisoned —
         # no append to the unterminated fragment, no True.
-        with patch.object(itrace.os, "write") as mock_write:
+        with patch.object(djsonl.os, "write") as mock_write:
             ok2 = writer.emit(self.PAYLOAD)
         assert ok2 is False
         mock_write.assert_not_called()
@@ -330,7 +331,7 @@ class TestDurabilityWriteSide:
 
         # os.write full-success; os.fsync OSError after it.
         with patch.object(
-            itrace.os, "fsync", side_effect=OSError("fsync failed")
+            djsonl.os, "fsync", side_effect=OSError("fsync failed")
         ):
             ok = writer.emit(self.PAYLOAD)
         assert ok is False

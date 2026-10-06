@@ -66,17 +66,20 @@ that create nothing anywhere.
 
 This module is stdlib-only by design (like ``capture_mode``): it is
 imported before/independently of any Qt or native-audio subsystem and
-stays fast-lane testable (ADR 0001).
+stays fast-lane testable (ADR 0001). The durable JSONL write side
+lives in ``durable_jsonl.DurableJSONLWriter`` — shared verbatim with
+the Resource Snapshot series (#106) — so both capture series have the
+same durability semantics by construction.
 """
 
 import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
 from meetandread.capture_mode import read_appendable_records
+from meetandread.durable_jsonl import DurableJSONLWriter
 
 # Filename of the Interaction Trace inside the capture dir. One capture
 # directory holds one run (#104) and one trace; treat as stable contract.
@@ -116,108 +119,33 @@ class InteractionTraceError(Exception):
     """
 
 
-class _TraceWriter:
-    """Durable append-only JSONL writer: one event, one line, fsynced.
+class _TraceWriter(DurableJSONLWriter):
+    """The trace's durable JSONL writer: one event, one line, fsynced.
 
-    The file is opened once with ``O_APPEND | O_CREAT | O_EXCL`` (one
-    trace per capture run — same exclusivity discipline as the #104
-    capture log, never truncating or double-owning) and held for the
-    process lifetime. Each event is formatted, persisted by a loop of
-    ``os.write`` calls that continues across short writes until the
-    full line is on disk (a zero-byte write is an error condition),
-    and fsynced BEFORE :meth:`emit` returns — the durability
-    contract's write side (a forced kill loses at most the one record
-    being written at that instant). There is no Python-side buffer
-    that could hold a completed record.
+    Thin adapter over the shared ``durable_jsonl.DurableJSONLWriter``
+    (extracted verbatim from this class in #106 so the Interaction
+    Trace and the Resource Snapshot series share one durability
+    implementation): opens the trace file exclusively (one trace per
+    capture run — the #104 exclusivity discipline), persists each
+    record fully before :meth:`emit` returns, and follows the
+    documented write-path failure semantics (short-write loop;
+    partial-write poisoning; fsync-failure tolerance) — see the
+    ``durable_jsonl`` module docstring.
 
-    Write-path failure semantics (documented contract, PR #123
-    review):
-
-    - ``os.write`` short-write → keep writing the remainder (loop).
-    - zero-byte write → error condition (``False``, no fsync); the
-      record boundary is intact (nothing landed), so the writer stays
-      usable for later emits.
-    - error after a PARTIAL write (≥1 byte of the record landed, then
-      the write failed) → the file now ends in an unterminated
-      fragment; the writer is PERMANENTLY POISONED — every later
-      emit returns ``False`` without writing, so no later record can
-      append to the fragment and claim success for a line that would
-      read back as one malformed merged record. The fragment stays as
-      the single torn tail the reader already tolerates. Chosen over
-      best-effort boundary repair (writing a lone newline): after a
-      partial-write failure the storage itself is failing, so the
-      honest, fail-closed move is to stop claiming writes.
-    - error at ``fsync`` AFTER the full line reached the OS → the
-      record boundary is intact, so the writer is NOT poisoned;
-      ``False`` is returned (the durability promise was not met) and
-      later emits append cleanly.
+    A pre-existing trace file (another run's) is refused at
+    construction with :class:`InteractionTraceError` — the same
+    refusal class as every capture-mode startup conflict.
     """
 
     def __init__(self, path: Path):
-        self._path = Path(path)
-        self._closed = False
-        self._poisoned = False
         try:
-            self._fd = os.open(
-                str(self._path), os.O_APPEND | os.O_CREAT | os.O_EXCL | os.O_WRONLY
-            )
+            super().__init__(path, kind="interaction_trace")
         except FileExistsError as exc:
             raise InteractionTraceError(
-                f"interaction trace file already exists: '{self._path}' "
+                f"interaction trace file already exists: '{path}' "
                 "— one capture run holds one trace; pass a fresh capture "
                 "directory"
             ) from exc
-
-    @property
-    def path(self) -> Path:
-        return self._path
-
-    def emit(self, payload: dict) -> bool:
-        """Append one JSON line durably; True when it reached the disk.
-
-        ``os.write`` may legally short-write (or write zero bytes), so
-        the loop persists the FULL buffer — a partial count re-writes
-        the remainder, a zero-byte write is an error condition — and
-        only then fsyncs. True means the whole line is on disk.
-
-        An error after a PARTIAL write poisons the writer (see the
-        class docstring): later emits return False without writing,
-        so nothing can append to the unterminated fragment.
-        """
-        if self._closed or self._poisoned:
-            return False
-        line = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
-        view = memoryview(line)
-        try:
-            while view:
-                written = os.write(self._fd, view)
-                if written <= 0:
-                    raise OSError(
-                        f"trace write wrote {written} of {len(view)} "
-                        "remaining bytes"
-                    )
-                view = view[written:]
-            os.fsync(self._fd)
-            return True
-        except OSError:
-            if 0 < len(view) < len(line):
-                # PARTIAL write then failure: the file now ends in an
-                # unterminated fragment. Poison — never append to it.
-                # (A full write's later fsync failure leaves the view
-                # empty and the record boundary intact — not poisoned.)
-                self._poisoned = True
-            logger.exception(
-                "interaction_trace_write_failed: file=%s", self._path.name
-            )
-            return False
-
-    def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            try:
-                os.close(self._fd)
-            except OSError:
-                pass
 
 
 # The trace writer THIS process has installed (None in a normal run).
