@@ -18,13 +18,59 @@ permissions:
 
 jobs:
   lint-and-test:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
+      # The runner service (NETWORK SERVICE, non-admin) cannot use
+      # actions/setup-python: its Windows toolcache installer does an
+      # all-users MSI install + HKLM registry cleanup, both elevation-
+      # only. Locate a Python 3.10 the service account can run instead:
+      # 1) a preinstalled system interpreter (e.g. C:\Python310),
+      # 2) the account's per-user install,
+      # 3) else install per-user (no elevation required) from the
+      #    actions/python-versions bundle.
+      - name: Set up Python 3.10 (no elevation)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            'C:\Python310',
+            (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310'),
+            (Join-Path $env:RUNNER_TOOL_CACHE 'PythonUser\3.10.11\x64')
+          )
+          $found = $null
+          foreach ($c in $candidates) {
+            $exe = Join-Path $c 'python.exe'
+            if (Test-Path $exe) {
+              $v = & $exe --version 2>&1
+              if ("$v" -match '3\.10\.') { $found = $c; break }
+            }
+          }
+          if (-not $found) {
+            Write-Host 'No local Python 3.10 — installing per-user 3.10.11...'
+            $tmp = Join-Path $env:RUNNER_TEMP 'pyuser'
+            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+            $zip = Join-Path $tmp 'python-3.10.11-win32-x64.zip'
+            Invoke-WebRequest -Uri 'https://github.com/actions/python-versions/releases/download/3.10.11-11114431484/python-3.10.11-win32-x64.zip' -OutFile $zip
+            Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
+            $exe = Join-Path $tmp 'python-3.10.11-amd64.exe'
+            $found = Join-Path $env:RUNNER_TOOL_CACHE 'PythonUser\3.10.11\x64'
+            New-Item -ItemType Directory -Force -Path $found | Out-Null
+            $p = Start-Process -FilePath $exe -ArgumentList '/quiet',"TargetDir=$found",'InstallAllUsers=0','PrependPath=0','Include_test=0','Include_launcher=0','InstallLauncherAllUsers=0' -Wait -PassThru
+            if (-not (Test-Path (Join-Path $found 'python.exe'))) {
+              # The bundle no-ops when the same per-user 3.10 already
+              # exists (exit 0, nothing installed) — use that copy.
+              $fallback = Join-Path $env:LOCALAPPDATA 'Programs\Python\Python310'
+              if (Test-Path (Join-Path $fallback 'python.exe')) { $found = $fallback }
+              else { throw "per-user Python install failed (exit $($p.ExitCode))" }
+            }
+            Write-Host "Installed per-user Python at $found"
+          }
+          $resolved = (Resolve-Path $found).Path
+          Write-Host "Using Python at $resolved"
+          Add-Content -Path $env:GITHUB_PATH -Value $resolved
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $resolved 'Scripts')
+          & (Join-Path $resolved 'python.exe') --version
 
       - run: pip install -e ".[dev]"
 
