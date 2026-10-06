@@ -1,0 +1,394 @@
+"""Issue Reporter wizard — the console front-end over the supervisor
+core (issue #107, docs/specs/issue-reporting.md, ADR 0003).
+
+Stdlib-only like ``reporter.py`` (the defense discipline binds the
+whole reporter program): no audio stack, no Qt. The wizard owns the
+user-facing flow — describe → launch → reproduce → stop — with
+review/submit deferred to #108/#109 (the flow prints where they will
+slot in, so a user is never left guessing).
+
+## Flow
+
+1. **Recovery offer** (standalone recovery, amended ADR 0003): on
+   startup, scan for resumable capture directories and offer to
+   resume the newest; declining proceeds to a fresh run.
+2. **Describe**: read the user's free-text description of the
+   problem (carried into the capture directory, and forward to
+   review/submission).
+3. **Single-instance gate** (decided 2026-09-05): if the app is
+   already running, tell the user to close it and wait until they
+   have — capture must start from a clean single instance.
+4. **Launch + reproduce**: create a FRESH capture directory
+   (``new_capture_dir``, ADR 0005), write the description, launch the
+   app in Issue Capture Mode, and supervise. The user reproduces the
+   bug in the app; the wizard waits.
+5. **Stop**: the user presses Enter in the wizard to stop the run —
+   the reporter signals the app (CTRL_BREAK, the graceful user-stop
+   path the capture-mode tests drive) and waits for the clean exit.
+   If the app crashed on its own, the wizard reports the crash and
+   CONTINUES — the crash itself is always reportable.
+6. **End**: print the termination outcome and the capture directory;
+   review/submission (#108/#109) continues from the directory alone.
+
+## Crash handling (the reporter must be hard to kill)
+
+``run_wizard`` wraps the flow in a try/except that catches everything,
+prints the internal error, and STILL names the capture directory on
+disk (when one exists) — an internal reporter error never loses the
+run's artifacts. ``main`` installs ``sys.excepthook`` so an uncaught
+PYTHON-level error still prints where the data lives before exiting;
+a native crash cannot be caught this way, but nothing ever deletes
+the capture directory, so the next reporter startup's recovery scan
+finds it regardless.
+
+## Testability
+
+Every interactive seam is injectable: ``input_fn`` / ``print_fn``
+(defaults: ``input`` / ``print``), ``app_command`` (the stub-app seam
+the subprocess tests drive), and ``data_base`` (where capture
+directories live — ``~/.meetandread-reporter`` by default; tests and
+packaging (#111) point it elsewhere). The wizard is thin: every
+decision lives in the pure ``reporter.py`` core and is tested there.
+"""
+
+import os
+import signal
+import subprocess
+import sys
+import traceback
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, List, Optional
+
+from meetandread.reporter import (
+    RunOutcome,
+    SupervisedRun,
+    app_is_running,
+    find_resumable_captures,
+    new_capture_dir,
+    resume_capture,
+    scan_capture_state,
+    supervise_run,
+    wait_until,
+    write_description,
+)
+
+# Where the reporter keeps capture runs (and finds resumable ones).
+# Kept OUTSIDE the app's Documents tree: the reporter must not depend
+# on the app's storage configuration, and capture artifacts are
+# excluded from the app's retention cleanup by living apart.
+DEFAULT_DATA_BASE = Path.home() / ".meetandread-reporter"
+
+# How long the single-instance gate waits between re-probes.
+_SINGLE_INSTANCE_POLL_S = 1.0
+
+InputFn = Callable[[str], str]
+PrintFn = Callable[..., None]
+
+
+def _install_excepthook() -> None:
+    """Reporter-level crash handling: an uncaught Python exception
+    prints where the capture data lives before the process dies, so
+    the artifacts are discoverable even after a reporter crash. (A
+    NATIVE crash bypasses Python entirely; there is nothing to hook —
+    the data is safe on disk either way, and the next startup's
+    recovery scan finds it.)"""
+
+    def hook(exc_type, exc, tb):
+        sys.stderr.write(
+            "\nIssue Reporter internal error — your capture data is "
+            "safe on disk.\nRun the Issue Reporter again to resume "
+            "the interrupted capture run.\n\n"
+        )
+        traceback.print_exception(exc_type, exc, tb)
+
+    sys.excepthook = hook
+
+
+def offer_recovery(
+    data_base: Path,
+    input_fn: InputFn,
+    print_fn: PrintFn,
+) -> Optional[Path]:
+    """Startup recovery: offer EVERY resumable capture, newest first.
+
+    The spec's recovery scan is plural ("offers to resume incomplete
+    or review-ready capture directories"): each interrupted run is
+    offered in turn — resuming one returns it immediately; declining
+    moves to the next; declining all proceeds to a fresh run. Resuming
+    an ``incomplete`` directory fills in its missing termination
+    record (``resume_capture``, which also reconciles a staged
+    description) so the flow can continue to review exactly as if the
+    run had been supervised to its end.
+    """
+    resumable = find_resumable_captures(data_base)
+    if not resumable:
+        return None
+    for candidate in resumable:
+        state = scan_capture_state(candidate)
+        print_fn(
+            f"\nFound an interrupted capture run from a previous "
+            f"session:\n  {candidate}\n  (state: {state.state_name})"
+        )
+        answer = input_fn("Resume it? [Y/n] ").strip().lower()
+        if answer in ("", "y", "yes"):
+            resume_capture(candidate, data_base)
+            print_fn(
+                "Resumed. The captured diagnostics are ready for "
+                "review.\n(The review and submission steps arrive with "
+                "the next update; the capture directory above holds "
+                "everything.)"
+            )
+            return candidate
+        print_fn("Skipped.")
+    print_fn("No more interrupted runs — starting a fresh flow.")
+    return None
+
+
+def gate_on_single_instance(
+    input_fn: InputFn, print_fn: PrintFn
+) -> None:
+    """The single-instance gate (decided 2026-09-05): if the app is
+    already running, tell the user to close it and wait until they
+    have. The wizard does not proceed while the mutex is held."""
+    if not app_is_running():
+        return
+    print_fn(
+        "\nmeetandread is already running. Please close the open "
+        "meetandread window (and its tray icon) first — the capture "
+        "must start from a clean single instance."
+    )
+    while not wait_until(
+        lambda: not app_is_running(),
+        timeout_s=_SINGLE_INSTANCE_POLL_S,
+        interval_s=_SINGLE_INSTANCE_POLL_S,
+    ):
+        print_fn("Still running — waiting for it to close...")
+    print_fn("Closed. Continuing.")
+
+
+def ask_description(input_fn: InputFn, print_fn: PrintFn) -> str:
+    """The describe step: the user's problem description in their own
+    words. Non-empty (re-asked while empty) — the human context is
+    the one thing the machine diagnostics cannot supply. (Named
+    ``ask_`` to distinguish from ``reporter.read_description``, the
+    capture-directory reader.)"""
+    print_fn(
+        "\nFirst, describe the problem in your own words.\n"
+        "(What did you do, what did you expect, and what happened?)"
+    )
+    while True:
+        text = input_fn("Description> ").strip()
+        if text:
+            return text
+        print_fn("Please describe the problem (a few words are enough).")
+
+
+def _signal_user_stop(proc) -> None:
+    """Ask the app to stop gracefully: CTRL_BREAK on Windows (the
+    same signal the capture-mode clean-exit tests drive, and the
+    Issue Reporter's designated user-stop signal), SIGINT elsewhere.
+    Idempotent: safe to call repeatedly while the app winds down.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            proc.send_signal(signal.SIGINT)
+    except (OSError, ValueError):
+        # Process died between the poll and the signal: nothing to
+        # stop — supervise_run will observe the exit.
+        pass
+
+
+def _graceful_stop(
+    proc, deadline_s: float = 30.0, interval_s: float = 1.0
+) -> bool:
+    """Signal the user stop and give the app time to exit cleanly.
+
+    Returns True when a stop signal was delivered to a LIVE app (the
+    run's stop was user-initiated); False when the app had already
+    exited on its own (its own outcome — clean or crash — stands).
+
+    The stop must be graceful (the app writes its completion marker
+    on the clean-exit path): send CTRL_BREAK, wait, re-send while the
+    process lives — up to the deadline. A hard kill is NEVER used:
+    the wizard's stop must not fabricate a crash out of a healthy
+    app. If the app outlives the deadline it is left running;
+    ``supervise_run`` keeps waiting (the user can still close it by
+    hand, and a genuinely hung app is exactly the bug being
+    reported).
+
+    Before the FIRST signal, give the app a short grace window to
+    exit on its own: the user pressing "Enter to finish" right after
+    the app crashed on its own is the core scenario — the recorded
+    exit must be the app's own crash code, not a stop-signal
+    artifact (CTRL_BREAK to a process without a handler is fatal).
+    """
+    import time as _time
+
+    # Grace window: an app that died during reproduction exits here,
+    # keeping its genuine exit code.
+    try:
+        proc.wait(timeout=2.0)
+        return False
+    except subprocess.TimeoutExpired:
+        pass
+
+    signaled = False
+    deadline = _time.monotonic() + deadline_s
+    while _time.monotonic() < deadline:
+        if proc.poll() is not None:
+            break
+        _signal_user_stop(proc)
+        signaled = True
+        try:
+            proc.wait(timeout=interval_s)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    return signaled
+
+
+def run_wizard(
+    data_base: Optional[Path] = None,
+    app_command: Optional[List[str]] = None,
+    input_fn: InputFn = input,
+    print_fn: PrintFn = print,
+) -> Optional[SupervisedRun]:
+    """Drive the full wizard flow; returns the supervised run (when
+    one was launched), or None when only a recovery resume happened.
+
+    Every failure path prints and returns/raises cleanly — the
+    capture directory on disk is the crash-safe source of truth, and
+    the next reporter startup can always resume from it.
+    """
+    if data_base is None:
+        # Packaging (#111) and tests steer the reporter's data base
+        # via the environment; default is ~/.meetandread-reporter.
+        env_base = os.environ.get("MAR_REPORTER_DATA_BASE")
+        data_base = (
+            Path(env_base) if env_base else DEFAULT_DATA_BASE
+        )
+    data_base = Path(data_base)
+    data_base.mkdir(parents=True, exist_ok=True)
+
+    print_fn(
+        "=" * 60
+        + "\nmeetandread Issue Reporter\n"
+        + "Report a bug by reproducing it under diagnostics capture.\n"
+        + "=" * 60
+    )
+
+    # 1. Standalone recovery (amended ADR 0003): reporter startup is
+    #    the designated recovery path.
+    resumed = offer_recovery(data_base, input_fn, print_fn)
+    if resumed is not None:
+        return None
+
+    # 2. Describe (carried forward for review/submission, #108/#109).
+    description = ask_description(input_fn, print_fn)
+
+    # 3. Single-instance gate: capture starts from a clean instance.
+    gate_on_single_instance(input_fn, print_fn)
+
+    # 4. Launch + reproduce: a FRESH capture directory (ADR 0005) —
+    #    handed to the app EMPTY: the capture-directory contract
+    #    rejects a non-empty directory at entry (exit 2), so the
+    #    description is staged OUTSIDE (in the data base) during the
+    #    run and copied into the capture directory at run end, when
+    #    no entry check can race it.
+    capture_dir = new_capture_dir(data_base)
+    staged_desc = data_base / f"pending-{capture_dir.name}.description"
+    staged_desc.write_text(description + "\n", encoding="utf-8")
+    print_fn(
+        f"\nCapture run: {capture_dir}\n"
+        "Starting meetandread in Issue Capture Mode..."
+    )
+    from meetandread.reporter import launch_app
+
+    proc = launch_app(capture_dir, app_command=app_command)
+    started_at = datetime.now()
+
+    print_fn(
+        "\nmeetandread is starting with full diagnostics.\n"
+        "NOW REPRODUCE THE PROBLEM in the meetandread window.\n"
+        "When you are done (or the app has crashed/closed), come back\n"
+        "here and press Enter to finish the run."
+    )
+    input_fn("Press Enter when you have finished reproducing... ")
+    print_fn("Stopping the capture run...")
+
+    # The graceful stop: signal CTRL_BREAK and give the app time to
+    # wind down and write its completion marker. Blocking by design —
+    # the marker is what separates a user stop from a crash. A stop
+    # signal actually delivered to a LIVE app makes this run's stop
+    # user-initiated (refining a clean exit into ``user_stop``); an
+    # app that already exited on its own keeps its own outcome.
+    user_initiated = _graceful_stop(proc)
+
+    run = supervise_run(
+        proc,
+        capture_dir,
+        started_at=started_at,
+        stop_signal=_signal_user_stop,
+        user_initiated_stop=user_initiated,
+    )
+
+    # 5. End: the staged description joins the capture directory now
+    #    that the run is over (no entry check can race it), and the
+    #    staged copy is removed. Best-effort: the run's diagnostics
+    #    exist regardless.
+    try:
+        write_description(capture_dir, description)
+        staged_desc.unlink(missing_ok=True)
+    except OSError:
+        print_fn("(Could not save the description alongside the run.)")
+
+    # 6. Report the outcome; review/submit continue from the
+    #    directory alone (#108/#109).
+    if run.final_outcome() == RunOutcome.CRASH:
+        print_fn(
+            f"\nmeetandread exited unexpectedly (code {run.exit_code}).\n"
+            "The crash WAS captured — that is the most valuable part\n"
+            "of the report."
+        )
+    else:
+        print_fn("\nCapture run finished cleanly.")
+    print_fn(
+        f"\nDiagnostics saved in:\n  {capture_dir}\n"
+        "(The review screen and submission flow arrive with the next\n"
+        "update; nothing leaves your machine.)"
+    )
+    return run
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Reporter entry point (console script / ``python -m``)."""
+    _install_excepthook()
+    try:
+        run_wizard()
+    except KeyboardInterrupt:
+        sys.stderr.write(
+            "\nCancelled. If a capture run was in flight, its data is "
+            "safe; run the Issue Reporter again to resume it.\n"
+        )
+        return 130
+    except Exception:
+        # The reporter's own crash handling: the capture directory
+        # remains on disk and the next startup's recovery scan finds
+        # it — never lose the run to a reporter bug.
+        sys.stderr.write(
+            "\nThe Issue Reporter hit an internal error. Any capture "
+            "data is safe on disk; run the Issue Reporter again to "
+            "resume.\n"
+        )
+        traceback.print_exc()
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
