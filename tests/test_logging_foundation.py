@@ -461,8 +461,8 @@ class TestTranscriptLeakCanaries:
         content = self._capture_log_content(tmp_path)
         assert self.CANARY not in content
         # Handler ran: telemetry present and word-count path exercised.
-        assert "Segment received" in content
-        assert "conf: 87" in content
+        assert "segment_received:" in content
+        assert "confidence_percent=87" in content
         assert word_count_calls, "word-count path was not exercised"
 
     def test_main_widget_phrase_handler_never_logs_transcript(

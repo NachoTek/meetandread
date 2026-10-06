@@ -1092,16 +1092,19 @@ class TestControllerCleanupIntegration:
             num_speakers=1,
         )
 
-        with caplog.at_level(logging.INFO):
+        with caplog.at_level(logging.DEBUG):
             with mock.patch("meetandread.speaker.diarizer.Diarizer") as mock_cls:
                 mock_cls.return_value.diarize.return_value = mock_result
                 with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore"):
                     ctrl._run_diarization(Path("test.wav"))
 
-        # Check that cleanup log was emitted
-        cleanup_logs = [r for r in caplog.records if "cleanup" in r.message.lower()]
+        # Check that the named cleanup DEBUG event carries before/after counts
+        cleanup_logs = [
+            r for r in caplog.records
+            if r.message.startswith("diarization_cleanup:")
+        ]
         assert len(cleanup_logs) >= 1
-        assert any("2 -> 1" in r.message for r in cleanup_logs)
+        assert any("before=2" in r.message and "after=1" in r.message for r in cleanup_logs)
 
 
 # ---------------------------------------------------------------------------
@@ -1148,8 +1151,12 @@ class TestTurnTakingDiarizationTuning:
                 with mock.patch("meetandread.speaker.signatures.VoiceSignatureStore"):
                     ctrl._run_diarization(Path("test.wav"))
 
-        # Should have logged the 0-speaker fallback warning
-        assert any("0 speakers" in r.message and "falling back" in r.message for r in caplog.records)
+        # Should have logged the named 0-speaker fallback warning
+        assert any(
+            r.message.startswith("diarization_zero_speakers:")
+            and "fallback=single-speaker" in r.message
+            for r in caplog.records
+        )
 
         # Words should be tagged with a single speaker label
         words = ctrl._transcript_store.get_all_words()
@@ -1186,8 +1193,11 @@ class TestTurnTakingDiarizationTuning:
                 mock_cls.return_value.diarize.return_value = mock_result
                 ctrl._run_diarization(Path("test.wav"))
 
-        # Should log no segments detected (early return path)
-        assert any("no speaker segments" in r.message.lower() for r in caplog.records)
+        # Should log the named no-segments event (early return path)
+        assert any(
+            r.message.startswith("diarization_no_segments:")
+            for r in caplog.records
+        )
 
     # --- >8 speakers warning ---
 

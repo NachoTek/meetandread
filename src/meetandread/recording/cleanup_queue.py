@@ -157,8 +157,8 @@ class CleanupQueue:
             data = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             logger.warning(
-                "Corrupt cleanup queue at %s: %s — resetting to empty",
-                self._queue_path, exc,
+                "cleanup_queue_reset: reason=corrupt error_class=%s",
+                type(exc).__name__,
             )
             self._operations = []
             # Overwrite the corrupt file with a valid empty queue
@@ -166,10 +166,7 @@ class CleanupQueue:
             return
 
         if not isinstance(data, dict) or "operations" not in data:
-            logger.warning(
-                "Invalid cleanup queue format at %s — resetting to empty",
-                self._queue_path,
-            )
+            logger.warning("cleanup_queue_reset: reason=invalid_format")
             self._operations = []
             self._save()
             return
@@ -180,7 +177,8 @@ class CleanupQueue:
             if isinstance(op, dict)
         ]
         logger.debug(
-            "Loaded %d operations from cleanup queue", len(self._operations)
+            "cleanup_queue_loaded: total=%d pending=%d",
+            len(self._operations), self.pending_count,
         )
 
     def _save(self) -> None:
@@ -209,7 +207,10 @@ class CleanupQueue:
                 Path(tmp_path).unlink(missing_ok=True)
                 raise
         except OSError as exc:
-            logger.error("Failed to persist cleanup queue: %s", exc)
+            logger.error(
+                "cleanup_queue_persist_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     # -- Public API --------------------------------------------------------
 
@@ -250,9 +251,9 @@ class CleanupQueue:
         )
         self._operations.append(op)
         self._save()
-        logger.info(
-            "Enqueued file deletion for stem %s (%d pending)",
-            stem, self.pending_count,
+        logger.debug(
+            "cleanup_enqueued: kind=file_delete pending=%d",
+            self.pending_count,
         )
         return op
 
@@ -277,9 +278,9 @@ class CleanupQueue:
         )
         self._operations.append(op)
         self._save()
-        logger.info(
-            "Enqueued identity cleanup for %s (%d pending)",
-            identity_name, self.pending_count,
+        logger.debug(
+            "cleanup_enqueued: kind=identity_cleanup pending=%d",
+            self.pending_count,
         )
         return op
 
@@ -317,7 +318,9 @@ class CleanupQueue:
                     summary = self._process_identity_cleanup(op)
                 else:
                     summary = f"Unknown operation kind: {op.kind}"
-                    logger.warning("Unknown cleanup kind: %s", op.kind)
+                    logger.warning(
+                        "cleanup_unknown_kind: kind=%s", op.kind
+                    )
                     op.status = "completed"
                     result.processed += 1
                     result.details.append(summary)
@@ -340,8 +343,8 @@ class CleanupQueue:
                 result.failed += 1
                 result.details.append(f"Error processing {op.kind} for {op.target}: {exc}")
                 logger.error(
-                    "Cleanup processing error for %s/%s: %s",
-                    op.kind, op.target, exc,
+                    "cleanup_operation_error: kind=%s error_class=%s",
+                    op.kind, type(exc).__name__,
                 )
 
         # Retain only pending/failed operations — completed are pruned
@@ -349,11 +352,13 @@ class CleanupQueue:
         result.remaining = len(still_pending)
 
         if pruned_count:
-            logger.info("Pruned %d completed operations from queue", pruned_count)
+            logger.debug(
+                "cleanup_pruned: completed=%d", pruned_count
+            )
 
         self._save()
         logger.info(
-            "Cleanup queue processed: %d succeeded, %d failed, %d remaining",
+            "cleanup_processed: succeeded=%d failed=%d remaining=%d",
             result.processed, result.failed, result.remaining,
         )
         return result
@@ -371,7 +376,7 @@ class CleanupQueue:
         removed = before - len(self._operations)
         if removed:
             self._save()
-            logger.info("Cleared %d completed operations from queue", removed)
+            logger.info("cleanup_completed_cleared: removed=%d", removed)
         return removed
 
     # -- Internal processors -----------------------------------------------
@@ -423,8 +428,7 @@ class CleanupQueue:
             if not self._validate_path_containment(path_str):
                 failures.append(f"{path_str}: path outside allowed roots")
                 logger.warning(
-                    "Rejected identity cleanup path outside allowed roots: %s",
-                    path_str,
+                    "identity_cleanup_path_rejected: reason=outside_allowed_roots"
                 )
                 continue
 

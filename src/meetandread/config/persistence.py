@@ -137,61 +137,79 @@ class SettingsPersistence:
     
     def load_raw(self) -> Optional[Dict[str, Any]]:
         """Load raw config dictionary from file.
-        
+
         Returns:
             Dictionary with config data, or None if file doesn't exist or is corrupted.
         """
         config_path = self.get_config_path()
-        
+
         if not config_path.exists():
-            logger.info(f"Config file not found at {config_path}, using defaults")
+            logger.info("config_defaults_used: reason=missing_file")
             return None
-        
+
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             if not content.strip():
-                logger.warning(f"Config file at {config_path} is empty, using defaults")
+                logger.warning(
+                    "config_load_failed: reason=empty_file action=defaults_used"
+                )
                 return None
-            
+
             data = json.loads(content)
-            
+
             if not isinstance(data, dict):
-                logger.warning(f"Config file at {config_path} is not a dictionary, using defaults")
+                logger.warning(
+                    "config_load_failed: reason=not_a_dict action=defaults_used"
+                )
                 return None
-            
-            logger.debug(f"Loaded config from {config_path}")
+
+            logger.debug(
+                "config_loaded: version=%s",
+                data.get("config_version", 0),
+            )
             return data
-            
+
         except json.JSONDecodeError as e:
-            logger.warning(f"Config file at {config_path} has invalid JSON: {e}, using defaults")
+            logger.warning(
+                "config_load_failed: reason=invalid_json "
+                "error_class=%s action=defaults_used",
+                type(e).__name__,
+            )
             return None
         except Exception as e:
-            logger.error(f"Error reading config file at {config_path}: {e}, using defaults")
+            logger.error(
+                "config_load_failed: reason=read_error error_class=%s "
+                "action=defaults_used",
+                type(e).__name__,
+            )
             return None
-    
+
     def load_settings(self) -> AppSettings:
         """Load settings from file, applying migrations and smart defaults.
-        
+
         If file doesn't exist or is corrupted, returns default settings.
         If config version is outdated, runs migration chain.
-        
+
         Returns:
             AppSettings instance (loaded or defaults).
         """
         raw_data = self.load_raw()
-        
+
         if raw_data is None:
             # No config file or corrupted - return defaults
-            logger.info("Using default settings")
+            logger.info("config_defaults_used: reason=missing_or_corrupt")
             return self.get_default_settings()
-        
+
         # Check version and migrate if needed
         file_version = raw_data.get("config_version", 0)
-        
+
         if file_version < CURRENT_CONFIG_VERSION:
-            logger.info(f"Migrating config from version {file_version} to {CURRENT_CONFIG_VERSION}")
+            logger.info(
+                "config_migrated: from_version=%d to_version=%d",
+                file_version, CURRENT_CONFIG_VERSION,
+            )
             raw_data = self.migrate_config(raw_data, file_version)
         
         # Build settings from dict (handles missing fields with defaults)
@@ -237,10 +255,10 @@ class SettingsPersistence:
                 
                 # Atomic rename
                 os.replace(temp_path, config_path)
-                
-                logger.debug(f"Saved config to {config_path}")
+
+                logger.debug("config_saved: version=%d", data.get("config_version", 0))
                 return True
-                
+
             except Exception:
                 # Clean up temp file on error
                 try:
@@ -248,9 +266,11 @@ class SettingsPersistence:
                 except OSError:
                     pass
                 raise
-                
+
         except Exception as e:
-            logger.error(f"Failed to save config to {config_path}: {e}")
+            logger.error(
+                "config_save_failed: error_class=%s", type(e).__name__
+            )
             return False
     
     def migrate_config(self, config_dict: Dict[str, Any], from_version: int) -> Dict[str, Any]:
@@ -382,10 +402,12 @@ class SettingsPersistence:
         try:
             if config_path.exists():
                 config_path.unlink()
-                logger.info(f"Deleted config file at {config_path}")
+                logger.info("config_deleted:")
             return True
         except Exception as e:
-            logger.error(f"Failed to delete config file at {config_path}: {e}")
+            logger.error(
+                "config_delete_failed: error_class=%s", type(e).__name__
+            )
             return False
     
     def get_config_info(self) -> Dict[str, Any]:

@@ -236,22 +236,25 @@ class RecordingController:
             safe_count = int(max(0, count))
         except (TypeError, ValueError):
             logger.warning(
-                "Non-numeric frame-drop count received: %r - treating as 0",
-                count,
+                "frame_drop_count_invalid: error_class=%s coerced=0",
+                type(count).__name__,
             )
             safe_count = 0
 
         if safe_count == 0:
             return  # no-op for zero
 
-        logger.info(
-            "Controller frame-drop forwarded: aggregate=%d", safe_count
+        logger.debug(
+            "frame_drops_forwarded: aggregate=%d", safe_count
         )
         if self.on_frames_dropped:
             try:
                 self.on_frames_dropped(safe_count)
-            except Exception:
-                logger.exception("on_frames_dropped callback error (recording continues)")
+            except Exception as e:
+                logger.error(
+                    "frames_dropped_callback_failed: error_class=%s",
+                    type(e).__name__,
+                )
 
     def _on_session_error(self, exc: Exception) -> None:
         """Internal handler for session consumer thread crashes.
@@ -264,7 +267,7 @@ class RecordingController:
         try:
             error_class = type(exc).__name__
             logger.error(
-                "Audio session consumer crash: error_class=%s, state=%s",
+                "session_consumer_crash: error_class=%s state=%s",
                 error_class,
                 self._state.name,
             )
@@ -273,7 +276,10 @@ class RecordingController:
                 is_recoverable=True,
             )
         except Exception:
-            logger.exception("Error in _on_session_error handler")
+            logger.error(
+                "session_error_handler_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def _set_state(self, state: ControllerState) -> None:
         """Update state and notify listeners."""
@@ -286,7 +292,10 @@ class RecordingController:
             try:
                 callback(state)
             except Exception as e:
-                logger.error("State change callback failed: %s", e)
+                logger.error(
+                    "state_change_callback_failed: error_class=%s",
+                    type(e).__name__,
+                )
 
     def _set_error(self, message: str, is_recoverable: bool = True) -> ControllerError:
         """Set error state and notify listeners."""
@@ -302,12 +311,18 @@ class RecordingController:
             try:
                 state_cb(ControllerState.ERROR)
             except Exception as e:
-                logger.error("State change callback failed: %s", e)
+                logger.error(
+                    "state_change_callback_failed: error_class=%s",
+                    type(e).__name__,
+                )
         if error_cb:
             try:
                 error_cb(error)
             except Exception as e:
-                logger.error("Error callback failed: %s", e)
+                logger.error(
+                    "error_callback_failed: error_class=%s",
+                    type(e).__name__,
+                )
         return error
 
     def clear_error(self) -> None:
@@ -448,7 +463,10 @@ class RecordingController:
                 try:
                     state_cb(ControllerState.IDLE)
                 except Exception as e:
-                    logger.error("State change callback failed: %s", e)
+                    logger.error(
+                        "state_change_callback_failed: error_class=%s",
+                        type(e).__name__,
+                    )
 
     def _apply_retry_stats(
         self,
@@ -518,8 +536,20 @@ class RecordingController:
             self._lost_source_identities = {}
             self._last_recovery_result = None
         logger.info(
-            "Recording hotplug active source snapshot: %s",
-            [identity.as_diagnostics() for identity in identities.values()],
+            "recording_sources_snapshot: active=%d lost=0",
+            len(identities),
+        )
+        logger.debug(
+            "recording_sources_snapshot_detail: types=%s flows=%s "
+            "device_ids_present=%s",
+            sorted(t for t in identities),
+            sorted(
+                i.flow for i in identities.values() if i.flow is not None
+            ),
+            sorted(
+                "yes" if i.device_id else "no"
+                for i in identities.values()
+            ),
         )
 
     def _start_hotplug_monitor(self) -> None:
@@ -527,11 +557,14 @@ class RecordingController:
             self._hotplug_monitor = WindowsDeviceMonitor()
             self._hotplug_monitor.start_monitoring(self.handle_device_event)
             self._hotplug_monitor_active = True
-            logger.info("Recording hotplug monitor started")
+            logger.info("hotplug_monitor_started:")
         except Exception as exc:
             self._hotplug_monitor = None
             self._hotplug_monitor_active = False
-            logger.warning("Recording hotplug monitor unavailable: %s", exc)
+            logger.warning(
+                "hotplug_monitor_unavailable: error_class=%s",
+                type(exc).__name__,
+            )
 
     def _stop_hotplug_monitor(self) -> None:
         monitor = self._hotplug_monitor
@@ -541,9 +574,12 @@ class RecordingController:
             return
         try:
             monitor.stop_monitoring()
-            logger.info("Recording hotplug monitor stopped")
+            logger.info("hotplug_monitor_stopped:")
         except Exception as exc:
-            logger.warning("Recording hotplug monitor stop failed: %s", exc)
+            logger.warning(
+                "hotplug_monitor_stop_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def drain_hotplug_events(self, max_events: int = 100) -> List[RecoveryResult]:
         """Drain queued monitor events through controller recovery decisions."""
@@ -553,7 +589,10 @@ class RecordingController:
         try:
             events = monitor.drain_events(max_events=max_events)
         except Exception as exc:
-            logger.warning("Recording hotplug event drain failed: %s", exc)
+            logger.warning(
+                "hotplug_drain_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return []
         results: List[RecoveryResult] = []
         for event in events:
@@ -568,7 +607,10 @@ class RecordingController:
             try:
                 callback(event)
             except Exception as exc:
-                logger.error("Device change callback failed: %s", exc)
+                logger.error(
+                    "device_change_callback_failed: error_class=%s",
+                    type(exc).__name__,
+                )
 
     def _emit_recovery_result(self, result: RecoveryResult) -> None:
         with self._hotplug_lock:
@@ -578,7 +620,10 @@ class RecordingController:
             try:
                 callback(result)
             except Exception as exc:
-                logger.error("Recovery callback failed: %s", exc)
+                logger.error(
+                    "recovery_callback_failed: error_class=%s",
+                    type(exc).__name__,
+                )
 
     def _source_type_for_event(self, event: DeviceEvent) -> Optional[str]:
         event_device_id = (event.device_id or "").strip() or None
@@ -652,12 +697,19 @@ class RecordingController:
             if remaining > 0:
                 result = RecoveryResult(RecoveryOutcome.DEGRADED, source_type, event_device_id, "Recording source lost; continuing with remaining recording source")
                 self._emit_recovery_result(result)
-                logger.warning("Recording hotplug partial degradation: %s", result.as_diagnostics())
+                logger.warning(
+                    "hotplug_source_lost: outcome=degraded source_type=%s "
+                    "remaining=%d",
+                    source_type, remaining,
+                )
                 return result
             else:
                 result = RecoveryResult(RecoveryOutcome.TOTAL_LOSS, source_type, event_device_id, "Capture source lost: all active capture sources lost", True)
                 self._emit_recovery_result(result)
-                logger.error("Recording hotplug total device loss: %s", result.as_diagnostics())
+                logger.error(
+                    "hotplug_source_lost: outcome=total_loss source_type=%s",
+                    source_type,
+                )
                 self._set_error("Capture source lost: all active capture sources lost. Reconnect a device and retry recording recovery.", is_recoverable=True)
                 return result
 
@@ -691,7 +743,11 @@ class RecordingController:
                     self._error = None
                     self._state = ControllerState.RECORDING
                 result = RecoveryResult(RecoveryOutcome.AUTO_RECOVERED, source_type, recovered.device_id, "Recording source reappeared within recovery window")
-                logger.info("Recording hotplug auto-recovered: %s", result.as_diagnostics())
+                logger.info(
+                    "hotplug_source_recovered: outcome=auto_recovered "
+                    "source_type=%s",
+                    source_type,
+                )
                 self._emit_recovery_result(result)
                 # Rebuild and swap the source into the running session
                 new_wrapper = self._rebuild_source_wrapper(source_type, recovered.device_id)
@@ -702,11 +758,18 @@ class RecordingController:
                     try:
                         state_cb(ControllerState.RECORDING)
                     except Exception as exc:
-                        logger.error("State change callback failed: %s", exc)
+                        logger.error(
+                            "state_change_callback_failed: error_class=%s",
+                            type(exc).__name__,
+                        )
                 return result
 
             result = RecoveryResult(RecoveryOutcome.MANUAL_RETRY_REQUIRED, source_type, event_device_id, "Recovery window expired; manual retry required")
-            logger.warning("Recording hotplug recovery window expired: %s", result.as_diagnostics())
+            logger.warning(
+                "hotplug_recovery_window_expired: source_type=%s "
+                "window_seconds=%.1f",
+                source_type, _HOTPLUG_RECOVERY_WINDOW_SECONDS,
+            )
             self._emit_recovery_result(result)
             self._set_error("Recording device reconnected after the automatic recovery window. Retry recording recovery manually.", is_recoverable=True)
             return result
@@ -737,7 +800,7 @@ class RecordingController:
             self._error = None
             self._state = ControllerState.RECORDING
         result = RecoveryResult(RecoveryOutcome.MANUAL_RECOVERED, message="Manual recording recovery retry accepted")
-        logger.info("Recording hotplug manual recovery accepted")
+        logger.info("hotplug_manual_recovery_accepted:")
         self._emit_recovery_result(result)
         # Rebuild and swap each recovered source into the running session
         for stype in list(self._active_source_identities.keys()):
@@ -749,7 +812,10 @@ class RecordingController:
             try:
                 state_cb(ControllerState.RECORDING)
             except Exception as exc:
-                logger.error("State change callback failed: %s", exc)
+                logger.error(
+                    "state_change_callback_failed: error_class=%s",
+                    type(exc).__name__,
+                )
         return result
 
     def _hotplug_diagnostics(self) -> Dict[str, Any]:
@@ -809,7 +875,7 @@ class RecordingController:
         # Clear any previous error
         self.clear_error()
         self._set_state(ControllerState.STARTING)
-        logger.debug("Starting recording...")
+        logger.debug("recording_start_requested:")
 
         # Preempt any in-flight post-processing from a previous recording
         # (ADR-0002, issue #63): the live Recording always outranks
@@ -833,11 +899,13 @@ class RecordingController:
         try:
             # Initialize transcription if enabled
             if self.enable_transcription:
-                logger.debug("Initializing transcription...")
+                logger.debug("transcription_init_requested:")
                 error = self._init_transcription()
                 if error:
                     # Log warning but continue with recording
-                    logger.warning("Transcription not available: %s", error.message)
+                    logger.warning(
+                        "transcription_unavailable: degraded=recording_only"
+                    )
 
             # Build source configs
             source_configs = self._build_source_configs(
@@ -881,9 +949,9 @@ class RecordingController:
                 else:
                     if raw_provider:
                         logger.warning(
-                            "Invalid denoising provider '%s' in config, "
-                            "falling back to '%s'",
-                            raw_provider, denoise_provider,
+                            "denoising_provider_invalid: reason=not_allowed "
+                            "fallback=%s",
+                            denoise_provider,
                         )
 
                 # Validate budget - must be a positive number
@@ -893,13 +961,14 @@ class RecordingController:
                 else:
                     if raw_budget is not None and raw_budget != 200:
                         logger.warning(
-                            "Invalid denoising latency budget %r in config, "
-                            "falling back to %.0fms",
-                            raw_budget, denoise_budget_ms,
+                            "denoising_budget_invalid: reason=not_positive "
+                            "fallback_ms=%.0f",
+                            denoise_budget_ms,
                         )
             except Exception as exc:
                 logger.warning(
-                    "Failed to read denoising config, using defaults: %s", exc
+                    "denoising_config_read_failed: error_class=%s",
+                    type(exc).__name__,
                 )
 
             # Tag mic sources with denoise=True when denoising is enabled
@@ -924,32 +993,34 @@ class RecordingController:
                 on_error=self._on_session_error,
             )
             logger.info(
-                "Denoising config: enabled=%s provider=%s budget=%.0fms",
+                "denoising_config: enabled=%s provider=%s budget_ms=%.0f",
                 denoise_enabled, denoise_provider, denoise_budget_ms,
             )
             # Wire audio callback to feed transcription processor
             if self.enable_transcription and self._transcription_processor:
                 config.on_audio_frame = self.feed_audio_for_transcription
-                logger.debug("Audio callback wired to transcription processor")
+                logger.debug("audio_callback_wired: target=transcription_processor")
 
             self._snapshot_active_sources(source_configs)
             self._session = AudioSession()
             self._session.start(config)
-            logger.debug("Audio session started")
+            logger.debug("audio_session_started:")
 
             # Start transcription if available
             if self._transcription_processor:
-                logger.debug("Starting transcription processor...")
-                logger.debug("Transcription processor exists: %s", self._transcription_processor is not None)
-                logger.debug("Processor on_result callback: %s", self._transcription_processor.on_result is not None)
+                logger.debug("transcription_processor_starting:")
+                logger.debug(
+                    "transcription_processor_ready: has_on_result_callback=%s",
+                    self._transcription_processor.on_result is not None,
+                )
                 self._transcription_processor.start()
-                logger.debug("Transcription processor started")
+                logger.debug("transcription_processor_started:")
 
             self._audio_chunks_fed = 0
             self._reset_live_speaker_state()
             self._set_state(ControllerState.RECORDING)
             self._start_hotplug_monitor()
-            logger.info("Recording started successfully")
+            logger.info("recording_started:")
             return None
 
         except NoSourcesError as e:
@@ -959,8 +1030,10 @@ class RecordingController:
         except SessionError as e:
             return self._set_error(f"Session error: {e}", is_recoverable=True)
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.error(
+                "recording_start_failed: error_class=%s",
+                type(e).__name__,
+            )
             return self._set_error(f"Unexpected error: {e}", is_recoverable=False)
 
     def stop(self) -> Optional[ControllerError]:
@@ -976,8 +1049,10 @@ class RecordingController:
         if current_state != ControllerState.RECORDING:
             return self._set_error("Not currently recording", is_recoverable=True)
 
-        logger.info("[STOP-TIMER] stop() called on thread: %s",
-                    threading.current_thread().name)
+        logger.debug(
+            "recording_stop_requested: thread=%s",
+            threading.current_thread().name,
+        )
         self._stop_hotplug_monitor()
         self._set_state(ControllerState.STOPPING)
 
@@ -988,7 +1063,7 @@ class RecordingController:
             name="RecordingStopWorker"
         )
         self._worker_thread.start()
-        logger.info("[STOP-TIMER] stop() returning, worker started")
+        logger.info("recording_stop_initiated:")
 
         return None
 
@@ -1005,8 +1080,7 @@ class RecordingController:
                 return
             if self._post_process_job_id is not None:
                 logger.info(
-                    "Cancelling post-processing job %s (new recording starting)",
-                    self._post_process_job_id,
+                    "post_processing_cancel_requested: reason=new_recording",
                 )
                 self._post_processor.cancel_job(
                     self._post_process_job_id,
@@ -1019,7 +1093,8 @@ class RecordingController:
             )
         except Exception as exc:
             logger.warning(
-                "cancel_post_processing error (non-fatal): %s", exc,
+                "post_processing_cancel_failed: error_class=%s",
+                type(exc).__name__,
             )
 
     def preempt_post_processing(self, reason: str = "") -> None:
@@ -1044,11 +1119,13 @@ class RecordingController:
             preempted = preempt(reason=reason or "preempted")
             if preempted:
                 logger.info(
-                    "Preempted running post-processing job: %s", reason,
+                    "post_processing_preempted: reason=%s",
+                    reason or "preempted",
                 )
         except Exception as exc:
             logger.warning(
-                "preempt_post_processing error (non-fatal): %s", exc,
+                "post_processing_preempt_failed: error_class=%s",
+                type(exc).__name__,
             )
 
     def is_post_processing_running(self) -> bool:
@@ -1067,7 +1144,8 @@ class RecordingController:
             return bool(probe())
         except Exception as exc:
             logger.warning(
-                "is_post_processing_running error (non-fatal): %s", exc,
+                "post_processing_running_probe_failed: error_class=%s",
+                type(exc).__name__,
             )
             return False
 
@@ -1095,7 +1173,7 @@ class RecordingController:
         """
         if self._post_processor is None:
             logger.warning(
-                "Retry requested but Post-processing is unavailable (no queue)"
+                "retry_unavailable: reason=no_queue"
             )
             return None
 
@@ -1108,8 +1186,7 @@ class RecordingController:
 
         if not wav_path.exists():
             logger.warning(
-                "Retry for %s impossible: Audio file missing (%s)",
-                stem, wav_path.name,
+                "retry_unavailable_audio: audio_exists=0"
             )
             return None
 
@@ -1125,8 +1202,8 @@ class RecordingController:
             PostProcessStatus.RUNNING,
         ):
             logger.info(
-                "Retry for %s skipped: a job is already in flight (%s)",
-                stem, getattr(live_state, "name", live_state),
+                "retry_skipped: reason=already_in_flight state=%s",
+                getattr(live_state, "name", live_state),
             )
             return None
 
@@ -1136,12 +1213,12 @@ class RecordingController:
             )
             if cleared:
                 logger.info(
-                    "Retry: cleared Failed Outcome from %s", transcript_path
+                    "retry_outcome_cleared: cleared=1"
                 )
         except Exception as exc:
             logger.warning(
-                "Retry: clearing Outcome from %s failed (non-fatal): %s",
-                transcript_path, exc,
+                "retry_outcome_clear_failed: error_class=%s",
+                type(exc).__name__,
             )
 
         self.preempt_post_processing(reason="user retry")
@@ -1155,12 +1232,14 @@ class RecordingController:
                 user_initiated=True,
             )
         except Exception as exc:
-            logger.error("Retry scheduling failed for %s: %s", stem, exc)
+            logger.error(
+                "retry_schedule_failed: error_class=%s",
+                type(exc).__name__,
+            )
             return None
 
         logger.info(
-            "Retry scheduled job %s for %s at the front of the queue",
-            job.job_id, stem,
+            "post_processing_retry_scheduled: front=1 user_initiated=1",
         )
         return job.job_id
 
@@ -1183,7 +1262,8 @@ class RecordingController:
             job = self._post_processor.get_job_status(job_id)
         except Exception as exc:
             logger.warning(
-                "get_post_process_failure error (non-fatal): %s", exc,
+                "post_process_failure_probe_failed: error_class=%s",
+                type(exc).__name__,
             )
             return None
         if job is None or job.status != PostProcessStatus.FAILED:
@@ -1221,7 +1301,8 @@ class RecordingController:
             return self._post_processor.get_status_for_audio(transcript_path)
         except Exception as exc:
             logger.warning(
-                "get_post_processing_state error (non-fatal): %s", exc,
+                "post_processing_state_probe_failed: error_class=%s",
+                type(exc).__name__,
             )
             return None
 
@@ -1245,7 +1326,8 @@ class RecordingController:
             return self._post_processor.get_progress_for_audio(transcript_path)
         except Exception as exc:
             logger.warning(
-                "get_post_processing_progress error (non-fatal): %s", exc,
+                "post_processing_progress_probe_failed: error_class=%s",
+                type(exc).__name__,
             )
             return None
 
@@ -1274,8 +1356,8 @@ class RecordingController:
             self._ensure_post_processor(settings)
         except Exception as exc:
             logger.warning(
-                "Post-processing startup initialization failed "
-                "(non-fatal): %s", exc,
+                "post_processing_startup_init_failed: error_class=%s",
+                type(exc).__name__,
             )
 
     def requeue_stalled_recordings(self) -> int:
@@ -1297,7 +1379,8 @@ class RecordingController:
             return self._post_processor.requeue_stalled_recordings()
         except Exception as exc:
             logger.warning(
-                "requeue_stalled_recordings error (non-fatal): %s", exc,
+                "stalled_requeue_failed: error_class=%s",
+                type(exc).__name__,
             )
             return 0
 
@@ -1333,7 +1416,7 @@ class RecordingController:
             speaker_cfg = settings.speaker
 
             if not speaker_cfg.enabled:
-                logger.info("Speaker diarization disabled in settings - skipped")
+                logger.info("diarization_skipped: reason=disabled")
                 return None
 
             # Tier-2 gate (issue #61): a missing feature dependency is a
@@ -1348,7 +1431,7 @@ class RecordingController:
                     feature_dependencies.SHERPA_ONNX
                 )
 
-            logger.info("Running speaker diarization on %s (post-process)", wav_path.name)
+            logger.info("diarization_started: context=post-process")
 
             # (1) Run diarization
             diarizer = Diarizer(
@@ -1360,27 +1443,28 @@ class RecordingController:
 
             if not result.succeeded:
                 logger.error(
-                    "Diarization failed for %s: %s", wav_path.name, result.error
+                    "diarization_failed: context=post-process"
                 )
                 return None
 
             # --- Degraded-result fallback: 0 speakers ---
             if result.num_speakers == 0:
                 logger.warning(
-                    "Diarization returned 0 speakers for %s - falling back to "
-                    "single-speaker labeling",
-                    wav_path.name,
+                    "diarization_zero_speakers: fallback=single-speaker"
                 )
                 self._fallback_single_speaker_labeling(result)
                 return result
 
             if not result.segments:
-                logger.info("No speaker segments detected in %s", wav_path.name)
+                logger.info(
+                    "diarization_no_segments: context=post-process"
+                )
                 return None
 
             logger.info(
-                "Diarized %s: %d segments, %d speakers",
-                wav_path.name, len(result.segments), result.num_speakers,
+                "diarization_complete: context=post-process segments=%d "
+                "speakers=%d",
+                len(result.segments), result.num_speakers,
             )
 
             # --- Clean up noisy over-segmentation ---
@@ -1388,8 +1472,8 @@ class RecordingController:
             pre_cleanup_count = len(result.segments)
             result.segments = cleanup_diarization_segments(result.segments)
             if len(result.segments) != pre_cleanup_count:
-                logger.info(
-                    "Diarization cleanup: %d -> %d segments",
+                logger.debug(
+                    "diarization_cleanup: before=%d after=%d",
                     pre_cleanup_count, len(result.segments),
                 )
 
@@ -1428,8 +1512,8 @@ class RecordingController:
             raise
         except Exception as exc:
             logger.error(
-                "Speaker diarization error for %s: %s",
-                wav_path.name, exc, exc_info=True,
+                "diarization_error: context=post-process error_class=%s",
+                type(exc).__name__,
             )
             return None
 
@@ -1443,8 +1527,10 @@ class RecordingController:
         the GIL and starve the UI thread.
         """
         t0 = _time.monotonic()
-        logger.info("[STOP-TIMER] _stop_worker entered on thread: %s",
-                    threading.current_thread().name)
+        logger.debug(
+            "stop_worker_entered: thread=%s",
+            threading.current_thread().name,
+        )
 
         # Capture references to current session/processor before IDLE
         # allows a new recording to replace them.
@@ -1461,20 +1547,26 @@ class RecordingController:
                 old_processor._stop_event.set()
             if self._transcription_processor is old_processor:
                 self._transcription_processor = None
-            logger.info("[STOP-TIMER] processor signaled stop: %.1fms",
-                        (_time.monotonic() - t0) * 1000)
+            logger.debug(
+                "processor_stop_signaled: elapsed_ms=%.1f",
+                (_time.monotonic() - t0) * 1000,
+            )
 
         # Signal audio session to stop (non-blocking).
         # The consumer thread will drain remaining frames and exit.
         if hasattr(old_session, '_stop_event'):
             old_session._stop_event.set()
-            logger.info("[STOP-TIMER] session stop event set: %.1fms",
-                        (_time.monotonic() - t0) * 1000)
+            logger.debug(
+                "session_stop_signaled: elapsed_ms=%.1f",
+                (_time.monotonic() - t0) * 1000,
+            )
 
         # Move to IDLE immediately - no joins, no blocking.
         self._set_state(ControllerState.IDLE)
-        logger.info("[STOP-TIMER] IDLE set, total stop_worker: %.1fms",
-                    (_time.monotonic() - t0) * 1000)
+        logger.debug(
+            "stop_worker_idle_set: elapsed_ms=%.1f",
+            (_time.monotonic() - t0) * 1000,
+        )
 
         # Spawn a low-priority finalizer thread for the heavy work.
         # This thread joins the processing and consumer threads, finalizes
@@ -1489,32 +1581,38 @@ class RecordingController:
                 # (1) Wait for transcription processor thread to finish.
                 if old_processor and hasattr(old_processor, '_processing_thread'):
                     if old_processor._processing_thread:
-                        logger.info("[STOP-TIMER] joining processor thread...")
+                        logger.debug("finalizer_joining_processor:")
                         old_processor._processing_thread.join(timeout=30.0)
-                        logger.info("[STOP-TIMER] processor joined: %.2fs",
-                                    _time.monotonic() - ft0)
+                        logger.debug(
+                            "finalizer_processor_joined: elapsed_seconds=%.2f",
+                            _time.monotonic() - ft0,
+                        )
 
                 # (2) Stop audio session (join consumer + finalize WAV).
-                logger.debug("Finalizing audio session...")
+                logger.debug("finalizer_stopping_session:")
                 wav_path = old_session.stop()
                 with self._state_lock:
                     self._last_wav_path = wav_path
-                logger.info("[STOP-TIMER] session.stop() done (WAV): %.2fs, path=%s",
-                            _time.monotonic() - ft0, wav_path)
+                logger.info(
+                    "recording_audio_finalized: elapsed_seconds=%.2f",
+                    _time.monotonic() - ft0,
+                )
 
                 # (3) Save transcript if available (before post-processing)
                 if old_store and self._last_wav_path:
                     # Commit any remaining live phrase words before saving
                     old_store.commit_live_phrase()
-                    logger.info(
-                        "Saving transcript (%d words)...",
+                    logger.debug(
+                        "finalizer_saving_transcript: words=%d",
                         old_store.get_word_count(),
                     )
                     transcript_path = self._save_transcript(store=old_store)
                     with self._state_lock:
                         self._last_transcript_path = transcript_path
-                    logger.info("[STOP-TIMER] transcript saved: %.2fs",
-                                _time.monotonic() - ft0)
+                    logger.info(
+                        "recording_transcript_saved: elapsed_seconds=%.2f",
+                        _time.monotonic() - ft0,
+                    )
 
                 # (4) Schedule post-processing with stronger model + diarization
                 if self._post_processor and self._last_wav_path and old_store:
@@ -1526,20 +1624,24 @@ class RecordingController:
                     )
                     with self._state_lock:
                         self._post_process_job_id = job.job_id
-                    logger.info("[STOP-TIMER] post-process scheduled: %.2fs",
-                                _time.monotonic() - ft0)
+                    logger.info(
+                        "post_processing_scheduled: elapsed_seconds=%.2f",
+                        _time.monotonic() - ft0,
+                    )
                 else:
                     logger.warning(
-                        "Post-processing NOT scheduled: processor=%s, wav=%s, store=%s",
-                        "exists" if self._post_processor else "None",
-                        self._last_wav_path,
-                        "exists" if old_store else "None",
+                        "post_processing_not_scheduled: queue=%s wav=%s "
+                        "store=%s",
+                        bool(self._post_processor),
+                        bool(self._last_wav_path),
+                        bool(old_store),
                     )
 
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                logger.error("Finalizer error: %s", e)
+                logger.error(
+                    "finalizer_error: error_class=%s",
+                    type(e).__name__,
+                )
                 with self._state_lock:
                     self._error = ControllerError(
                         f"Finalization warning: {e}", is_recoverable=True,
@@ -1547,15 +1649,23 @@ class RecordingController:
             finally:
                 # (5) Notify completion — triggers history refresh on UI thread
                 # Moved to finally block to ensure callback fires even when exceptions occur
-                logger.info("[STOP-TIMER] firing on_recording_complete: %.2fs",
-                            _time.monotonic() - ft0)
+                logger.debug(
+                    "finalizer_notifying_complete: elapsed_seconds=%.2f",
+                    _time.monotonic() - ft0,
+                )
                 if self.on_recording_complete:
                     try:
                         self.on_recording_complete(wav_path, transcript_path)
                     except Exception as e:
-                        logger.error("Recording complete callback failed: %s", e)
-                logger.info("[STOP-TIMER] finalizer done: %.2fs",
-                            _time.monotonic() - ft0)
+                        logger.error(
+                            "recording_complete_callback_failed: "
+                            "error_class=%s",
+                            type(e).__name__,
+                        )
+                logger.info(
+                    "finalizer_done: elapsed_seconds=%.2f",
+                    _time.monotonic() - ft0,
+                )
 
         finalizer = threading.Thread(
             target=_finalize,
@@ -1585,7 +1695,7 @@ class RecordingController:
         # Clamp timeout to sane range
         timeout = max(1.0, min(60.0, float(timeout)))
         logger.info(
-            "shutdown() called: state=%s, timeout=%.1fs",
+            "shutdown_started: state=%s timeout_seconds=%.1f",
             self._state.name, timeout,
         )
 
@@ -1597,11 +1707,16 @@ class RecordingController:
 
         # If recording or stopping, initiate stop first
         if current_state in (ControllerState.RECORDING, ControllerState.STOPPING):
-            logger.info("shutdown(): initiating stop (state=%s)", current_state.name)
+            logger.info(
+                "shutdown_initiating_stop: state=%s", current_state.name
+            )
             try:
                 self.stop()
             except Exception as exc:
-                logger.warning("shutdown(): stop() raised %s, continuing", exc)
+                logger.warning(
+                    "shutdown_stop_error: error_class=%s",
+                    type(exc).__name__,
+                )
 
             # Wait for stop worker to spawn the finalizer thread
             # Poll with short sleeps — the stop worker sets IDLE and spawns
@@ -1621,22 +1736,22 @@ class RecordingController:
         finalizer = self._finalizer_thread
         if finalizer is not None and finalizer.is_alive():
             logger.info(
-                "shutdown(): waiting for finalizer thread (timeout=%.1fs)",
+                "shutdown_waiting_finalizer: timeout_seconds=%.1f",
                 timeout,
             )
             finalizer.join(timeout=timeout)
             if finalizer.is_alive():
                 logger.warning(
-                    "shutdown(): finalizer did not complete within %.1fs — "
-                    "proceeding with exit (WAV/transcript may be incomplete)",
+                    "shutdown_finalizer_timeout: timeout_seconds=%.1f "
+                    "artifacts=possibly_incomplete",
                     timeout,
                 )
             else:
-                logger.info("shutdown(): finalizer completed successfully")
+                logger.info("shutdown_finalizer_completed:")
         else:
-            logger.info("shutdown(): no active finalizer to wait for")
+            logger.info("shutdown_no_active_finalizer:")
 
-        logger.info("shutdown() complete")
+        logger.info("shutdown_complete:")
 
     def _init_transcription(self) -> Optional[ControllerError]:
         """Initialize transcription components.
@@ -1658,12 +1773,14 @@ class RecordingController:
             # HYBRID: Always use tiny for real-time (fastest)
             # Post-processing will use stronger model
             realtime_model = settings.transcription.realtime_model_size
-            logger.debug("Initializing accumulating transcription with %s model", realtime_model)
+            logger.debug(
+                "transcription_init_started: model=%s", realtime_model
+            )
 
             # Create transcript store
             self._transcript_store = TranscriptStore()
             self._transcript_store.start_recording()
-            logger.debug("Transcript store initialized")
+            logger.debug("transcript_store_initialized:")
 
             # Create accumulating transcription processor
             # Configuration optimized for meetings:
@@ -1678,15 +1795,22 @@ class RecordingController:
             )
 
             # Load model (tiny takes 1-2 seconds)
-            logger.info("Loading %s model for real-time transcription...", realtime_model)
-            self._transcription_processor.load_model(
-                progress_callback=lambda p: logger.info("Loading %s model: %d%%", realtime_model, p)
+            logger.info(
+                "realtime_model_load_started: model=%s", realtime_model
             )
-            logger.info("%s model loaded successfully", realtime_model)
+            self._transcription_processor.load_model(
+                progress_callback=lambda p: logger.debug(
+                    "realtime_model_load_progress: model=%s percent=%d",
+                    realtime_model, p,
+                )
+            )
+            logger.info(
+                "realtime_model_loaded: model=%s", realtime_model
+            )
 
             # Wire up the phrase result callback
             self._transcription_processor.on_result = self._on_phrase_result
-            logger.debug("Transcription result callback wired")
+            logger.debug("transcription_result_callback_wired:")
 
             # Initialize post-processing queue (for after recording stops).
             # One queue for the controller's lifetime — see
@@ -1696,8 +1820,10 @@ class RecordingController:
             return None
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.error(
+                "transcription_init_failed: error_class=%s",
+                type(e).__name__,
+            )
             return ControllerError(
                 message=f"Failed to initialize transcription: {e}",
                 is_recoverable=True
@@ -1721,7 +1847,7 @@ class RecordingController:
             return
         if self._post_processor is not None:
             return
-        logger.debug("Initializing post-processing queue")
+        logger.debug("post_processing_queue_init:")
         self._post_processor = PostProcessingQueue(
             settings=settings,
             on_progress=self._on_post_process_progress,
@@ -1738,9 +1864,11 @@ class RecordingController:
         Args:
             result: SegmentResult with text, confidence, and completion status
         """
-        logger.debug("Segment received [conf: %d%%, final: %s, idx: %s]",
-                     result.confidence, result.is_final,
-                     result.segment_index)
+        logger.debug(
+            "segment_received: confidence_percent=%d is_final=%s "
+            "segment_index=%s",
+            result.confidence, result.is_final, result.segment_index,
+        )
 
         # Attempt live speaker matching (conservative; attaches name only
         # for high-confidence known-speaker matches)
@@ -1765,29 +1893,38 @@ class RecordingController:
                     # then start fresh live buffer
                     self._transcript_store.commit_live_phrase()
                     self._transcript_store.set_live_phrase_words(words)
-                    logger.debug("New phrase: %d words (total: %d)",
-                                 len(words),
-                                 self._transcript_store.get_word_count())
+                    logger.debug(
+                        "phrase_started: words=%d total_words=%d",
+                        len(words),
+                        self._transcript_store.get_word_count(),
+                    )
                 elif result.is_final:
                     # Final transcription — commit the live phrase
                     self._transcript_store.set_live_phrase_words(words)
                     self._transcript_store.commit_live_phrase()
-                    logger.debug("Final phrase: %d words (total: %d)",
-                                 len(words),
-                                 self._transcript_store.get_word_count())
+                    logger.debug(
+                        "phrase_committed: words=%d total_words=%d",
+                        len(words),
+                        self._transcript_store.get_word_count(),
+                    )
                 else:
                     # Re-transcription — replace the live phrase buffer
                     self._transcript_store.set_live_phrase_words(words)
-                    logger.debug("Updated phrase: %d words (total: %d)",
-                                 len(words),
-                                 self._transcript_store.get_word_count())
+                    logger.debug(
+                        "phrase_updated: words=%d total_words=%d",
+                        len(words),
+                        self._transcript_store.get_word_count(),
+                    )
 
         # Notify UI callback
         if self.on_phrase_result:
             try:
                 self.on_phrase_result(result)
             except Exception as e:
-                logger.error("Segment result callback failed: %s", e)
+                logger.error(
+                    "phrase_result_callback_failed: error_class=%s",
+                    type(e).__name__,
+                )
 
     def _segment_to_words(self, result: SegmentResult) -> List[Word]:
         """Convert a SegmentResult to Word objects.
@@ -1830,7 +1967,10 @@ class RecordingController:
             job_id: The job identifier
             progress: Progress percentage (0-100)
         """
-        logger.debug("Post-processing job %s: %d%%", job_id, progress)
+        logger.debug(
+            "post_process_progress: job_id=%s percent=%d",
+            job_id, progress,
+        )
 
     def _on_post_process_complete_callback(self, job_id: str, result: dict) -> None:
         """Handle post-processing completion (success or failure).
@@ -1844,12 +1984,12 @@ class RecordingController:
 
         if is_failure:
             logger.error(
-                "Post-processing job %s FAILED: %s",
-                job_id, result.get("error", "unknown"),
+                "post_process_job_failed: job_id=%s", job_id,
             )
         else:
             logger.info(
-                "Post-processing job %s completed: %s words (realtime: %s)",
+                "post_process_job_completed: job_id=%s words=%s "
+                "realtime_words=%s",
                 job_id,
                 result.get("word_count", "?"),
                 result.get("realtime_word_count", "?"),
@@ -1861,7 +2001,8 @@ class RecordingController:
             with self._state_lock:
                 self._last_diarization_result = diarization_result
             logger.info(
-                "Post-processing job %s delivered diarization result (%d speakers)",
+                "post_process_diarization_delivered: job_id=%s "
+                "speakers=%d",
                 job_id,
                 getattr(diarization_result, "num_speakers", 0),
             )
@@ -1877,13 +2018,21 @@ class RecordingController:
                 try:
                     self.on_post_process_complete(job_id, transcript_path)
                 except Exception as e:
-                    logger.error("Post-process complete callback failed: %s", e)
+                    logger.error(
+                        "post_process_complete_callback_failed: "
+                        "error_class=%s",
+                        type(e).__name__,
+                    )
             elif is_failure:
                 # Still notify UI so it can clear the "(processing speakers...)" indicator
                 try:
                     self.on_post_process_complete(job_id, None)
                 except Exception as e:
-                    logger.error("Post-process failure callback failed: %s", e)
+                    logger.error(
+                        "post_process_failure_callback_failed: "
+                        "error_class=%s",
+                        type(e).__name__,
+                    )
 
     def _compute_and_store_wer(self, result: dict) -> None:
         """Compute WER between realtime and post-processed transcripts and append to file.
@@ -1912,13 +2061,17 @@ class RecordingController:
 
             transcript_path = Path(transcript_path_str)
             if not transcript_path.exists():
-                logger.warning("Cannot compute WER: transcript file not found: %s", transcript_path)
+                logger.warning(
+                    "auto_wer_skipped: reason=transcript_missing"
+                )
                 return
 
             content = transcript_path.read_text(encoding="utf-8")
             split_result = transcript_footer.split(content)
             if split_result is None:
-                logger.warning("Cannot compute WER: no metadata footer in %s", transcript_path)
+                logger.warning(
+                    "auto_wer_skipped: reason=no_metadata_footer"
+                )
                 return
             md_body, data = split_result
 
@@ -1927,13 +2080,14 @@ class RecordingController:
             postproc_text = " ".join(w.get("text", "") for w in postproc_words)
 
             if not realtime_text.strip() and not postproc_text.strip():
-                logger.info("Both transcripts empty - skipping WER calculation")
+                logger.info("auto_wer_skipped: reason=both_transcripts_empty")
                 return
 
             wer_value = calculate_wer(realtime_text, postproc_text)
             logger.info(
-                "Auto-WER for %s: %.3f (realtime: %d words, postproc: %d words)",
-                transcript_path.name, wer_value,
+                "auto_wer_computed: wer=%.3f realtime_words=%d "
+                "postproc_words=%d",
+                wer_value,
                 len(realtime_text.split()) if realtime_text else 0,
                 len(postproc_words),
             )
@@ -1950,7 +2104,10 @@ class RecordingController:
                 self._last_wer = wer_value
 
         except Exception as exc:
-            logger.error("Auto-WER computation failed: %s", exc, exc_info=True)
+            logger.error(
+                "auto_wer_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def feed_audio_for_transcription(self, audio_chunk) -> None:
         """Feed audio chunk to transcription processor.
@@ -1968,7 +2125,11 @@ class RecordingController:
             self._audio_chunks_fed += 1
             if self._audio_chunks_fed % 100 == 0:
                 stats = self._transcription_processor.get_stats()
-                logger.debug("Fed %d audio chunks, buffer: %.1fs", self._audio_chunks_fed, stats.get("buffer_duration", 0))
+                logger.debug(
+                    "audio_chunks_fed: count=%d buffer_seconds=%.1f",
+                    self._audio_chunks_fed,
+                    stats.get("buffer_duration", 0),
+                )
 
         # Buffer raw PCM for live speaker matching (only while recording)
         if self._state == ControllerState.RECORDING and audio_chunk is not None:
@@ -2017,7 +2178,9 @@ class RecordingController:
             if not emb_path or not emb_path.exists():
                 self._live_extractor_available = False
                 self._live_last_status = "model_unavailable"
-                logger.info("Live speaker matching disabled: embedding model not found")
+                logger.info(
+                    "live_speaker_matching_disabled: reason=model_unavailable"
+                )
                 return False
 
             config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
@@ -2026,13 +2189,15 @@ class RecordingController:
             if not config.validate():
                 self._live_extractor_available = False
                 self._live_last_status = "model_unavailable"
-                logger.info("Live speaker matching disabled: extractor config invalid")
+                logger.info(
+                    "live_speaker_matching_disabled: reason=config_invalid"
+                )
                 return False
 
             self._live_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
             self._live_extractor_available = True
             self._live_last_status = "enabled"
-            logger.info("Live speaker matching enabled")
+            logger.info("live_speaker_matching_enabled:")
             return True
 
         except (ImportError, Exception) as exc:
@@ -2041,7 +2206,9 @@ class RecordingController:
             self._live_last_error_message = str(exc)[:_SANITIZED_STATUS_MAX_LENGTH]
             self._live_last_status = "extractor_error"
             logger.info(
-                "Live speaker matching disabled: %s", type(exc).__name__
+                "live_speaker_matching_disabled: reason=extractor_error "
+                "error_class=%s",
+                type(exc).__name__,
             )
             return False
 
@@ -2260,8 +2427,8 @@ class RecordingController:
             from meetandread.audio.storage.paths import get_recordings_dir
         except ImportError:
             logger.warning(
-                "sherpa-onnx not installed - speaker diarization skipped. "
-                "Install sherpa-onnx to enable speaker identification."
+                "diarization_dependency_missing: dependency=sherpa-onnx "
+                "skipped=1"
             )
             return
 
@@ -2270,10 +2437,10 @@ class RecordingController:
             speaker_cfg = settings.speaker
 
             if not speaker_cfg.enabled:
-                logger.info("Speaker diarization disabled in settings - skipped")
+                logger.info("diarization_skipped: reason=disabled")
                 return
 
-            logger.info("Running speaker diarization on %s", wav_path.name)
+            logger.info("diarization_started: context=realtime")
 
             # (1) Run diarization
             diarizer = Diarizer(
@@ -2281,8 +2448,9 @@ class RecordingController:
                 min_duration_on=speaker_cfg.min_duration_on,
                 min_duration_off=speaker_cfg.min_duration_off,
             )
-            logger.info(
-                "Diarization config: clustering=%.2f min_duration_on=%.2f min_duration_off=%.2f",
+            logger.debug(
+                "diarization_config: clustering=%.2f min_duration_on=%.2f "
+                "min_duration_off=%.2f",
                 speaker_cfg.clustering_threshold,
                 speaker_cfg.min_duration_on,
                 speaker_cfg.min_duration_off,
@@ -2291,35 +2459,35 @@ class RecordingController:
 
             if not result.succeeded:
                 logger.error(
-                    "Diarization failed for %s: %s", wav_path.name, result.error
+                    "diarization_failed: context=realtime"
                 )
                 return
 
             # --- Degraded-result fallback: 0 speakers ---
             if result.num_speakers == 0:
                 logger.warning(
-                    "Diarization returned 0 speakers for %s - falling back to "
-                    "single-speaker labeling",
-                    wav_path.name,
+                    "diarization_zero_speakers: fallback=single-speaker"
                 )
                 self._fallback_single_speaker_labeling(result)
                 return
 
             if not result.segments:
-                logger.info("No speaker segments detected in %s", wav_path.name)
+                logger.info(
+                    "diarization_no_segments: context=realtime"
+                )
                 return
 
             logger.info(
-                "Diarized %s: %d segments, %d speakers",
-                wav_path.name, len(result.segments), result.num_speakers,
+                "diarization_complete: context=realtime segments=%d "
+                "speakers=%d",
+                len(result.segments), result.num_speakers,
             )
 
             # --- Implausible speaker count warning ---
             if result.num_speakers > 8:
                 logger.warning(
-                    "Diarization detected %d speakers for %s - implausible "
-                    "count, continuing with cleanup and labeling",
-                    result.num_speakers, wav_path.name,
+                    "diarization_implausible_speaker_count: speakers=%d",
+                    result.num_speakers,
                 )
 
             # --- Clean up noisy over-segmentation ---
@@ -2327,8 +2495,8 @@ class RecordingController:
             pre_cleanup_count = len(result.segments)
             result.segments = cleanup_diarization_segments(result.segments)
             if len(result.segments) != pre_cleanup_count:
-                logger.info(
-                    "Diarization cleanup in controller: %d -> %d segments "
+                logger.debug(
+                    "diarization_cleanup: before=%d after=%d "
                     "(gap_threshold=%.2fs, short_threshold=%.2fs)",
                     pre_cleanup_count, len(result.segments),
                     0.2, 0.5,
@@ -2353,8 +2521,9 @@ class RecordingController:
                     if match:
                         result.matches[label] = match
                         logger.debug(
-                            "Matched %s -> '%s' (score=%.4f, confidence=%s)",
-                            label, match.name, match.score, match.confidence,
+                            "signature_matched: raw_label=%s score=%.4f "
+                            "confidence=%s",
+                            label, match.score, match.confidence,
                         )
                     else:
                         # Save raw profile so it can be linked later.
@@ -2367,8 +2536,9 @@ class RecordingController:
                             averaged_from_segments=sig.num_segments,
                         )
                         logger.debug(
-                            "Saved raw profile '%s' to signature store (no known match)",
-                            display_label,
+                            "signature_saved: raw_label=%s "
+                            "averaged_from_segments=%s",
+                            label, sig.num_segments,
                         )
 
             # (3) Tag transcript words with speaker labels
@@ -2379,8 +2549,8 @@ class RecordingController:
 
         except Exception as exc:
             logger.error(
-                "Speaker diarization error for %s: %s",
-                wav_path.name, exc, exc_info=True,
+                "diarization_error: context=realtime error_class=%s",
+                type(exc).__name__,
             )
 
     def _apply_speaker_labels(self, result: "DiarizationResult", transcript_store: Optional[TranscriptStore] = None) -> None:
@@ -2464,7 +2634,7 @@ class RecordingController:
                     tagged_count += 1
 
         logger.info(
-            "Tagged %d/%d words with speaker labels (%d speakers)",
+            "speaker_labels_applied: tagged=%d total_words=%d speakers=%d",
             tagged_count, len(words), len(label_map),
         )
 
@@ -2500,8 +2670,7 @@ class RecordingController:
         self._apply_speaker_labels(result)
 
         logger.info(
-            "Applied single-speaker fallback for %s (%.1fs, %d words)",
-            getattr(self._last_wav_path, "name", "unknown"),
+            "single_speaker_fallback_applied: duration_seconds=%.1f words=%d",
             duration,
             len(words),
         )
@@ -2583,7 +2752,10 @@ class RecordingController:
             return transcript_path
 
         except Exception as e:
-            logger.error("Failed to save transcript: %s", e)
+            logger.error(
+                "transcript_save_failed: error_class=%s",
+                type(e).__name__,
+            )
             return None
 
     def _build_source_configs(
@@ -2616,7 +2788,7 @@ class RecordingController:
                 configs.append(SourceConfig(type='system', gain=0.8))
             elif source_type == 'fake':
                 if not fake_path:
-                    logger.warning("Fake source requested without fake_path - skipping")
+                    logger.warning("fake_source_skipped: reason=no_path")
                     continue
                 configs.append(SourceConfig(
                     type='fake',
@@ -2694,7 +2866,7 @@ class RecordingController:
             return True
         except Exception as exc:
             logger.warning(
-                "swap_session_source failed for %s: error_class=%s",
+                "session_source_swap_failed: source_type=%s error_class=%s",
                 source_type,
                 type(exc).__name__,
             )
@@ -2726,16 +2898,14 @@ class RecordingController:
         """
         if not self._last_diarization_result or not self._last_transcript_path:
             logger.warning(
-                "Cannot pin speaker '%s': no diarization result available",
-                raw_label,
+                "speaker_pin_unavailable: reason=no_diarization_result"
             )
             return
 
         result = self._last_diarization_result
         if not result.succeeded or raw_label not in result.signatures:
             logger.warning(
-                "Cannot pin speaker '%s': no signature found in diarization result",
-                raw_label,
+                "speaker_pin_unavailable: reason=no_signature_for_label"
             )
             return
 
@@ -2754,7 +2924,10 @@ class RecordingController:
                 else:
                     store.save_signature(name, sig.embedding, sig.num_segments)
 
-                logger.info("Saved voice signature for '%s' (was %s)", name, raw_label)
+                logger.info(
+                    "speaker_signature_pinned: updated=%s",
+                    bool(existing and existing.name == name),
+                )
 
                 # Update the in-memory result mapping
                 from meetandread.speaker.models import SpeakerMatch
@@ -2773,8 +2946,8 @@ class RecordingController:
                     if match:
                         result.matches[label] = match
                         logger.info(
-                            "Re-checked %s -> '%s' (score=%.4f)",
-                            label, match.name, match.score,
+                            "speaker_rematch_found: raw_label=%s score=%.4f",
+                            label, match.score,
                         )
 
             # Re-apply speaker labels to transcript words
@@ -2782,7 +2955,10 @@ class RecordingController:
                 self._apply_speaker_labels(result)
 
         except Exception as exc:
-            logger.error("Failed to pin speaker '%s': %s", name, exc, exc_info=True)
+            logger.error(
+                "speaker_pin_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     def get_speaker_names(self) -> dict:
         """Return current speaker label mapping from the last diarization.
@@ -2866,7 +3042,7 @@ class RecordingController:
                 },
             }
         except Exception:
-            logger.debug("Diagnostics: session stats unavailable")
+            logger.debug("diagnostics_unavailable: section=session")
         # Device hot-plug recovery diagnostics (sanitized - no audio/transcript/secrets)
         diag["hotplug"] = self._hotplug_diagnostics()
         diag["retry"] = self._retry_diagnostics()
@@ -2885,7 +3061,7 @@ class RecordingController:
                     vs = vad()
                     diag["vad"] = vs
             except Exception:
-                logger.debug("Diagnostics: transcription stats unavailable")
+                logger.debug("diagnostics_unavailable: section=transcription")
 
         # Transcript store stats
         if self._transcript_store:
@@ -2896,7 +3072,7 @@ class RecordingController:
                     "words_with_speaker": sum(1 for w in words if w.speaker_id is not None),
                 }
             except Exception:
-                logger.debug("Diagnostics: transcript store stats unavailable")
+                logger.debug("diagnostics_unavailable: section=transcript_store")
 
         # Diarization result metadata
         with self._state_lock:
@@ -2920,7 +3096,7 @@ class RecordingController:
                     "labels": sorted(raw_labels),
                 }
             except Exception:
-                logger.debug("Diagnostics: diarization stats unavailable")
+                logger.debug("diagnostics_unavailable: section=diarization")
 
         # Live speaker matching diagnostics (sanitized - no names/embeddings)
         with self._buffer_lock:

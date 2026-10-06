@@ -138,7 +138,7 @@ class BenchmarkRunner:
             Ground truth text string.
         """
         if not self._ground_truth_path.exists():
-            logger.warning("Ground truth file not found: %s", self._ground_truth_path)
+            logger.warning("benchmark_ground_truth_missing:")
             return ""
 
         return self._ground_truth_path.read_text(encoding="utf-8").strip()
@@ -210,11 +210,18 @@ class BenchmarkRunner:
             if self._on_progress:
                 self._on_progress(10)
 
-            logger.info("Loading test audio from %s", self._test_clip_path)
+            logger.info(
+                "benchmark_run_started: mode=blocking "
+                "chunk_seconds=%.1f", self._chunk_duration_s,
+            )
             audio = self._load_audio()
             total_samples = len(audio)
             sample_rate = 16000
             result.total_audio_s = total_samples / sample_rate
+            logger.debug(
+                "benchmark_audio_loaded: seconds=%.1f",
+                result.total_audio_s,
+            )
 
             if self._on_progress:
                 self._on_progress(20)
@@ -230,7 +237,10 @@ class BenchmarkRunner:
             for i in range(num_chunks):
                 # Check cancellation before scheduling this chunk
                 if self._cancel_event.is_set():
-                    logger.info("Benchmark cancelled before chunk %d/%d", i + 1, num_chunks)
+                    logger.info(
+                        "benchmark_cancelled: stage=before_chunk chunk=%d/%d",
+                        i + 1, num_chunks,
+                    )
                     result.error = "Benchmark cancelled"
                     return result
 
@@ -247,8 +257,8 @@ class BenchmarkRunner:
                 from meetandread.transcription.engine import TranscriptionError, TranscriptionSuccess
                 if isinstance(chunk_result, TranscriptionError):
                     logger.warning(
-                        "Benchmark chunk %d transcription failed: %s",
-                        i + 1, chunk_result.message,
+                        "benchmark_chunk_failed: chunk=%d/%d error_type=%s",
+                        i + 1, num_chunks, chunk_result.error_type,
                     )
                     continue
                 segments = chunk_result.segments if isinstance(chunk_result, TranscriptionSuccess) else chunk_result
@@ -256,7 +266,7 @@ class BenchmarkRunner:
                 # Check cancellation immediately after blocking transcribe
                 if self._cancel_event.is_set():
                     logger.info(
-                        "Benchmark cancelled after chunk %d/%d completed",
+                        "benchmark_cancelled: stage=after_chunk chunk=%d/%d",
                         i + 1, num_chunks,
                     )
                     # Include partial results from completed chunks
@@ -280,8 +290,9 @@ class BenchmarkRunner:
                 if self._on_progress:
                     self._on_progress(progress)
 
-                logger.info(
-                    "Chunk %d/%d: %.2fs audio, %.3fs latency",
+                logger.debug(
+                    "benchmark_chunk_done: chunk=%d/%d audio_seconds=%.2f "
+                    "latency_seconds=%.3f",
                     i + 1, num_chunks, chunk_duration, chunk_latency,
                 )
 
@@ -307,12 +318,16 @@ class BenchmarkRunner:
                 self._on_progress(100)
 
             logger.info(
-                "Benchmark complete: WER=%.3f, throughput=%.1fx, latency=%.2fs",
+                "benchmark_complete: wer=%.3f throughput=%.1fx "
+                "latency_seconds=%.2f chunks=%d",
                 result.wer, result.throughput_ratio, overall_latency,
+                len(chunk_latencies),
             )
 
         except Exception as e:
-            logger.error("Benchmark failed: %s", e)
+            logger.error(
+                "benchmark_failed: error_class=%s", type(e).__name__
+            )
             result.error = str(e)
 
         return result
@@ -345,7 +360,9 @@ class BenchmarkRunner:
         last_result / history.
         """
         if self._is_running:
-            logger.warning("Benchmark already running, ignoring run_async() call")
+            logger.warning(
+                "benchmark_start_refused: reason=already_running"
+            )
             return
 
         def _thread_target():
@@ -362,7 +379,8 @@ class BenchmarkRunner:
 
         self._thread = threading.Thread(target=_thread_target, daemon=True)
         self._thread.start()
-        logger.info("Benchmark started in background thread")
+        logger.info("benchmark_started: mode=background chunk_seconds=%.1f",
+                    self._chunk_duration_s)
 
     def cancel(self) -> None:
         """Cancel a running benchmark.
@@ -372,4 +390,4 @@ class BenchmarkRunner:
         """
         self._cancel_event.set()
         self._is_running = False
-        logger.info("Benchmark cancellation requested")
+        logger.info("benchmark_cancel_requested:")

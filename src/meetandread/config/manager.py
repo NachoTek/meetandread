@@ -46,14 +46,20 @@ def validate_storage_paths(paths: StoragePaths) -> Dict[str, str]:
             resolved = Path(raw_value).expanduser().resolve()
         except Exception:
             errors[field_name] = "Path could not be resolved"
-            logger.warning("storage_path_validation_failed field=%s reason=resolve_error", field_name)
+            logger.warning(
+                "storage_path_validation_failed: field=%s reason=resolve_error",
+                field_name,
+            )
             continue
 
         try:
             resolved.mkdir(parents=True, exist_ok=True)
         except OSError:
             errors[field_name] = "Directory could not be created"
-            logger.warning("storage_path_validation_failed field=%s reason=mkdir_error", field_name)
+            logger.warning(
+                "storage_path_validation_failed: field=%s reason=mkdir_error",
+                field_name,
+            )
             continue
 
         # Write-test with a sentinel file
@@ -63,7 +69,10 @@ def validate_storage_paths(paths: StoragePaths) -> Dict[str, str]:
             sentinel.unlink(missing_ok=True)
         except OSError:
             errors[field_name] = "Directory is not writable"
-            logger.warning("storage_path_validation_failed field=%s reason=write_test_error", field_name)
+            logger.warning(
+                "storage_path_validation_failed: field=%s reason=write_test_error",
+                field_name,
+            )
             continue
 
     return errors
@@ -112,13 +121,16 @@ class ConfigManager:
             return
         
         self._persistence = persistence or SettingsPersistence()
-        
+
         # Load settings or use defaults
         try:
             self._settings = self._persistence.load_settings()
-            logger.info(f"Config loaded from {self._persistence.get_config_path()}")
+            logger.info("config_ready: source=loaded")
         except Exception as e:
-            logger.warning(f"Failed to load config: {e}, using defaults")
+            logger.warning(
+                "config_defaults_used: reason=load_failed error_class=%s",
+                type(e).__name__,
+            )
             self._settings = AppSettings.get_defaults()
         
         # Store reference to original defaults for smart defaults tracking
@@ -230,11 +242,11 @@ class ConfigManager:
         
         # Set the value
         setattr(parent, target_attr, value)
-        
+
         # Mark as dirty
         self._dirty_paths.add(key_path)
-        
-        logger.debug(f"Setting '{key_path}' = {value}")
+
+        logger.debug("config_value_set: key=%s", key_path)
     
     def is_dirty(self) -> bool:
         """Check if any settings have been modified from defaults.
@@ -254,38 +266,39 @@ class ConfigManager:
     
     def save(self) -> bool:
         """Save settings if dirty.
-        
+
         Only persists settings if they have been modified from defaults.
         After successful save, clears dirty flag.
-        
+
         Returns:
             True if saved successfully or not dirty, False on error.
         """
         if not self.is_dirty():
-            logger.debug("Settings not dirty, skipping save")
+            logger.debug("config_save_skipped: reason=not_dirty")
             return True
-        
+
         result = self._persistence.save_settings(self._settings)
-        
+
         if result:
+            saved_count = len(self._dirty_paths)
             self._dirty_paths.clear()
-            logger.info("Settings saved successfully")
+            logger.info("config_manager_saved: paths=%d", saved_count)
         else:
-            logger.error("Failed to save settings")
-        
+            logger.error("config_save_failed: reason=persistence_error")
+
         return result
-    
+
     def reset_to_defaults(self) -> None:
         """Reset all settings to their default values.
-        
+
         Marks all settings as dirty so they will be persisted.
         """
         self._settings = AppSettings.get_defaults()
-        
+
         # Mark all paths as dirty so they get saved
         self._dirty_paths = self._get_all_paths()
-        
-        logger.info("Settings reset to defaults")
+
+        logger.info("config_reset_to_defaults:")
     
     def _get_all_paths(self) -> set:
         """Get all setting paths for tracking purposes.
@@ -346,12 +359,12 @@ class ConfigManager:
     
     def reload(self) -> None:
         """Reload settings from disk.
-        
+
         Discards any unsaved changes and reloads from file.
         """
         self._settings = self._persistence.load_settings()
         self._dirty_paths.clear()
-        logger.info("Settings reloaded from disk")
+        logger.info("config_reloaded:")
 
 
 def get_config_manager() -> ConfigManager:
