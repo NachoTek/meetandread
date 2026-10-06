@@ -4,12 +4,15 @@ Provides HardwareDetector class to detect system specs including RAM, CPU count,
 frequency, and platform information. Used for model size recommendations.
 """
 
+import logging
 import platform
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 import psutil
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -84,25 +87,29 @@ class HardwareDetector:
         if self._cached_specs is not None:
             elapsed = time.time() - self._cache_timestamp
             if elapsed < self._cache_ttl_seconds:
+                logger.debug(
+                    "hardware_cache_hit: age_seconds=%.1f ttl_seconds=%d",
+                    elapsed, self._cache_ttl_seconds,
+                )
                 return self._cached_specs
-        
+
         # Detect RAM
         mem = psutil.virtual_memory()
         total_ram_gb = mem.total / (1024 ** 3)
         available_ram_gb = mem.available / (1024 ** 3)
-        
+
         # Detect CPU
-        cpu_count_logical = psutil.cpu_count(logical=True)
+        cpu_count_logical = psutil.cpu_count(logical=True) or 1
         cpu_count_physical = psutil.cpu_count(logical=False) or cpu_count_logical
-        
+
         # Detect CPU frequency (may not be available on all platforms)
         cpu_freq = psutil.cpu_freq()
         cpu_freq_mhz = cpu_freq.current if cpu_freq else None
-        
+
         # Platform info
         is_64bit = platform.machine().endswith('64')
         platform_name = platform.system()
-        
+
         specs = SystemSpecs(
             total_ram_gb=total_ram_gb,
             available_ram_gb=available_ram_gb,
@@ -112,11 +119,24 @@ class HardwareDetector:
             is_64bit=is_64bit,
             platform=platform_name,
         )
-        
+
         # Cache results
         self._cached_specs = specs
         self._cache_timestamp = time.time()
-        
+
+        logger.debug(
+            "hardware_detected: ram_gb=%.1f cpu_logical=%d cpu_physical=%d "
+            "platform=%s bits=%d freq_mhz=%s",
+            specs.total_ram_gb, specs.cpu_count_logical,
+            specs.cpu_count_physical, specs.platform,
+            64 if specs.is_64bit else 32,
+            f"{specs.cpu_freq_mhz:.0f}" if specs.cpu_freq_mhz else "unknown",
+        )
+        logger.info(
+            "hardware_specs_ready: ram_gb=%.1f cpu_logical=%d platform=%s",
+            specs.total_ram_gb, specs.cpu_count_logical, specs.platform,
+        )
+
         return specs
     
     def refresh(self) -> SystemSpecs:
@@ -156,7 +176,15 @@ class HardwareDetector:
         
         has_ram = specs.total_ram_gb >= min_ram
         has_cores = specs.cpu_count_logical >= min_cores
-        
+
+        logger.debug(
+            "hardware_requirements_checked: dual_mode=%s ram_gb=%.1f "
+            "min_ram_gb=%.1f cpu_logical=%d min_cores=%d meets=%s",
+            dual_mode, specs.total_ram_gb, min_ram,
+            specs.cpu_count_logical, min_cores,
+            has_ram and has_cores,
+        )
+
         return has_ram and has_cores
     
     def get_warning_message(

@@ -132,6 +132,13 @@ class ResourceMonitor:
         )
         self._current_snapshot = snapshot
 
+        logger.debug(
+            "resource_snapshot: ram_percent=%.1f cpu_percent=%.1f "
+            "available_ram_gb=%.2f",
+            snapshot.ram_percent, snapshot.cpu_percent,
+            snapshot.available_ram_gb,
+        )
+
         # Check thresholds
         self._check_thresholds(snapshot)
 
@@ -151,7 +158,8 @@ class ResourceMonitor:
         if snapshot.ram_percent >= self._ram_warning_percent:
             if not self._ram_warned:
                 logger.warning(
-                    "High RAM usage: %.1f%% (threshold: %.1f%%)",
+                    "resource_threshold_exceeded: resource=ram value=%.1f "
+                    "threshold=%.1f",
                     snapshot.ram_percent, self._ram_warning_percent,
                 )
                 self._ram_warned = True
@@ -164,7 +172,8 @@ class ResourceMonitor:
         if snapshot.cpu_percent >= self._cpu_warning_percent:
             if not self._cpu_warned:
                 logger.warning(
-                    "High CPU usage: %.1f%% (threshold: %.1f%%)",
+                    "resource_threshold_exceeded: resource=cpu value=%.1f "
+                    "threshold=%.1f",
                     snapshot.cpu_percent, self._cpu_warning_percent,
                 )
                 self._cpu_warned = True
@@ -207,9 +216,8 @@ class ResourceMonitor:
                 from PyQt5.QtCore import QTimer
             except ImportError:
                 logger.warning(
-                    "Neither PyQt6 nor PyQt5 available. "
-                    "ResourceMonitor cannot start timer-based polling. "
-                    "Use poll() manually instead."
+                    "resource_monitor_start_failed: reason=no_qt_timer "
+                    "(use poll() manually)"
                 )
                 return
 
@@ -220,8 +228,10 @@ class ResourceMonitor:
         self._timer.start(self._poll_interval_ms)
         self._running = True
         logger.info(
-            "ResourceMonitor started (interval=%dms, ram_threshold=%.1f%%, cpu_threshold=%.1f%%)",
-            self._poll_interval_ms, self._ram_warning_percent, self._cpu_warning_percent,
+            "resource_monitor_started: interval_ms=%d ram_threshold=%.1f "
+            "cpu_threshold=%.1f",
+            self._poll_interval_ms, self._ram_warning_percent,
+            self._cpu_warning_percent,
         )
 
     def stop(self) -> None:
@@ -235,7 +245,7 @@ class ResourceMonitor:
             self._timer = None
 
         self._running = False
-        logger.info("ResourceMonitor stopped")
+        logger.info("resource_monitor_stopped:")
 
     def get_snapshots_history(self) -> List[ResourceSnapshot]:
         """Return a single-element list with the current snapshot.

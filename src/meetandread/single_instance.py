@@ -5,12 +5,20 @@ a named kernel mutex created through ``ctypes`` — no extra dependencies.
 The handle is stored in a module-level global and intentionally never
 closed: the OS releases the kernel object when the owning process dies,
 so there is no stale-lock cleanup path.
+
+Logging discipline (full-audit batch E): the guard often runs BEFORE
+logging is configured, so events go through the module logger and rely
+on the root logger's lastResort handler (stderr) when nothing else is
+installed — same discipline as main()'s pre-logging refusals.
 """
 
 from __future__ import annotations
 
 import ctypes
+import logging
 import sys
+
+logger = logging.getLogger(__name__)
 
 ERROR_ALREADY_EXISTS = 183
 
@@ -55,6 +63,7 @@ def acquire_single_instance_lock(name: str = "meetandread") -> bool:
     global _lock_handle
 
     if sys.platform != "win32":
+        logger.debug("single_instance_lock: platform_unsupported=1 acquired=1")
         return True
 
     from ctypes import wintypes
@@ -70,12 +79,19 @@ def acquire_single_instance_lock(name: str = "meetandread") -> bool:
     if k32.GetLastError() == ERROR_ALREADY_EXISTS:
         if handle:
             k32.CloseHandle(handle)
+        logger.info(
+            "single_instance_lock: acquired=0 reason=already_exists"
+        )
         return False
 
     if not handle:
+        logger.warning(
+            "single_instance_lock: acquired=0 reason=create_failed"
+        )
         return False
 
     _lock_handle = handle
+    logger.debug("single_instance_lock: acquired=1")
     return True
 
 

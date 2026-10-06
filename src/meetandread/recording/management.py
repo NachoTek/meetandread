@@ -147,10 +147,9 @@ def enumerate_recording_files(
     found = [p for p in candidates if p.is_file()]
 
     logger.debug(
-        "Enumerated %d files for stem %s: %s",
+        "files_enumerated: stem_redacted count=%d kinds=%s",
         len(found),
-        stem,
-        [p.name for p in found],
+        sorted({p.suffix for p in found}),
     )
 
     return found
@@ -226,27 +225,28 @@ def rename_recording(
     # Build rename pairs
     pairs = _enumerate_rename_pairs(old_stem, new_stem, rec_dir, tra_dir)
     if not pairs:
-        logger.info("No files found for stem %s — nothing to rename", old_stem)
+        logger.info("rename_no_files: files=0")
         return result
 
     # Pre-check: all targets must not already exist
     for old_path, new_path in pairs:
         if new_path.exists():
             reason = f"Target already exists: {new_path.name}"
-            logger.warning("Rename conflict: %s", reason)
+            logger.warning("rename_conflict: target_exists files_pending=%d",
+                           len(pairs))
             result.failed.append((str(new_path), reason))
 
     if result.failed:
         logger.error(
-            "Rename aborted for %s -> %s: %d target conflicts",
-            old_stem, new_stem, len(result.failed),
+            "rename_aborted: conflicts=%d",
+            len(result.failed),
         )
         return result
 
     # Rename phase with rollback on failure
     logger.info(
-        "Renaming recording %s -> %s (%d files)",
-        old_stem, new_stem, len(pairs),
+        "rename_started: files=%d",
+        len(pairs),
     )
 
     renamed_so_far: List[Tuple[Path, Path]] = []
@@ -259,15 +259,18 @@ def rename_recording(
                 result.renamed.append((str(old_path), str(new_path)))
             except OSError as exc:
                 reason = f"OSError: {exc}"
-                logger.error("Failed to rename %s -> %s: %s", old_path, new_path, exc)
+                logger.error(
+                    "rename_file_failed: error_class=%s files_renamed=%d",
+                    type(exc).__name__, len(renamed_so_far),
+                )
                 result.failed.append((str(old_path), reason))
                 # Trigger rollback
                 raise
     except OSError:
         # Rollback: rename back all successfully renamed files
         logger.warning(
-            "Rolling back %d already-renamed files for %s -> %s",
-            len(renamed_so_far), old_stem, new_stem,
+            "rename_rollback_started: files=%d",
+            len(renamed_so_far),
         )
         for rollback_old, rollback_new in renamed_so_far:
             try:
@@ -275,8 +278,9 @@ def rename_recording(
                 result.rolled_back.append(str(rollback_new))
             except OSError as rb_exc:
                 logger.error(
-                    "ROLLBACK FAILURE: could not restore %s from %s: %s",
-                    rollback_old, rollback_new, rb_exc,
+                    "rename_rollback_failed: error_class=%s "
+                    "rolled_back=%d",
+                    type(rb_exc).__name__, len(result.rolled_back),
                 )
                 result.rolled_back_successfully = False
 
@@ -284,8 +288,8 @@ def rename_recording(
 
     if not result.failed:
         logger.info(
-            "Successfully renamed %d files: %s -> %s",
-            len(result.renamed), old_stem, new_stem,
+            "recording_renamed: files=%d rolled_back=%d",
+            len(result.renamed), len(result.rolled_back),
         )
 
     return result
@@ -322,15 +326,17 @@ def delete_recording(
         try:
             path.unlink()
             deleted.append(str(path))
-            logger.info("Deleted recording file: %s", path)
+            logger.debug("recording_file_deleted: kind=%s", path.suffix)
         except OSError as exc:
-            logger.warning("Failed to delete %s: %s", path, exc)
+            logger.warning(
+                "recording_file_delete_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     logger.info(
-        "Deleted %d/%d files for stem %s",
+        "recording_deleted: deleted=%d total=%d",
         len(deleted),
         len(files),
-        stem,
     )
 
     return len(deleted), deleted
@@ -367,17 +373,19 @@ def delete_recording_structured(
         try:
             path.unlink()
             result.deleted.append(str(path))
-            logger.info("Deleted recording file: %s", path)
+            logger.debug("recording_file_deleted: kind=%s", path.suffix)
         except OSError as exc:
             reason = str(exc)
             result.failed.append((str(path), reason))
-            logger.warning("Failed to delete %s: %s", path, exc)
+            logger.warning(
+                "recording_file_delete_failed: error_class=%s",
+                type(exc).__name__,
+            )
 
     logger.info(
-        "Deleted %d/%d files for stem %s (%d failures)",
+        "recording_deleted: deleted=%d total=%d failed=%d",
         result.success_count,
         len(files),
-        stem,
         result.failure_count,
     )
 

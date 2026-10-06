@@ -58,7 +58,10 @@ def check_critical_dlls():
                 f"The application cannot start without this component. "
                 f"Please reinstall meetandread."
             )
-            logging.error(f"DLL check failed for {name}: {exc}")
+            logging.getLogger(__name__).error(
+                "critical_dll_check_failed: library=%s error_class=%s",
+                name, type(exc).__name__,
+            )
             QMessageBox.critical(
                 None,
                 "meetandread — Missing Component",
@@ -223,7 +226,7 @@ def check_hardware_requirements():
         
         if not detector.has_minimum_requirements(specs, dual_mode=False):
             warning_msg = detector.get_warning_message(specs, dual_mode=False)
-            
+
             msg_box = QMessageBox()
             msg_box.setWindowTitle("Hardware Notice")
             msg_box.setText("Your system may not meet minimum requirements")
@@ -231,10 +234,13 @@ def check_hardware_requirements():
             msg_box.setIcon(QMessageBox.Icon.Warning)
             msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg_box.exec()
-            
-            logging.info(f"Hardware warning shown: {warning_msg}")
+
+            logger.info("hardware_warning_shown: meets=0")
     except Exception as e:
-        logging.warning(f"Hardware requirements check failed: {e}")
+        logger.warning(
+            "hardware_requirements_check_failed: error_class=%s",
+            type(e).__name__,
+        )
 
 
 def setup_signal_handlers(app, widget_ref=None):
@@ -274,7 +280,7 @@ def setup_signal_handlers(app, widget_ref=None):
     def _make_signal_handler(signal_name: str):
         """Build a graceful-exit handler for a named termination signal."""
         def handler(signum, frame):
-            logger.info("Received %s, shutting down gracefully...", signal_name)
+            logger.info("signal_received: signal=%s action=graceful_exit", signal_name)
             _graceful_exit()
         return handler
 
@@ -295,7 +301,7 @@ def setup_signal_handlers(app, widget_ref=None):
 
             def win_handler(dwCtrlType):
                 if dwCtrlType == 0:  # CTRL_C_EVENT
-                    logger.info("Received CTRL+C event, shutting down gracefully...")
+                    logger.info("signal_received: signal=CTRL_C action=graceful_exit")
                     _graceful_exit()
                     return True
                 return False
@@ -348,7 +354,7 @@ def main(capture_dir: Optional[Path] = None):
         # logger or lastResort handler routes ERROR to stderr, so the
         # diagnostic path is preserved either way.
         logger.error(
-            "meetandread is already running (or the single-instance lock could not be acquired) — exiting this instance."
+            "single_instance_refused: exiting=1"
         )
         sys.exit(1)
 
@@ -407,7 +413,10 @@ def main(capture_dir: Optional[Path] = None):
 
             install_interaction_trace_qt_filter(app)
         except Exception as e:
-            logger.warning("Interaction Trace Qt filter not installed: %s", e)
+            logger.warning(
+                "interaction_trace_qt_filter_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     # Widget placeholder — updated after widget creation.
     # Signal handlers read this via a lambda so they always get the
@@ -429,33 +438,44 @@ def main(capture_dir: Optional[Path] = None):
 
         for status in unresolved_dependencies():
             logger.warning(
-                "Optional dependency '%s' missing — %s degraded: %s",
+                "optional_dependency_missing: dependency=%s feature=%s",
                 status.dependency.name,
                 status.dependency.feature,
-                status.dependency.resolution_text(),
             )
     except Exception as e:
-        logger.warning("Feature dependency check failed: %s", e)
+        logger.warning(
+            "dependency_check_failed: error_class=%s",
+            type(e).__name__,
+        )
     
     # Run hardware detection on first startup (if auto-detect enabled)
     try:
         settings = get_config()
         if settings.hardware.auto_detect_on_startup and not settings.hardware.recommended_model:
-            logger.info("Running hardware detection...")
+            logger.info("hardware_detection_started:")
             recommender = ModelRecommender()
             recommended = recommender.detect_and_recommend()
             specs = recommender.get_detected_specs()
-            logger.info("RAM: %.1f GB, CPU: %d cores, Recommended model: %s",
-                        specs.total_ram_gb, specs.cpu_count_logical, recommended)
+            logger.info(
+                "hardware_detection_complete: ram_gb=%.1f cpu_cores=%d "
+                "recommended_model=%s",
+                specs.total_ram_gb, specs.cpu_count_logical, recommended,
+            )
     except Exception as e:
         # Log error but don't block startup
-        logger.warning("Hardware detection failed: %s", e)
+        logger.warning(
+            "hardware_detection_failed: error_class=%s",
+            type(e).__name__,
+        )
     
     # Check hardware requirements and warn if below minimum
     try:
         check_hardware_requirements()
     except Exception as e:
-        logger.warning("Hardware requirements check failed: %s", e)
+        logger.warning(
+            "hardware_requirements_check_failed: error_class=%s",
+            type(e).__name__,
+        )
     
     # Check for partial recordings and offer recovery before showing widget
     # This runs synchronously before the main event loop
@@ -463,7 +483,10 @@ def main(capture_dir: Optional[Path] = None):
         check_and_offer_recovery(parent=None)
     except Exception as e:
         # Log error but don't block startup
-        logger.warning("Recovery check failed: %s", e)
+        logger.warning(
+            "recovery_check_failed: error_class=%s",
+            type(e).__name__,
+        )
 
     # Process pending cleanup queue (orphaned files from prior sessions)
     try:
@@ -471,12 +494,15 @@ def main(capture_dir: Optional[Path] = None):
         cleanup_queue = CleanupQueue()
         result = cleanup_queue.process_pending()
         if result.processed > 0 or result.failed > 0:
-            logging.info(
-                "Startup cleanup: processed=%d, failed=%d",
+            logger.info(
+                "startup_cleanup_complete: processed=%d failed=%d",
                 result.processed, result.failed,
             )
     except Exception as e:
-        logging.warning("Startup cleanup queue processing failed: %s", e)
+        logger.warning(
+            "startup_cleanup_failed: error_class=%s",
+            type(e).__name__,
+        )
     
     # Create and show the main widget
     widget = MeetAndReadWidget()
@@ -489,7 +515,10 @@ def main(capture_dir: Optional[Path] = None):
     try:
         widget.initialize_post_processing()
     except Exception as e:
-        logger.warning("Post-processing startup initialization failed: %s", e)
+        logger.warning(
+            "post_processing_startup_init_failed: error_class=%s",
+            type(e).__name__,
+        )
     
     # Create and wire system tray icon manager
     from meetandread.widgets.tray_icon import TrayIconManager
@@ -503,8 +532,8 @@ def main(capture_dir: Optional[Path] = None):
     
     # Do NOT quit when last window is hidden — tray keeps the app alive
     app.setQuitOnLastWindowClosed(False)
-    
-    logging.info("Tray icon created and wired to main widget")
+
+    logger.info("tray_icon_ready:")
     
     widget.show()
 
@@ -513,7 +542,10 @@ def main(capture_dir: Optional[Path] = None):
     try:
         widget.maybe_show_dependency_banner()
     except Exception as e:
-        logger.warning("Dependency banner failed: %s", e)
+        logger.warning(
+            "dependency_banner_failed: error_class=%s",
+            type(e).__name__,
+        )
 
     # Clean-exit completion marker (issue #104): written only when the
     # event loop returns normally with exit code 0 — the marker is the
@@ -538,7 +570,10 @@ def main(capture_dir: Optional[Path] = None):
 
             remove_interaction_trace_qt_filter(app)
         except Exception as e:
-            logger.warning("Interaction Trace filter teardown failed: %s", e)
+            logger.warning(
+                "interaction_trace_qt_teardown_failed: error_class=%s",
+                type(e).__name__,
+            )
         try:
             from meetandread.interaction_trace import (
                 close_interaction_trace,
@@ -546,7 +581,10 @@ def main(capture_dir: Optional[Path] = None):
 
             close_interaction_trace()
         except Exception as e:
-            logger.warning("Interaction Trace teardown failed: %s", e)
+            logger.warning(
+                "interaction_trace_teardown_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     if capture_dir is not None and exit_code == 0:
         write_completion_marker(capture_dir)

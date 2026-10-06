@@ -4,10 +4,13 @@ Provides intelligent model size recommendations (tiny/base/small/medium/large)
 based on detected system specs. Integrates with ConfigManager to save recommendations.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
 from meetandread.hardware.detector import HardwareDetector, SystemSpecs
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -189,7 +192,20 @@ class ModelRecommender:
         # Force fresh detection
         self._detected_specs = self._detector.refresh()
         self._recommended_size = recommend_model_size(self._detected_specs, prefer_accuracy)
-        
+
+        logger.debug(
+            "model_recommendation_computed: model=%s ram_gb=%.1f "
+            "cpu_logical=%d prefer_accuracy=%s",
+            self._recommended_size,
+            self._detected_specs.total_ram_gb,
+            self._detected_specs.cpu_count_logical,
+            prefer_accuracy,
+        )
+        logger.info(
+            "model_recommendation_ready: model=%s",
+            self._recommended_size,
+        )
+
         return self._recommended_size
     
     def get_recommendation(self) -> str:
@@ -259,9 +275,12 @@ class ModelRecommender:
         except ImportError:
             raise RuntimeError("Config system not available - cannot save recommendation")
         except Exception as e:
-            # Log error but don't crash
-            import logging
-            logging.getLogger(__name__).error(f"Failed to save recommendation: {e}")
+            # Log error class only: the exception message can embed paths
+            # or config values (capture-boundary privacy, batch E audit).
+            logger.warning(
+                "recommendation_save_failed: error_class=%s",
+                type(e).__name__,
+            )
             return False
     
     def check_user_override(self) -> Optional[str]:

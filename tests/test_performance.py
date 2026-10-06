@@ -254,7 +254,11 @@ class TestResourceMonitor:
         monitor = ResourceMonitor(ram_warning_percent=0.0)
         with caplog.at_level(logging.WARNING, logger="meetandread.performance.monitor"):
             monitor.poll()
-        assert any("High RAM usage" in r.message for r in caplog.records)
+        assert any(
+            r.message.startswith("resource_threshold_exceeded:")
+            and "resource=ram" in r.message
+            for r in caplog.records
+        )
 
     def test_no_duplicate_warnings(self):
         """Threshold warning fires only once until it clears and re-triggers."""

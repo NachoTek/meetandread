@@ -109,10 +109,15 @@ def is_dependency_available(dep: FeatureDependency) -> bool:
     try:
         import_module(dep.module)
         available = True
+        logger.debug(
+            "dependency_available: dependency=%s feature=%s",
+            dep.name, dep.feature,
+        )
     except Exception as exc:  # ImportError covers DLL load failures
         logger.info(
-            "Feature dependency '%s' unavailable (%s): %s degraded",
-            dep.name, type(exc).__name__, dep.feature,
+            "dependency_unavailable: dependency=%s feature=%s "
+            "error_class=%s degraded=%s",
+            dep.name, dep.feature, type(exc).__name__, dep.feature,
         )
         available = False
 
@@ -123,10 +128,16 @@ def is_dependency_available(dep: FeatureDependency) -> bool:
 
 def check_feature_dependencies() -> List[DependencyStatus]:
     """Probe every registered Tier-2 dependency."""
-    return [
+    results = [
         DependencyStatus(dep, is_dependency_available(dep))
         for dep in FEATURE_DEPENDENCIES
     ]
+    missing = sum(1 for status in results if not status.available)
+    logger.info(
+        "dependency_check_complete: total=%d missing=%d",
+        len(results), missing,
+    )
+    return results
 
 
 def unresolved_dependencies() -> List[DependencyStatus]:
