@@ -57,3 +57,7 @@ Branch protection requires 1 approving review (TerminalSausage bot, auto-request
 ### Pyright
 
 Baseline is 0 errors (landed in #154); files you touch must stay at 0. From a worktree: `& "..\..\.venv\Scripts\python.exe" -m pyright` (central venv: `C:\Users\CCSupport\meetandread\.venv\Scripts\python.exe`).
+
+### Operations schedules
+
+Two standing ops routines live in `docs/ops/`: flake watch (daily, ~04:30 UTC, after the 03:00 nightly) and env health (weekly, Monday 13:00 UTC). Log outcomes to `docs/watchlog/`.
