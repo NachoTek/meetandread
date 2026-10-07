@@ -217,11 +217,11 @@ class TestTerminationRecord:
         )
         assert rec == tmp_path / TERMINATION_FILE_NAME
         data = read_termination_record(tmp_path)
-        assert data["outcome"] == "clean_stop"
-        assert data["exit_code"] == 0
-        assert data["marker_present"] is True
-        assert data["started_at"] == "2026-09-10T10:00:00"
-        assert data["ended_at"] == "2026-09-10T10:02:30"
+        assert data["outcome"] == "clean_stop"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["exit_code"] == 0  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["marker_present"] is True  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["started_at"] == "2026-09-10T10:00:00"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["ended_at"] == "2026-09-10T10:02:30"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
 
     def test_crash_record_carries_exit_code(self, tmp_path):
         write_termination_record(
@@ -233,9 +233,9 @@ class TestTerminationRecord:
             marker_present=False,
         )
         data = read_termination_record(tmp_path)
-        assert data["outcome"] == "crash"
-        assert data["exit_code"] == 0xC0000005
-        assert data["marker_present"] is False
+        assert data["outcome"] == "crash"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["exit_code"] == 0xC0000005  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["marker_present"] is False  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
 
     def test_user_stop_record(self, tmp_path):
         write_termination_record(
@@ -246,7 +246,7 @@ class TestTerminationRecord:
             ended_at=datetime(2026, 9, 10, 10, 1, 0),
             marker_present=True,
         )
-        assert read_termination_record(tmp_path)["outcome"] == "user_stop"
+        assert read_termination_record(tmp_path)["outcome"] == "user_stop"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
 
     def test_read_returns_none_when_absent(self, tmp_path):
         assert read_termination_record(tmp_path) is None

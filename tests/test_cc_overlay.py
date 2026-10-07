@@ -836,8 +836,8 @@ class TestCCOverlayWidgetLifecycle:
             w = MeetAndReadWidget()
 
         # Mock legacy panel but keep real CC overlay
-        w._floating_transcript_panel = MagicMock()
-        w._floating_transcript_panel.isVisible.return_value = False
+        w._floating_transcript_panel = MagicMock()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        w._floating_transcript_panel.isVisible.return_value = False  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         w._floating_settings_panel = MagicMock()
         w._floating_settings_panel.isVisible.return_value = False
 

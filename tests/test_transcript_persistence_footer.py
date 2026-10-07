@@ -127,7 +127,9 @@ class TestSavedFileRoundTripsThroughCanonicalInterface:
         # A blank line precedes the thematic break so it stays a horizontal
         # rule rather than a setext heading underline.
         assert "\n\n---\n" in content
-        body, _ = transcript_footer.split(content)
+        split_result = transcript_footer.split(content)  # pyright: ignore[reportGeneralTypeIssues]  # intentional mock seam
+        assert split_result is not None
+        body, _ = split_result
         assert body.startswith("# Transcript")
 
 

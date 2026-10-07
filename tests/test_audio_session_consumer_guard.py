@@ -74,7 +74,7 @@ def _make_config(tmp_path: Path, **overrides) -> SessionConfig:
         channels=1,
     )
     defaults.update(overrides)
-    return SessionConfig(**defaults)
+    return SessionConfig(**defaults)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ class TestConsumerCrashSetsErrorState:
             sample_rate=16000,
             channels=1,
             enable_microphone_denoising=True,
-            denoising_provider_factory=lambda: _CrashingDenoiser(),
+            denoising_provider_factory=lambda: _CrashingDenoiser(),  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
         session = AudioSession()
         session.start(config)
@@ -152,7 +152,7 @@ class TestConsumerCrashSetsErrorState:
         session.start(config)
 
         # Poison the writer
-        original_write = session._writer.write_frames_i16
+        original_write = session._writer.write_frames_i16  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         call_count = [0]
 
         def crashing_write(data):
@@ -161,7 +161,7 @@ class TestConsumerCrashSetsErrorState:
                 raise OSError("Simulated disk write failure")
             return original_write(data)
 
-        session._writer.write_frames_i16 = crashing_write
+        session._writer.write_frames_i16 = crashing_write  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
         deadline = time.monotonic() + 5.0
         while session.get_state() == SessionState.RECORDING and time.monotonic() < deadline:

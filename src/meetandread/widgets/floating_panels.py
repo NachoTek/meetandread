@@ -14,8 +14,20 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QDoubleSpinBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QUrl, QPoint, QSize, QRect, QObject
-from PyQt6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
-from typing import Any, Callable, Dict, List, Optional
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QTextCharFormat,
+    QTextCursor,
+    QPainter,
+    QPen,
+    QMouseEvent,
+    QCloseEvent,
+    QKeyEvent,
+    QPaintEvent,
+    QResizeEvent,
+)
+from typing import Any, Callable, Dict, List, Literal, Optional, Protocol, TYPE_CHECKING, overload
 from dataclasses import dataclass
 from pathlib import Path
 import html as _html_module
@@ -364,8 +376,12 @@ class ToastManager(QObject):
         return list(self._toasts.keys())
 
 
-# Lazy import — avoids QtMultimedia DLL issues at module level
-# HistoryPlaybackController is imported inside FloatingSettingsPanel methods.
+# Lazy import — avoids QtMultimedia DLL issues at module level.
+# HistoryPlaybackController is imported inside FloatingSettingsPanel
+# methods; this TYPE_CHECKING alias types the _playback_helper seam.
+if TYPE_CHECKING:
+    from meetandread.playback.history import HistoryPlaybackController
+    from meetandread.playback.bookmark import BookmarkManager
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +401,7 @@ class TexturedSizeGrip(QSizeGrip):
         from PyQt6.QtGui import QColor
         self._color = QColor(color)
 
-    def paintEvent(self, event) -> None:  # noqa: N802
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
         from PyQt6.QtGui import QPainter, QRadialGradient, QBrush, QColor
 
         painter = QPainter(self)
@@ -544,11 +560,13 @@ class PostProcessFailureDialog(QDialog):
         copy_btn = btn_box.addButton(
             "Copy details", QDialogButtonBox.ButtonRole.ActionRole
         )
-        copy_btn.clicked.connect(self._copy_details)
+        if copy_btn is not None:  # stubs say Optional; ActionRole always returns one
+            copy_btn.clicked.connect(self._copy_details)
         close_btn = btn_box.addButton(
             QDialogButtonBox.StandardButton.Close
         )
-        close_btn.clicked.connect(self.accept)
+        if close_btn is not None:  # stubs say Optional; Close always returns one
+            close_btn.clicked.connect(self.accept)
         btn_box.setStyleSheet(action_button_css(p, "dialog"))
         layout.addWidget(btn_box)
 
@@ -564,7 +582,9 @@ class PostProcessFailureDialog(QDialog):
 
     def _copy_details(self) -> None:
         """Copy the full failure details to the clipboard for reporting."""
-        QApplication.clipboard().setText(self.details_text())
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:  # None only without a QApplication
+            clipboard.setText(self.details_text())
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +660,21 @@ class FallbackConfirmationDialog(QDialog):
 # SpeakerIdentityLinkDialog — identity selection for history speaker labels
 # ---------------------------------------------------------------------------
 
+class _SignatureStoreLike(Protocol):
+    """Duck-type seam for VoiceSignatureStore (tests pass stand-ins)."""
+
+    def load_signatures(self) -> list:  # noqa: E501 - list of SpeakerProfile-like
+        ...
+
+
+class _RetranscribeDialog(QDialog):
+    """Model-picker dialog carrying its combo as a typed attribute."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._model_combo = QComboBox()
+
+
 class SpeakerIdentityLinkDialog(QDialog):
     """Dialog for linking a raw speaker label to an existing or new identity.
 
@@ -660,7 +695,7 @@ class SpeakerIdentityLinkDialog(QDialog):
         self,
         current_label: str,
         speaker_matches: dict,
-        store: object,
+        store: "_SignatureStoreLike",
         extra_identity_names: Optional[set] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -746,7 +781,7 @@ class SpeakerIdentityLinkDialog(QDialog):
     # Identity loading
     # ------------------------------------------------------------------
 
-    def _load_identities(self, store: object) -> None:
+    def _load_identities(self, store: "_SignatureStoreLike") -> None:
         """Load identity names from the store and extra sources, then populate list.
 
         On store failure, still populates from extra_identity_names so
@@ -817,6 +852,8 @@ class SpeakerIdentityLinkDialog(QDialog):
         filter_text = text.strip().lower()
         for i in range(self._identity_list.count()):
             item = self._identity_list.item(i)
+            if item is None:  # stubs say Optional; count() bounds the loop
+                continue
             if not filter_text:
                 item.setHidden(False)
             else:
@@ -894,7 +931,7 @@ class SpeakerIdentityLinkDialog(QDialog):
 
 
 def _open_identity_link_dialog(
-    md_path: Path, raw_label: str, parent_widget: QWidget
+    md_path: Optional[Path], raw_label: str, parent_widget: QWidget
 ) -> bool:
     """Open SpeakerIdentityLinkDialog and persist the chosen identity.
 
@@ -969,7 +1006,7 @@ def _open_identity_link_dialog(
     dialog = SpeakerIdentityLinkDialog(
         current_label=display_label,
         speaker_matches=speaker_matches,
-        store=store,
+        store=store,  # type: ignore[arg-type]  # VoiceSignatureStore satisfies the load_signatures duck-type
         extra_identity_names=transcript_identity_names,
         parent=parent_widget,
     )
@@ -1094,10 +1131,13 @@ class FloatingTranscriptPanel(QWidget):
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setFrameShape(QFrame.Shape.NoFrame)
-        # Handle anchor clicks on speaker labels (signal only on QTextBrowser)
+        # Handle anchor clicks on speaker labels (signal only on QTextBrowser).
+        # QTextEdit lacks this signal, so probe dynamically (test seams may
+        # substitute a QTextBrowser-like object).
         self.text_edit.setMouseTracking(True)
-        if hasattr(self.text_edit, "anchorClicked"):
-            self.text_edit.anchorClicked.connect(self._on_anchor_clicked)
+        anchor_signal = getattr(self.text_edit, "anchorClicked", None)
+        if anchor_signal is not None:
+            anchor_signal.connect(self._on_anchor_clicked)
         live_layout.addWidget(self.text_edit)
 
         # Status label
@@ -1215,7 +1255,9 @@ class FloatingTranscriptPanel(QWidget):
         self._pending_content_count: int = 0
         
         # Connect to scrollbar value changed signal to detect manual scroll
-        self.text_edit.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        scroll_bar = self.text_edit.verticalScrollBar()
+        if scroll_bar is not None:  # stubs say Optional
+            scroll_bar.valueChanged.connect(self._on_scroll_value_changed)
         
         # Confidence legend overlay (initially hidden)
         self._create_legend_overlay()
@@ -1364,7 +1406,7 @@ class FloatingTranscriptPanel(QWidget):
             self._position_legend_overlay()
         self._legend_overlay.setVisible(visible)
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         """Reposition overlays and resize grip on resize."""
         if hasattr(self, '_legend_overlay') and self._legend_overlay.isVisible():
             self._position_legend_overlay()
@@ -1689,7 +1731,8 @@ class FloatingTranscriptPanel(QWidget):
 
         If the user provides a name, emits speaker_name_pinned signal.
         """
-        parent = self.parent() if self.parent() else self
+        parent_widget = self.parent()
+        parent = parent_widget if isinstance(parent_widget, QWidget) else self
         name, ok = QInputDialog.getText(
             parent,
             "Name Speaker",
@@ -1799,6 +1842,10 @@ class FloatingTranscriptPanel(QWidget):
         retranscribe_action = menu.addAction("🔄  Re-transcribe Recording")
         rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
+        # text-only addAction overloads always return an action; the
+        # stub's Optional is satisfied via narrowing without assert.
+        if retranscribe_action is None or rename_action is None or delete_action is None:  # pragma: no cover
+            return
         retranscribe_action.triggered.connect(lambda: (
             emit_interaction_event(
                 "menu_item_selected", target="history.retranscribe"
@@ -1817,7 +1864,9 @@ class FloatingTranscriptPanel(QWidget):
             ),
             self._delete_recording(item),
         ))
-        menu.exec(self._history_list.viewport().mapToGlobal(pos))
+        viewport = self._history_list.viewport()
+        if viewport is not None:
+            menu.exec(viewport.mapToGlobal(pos))
 
     def _on_delete_btn_clicked(self) -> None:
         """Handle Delete button click in the detail header."""
@@ -1858,7 +1907,7 @@ class FloatingTranscriptPanel(QWidget):
         # open handle to a file the user is about to delete.  Defensive
         # wrap — a playback-stop exception must not prevent the dialog.
         try:
-            self._stop_playback()
+            self._stop_playback()  # pyright: ignore[reportAttributeAccessIssue]  # see comment above
         except Exception as stop_exc:
             logger.warning(
                 "pre_delete_playback_stop_failed: error_class=%s",
@@ -1868,7 +1917,8 @@ class FloatingTranscriptPanel(QWidget):
         file_count = len(files)
 
         # Show confirmation dialog
-        parent = self.parent() if self.parent() else self
+        parent_widget = self.parent()
+        parent = parent_widget if isinstance(parent_widget, QWidget) else self
         reply = QMessageBox.question(
             parent,
             "Delete Recording",
@@ -1938,7 +1988,8 @@ class FloatingTranscriptPanel(QWidget):
         md_path = Path(md_path_str)
         old_stem = md_path.stem
 
-        parent = self.parent() if self.parent() else self
+        parent_widget = self.parent()
+        parent = parent_widget if isinstance(parent_widget, QWidget) else self
         new_name, ok = QInputDialog.getText(
             parent,
             "Rename Recording",
@@ -2027,7 +2078,8 @@ class FloatingTranscriptPanel(QWidget):
             wav_path = md_path.parent.parent / "recordings" / f"{stem}.wav"
 
         if not wav_path.exists():
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.information(
                 parent,
                 "Cannot Re-transcribe",
@@ -2048,14 +2100,14 @@ class FloatingTranscriptPanel(QWidget):
         # Start the re-transcription
         self._start_retranscribe(wav_path, md_path, model_size)
 
-    def _create_retranscribe_dialog(self) -> QDialog:
+    def _create_retranscribe_dialog(self) -> "_RetranscribeDialog":
         """Create the model picker dialog for re-transcription.
 
-        Returns a QDialog with a QComboBox showing all 5 Whisper models
-        with WER from benchmark_history. Default selection is the current
-        post-process model from config.
+        Returns a _RetranscribeDialog with a QComboBox showing all 5
+        Whisper models with WER from benchmark_history. Default selection
+        is the current post-process model from config.
         """
-        dialog = QDialog(self)
+        dialog = _RetranscribeDialog(self)
         dialog.setWindowTitle("Re-transcribe Recording")
         dialog.setFixedSize(340, 180)
         p = current_palette()
@@ -2099,7 +2151,7 @@ class FloatingTranscriptPanel(QWidget):
         combo.setCurrentIndex(_select_idx)
 
         layout.addWidget(combo)
-        dialog._model_combo = combo  # store reference for caller
+        dialog._model_combo = combo  # typed attribute on the dialog subclass
 
         layout.addStretch()
 
@@ -2158,7 +2210,8 @@ class FloatingTranscriptPanel(QWidget):
             self._retranscribe_btn.setText("🔄 Re-transcribe")
             self._retranscribe_runner = None
             self._retranscribe_sidecar_path = None
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent,
                 "Re-transcribe Failed",
@@ -2203,7 +2256,8 @@ class FloatingTranscriptPanel(QWidget):
         self._retranscribe_btn.setText("🔄 Re-transcribe")
 
         if error:
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent,
                 "Re-transcribe Failed",
@@ -2338,9 +2392,10 @@ class FloatingTranscriptPanel(QWidget):
 
             # Insert into detail header layout (before delete button)
             header_layout = self._detail_header.layout()
-            delete_idx = header_layout.indexOf(self._delete_btn)
-            header_layout.insertWidget(delete_idx, self._retranscribe_accept_btn)
-            header_layout.insertWidget(delete_idx + 1, self._retranscribe_reject_btn)
+            if isinstance(header_layout, QHBoxLayout):
+                delete_idx = header_layout.indexOf(self._delete_btn)
+                header_layout.insertWidget(delete_idx, self._retranscribe_accept_btn)
+                header_layout.insertWidget(delete_idx + 1, self._retranscribe_reject_btn)
         else:
             self._retranscribe_accept_btn.show()
             self._retranscribe_reject_btn.show()
@@ -2369,7 +2424,8 @@ class FloatingTranscriptPanel(QWidget):
                 self._retranscribe_model_size,
             )
         except FileNotFoundError:
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent, "Accept Failed",
                 "Sidecar file not found. It may have been deleted.",
@@ -2377,7 +2433,8 @@ class FloatingTranscriptPanel(QWidget):
             self._hide_retranscribe_accept_reject()
             return
         except Exception as exc:
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent, "Accept Failed", f"Could not accept re-transcribe result:\n\n{exc}",
             )
@@ -2490,7 +2547,7 @@ class FloatingTranscriptPanel(QWidget):
     # History transcript rendering with clickable speaker anchors
     # ------------------------------------------------------------------
 
-    def _render_history_transcript(self, md_path: Path) -> Optional[str]:
+    def _render_history_transcript(self, md_path: Optional[Path]) -> Optional[str]:
         """Render a transcript .md file as HTML with clickable speaker anchors.
 
         Reads the .md file, parses the JSON metadata footer to get speakers,
@@ -2503,6 +2560,8 @@ class FloatingTranscriptPanel(QWidget):
         Returns:
             HTML string for the viewer, or None if no metadata is found.
         """
+        if md_path is None:
+            return None
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -2592,7 +2651,8 @@ class FloatingTranscriptPanel(QWidget):
         if not raw_label:
             return
 
-        parent = self.parent() if self.parent() else self
+        parent_widget = self.parent()
+        parent = parent_widget if isinstance(parent_widget, QWidget) else self
         md_path = self._current_history_md_path
 
         linked = _open_identity_link_dialog(md_path, raw_label, parent)
@@ -2715,7 +2775,9 @@ class FloatingTranscriptPanel(QWidget):
         avoid degenerate cases on very small viewports. This replaces
         all hardcoded pixel thresholds for bottom detection.
         """
-        return max(10, int(self.text_edit.verticalScrollBar().pageStep() * 0.1))
+        scrollbar = self.text_edit.verticalScrollBar()
+        page_step = scrollbar.pageStep() if scrollbar is not None else 0
+        return max(10, int(page_step * 0.1))
     
     def _on_scroll_value_changed(self, value: int) -> None:
         """
@@ -2726,7 +2788,7 @@ class FloatingTranscriptPanel(QWidget):
         back to the bottom while paused, resume auto-scroll immediately.
         """
         scrollbar = self.text_edit.verticalScrollBar()
-        maximum = scrollbar.maximum()
+        maximum = scrollbar.maximum() if scrollbar is not None else 0
         threshold = self._near_bottom_threshold()
         
         if maximum > 0 and value < maximum - threshold:
@@ -2766,7 +2828,8 @@ class FloatingTranscriptPanel(QWidget):
             return
         
         scrollbar = self.text_edit.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        if scrollbar is not None:
+            scrollbar.setValue(scrollbar.maximum())
     
     def save_to_file(self, filepath: str) -> None:
         """Save transcript to file."""
@@ -2777,25 +2840,25 @@ class FloatingTranscriptPanel(QWidget):
                 avg_conf = sum(phrase.confidences) // len(phrase.confidences) if phrase.confidences else 0
                 f.write(f"{i+1}. [{avg_conf}%] {text}\n")
     
-    def closeEvent(self, event) -> None:
+    def closeEvent(self, event: QCloseEvent) -> None:
         """Handle close event."""
         self.closed.emit()
         event.accept()
     
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         """Start dragging."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
     
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent):
         """Handle dragging."""
         if self._dragging and self._drag_pos is not None:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             event.accept()
     
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         """Stop dragging."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
@@ -2812,7 +2875,7 @@ class BudgetProgressBar(QProgressBar):
         super().__init__(parent)
         self._budget_percent = budget_percent
 
-    def paintEvent(self, event):
+    def paintEvent(self, event: QPaintEvent):
         """Paint the progress bar then overlay a red budget marker."""
         super().paintEvent(event)
         painter = QPainter(self)
@@ -2995,7 +3058,7 @@ class CCOverlayPanel(QWidget):
             return QRect(w, h, 0, 0)
         return QRect(w - r - inset, h - r - inset, r, r)
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent) -> None:
         from PyQt6.QtGui import QPainter, QColor, QPen
         from meetandread.widgets.theme import AETHERIC_CC_BG
         painter = QPainter(self)
@@ -3079,6 +3142,8 @@ class CCOverlayPanel(QWidget):
             "top-right": Qt.CursorShape.SizeBDiagCursor,
             "bottom-left": Qt.CursorShape.SizeBDiagCursor,
         }
+        if edge is None:
+            return Qt.CursorShape.ArrowCursor
         return mapping.get(edge, Qt.CursorShape.ArrowCursor)
 
     def _update_cursor_for_resize_edge(self, edge: Optional[str]) -> None:
@@ -3214,7 +3279,7 @@ class CCOverlayPanel(QWidget):
     # Resize — reposition grip (MEM083 pattern)
     # ------------------------------------------------------------------
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         """Reposition resize grip to bottom-right corner."""
         if hasattr(self, "_resize_grip"):
             self._resize_grip.move(
@@ -3541,7 +3606,8 @@ class CCOverlayPanel(QWidget):
             lines.append(text)
         self.text_edit.setPlainText("\n".join(lines))
         sb = self.text_edit.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        if sb is not None:
+            sb.setValue(sb.maximum())
 
     # ------------------------------------------------------------------
     # Speaker name management
@@ -3852,7 +3918,7 @@ class _HistoryRowWidget(QWidget):
     # Mouse event forwarding
     # ------------------------------------------------------------------
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         """Forward left-clicks to the parent list for item selection."""
         if event.button() == Qt.MouseButton.LeftButton:
             self._panel._history_list.setCurrentItem(self._item)
@@ -3864,8 +3930,9 @@ class _HistoryRowWidget(QWidget):
     def contextMenuEvent(self, event) -> None:  # noqa: N802
         """Forward context menu to the panel's history context-menu handler."""
         global_pos = event.globalPos()
-        list_pos = self._panel._history_list.viewport().mapFromGlobal(global_pos)
-        self._panel._on_history_context_menu(list_pos)
+        viewport = self._panel._history_list.viewport()
+        if viewport is not None:
+            self._panel._on_history_context_menu(viewport.mapFromGlobal(global_pos))
         event.accept()
 
 
@@ -3990,9 +4057,11 @@ class FloatingSettingsPanel(QWidget):
         # -- Drag state for title bar --
         self._title_dragging: bool = False
         self._title_drag_pos: Optional[QPoint] = None
-        self._title_bar.mousePressEvent = self._title_bar_mouse_press
-        self._title_bar.mouseMoveEvent = self._title_bar_mouse_move
-        self._title_bar.mouseReleaseEvent = self._title_bar_mouse_release
+        # Intentional instance-level handler rebinding (title bar is a
+        # plain QWidget; handlers below implement its drag behavior).
+        self._title_bar.mousePressEvent = self._title_bar_mouse_press  # pyright: ignore[reportAttributeAccessIssue]
+        self._title_bar.mouseMoveEvent = self._title_bar_mouse_move  # pyright: ignore[reportAttributeAccessIssue]
+        self._title_bar.mouseReleaseEvent = self._title_bar_mouse_release  # pyright: ignore[reportAttributeAccessIssue]
 
         # ------------------------------------------------------------------
         # Body layout: horizontal sidebar + content stack
@@ -4747,7 +4816,9 @@ class FloatingSettingsPanel(QWidget):
         # Hover-reveal action state for inline Re-transcribe/Delete buttons
         self._hovered_history_row: int = -1
         self._history_row_widgets: Dict[int, _HistoryRowWidget] = {}
-        self._history_list.viewport().installEventFilter(self)
+        viewport = self._history_list.viewport()
+        if viewport is not None:
+            viewport.installEventFilter(self)
         self._history_list.currentItemChanged.connect(self._on_history_current_item_changed)
 
         self._history_splitter.addWidget(self._history_list)
@@ -4918,7 +4989,7 @@ class FloatingSettingsPanel(QWidget):
         # Bookmark manager state — per-transcript BookmarkManager, created on
         # selection.  _bookmark_items stores (created_at, position_ms) tuples
         # parallel to the combo items for navigation lookup.
-        self._bookmark_manager: Optional[object] = None  # BookmarkManager
+        self._bookmark_manager: Optional["BookmarkManager"] = None
         self._bookmark_items: List[tuple] = []  # [(created_at, position_ms), ...]
 
         # Live progress polling for per-row Post-processing lifecycle labels
@@ -4957,7 +5028,7 @@ class FloatingSettingsPanel(QWidget):
         self._current_history_md_path: Optional[Path] = None
 
         # -- Playback helper (lazy-init on first History use) --
-        self._playback_helper: Optional[object] = None  # HistoryPlaybackController
+        self._playback_helper: Optional["HistoryPlaybackController"] = None
 
         # -- Current-word highlight state --
         # Cached list of (start_ms, end_ms) tuples for timed words in the
@@ -5090,23 +5161,21 @@ class FloatingSettingsPanel(QWidget):
         self._identity_recordings_table = QTableWidget(0, 3)
         self._identity_recordings_table.setObjectName("AethericIdentityRecordingsTable")
         self._identity_recordings_table.setHorizontalHeaderLabels(["Recording", "Mentions", "Date"])
-        self._identity_recordings_table.horizontalHeader().setStretchLastSection(True)
-        self._identity_recordings_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
-        )
-        self._identity_recordings_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self._identity_recordings_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
+        header = self._identity_recordings_table.horizontalHeader()
+        if header is not None:
+            header.setStretchLastSection(True)
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._identity_recordings_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self._identity_recordings_table.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
         )
-        self._identity_recordings_table.verticalHeader().setVisible(False)
+        vheader = self._identity_recordings_table.verticalHeader()
+        if vheader is not None:
+            vheader.setVisible(False)
         self._identity_recordings_table.setAccessibleName("Associated recordings")
         self._identity_recordings_table.setToolTip("Click a recording to navigate to it in the Library")
         self._identity_recordings_table.setMaximumHeight(160)
@@ -5364,6 +5433,8 @@ class FloatingSettingsPanel(QWidget):
             "top-right": Qt.CursorShape.SizeBDiagCursor,
             "bottom-left": Qt.CursorShape.SizeBDiagCursor,
         }
+        if edge is None:
+            return Qt.CursorShape.ArrowCursor
         return mapping.get(edge, Qt.CursorShape.ArrowCursor)
 
     def _update_cursor_for_resize_edge(self, edge: Optional[str]) -> None:
@@ -5462,7 +5533,7 @@ class FloatingSettingsPanel(QWidget):
             radius_val,
         )
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         """Reposition resize grip on resize."""
         if hasattr(self, '_resize_grip'):
             self._resize_grip.move(
@@ -5471,7 +5542,7 @@ class FloatingSettingsPanel(QWidget):
             )
         super().resizeEvent(event)
 
-    def paintEvent(self, event) -> None:
+    def paintEvent(self, event: QPaintEvent) -> None:
         """Draw gradient glow on the sidebar's right inner edge and square bottom-right corner."""
         from PyQt6.QtGui import QPainter, QLinearGradient, QColor
         painter = QPainter(self)
@@ -5872,7 +5943,7 @@ class FloatingSettingsPanel(QWidget):
         """Emit history_data_changed signal via main widget."""
         if self._main_widget is not None:
             try:
-                self._main_widget.history_data_changed.emit()
+                self._main_widget.history_data_changed.emit()  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed main-widget seam
             except Exception:
                 pass
 
@@ -5880,7 +5951,7 @@ class FloatingSettingsPanel(QWidget):
         """Emit identity_data_changed signal via main widget."""
         if self._main_widget is not None:
             try:
-                self._main_widget.identity_data_changed.emit()
+                self._main_widget.identity_data_changed.emit()  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed main-widget seam
             except Exception:
                 pass
 
@@ -5955,7 +6026,7 @@ class FloatingSettingsPanel(QWidget):
         # Drop previous rows (statuses can change between sessions).
         while self._diagnostics_rows_layout.count():
             item = self._diagnostics_rows_layout.takeAt(0)
-            stale = item.widget()
+            stale = item.widget() if item is not None else None
             if stale is not None:
                 stale.setParent(None)
                 stale.deleteLater()
@@ -6093,7 +6164,7 @@ class FloatingSettingsPanel(QWidget):
         # Send tray notification if available
         if self._tray_manager is not None:
             try:
-                tray = self._tray_manager.tray_icon
+                tray = self._tray_manager.tray_icon  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed tray seam
                 tray.showMessage(
                     "Resource Warning",
                     f"High {resource_name.upper()} usage: {value:.0f}% (threshold: {threshold:.0f}%)",
@@ -6107,7 +6178,7 @@ class FloatingSettingsPanel(QWidget):
         # Also show warning on the main widget scene
         if self._main_widget is not None:
             try:
-                self._main_widget._show_resource_warning(
+                self._main_widget._show_resource_warning(  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed main-widget seam
                     f"⚠ High {resource_name.upper()}: {value:.0f}%"
                 )
             except Exception as exc:
@@ -6133,7 +6204,7 @@ class FloatingSettingsPanel(QWidget):
             return
 
         try:
-            if not self._controller.is_recording():
+            if not self._controller.is_recording():  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed controller seam
                 self._metric_model.setText("Model: Not recording")
                 self._metric_buffer.setText("Buffer: Not recording")
                 self._metric_count.setText("Transcriptions: Not recording")
@@ -7061,6 +7132,8 @@ class FloatingSettingsPanel(QWidget):
         if target_name:
             for i in range(self._identity_list.count()):
                 item = self._identity_list.item(i)
+                if item is None:  # count()-bounded; stub says Optional
+                    continue
                 if item.data(Qt.ItemDataRole.UserRole) == target_name:
                     self._identity_list.setCurrentItem(item)
                     self._on_identity_item_clicked(item)
@@ -7352,6 +7425,8 @@ class FloatingSettingsPanel(QWidget):
         target_item = None
         for i in range(self._history_list.count()):
             item = self._history_list.item(i)
+            if item is None:  # count()-bounded; stub says Optional
+                continue
             if item.data(Qt.ItemDataRole.UserRole) == md_path_str:
                 target_item = item
                 break
@@ -7512,6 +7587,24 @@ class FloatingSettingsPanel(QWidget):
         self._populate_history_list(scan_recordings())
 
     @staticmethod
+    @overload
+    def _build_history_display_text(
+        meta,
+        return_italic: Literal[True],
+        post_process_status: Optional[PostProcessStatus] = ...,
+        post_process_progress: Optional[int] = ...,
+    ) -> tuple: ...
+
+    @staticmethod
+    @overload
+    def _build_history_display_text(
+        meta,
+        return_italic: Literal[False] = ...,
+        post_process_status: Optional[PostProcessStatus] = ...,
+        post_process_progress: Optional[int] = ...,
+    ) -> str: ...
+
+    @staticmethod
     def _build_history_display_text(
         meta,  # RecordingMeta — avoids circular import at class level
         return_italic: bool = False,
@@ -7643,7 +7736,8 @@ class FloatingSettingsPanel(QWidget):
         if not callable(getter):
             return None
         try:
-            return getter(md_path)
+            state = getter(md_path)
+            return state if isinstance(state, PostProcessStatus) else None
         except Exception as exc:
             logger.warning(
                 "post_processing_state_read_failed: error_class=%s",
@@ -7660,7 +7754,8 @@ class FloatingSettingsPanel(QWidget):
         if not callable(getter):
             return None
         try:
-            return getter(md_path)
+            progress = getter(md_path)
+            return progress if isinstance(progress, int) else None
         except Exception as exc:
             logger.warning(
                 "post_processing_progress_read_failed: error_class=%s",
@@ -7703,8 +7798,9 @@ class FloatingSettingsPanel(QWidget):
             for meta in self._history_recordings
         ):
             self._ensure_history_progress_timer()
-            if not self._history_progress_timer.isActive():
-                self._history_progress_timer.start(
+            timer = self._history_progress_timer
+            if timer is not None and not timer.isActive():
+                timer.start(
                     self._HISTORY_PROGRESS_INTERVAL_MS
                 )
         elif self._history_progress_timer is not None:
@@ -7798,7 +7894,7 @@ class FloatingSettingsPanel(QWidget):
                 path=path_str,
                 panel=self,
                 item=item,
-                parent=self._history_list.viewport(),
+                parent=self._history_list.viewport() or self._history_list,
                 italic=is_italic,
             )
             row_widget.set_status_pill(pill_text, pill_kind, pill_tooltip)
@@ -7867,7 +7963,8 @@ class FloatingSettingsPanel(QWidget):
             return
 
         if self._is_post_processing_running_safe():
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             reply = QMessageBox.question(
                 parent,
                 "Retry post-processing?",
@@ -7893,7 +7990,8 @@ class FloatingSettingsPanel(QWidget):
             job_id = None
 
         if job_id is None:
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.information(
                 parent,
                 "Cannot Retry",
@@ -8244,10 +8342,11 @@ class FloatingSettingsPanel(QWidget):
         is_descendant = False
         if obj is self:
             is_descendant = True
-        elif hasattr(obj, 'parent'):
-            w = obj
+        else:
+            w: object = obj
             while w is not None and w is not self:
-                w = w.parent() if hasattr(w, 'parent') and callable(w.parent) else None
+                parent_method = getattr(w, "parent", None)
+                w = parent_method() if callable(parent_method) else None
             is_descendant = w is self
 
         if is_descendant:
@@ -8584,7 +8683,7 @@ class FloatingSettingsPanel(QWidget):
             return True
         return False
 
-    def keyPressEvent(self, event) -> None:  # noqa: N802
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Handle keyboard shortcuts for History playback and DELETE actions.
 
         Playback shortcuts only fire when the History nav page is active and
@@ -8742,7 +8841,7 @@ class FloatingSettingsPanel(QWidget):
         """
         return _html_module.escape(str(text), quote=True)
 
-    def _extract_timed_words(self, md_path: Path) -> List[tuple]:
+    def _extract_timed_words(self, md_path: Optional[Path]) -> List[tuple]:
         """Extract and cache (start_ms, end_ms) pairs from transcript metadata.
 
         Reads the metadata ``words`` array and builds a list of
@@ -8759,6 +8858,9 @@ class FloatingSettingsPanel(QWidget):
         Returns:
             List of ``(start_ms, end_ms)`` tuples aligned with the words array.
         """
+        if md_path is None:
+            self._cached_timed_words = []
+            return self._cached_timed_words
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError:
@@ -8904,14 +9006,17 @@ class FloatingSettingsPanel(QWidget):
             viewer.scrollToAnchor(anchor)
             # Re-center: shift back by half the visible area
             sb = viewer.verticalScrollBar()
-            viewport_height = viewer.viewport().height()
+            vp = viewer.viewport()
+            if sb is None or vp is None:
+                return
+            viewport_height = vp.height()
             target = sb.value() - (viewport_height // 2)
             sb.setValue(max(sb.minimum(), min(target, sb.maximum())))
         except Exception:
             pass
 
     def _render_history_transcript_highlighted(
-        self, md_path: Path, highlight_idx: int
+        self, md_path: Optional[Path], highlight_idx: int
     ) -> Optional[str]:
         """Render transcript HTML with a highlighted word.
 
@@ -8923,13 +9028,15 @@ class FloatingSettingsPanel(QWidget):
             highlight_idx: Zero-based word index to highlight, or -1 for none.
 
         Returns:
-            HTML string, or None if the transcript cannot be rendered.
+            HTML string for the viewer, or None if no metadata is found.
         """
+        if md_path is None:
+            return None
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
             logger.error(
-                "transcript_highlight_failed: reason=read_error error_class=%s",
+                "transcript_render_failed: reason=read_error error_class=%s",
                 type(exc).__name__,
             )
             return None
@@ -9015,7 +9122,7 @@ class FloatingSettingsPanel(QWidget):
 
         return "".join(html_lines)
 
-    def _render_history_transcript(self, md_path: Path) -> Optional[str]:
+    def _render_history_transcript(self, md_path: Optional[Path]) -> Optional[str]:
         """Render a transcript .md file as HTML with clickable speaker anchors.
 
         Reads the .md file, parses the JSON metadata footer to get speakers,
@@ -9028,6 +9135,8 @@ class FloatingSettingsPanel(QWidget):
         Returns:
             HTML string for the viewer, or None if no metadata is found.
         """
+        if md_path is None:
+            return None
         try:
             content = md_path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -9167,6 +9276,10 @@ class FloatingSettingsPanel(QWidget):
         retranscribe_action = menu.addAction("🔄  Re-transcribe Recording")
         rename_action = menu.addAction("✏️  Rename Recording")
         delete_action = menu.addAction("🗑  Delete Recording")
+        # text-only addAction overloads always return an action; the
+        # stub's Optional is satisfied via narrowing without assert.
+        if retranscribe_action is None or rename_action is None or delete_action is None:  # pragma: no cover
+            return
         retranscribe_action.triggered.connect(lambda: (
             emit_interaction_event(
                 "menu_item_selected", target="history.retranscribe"
@@ -9185,7 +9298,9 @@ class FloatingSettingsPanel(QWidget):
             ),
             self._delete_recording(item),
         ))
-        menu.exec(self._history_list.viewport().mapToGlobal(pos))
+        viewport = self._history_list.viewport()
+        if viewport is not None:
+            menu.exec(viewport.mapToGlobal(pos))
 
     def _on_delete_btn_clicked(self) -> None:
         """Handle Delete button click in the detail header."""
@@ -9211,7 +9326,8 @@ class FloatingSettingsPanel(QWidget):
         md_path = Path(md_path_str)
         old_stem = md_path.stem
 
-        parent = self.parent() if self.parent() else self
+        parent_widget = self.parent()
+        parent = parent_widget if isinstance(parent_widget, QWidget) else self
         new_name, ok = QInputDialog.getText(
             parent,
             "Rename Recording",
@@ -9324,7 +9440,8 @@ class FloatingSettingsPanel(QWidget):
 
         file_count = len(files)
 
-        parent = self.parent() if self.parent() else self
+        parent_widget = self.parent()
+        parent = parent_widget if isinstance(parent_widget, QWidget) else self
         reply = QMessageBox.question(
             parent,
             "Delete Recording",
@@ -9466,7 +9583,8 @@ class FloatingSettingsPanel(QWidget):
         if not raw_label:
             return
 
-        parent = self.parent() if self.parent() else self
+        parent_widget = self.parent()
+        parent = parent_widget if isinstance(parent_widget, QWidget) else self
         md_path = self._current_history_md_path
 
         linked = _open_identity_link_dialog(md_path, raw_label, parent)
@@ -9617,7 +9735,8 @@ class FloatingSettingsPanel(QWidget):
             wav_path = md_path.parent.parent / "recordings" / f"{stem}.wav"
 
         if not wav_path.exists():
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.information(
                 parent,
                 "Cannot Re-transcribe",
@@ -9638,9 +9757,9 @@ class FloatingSettingsPanel(QWidget):
         # Start the re-transcription
         self._start_retranscribe(wav_path, md_path, model_size)
 
-    def _create_retranscribe_dialog(self) -> QDialog:
+    def _create_retranscribe_dialog(self) -> "_RetranscribeDialog":
         """Create the model picker dialog for re-transcription."""
-        dialog = QDialog(self)
+        dialog = _RetranscribeDialog(self)
         dialog.setWindowTitle("Re-transcribe Recording")
         dialog.setFixedSize(340, 180)
         p = current_palette()
@@ -9737,7 +9856,8 @@ class FloatingSettingsPanel(QWidget):
             self._retranscribe_runner = None
             self._retranscribe_sidecar_path = None
             self._clear_retranscribe_progress()
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent,
                 "Re-transcribe Failed",
@@ -9817,7 +9937,8 @@ class FloatingSettingsPanel(QWidget):
         self._clear_retranscribe_progress()
 
         if error:
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent,
                 "Re-transcribe Failed",
@@ -9915,8 +10036,9 @@ class FloatingSettingsPanel(QWidget):
             self._retranscribe_reject_btn.clicked.connect(self._on_retranscribe_reject)
 
             header_layout = self._history_detail_header.layout()
-            header_layout.insertWidget(-1, self._retranscribe_accept_btn)
-            header_layout.insertWidget(-1, self._retranscribe_reject_btn)
+            if isinstance(header_layout, QHBoxLayout):
+                header_layout.insertWidget(-1, self._retranscribe_accept_btn)
+                header_layout.insertWidget(-1, self._retranscribe_reject_btn)
         else:
             self._retranscribe_accept_btn.show()
             self._retranscribe_reject_btn.show()
@@ -9944,7 +10066,8 @@ class FloatingSettingsPanel(QWidget):
                 self._retranscribe_model_size,
             )
         except FileNotFoundError:
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent, "Accept Failed",
                 "Sidecar file not found. It may have been deleted.",
@@ -9952,7 +10075,8 @@ class FloatingSettingsPanel(QWidget):
             self._hide_retranscribe_accept_reject()
             return
         except Exception as exc:
-            parent = self.parent() if self.parent() else self
+            parent_widget = self.parent()
+            parent = parent_widget if isinstance(parent_widget, QWidget) else self
             QMessageBox.warning(
                 parent, "Accept Failed", f"Could not accept re-transcribe result:\n\n{exc}",
             )
@@ -10019,7 +10143,7 @@ class FloatingSettingsPanel(QWidget):
                 "Select a recording to view its transcript",
             )
 
-    def closeEvent(self, event):
+    def closeEvent(self, event: QCloseEvent):
         """Handle close event — clean up qApp event filter."""
         from PyQt6.QtWidgets import QApplication
         _app = QApplication.instance()

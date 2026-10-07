@@ -59,7 +59,7 @@ class FakeAudioSession:
             frames_recorded=0,
             frames_dropped=0,
             duration_seconds=0.0,
-            source_stats=[],
+            source_stats=[],  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
 
@@ -146,10 +146,10 @@ def _make_controller(tmp_path: Path, *, enable_postprocess: bool = True) -> Reco
     # Replace session
     wav_path = tmp_path / "test.wav"
     wav_path.write_text("fake wav")
-    ctrl._session = FakeAudioSession(wav_path)
+    ctrl._session = FakeAudioSession(wav_path)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     if enable_postprocess:
-        ctrl._post_processor = FakePostProcessingQueue()
+        ctrl._post_processor = FakePostProcessingQueue()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     return ctrl
 
@@ -162,7 +162,7 @@ def _setup_transcription(ctrl: RecordingController):
         Word("hello", 0.0, 0.5, 90),
         Word("world", 0.5, 1.0, 85),
     ])
-    ctrl._transcription_processor = FakeAccumulatingProcessor()
+    ctrl._transcription_processor = FakeAccumulatingProcessor()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
 
 # ---------------------------------------------------------------------------
@@ -214,8 +214,8 @@ class TestStopWorkerImmediateIdle:
         if ctrl._finalizer_thread:
             ctrl._finalizer_thread.join(timeout=10.0)
 
-        assert len(fake_queue.scheduled_jobs) == 1
-        job = fake_queue.scheduled_jobs[0]
+        assert len(fake_queue.scheduled_jobs) == 1  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
+        job = fake_queue.scheduled_jobs[0]  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         assert ctrl._post_process_job_id == job.job_id
 
     def test_stop_worker_saves_transcript_before_idle(self, tmp_path: Path):
@@ -306,14 +306,14 @@ class TestCancelPostProcessing:
         ctrl._post_process_job_id = None
         ctrl.cancel_post_processing()
         # cancel_current_job should still be called for safety
-        assert ctrl._post_processor.cancel_current_called == 1
+        assert ctrl._post_processor.cancel_current_called == 1  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
     def test_cancel_cancels_known_job(self, tmp_path: Path):
         """Cancels the tracked job by ID."""
         ctrl = _make_controller(tmp_path)
         ctrl._post_process_job_id = "job-abc"
         ctrl.cancel_post_processing()
-        assert "job-abc" in ctrl._post_processor.cancelled_job_ids
+        assert "job-abc" in ctrl._post_processor.cancelled_job_ids  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         assert ctrl._post_process_job_id is None
 
     def test_cancel_clears_job_id(self, tmp_path: Path):
@@ -330,13 +330,13 @@ class TestCancelPostProcessing:
         ctrl.cancel_post_processing()
         ctrl.cancel_post_processing()  # Second call with None job_id
         # Only one explicit cancel_job call (the second call has job_id=None)
-        assert "job-1" in ctrl._post_processor.cancelled_job_ids
+        assert "job-1" in ctrl._post_processor.cancelled_job_ids  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
     def test_cancel_handles_exception(self, tmp_path: Path):
         """Exceptions from cancel_job are caught and logged."""
         ctrl = _make_controller(tmp_path)
         ctrl._post_process_job_id = "job-err"
-        ctrl._post_processor.cancel_job = MagicMock(side_effect=RuntimeError("broken"))
+        ctrl._post_processor.cancel_job = MagicMock(side_effect=RuntimeError("broken"))  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         # Should not raise
         ctrl.cancel_post_processing()
 
@@ -344,7 +344,7 @@ class TestCancelPostProcessing:
         """Exceptions from cancel_current_job are caught."""
         ctrl = _make_controller(tmp_path)
         ctrl._post_process_job_id = None
-        ctrl._post_processor.cancel_current_job = MagicMock(side_effect=RuntimeError("broken"))
+        ctrl._post_processor.cancel_current_job = MagicMock(side_effect=RuntimeError("broken"))  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         ctrl.cancel_post_processing()
 
 
@@ -388,7 +388,7 @@ class TestStartCancelsPostProcessing:
         assert ctrl._state == ControllerState.IDLE
         if ctrl._finalizer_thread:
             ctrl._finalizer_thread.join(timeout=10.0)
-        assert len(fake_queue.scheduled_jobs) == 1
+        assert len(fake_queue.scheduled_jobs) == 1  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
         # Start a new recording — should NOT cancel the old job
         with patch.object(ctrl, "_init_transcription", return_value=None):
@@ -396,8 +396,8 @@ class TestStartCancelsPostProcessing:
                 ctrl.start({"mic"})
 
         # The old job should still be queued (not cancelled)
-        assert len(fake_queue.cancelled_job_ids) == 0
-        assert len(fake_queue.scheduled_jobs) == 1
+        assert len(fake_queue.cancelled_job_ids) == 0  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
+        assert len(fake_queue.scheduled_jobs) == 1  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
 
 class TestPostProcessCompleteCallback:
@@ -515,7 +515,7 @@ class TestStopWorkerNoStuckOnFailure:
         ctrl._state = ControllerState.RECORDING
 
         # Make schedule_post_process raise
-        ctrl._post_processor.schedule_post_process = MagicMock(
+        ctrl._post_processor.schedule_post_process = MagicMock(  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
             side_effect=RuntimeError("queue broken")
         )
 
@@ -536,7 +536,7 @@ class TestNegativeScenarios:
         """Even if diarization is slow, controller is already IDLE."""
         ctrl = _make_controller(tmp_path)
         fake_queue = FakePostProcessingQueue(slow_diarize=True)
-        ctrl._post_processor = fake_queue
+        ctrl._post_processor = fake_queue  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         _setup_transcription(ctrl)
         ctrl._state = ControllerState.RECORDING
 
@@ -596,8 +596,8 @@ class TestNegativeScenarios:
         """cancel_post_processing swallows all exceptions."""
         ctrl = _make_controller(tmp_path)
         ctrl._post_process_job_id = "bad-job"
-        ctrl._post_processor.cancel_job = MagicMock(side_effect=Exception("fatal"))
-        ctrl._post_processor.cancel_current_job = MagicMock(side_effect=Exception("also-fatal"))
+        ctrl._post_processor.cancel_job = MagicMock(side_effect=Exception("fatal"))  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
+        ctrl._post_processor.cancel_current_job = MagicMock(side_effect=Exception("also-fatal"))  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         # Should not raise
         ctrl.cancel_post_processing()
@@ -626,8 +626,8 @@ class TestStopRerecordFlow:
         assert ctrl._state == ControllerState.IDLE
         if ctrl._finalizer_thread:
             ctrl._finalizer_thread.join(timeout=10.0)
-        assert len(fake_queue.scheduled_jobs) == 1
-        old_job_id = fake_queue.scheduled_jobs[0].job_id
+        assert len(fake_queue.scheduled_jobs) == 1  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
+        old_job_id = fake_queue.scheduled_jobs[0].job_id  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         ctrl._post_process_job_id = old_job_id
 
         # Start new recording - should NOT cancel the old job
@@ -636,7 +636,7 @@ class TestStopRerecordFlow:
             ctrl.start({"mic"})
 
         # Old job should still be queued (not cancelled)
-        assert old_job_id not in fake_queue.cancelled_job_ids
+        assert old_job_id not in fake_queue.cancelled_job_ids  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
     def test_stop_then_start_controller_not_stuck_in_stopping(self, tmp_path: Path):
         """After stop→start, controller is NOT stuck in STOPPING."""
@@ -672,7 +672,7 @@ class TestStopRerecordFlow:
                 ctrl._finalizer_thread.join(timeout=10.0)
 
             # Each stop schedules a job
-            assert len(fake_queue.scheduled_jobs) == i + 1
+            assert len(fake_queue.scheduled_jobs) == i + 1  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
             # Start does NOT cancel — jobs remain for the queue to process
             with patch.object(ctrl, "_init_transcription", return_value=None), \
@@ -680,8 +680,8 @@ class TestStopRerecordFlow:
                 ctrl.start({"mic"})
 
         # All 3 jobs should still be queued (not cancelled)
-        assert len(fake_queue.cancelled_job_ids) == 0
-        assert len(fake_queue.scheduled_jobs) == 3
+        assert len(fake_queue.cancelled_job_ids) == 0  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
+        assert len(fake_queue.scheduled_jobs) == 3  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
     def test_stop_no_postprocessor_then_start(self, tmp_path: Path):
         """Stop with no post-processor followed by start works cleanly."""
@@ -775,7 +775,7 @@ class TestWidgetStartCancellationIntegration:
         assert ctrl._state == ControllerState.IDLE
         if ctrl._finalizer_thread:
             ctrl._finalizer_thread.join(timeout=10.0)
-        assert len(fake_queue.scheduled_jobs) == 1
+        assert len(fake_queue.scheduled_jobs) == 1  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
         # Simulate what the widget does: controller.start()
         with patch.object(ctrl, "_init_transcription", return_value=None), \
@@ -783,7 +783,7 @@ class TestWidgetStartCancellationIntegration:
             ctrl.start({"mic"})
 
         # The controller should NOT cancel the old job
-        assert len(fake_queue.cancelled_job_ids) == 0
+        assert len(fake_queue.cancelled_job_ids) == 0  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
     def test_no_postprocess_no_job_cancellation(self, tmp_path: Path):
         """When no post-processor exists, start() proceeds without error."""

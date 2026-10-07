@@ -48,16 +48,16 @@ def _minimal_widget():
     from meetandread.widgets.main_widget import MeetAndReadWidget
 
     widget = _MinimalWidget()
-    widget._reset_frame_drop_toast_state = MethodType(MeetAndReadWidget._reset_frame_drop_toast_state, widget)
-    widget._maybe_show_frame_drop_toast = MethodType(MeetAndReadWidget._maybe_show_frame_drop_toast, widget)
-    widget._on_frames_dropped = MethodType(MeetAndReadWidget._on_frames_dropped, widget)
-    widget.record_button = MagicMock()
-    widget.record_button.on_frames_dropped = MagicMock()
-    widget.toast_manager = _FakeToastManager()
-    widget._frame_drop_toast_id = "frame-drops"
-    widget._frame_drop_toast_last_count = 0
-    widget._frame_drop_toast_last_ts = 0.0
-    widget._frame_drop_toast_reminder_seconds = 60.0
+    widget._reset_frame_drop_toast_state = MethodType(MeetAndReadWidget._reset_frame_drop_toast_state, widget)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget._maybe_show_frame_drop_toast = MethodType(MeetAndReadWidget._maybe_show_frame_drop_toast, widget)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget._on_frames_dropped = MethodType(MeetAndReadWidget._on_frames_dropped, widget)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget.record_button = MagicMock()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget.record_button.on_frames_dropped = MagicMock()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget.toast_manager = _FakeToastManager()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget._frame_drop_toast_id = "frame-drops"  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget._frame_drop_toast_last_count = 0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget._frame_drop_toast_last_ts = 0.0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget._frame_drop_toast_reminder_seconds = 60.0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return widget
 
 
@@ -163,7 +163,7 @@ class TestToastManager:
         try:
             manager.show("short", "Title", "Auto dismiss", duration_ms=10)
             assert manager.active_ids() == ["short"]
-            QTest.qWait(30)
+            QTest.qWait(30)  # pyright: ignore[reportCallIssue]  # intentional mock seam
             qapp.processEvents()
             assert manager.active_ids() == []
 
@@ -184,11 +184,11 @@ class TestFrameDropToastThrottling:
         widget = _minimal_widget()
         monkeypatch.setattr(main_widget._time, "monotonic", lambda: 100.0)
 
-        widget._on_frames_dropped(5)
+        widget._on_frames_dropped(5)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
-        widget.record_button.on_frames_dropped.assert_called_once_with(5)
-        assert len(widget.toast_manager.shown) == 1
-        toast = widget.toast_manager.shown[0]
+        widget.record_button.on_frames_dropped.assert_called_once_with(5)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert len(widget.toast_manager.shown) == 1  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        toast = widget.toast_manager.shown[0]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert toast["toast_id"] == "frame-drops"
         assert "Recording quality warning" == toast["title"]
         assert "5" in toast["message"]
@@ -201,13 +201,13 @@ class TestFrameDropToastThrottling:
         times = iter([100.0, 120.0, 159.9])
         monkeypatch.setattr(main_widget._time, "monotonic", lambda: next(times))
 
-        widget._on_frames_dropped(5)
-        widget._on_frames_dropped(6)
-        widget._on_frames_dropped(7)
+        widget._on_frames_dropped(5)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        widget._on_frames_dropped(6)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        widget._on_frames_dropped(7)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
-        assert [call.args[0] for call in widget.record_button.on_frames_dropped.call_args_list] == [5, 6, 7]
-        assert len(widget.toast_manager.shown) == 1
-        assert widget._frame_drop_toast_last_count == 7
+        assert [call.args[0] for call in widget.record_button.on_frames_dropped.call_args_list] == [5, 6, 7]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert len(widget.toast_manager.shown) == 1  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert widget._frame_drop_toast_last_count == 7  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     def test_reminder_after_one_minute_replaces_same_toast_id(self, monkeypatch):
         from meetandread.widgets import main_widget
@@ -216,31 +216,31 @@ class TestFrameDropToastThrottling:
         times = iter([100.0, 161.0])
         monkeypatch.setattr(main_widget._time, "monotonic", lambda: next(times))
 
-        widget._on_frames_dropped(5)
-        widget._on_frames_dropped(12)
+        widget._on_frames_dropped(5)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        widget._on_frames_dropped(12)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
-        assert [toast["toast_id"] for toast in widget.toast_manager.shown] == ["frame-drops", "frame-drops"]
-        assert "12" in widget.toast_manager.shown[-1]["message"]
+        assert [toast["toast_id"] for toast in widget.toast_manager.shown] == ["frame-drops", "frame-drops"]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert "12" in widget.toast_manager.shown[-1]["message"]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     def test_malformed_and_non_positive_counts_do_not_toast_or_signal(self):
         widget = _minimal_widget()
 
         for value in (None, "bad", -1, 0):
-            widget._on_frames_dropped(value)
+            widget._on_frames_dropped(value)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
-        widget.record_button.on_frames_dropped.assert_not_called()
-        assert widget.toast_manager.shown == []
+        widget.record_button.on_frames_dropped.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert widget.toast_manager.shown == []  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     def test_reset_clears_throttle_and_dismisses_stale_toast(self):
         widget = _minimal_widget()
-        widget._frame_drop_toast_last_count = 99
-        widget._frame_drop_toast_last_ts = 123.4
+        widget._frame_drop_toast_last_count = 99  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        widget._frame_drop_toast_last_ts = 123.4  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
-        widget._reset_frame_drop_toast_state()
+        widget._reset_frame_drop_toast_state()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
-        assert widget._frame_drop_toast_last_count == 0
-        assert widget._frame_drop_toast_last_ts == 0.0
-        assert widget.toast_manager.dismissed == ["frame-drops"]
+        assert widget._frame_drop_toast_last_count == 0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert widget._frame_drop_toast_last_ts == 0.0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert widget.toast_manager.dismissed == ["frame-drops"]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
 
 class TestBridgeControllerCompatibility:
@@ -251,11 +251,11 @@ class TestBridgeControllerCompatibility:
         widget = _minimal_widget()
         monkeypatch.setattr(main_widget._time, "monotonic", lambda: 200.0)
         bridge = _ControllerBridge()
-        bridge.frames_dropped.connect(widget._on_frames_dropped)
+        bridge.frames_dropped.connect(widget._on_frames_dropped)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         bridge.frames_dropped.emit(8)
         qapp.processEvents()
 
-        widget.record_button.on_frames_dropped.assert_called_once_with(8)
-        assert len(widget.toast_manager.shown) == 1
-        assert "8" in widget.toast_manager.shown[0]["message"]
+        widget.record_button.on_frames_dropped.assert_called_once_with(8)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert len(widget.toast_manager.shown) == 1  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert "8" in widget.toast_manager.shown[0]["message"]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam

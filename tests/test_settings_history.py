@@ -136,7 +136,7 @@ class TestSettingsHistoryStructure:
         stack_page = settings_panel._content_stack.widget(FloatingSettingsPanel._NAV_HISTORY)
         assert stack_page is not None
         page = stack_page.widget() if isinstance(stack_page, QScrollArea) else stack_page
-        assert page.objectName() == "AethericHistoryPage"
+        assert page.objectName() == "AethericHistoryPage"  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
     def test_history_splitter_object_name(self, settings_panel):
         assert settings_panel._history_splitter.objectName() == "AethericHistorySplitter"
@@ -182,7 +182,7 @@ class TestSettingsHistoryStructure:
         stack_page = settings_panel._content_stack.widget(2)
         assert stack_page is not None
         page = stack_page.widget() if isinstance(stack_page, QScrollArea) else stack_page
-        assert page.objectName() == "AethericHistoryPage"
+        assert page.objectName() == "AethericHistoryPage"  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
     def test_splitter_is_vertical(self, settings_panel):
         assert settings_panel._history_splitter.orientation() == Qt.Orientation.Vertical
@@ -1119,7 +1119,7 @@ class TestStalePlaceholderAbsence:
         stack_page = settings_panel._content_stack.widget(FloatingSettingsPanel._NAV_HISTORY)
         assert stack_page is not None
         page = stack_page.widget() if isinstance(stack_page, QScrollArea) else stack_page
-        assert page.objectName() == "AethericHistoryPage"
+        assert page.objectName() == "AethericHistoryPage"  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         # It must have child widgets (splitter, list, viewer)
         assert settings_panel._history_list is not None
         assert settings_panel._history_viewer is not None

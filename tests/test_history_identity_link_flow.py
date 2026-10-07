@@ -382,7 +382,7 @@ class TestOpenIdentityLinkDialogIntegration:
         from unittest.mock import patch
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog") as mock_dlg:
-            result = _open_identity_link_dialog(None, "SPK_0", None)
+            result = _open_identity_link_dialog(None, "SPK_0", None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert result is False
         mock_dlg.assert_not_called()
 
@@ -393,7 +393,7 @@ class TestOpenIdentityLinkDialogIntegration:
 
         fake_path = tmp_path / "nonexistent.md"
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog") as mock_dlg:
-            result = _open_identity_link_dialog(fake_path, "SPK_0", None)
+            result = _open_identity_link_dialog(fake_path, "SPK_0", None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert result is False
         mock_dlg.assert_not_called()
 
@@ -412,7 +412,7 @@ class TestOpenIdentityLinkDialogIntegration:
         mock_dialog.exec.return_value = QDialog.DialogCode.Rejected
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog", return_value=mock_dialog):
-            result = _open_identity_link_dialog(md, "SPK_0", None)
+            result = _open_identity_link_dialog(md, "SPK_0", None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert result is False
         assert md.read_text(encoding="utf-8") == original
@@ -433,7 +433,7 @@ class TestOpenIdentityLinkDialogIntegration:
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog", return_value=mock_dialog), \
              patch("meetandread.speaker.identity_linking._propagate_link_to_signature_store"):
-            result = _open_identity_link_dialog(md, "SPK_0", None)
+            result = _open_identity_link_dialog(md, "SPK_0", None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert result is True
         data = _parse_metadata(md)
@@ -457,7 +457,7 @@ class TestOpenIdentityLinkDialogIntegration:
         mock_dialog.selected_identity_name.return_value = ""
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog", return_value=mock_dialog):
-            result = _open_identity_link_dialog(md, "SPK_0", None)
+            result = _open_identity_link_dialog(md, "SPK_0", None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert result is False
         assert md.read_text(encoding="utf-8") == original
@@ -478,7 +478,7 @@ class TestOpenIdentityLinkDialogIntegration:
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog", return_value=mock_dialog), \
              patch("meetandread.widgets.floating_panels._link_speaker_identity_in_file", side_effect=OSError("disk full")):
-            result = _open_identity_link_dialog(md, "SPK_0", None)
+            result = _open_identity_link_dialog(md, "SPK_0", None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert result is False
 
@@ -497,7 +497,7 @@ class TestOpenIdentityLinkDialogIntegration:
         mock_dialog.exec.return_value = QDialog.DialogCode.Rejected
 
         with patch("meetandread.widgets.floating_panels.SpeakerIdentityLinkDialog", return_value=mock_dialog) as mock_cls:
-            _open_identity_link_dialog(md, "SPK_0", None)
+            _open_identity_link_dialog(md, "SPK_0", None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         # Verify the dialog was constructed with the speaker_matches
         init_call = mock_cls.call_args

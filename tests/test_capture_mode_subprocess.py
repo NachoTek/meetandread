@@ -433,7 +433,7 @@ class TestNormalRunWithoutFlag:
 
     def test_normal_run_creates_no_capture_directory(self, tmp_path):
         env = _sandbox_env(tmp_path, f"mar_cap_{uuid.uuid4().hex}")
-        proc = _launch_app(None, env, tmp_path / "app-stdout.txt")
+        proc = _launch_app(None, env, tmp_path / "app-stdout.txt")  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         try:
             # The normal INFO log lands in the normal logs dir under the
@@ -506,7 +506,7 @@ class TestNormalRunExitPath:
         )
         env["PYTHONPATH"] = f"{debug_dir}{os.pathsep}{env['PYTHONPATH']}"
 
-        proc = _launch_app(None, env, tmp_path / "app-stdout.txt")
+        proc = _launch_app(None, env, tmp_path / "app-stdout.txt")  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         try:
             # The normal run's log lands under the sandboxed home

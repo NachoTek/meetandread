@@ -6,7 +6,7 @@ without PyTorch DLL dependencies.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any, Tuple, Union
+from typing import List, Optional, Dict, Any, Callable, Tuple, Union
 from pathlib import Path
 import numpy as np
 import logging
@@ -20,7 +20,7 @@ try:
     _WHISPER_AVAILABLE = True
 except ImportError:
     _WHISPER_AVAILABLE = False
-    WhisperModel = None
+    WhisperModel = None  # type: ignore[assignment, misc]
 
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,10 @@ class WhisperTranscriptionEngine:
         self.device = device  # whisper.cpp is CPU-only
         self.compute_type = compute_type  # Ignored, whisper.cpp handles internally
         
-        self._model: Optional[Any] = None
+        # The pywhispercpp Model once loaded (Any: the binding ships no
+        # inline types). None until load_model() succeeds; every use is
+        # guarded by is_model_loaded().
+        self._model: Any = None
         self._model_loaded = False
         
         # Model directory in app data
@@ -213,7 +216,7 @@ class WhisperTranscriptionEngine:
                 model_path.unlink()  # Clean up partial download
             raise
     
-    def load_model(self, progress_callback: Optional[callable] = None) -> None:
+    def load_model(self, progress_callback: Optional[Callable[[int], None]] = None) -> None:
         """Load the Whisper model.
         
         This can take 2-5 seconds depending on model size and hardware.
@@ -252,7 +255,10 @@ class WhisperTranscriptionEngine:
             
             # Load the model with whisper.cpp
             # Model takes model path as string, print options disabled
-            self._model = WhisperModel(
+            model_cls = WhisperModel  # local alias: Optional gate below
+            if model_cls is None:
+                raise RuntimeError("pywhispercpp not installed")
+            self._model = model_cls(
                 str(model_path),
                 print_realtime=False,
                 print_progress=False
@@ -442,7 +448,7 @@ class WhisperTranscriptionEngine:
             #   (geometric mean of per-token probabilities for each segment)
             # token_timestamps=True: accurate start/end timestamps
             # word_level: one segment per word with real per-word timestamps
-            transcribe_kwargs = dict(
+            transcribe_kwargs: Dict[str, Any] = dict(
                 extract_probability=True,
                 token_timestamps=True,
             )

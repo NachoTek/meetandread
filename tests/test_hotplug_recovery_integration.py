@@ -67,7 +67,7 @@ class FakeToastManager:
 
 def _source(source_type, device_id=None, friendly_name=None):
     source = SourceConfig(type=source_type, device_id=device_id)
-    source.friendly_name = friendly_name
+    source.friendly_name = friendly_name  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return source
 
 
@@ -82,11 +82,11 @@ def _recording_controller(*sources, monitor=None):
 
 
 def _widget_shell():
-    QApplication.instance() or QApplication([])
+    _app = QApplication.instance() or QApplication([])  # ensure a QApplication exists  # pyright: ignore[reportUnusedExpression]  # intentional mock seam
     widget = MeetAndReadWidget.__new__(MeetAndReadWidget)
-    widget.toast_manager = FakeToastManager()
+    widget.toast_manager = FakeToastManager()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     widget._recovery_toast_id = "recording-device-recovery"
-    widget._controller = None
+    widget._controller = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return widget
 
 
@@ -133,7 +133,7 @@ def test_monitor_controller_and_ui_emit_ordered_hotplug_recovery_messages():
     widget = _widget_shell()
     _emit_to_widget(widget, device_callbacks, results)
 
-    notifications = widget.toast_manager.shown
+    notifications = widget.toast_manager.shown  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert [notification["title"] for notification in notifications] == [
         "Recording device disconnected",
         "Recording device changed",
@@ -217,7 +217,7 @@ def test_source_identity_falls_back_to_friendly_name_and_recovery_window_expires
         ),
         now=100.0,
     )
-    assert lost.outcome is RecoveryOutcome.TOTAL_LOSS
+    assert lost.outcome is RecoveryOutcome.TOTAL_LOSS  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
     assert controller.get_state() is ControllerState.ERROR
 
     expired = controller.handle_device_event(
@@ -229,7 +229,7 @@ def test_source_identity_falls_back_to_friendly_name_and_recovery_window_expires
         ),
         now=106.0,
     )
-    assert expired.outcome is RecoveryOutcome.MANUAL_RETRY_REQUIRED
+    assert expired.outcome is RecoveryOutcome.MANUAL_RETRY_REQUIRED  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
     assert controller.get_state() is ControllerState.ERROR
 
 
@@ -253,7 +253,7 @@ def test_diagnostics_are_sanitized_and_never_expose_content_payloads():
         ),
         now=time.monotonic(),
     )
-    assert result.outcome is RecoveryOutcome.TOTAL_LOSS
+    assert result.outcome is RecoveryOutcome.TOTAL_LOSS  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
     diagnostics = controller.get_diagnostics()
     hotplug = diagnostics["hotplug"]

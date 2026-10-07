@@ -111,7 +111,7 @@ def _run_consumer(
     last_progress = time.monotonic()
     while time.monotonic() < deadline:
         time.sleep(0.02)
-        current = session._writer.write_frames_i16.call_count
+        current = session._writer.write_frames_i16.call_count  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         if current > seen:
             seen = current
             last_progress = time.monotonic()

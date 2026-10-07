@@ -292,10 +292,10 @@ class TestSettingsPanelGeometryUnit:
         ConfigManager._instance = None
         ConfigManager._initialized = False
         import meetandread.config.manager as mgr_mod
-        mgr_mod._config_manager = None
+        mgr_mod._config_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         persistence = SettingsPersistence(config_dir=tmp)
         cm = ConfigManager(persistence=persistence)
-        mgr_mod._config_manager = cm
+        mgr_mod._config_manager = cm  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         try:
             panel = FloatingSettingsPanel()
@@ -316,7 +316,7 @@ class TestSettingsPanelGeometryUnit:
         finally:
             ConfigManager._instance = None
             ConfigManager._initialized = False
-            mgr_mod._config_manager = None
+            mgr_mod._config_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -332,10 +332,10 @@ class TestSettingsPanelGeometryUnit:
         ConfigManager._instance = None
         ConfigManager._initialized = False
         import meetandread.config.manager as mgr_mod
-        mgr_mod._config_manager = None
+        mgr_mod._config_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         persistence = SettingsPersistence(config_dir=tmp)
         cm = ConfigManager(persistence=persistence)
-        mgr_mod._config_manager = cm
+        mgr_mod._config_manager = cm  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         try:
             # Pre-set saved geometry
@@ -357,7 +357,7 @@ class TestSettingsPanelGeometryUnit:
         finally:
             ConfigManager._instance = None
             ConfigManager._initialized = False
-            mgr_mod._config_manager = None
+            mgr_mod._config_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -372,10 +372,10 @@ class TestSettingsPanelGeometryUnit:
         ConfigManager._instance = None
         ConfigManager._initialized = False
         import meetandread.config.manager as mgr_mod
-        mgr_mod._config_manager = None
+        mgr_mod._config_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         persistence = SettingsPersistence(config_dir=tmp)
         cm = ConfigManager(persistence=persistence)
-        mgr_mod._config_manager = cm
+        mgr_mod._config_manager = cm  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         try:
             # Pre-set a saved geometry
@@ -397,6 +397,6 @@ class TestSettingsPanelGeometryUnit:
         finally:
             ConfigManager._instance = None
             ConfigManager._initialized = False
-            mgr_mod._config_manager = None
+            mgr_mod._config_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             import shutil
             shutil.rmtree(tmp, ignore_errors=True)

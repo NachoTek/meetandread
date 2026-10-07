@@ -6,7 +6,7 @@ setting, and saving application settings with smart defaults tracking.
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from meetandread.config.models import (
     AppSettings,
@@ -137,7 +137,8 @@ class ConfigManager:
         self._defaults = AppSettings.get_defaults()
         
         # Track which paths have been modified
-        self._dirty_paths: set = set()
+        # (qualified: the class's `set()` method shadows the builtin here)
+        self._dirty_paths: Set[str] = set()
         
         ConfigManager._initialized = True
     
@@ -300,7 +301,7 @@ class ConfigManager:
 
         logger.info("config_reset_to_defaults:")
     
-    def _get_all_paths(self) -> set:
+    def _get_all_paths(self) -> Set[str]:
         """Get all setting paths for tracking purposes.
         
         Returns:
@@ -377,7 +378,10 @@ def get_config_manager() -> ConfigManager:
     """
     if ConfigManager._instance is None:
         ConfigManager()
-    return ConfigManager._instance
+    instance = ConfigManager._instance
+    if instance is None:  # pragma: no cover - constructed above
+        instance = ConfigManager()
+    return instance
 
 
 def get_config(key_path: Optional[str] = None) -> Any:

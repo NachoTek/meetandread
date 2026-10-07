@@ -68,8 +68,16 @@ class RenameResult:
     new_stem: str
     renamed: List[Tuple[str, str]] = field(default_factory=list)
     rolled_back: List[str] = field(default_factory=list)
-    failed: List[Tuple[str, str]] = field(default_factory=list)
+    failed: List[Tuple[str, str]] = field(default_factory=list)  # (path, reason)
     rolled_back_successfully: bool = True
+
+    @property
+    def success_count(self) -> int:
+        return len(self.renamed)
+
+    @property
+    def failure_count(self) -> int:
+        return len(self.failed)
 
 
 def _validate_stem(stem: str) -> None:

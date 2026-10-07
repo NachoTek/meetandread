@@ -55,8 +55,8 @@ def widget(qapp):
          patch("meetandread.widgets.main_widget.get_config", return_value=None), \
          patch("meetandread.widgets.main_widget.save_config"):
         w = MeetAndReadWidget()
-    w._floating_transcript_panel = MagicMock()
-    w._floating_transcript_panel.isVisible.return_value = False
+    w._floating_transcript_panel = MagicMock()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    w._floating_transcript_panel.isVisible.return_value = False  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     w._floating_settings_panel = MagicMock()
     w._floating_settings_panel.isVisible.return_value = False
     w._cc_overlay = MagicMock()
@@ -329,13 +329,13 @@ class TestWIDGET31:
         menu.setStyleSheet(context_menu_css(p, accent_color='#4CAF50'))
         toggle_text = "Stop Recording" if widget.is_recording else "Start Recording"
         toggle_action = menu.addAction(toggle_text)
-        toggle_action.triggered.connect(widget.toggle_recording)
+        toggle_action.triggered.connect(widget.toggle_recording)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         menu.addSeparator()
         settings_action = menu.addAction("Settings")
-        settings_action.triggered.connect(widget._toggle_settings_panel)
+        settings_action.triggered.connect(widget._toggle_settings_panel)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         menu.addSeparator()
         exit_action = menu.addAction("Exit")
-        exit_action.triggered.connect(widget._exit_application)
+        exit_action.triggered.connect(widget._exit_application)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         return [a.text() for a in menu.actions() if a.text()]
 
     def test_context_menu_has_start_recording(self, widget):

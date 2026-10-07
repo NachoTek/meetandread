@@ -195,7 +195,7 @@ def _cleanup_qtimers():
     from meetandread.performance.monitor import ResourceMonitor
 
     # 1. Neutralize leaked timers BEFORE any event processing.
-    for widget in app.topLevelWidgets():
+    for widget in app.topLevelWidgets():  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         for timer in widget.findChildren(QTimer):
             try:
                 timer.timeout.disconnect()
@@ -207,7 +207,7 @@ def _cleanup_qtimers():
     # findChildren sweep — and keep firing into deleted panels otherwise.
     ResourceMonitor.stop_all()
     # 2. Close top-level widgets (deferred deletion via deleteLater).
-    for widget in app.topLevelWidgets():
+    for widget in app.topLevelWidgets():  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         try:
             widget.hide()
             widget.close()

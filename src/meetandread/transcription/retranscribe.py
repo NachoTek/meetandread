@@ -740,7 +740,9 @@ class RetranscribeRunner:
         #     includes them in the metadata footer. This is critical for
         #     identity binding: without it, the identities tab shows 0
         #     recordings and linking doesn't work.
-        store._speaker_matches = speaker_matches
+        # Dynamic handoff: read back via getattr(store, "_speaker_matches")
+        # at the save site below — TranscriptStore has no declared field.
+        setattr(store, "_speaker_matches", speaker_matches)
 
         return store
 

@@ -66,6 +66,15 @@ class DeviceEvent:
         if not self.device_id:
             raise ValueError("device_id must not be empty")
 
+    @property
+    def normalized_event_type(self) -> DeviceEventType:
+        """The constructor accepts str for convenience; this is the enum.
+
+        __post_init__ always replaces str inputs with the enum member,
+        so the cast reflects an enforced invariant.
+        """
+        return self.event_type  # type: ignore[return-value]  # normalized in __post_init__
+
     @staticmethod
     def _normalize_event_type(value: DeviceEventType | str) -> DeviceEventType:
         if isinstance(value, DeviceEventType):
@@ -92,7 +101,7 @@ class DeviceEvent:
         """Return diagnostics-safe event fields for logs or controller state."""
 
         return {
-            "event_type": self.event_type.value,
+            "event_type": self.normalized_event_type.value,
             "device_id": self.device_id,
             "timestamp": self.timestamp.isoformat(),
             "friendly_name": self.friendly_name,
@@ -212,13 +221,13 @@ class WindowsDeviceMonitor:
                 dropped = self._dropped_events
             logger.warning(
                 "Hot-plug monitor queue full; dropping event",
-                extra={"event_type": event.event_type.value, "dropped_events": dropped},
+                extra={"event_type": event.normalized_event_type.value, "dropped_events": dropped},
             )
             return
 
         logger.debug(
             "event_queued: event_type=%s, queued=%d",
-            event.event_type.value,
+            event.normalized_event_type.value,
             self._queue.qsize(),
         )
         # Device added/removed/changed is a user-visible operational fact:
@@ -226,7 +235,7 @@ class WindowsDeviceMonitor:
         # OS-supplied and must never enter any log stream).
         logger.info(
             "device_event: %s device=%s name=%s",
-            event.event_type.value,
+            event.normalized_event_type.value,
             _redact_device_name(event.device_id),
             _redact_device_name(event.friendly_name)
             if event.friendly_name
@@ -252,7 +261,7 @@ class WindowsDeviceMonitor:
             except Exception:
                 logger.exception(
                     "Hot-plug consumer callback failed",
-                    extra={"event_type": event.event_type.value, "device_id": event.device_id},
+                    extra={"event_type": event.normalized_event_type.value, "device_id": event.device_id},
                 )
             finally:
                 dispatched += 1

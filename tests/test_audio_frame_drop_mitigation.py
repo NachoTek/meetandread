@@ -145,8 +145,8 @@ def test_sounddevice_drop_bursts_reset_after_successful_enqueue_and_read():
     src = _make_sounddevice_source(queue_size=1)
     src._queue.put(_sounddevice_buffer())
 
-    src._callback(_sounddevice_buffer(), 1024, {}, 0)
-    src._callback(_sounddevice_buffer(), 1024, {}, 0)
+    src._callback(_sounddevice_buffer(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
+    src._callback(_sounddevice_buffer(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
     assert src.get_frames_dropped() == 2
     assert src.get_drop_telemetry()["consecutive_frames_dropped"] == 2
     assert src.get_drop_telemetry()["max_consecutive_frames_dropped"] == 2
@@ -155,7 +155,7 @@ def test_sounddevice_drop_bursts_reset_after_successful_enqueue_and_read():
     assert src.get_frames_dropped() == 2
     assert src.get_drop_telemetry()["consecutive_frames_dropped"] == 0
 
-    src._callback(_sounddevice_buffer(), 1024, {}, 0)
+    src._callback(_sounddevice_buffer(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
     telemetry = src.get_drop_telemetry()
     assert telemetry["frames_enqueued"] == 1
     assert telemetry["total_callbacks"] == 3
@@ -216,10 +216,10 @@ def test_audio_session_aggregates_sanitized_drop_stats():
     system._source_label = "system"
 
     mic._queue.put(_sounddevice_buffer())
-    mic._callback(_sounddevice_buffer(), 1024, {}, 0)
-    mic._callback(_sounddevice_buffer(), 1024, {}, 0)
+    mic._callback(_sounddevice_buffer(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
+    mic._callback(_sounddevice_buffer(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
-    system._callback(_sounddevice_buffer(), 1024, {}, 0)
+    system._callback(_sounddevice_buffer(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
     session._sources = [
         AudioSourceWrapper(mic, SourceConfig(type="mic")),

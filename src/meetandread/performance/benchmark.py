@@ -181,8 +181,11 @@ class BenchmarkRunner:
 
         # Resample to 16kHz if needed
         if framerate != 16000:
-            from meetandread.audio.resampler import Resampler
-            audio = Resampler.resample(audio, framerate, 16000)
+            # soxr directly — the long-gone meetandread.audio.resampler
+            # module was removed; session.py uses the same library.
+            import soxr
+
+            audio = soxr.resample(audio, framerate, 16000)
 
         return audio
 

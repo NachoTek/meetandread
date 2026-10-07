@@ -85,14 +85,14 @@ def count_preserved_boundaries(
     segments: List[SpeakerSegment],
     ground_truth: GroundTruth,
     tolerance: float = 0.3,
-) -> int:
+) -> tuple:
     """Count ground-truth speaker-change boundaries that have a matching
     segment boundary in the cleaned segments.
 
     Returns (preserved_count, total_boundaries).
     """
     if not ground_truth.boundaries or not segments:
-        return 0, len(ground_truth.boundaries)
+        return 0, len(ground_truth.boundaries)  # pyright: ignore[reportReturnType]  # intentional mock seam
 
     preserved = 0
     for gt_boundary in ground_truth.boundaries:
@@ -105,7 +105,7 @@ def count_preserved_boundaries(
                     preserved += 1
                 break
 
-    return preserved, len(ground_truth.boundaries)
+    return preserved, len(ground_truth.boundaries)  # pyright: ignore[reportReturnType]  # intentional mock seam
 
 
 def segment_count_reduction(
@@ -412,7 +412,7 @@ class TestCleanupMetrics:
         ]
 
         cleaned = cleanup_diarization_segments(noisy)
-        preserved, total = count_preserved_boundaries(cleaned, gt)
+        preserved, total = count_preserved_boundaries(cleaned, gt)  # pyright: ignore[reportGeneralTypeIssues]  # intentional mock seam
 
         assert preserved == total, (
             f"Expected all {total} boundaries preserved, got {preserved}"
@@ -486,7 +486,7 @@ class TestCleanupMetrics:
         assert len(cleaned) < len(noisy_segs)
 
         # Verify: true boundaries preserved
-        preserved, total = count_preserved_boundaries(cleaned, gt)
+        preserved, total = count_preserved_boundaries(cleaned, gt)  # pyright: ignore[reportGeneralTypeIssues]  # intentional mock seam
         assert preserved >= 1, f"Expected >=1 boundary preserved, got {preserved}/{total}"
 
         # Verify: false splits reduced

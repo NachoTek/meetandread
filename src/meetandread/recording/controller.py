@@ -175,7 +175,8 @@ class RecordingController:
         self.on_error: Optional[Callable[[ControllerError], None]] = None
         self.on_recording_complete: Optional[Callable[[Path, Optional[Path]], None]] = None
         self.on_phrase_result: Optional[Callable[[SegmentResult], None]] = None  # For accumulating processor results
-        self.on_post_process_complete: Optional[Callable[[str, Path], None]] = None  # job_id, transcript_path
+        # None transcript_path signals a failed job (UI clears indicators).
+        self.on_post_process_complete: Optional[Callable[[str, Optional[Path]], None]] = None  # job_id, transcript_path
         self.on_frames_dropped: Optional[Callable[[int], None]] = None  # Aggregate drop count (UI thread via bridge)
         self.on_device_change: Optional[Callable[[DeviceEvent], None]] = None
         self.on_recovery_attempt: Optional[Callable[[RecoveryResult], None]] = None
@@ -197,7 +198,9 @@ class RecordingController:
         self._audio_chunks_fed = 0
 
         # Speaker diarization result (kept for pin-to-name UX)
-        self._last_diarization_result: Optional[object] = None  # DiarizationResult
+        # Last diarization result (typed via the diarizer's return type;
+        # quoted to avoid an import cycle at module scope).
+        self._last_diarization_result: Optional["DiarizationResult"] = None
 
         # Auto-WER from last post-processing (None until computed)
         self._last_wer: Optional[float] = None
@@ -205,7 +208,9 @@ class RecordingController:
         # --- Live speaker matching state ---
         self._live_audio_buffer = bytearray()  # raw int16 PCM bytes
         self._live_max_buffer_bytes = 12 * 16000 * 2  # 12s at 16kHz int16 = 384000
-        self._live_extractor = None  # lazily-created SpeakerEmbeddingExtractor
+        # Lazily-created sherpa_onnx.SpeakerEmbeddingExtractor (Any: the
+        # native binding ships no types). None until _ensure_live_extractor.
+        self._live_extractor: Any = None
         self._live_extractor_available: Optional[bool] = None  # None=unchecked, True/False
         self._live_store_available: Optional[bool] = None
         self._live_match_attempts = 0
@@ -255,6 +260,23 @@ class RecordingController:
                     "frames_dropped_callback_failed: error_class=%s",
                     type(e).__name__,
                 )
+
+    def _on_recovery_source_frames_dropped(self, source_type: str, count: int) -> None:
+        """Adapter for hotplug-recovery sources' (label, count) callback seam.
+
+        Capture sources invoke ``on_frame_dropped(source_label, count)``
+        with two arguments; the session-level aggregate handler takes the
+        aggregate count alone. Route through the owning session's own
+        source-drop handler so recovery sources land in the same aggregate
+        accounting as the originals.
+        """
+        try:
+            self._session._on_source_frame_dropped(source_type, count)
+        except Exception as e:
+            logger.error(
+                "recovery_frame_drops_callback_failed: error_class=%s",
+                type(e).__name__,
+            )
 
     def _on_session_error(self, exc: Exception) -> None:
         """Internal handler for session consumer thread crashes.
@@ -447,8 +469,16 @@ class RecordingController:
         self._apply_retry_stats(
             retry_attempts=getattr(self._session.get_stats(), "retry_attempts", 0),
             retry_outcome=self._sanitize_retry_outcome(outcome),
-            failed_sources=[self._sanitize_source_type(s) for s in (failed_sources or []) if self._sanitize_source_type(s)],
-            fallback_sources=[self._sanitize_source_type(s) for s in (fallback_sources or []) if self._sanitize_source_type(s)],
+            failed_sources=[
+                s
+                for s in (self._sanitize_source_type(x) for x in (failed_sources or []))
+                if s is not None
+            ],
+            fallback_sources=[
+                s
+                for s in (self._sanitize_source_type(x) for x in (fallback_sources or []))
+                if s is not None
+            ],
         )
         # Transition out of RETRYING for terminal outcomes so the UI can
         # unlock source toggles and the controller reports a non-busy state.
@@ -553,9 +583,15 @@ class RecordingController:
         )
 
     def _start_hotplug_monitor(self) -> None:
+        def _on_device_event(event: "DeviceEvent") -> None:
+            # Wrap: handle_device_event takes an optional keyword seam
+            # (now=...) and returns a diagnostic the monitor's callback
+            # type (-> None) doesn't carry; discard both here.
+            self.handle_device_event(event)
+
         try:
             self._hotplug_monitor = WindowsDeviceMonitor()
-            self._hotplug_monitor.start_monitoring(self.handle_device_event)
+            self._hotplug_monitor.start_monitoring(_on_device_event)
             self._hotplug_monitor_active = True
             logger.info("hotplug_monitor_started:")
         except Exception as exc:
@@ -1384,7 +1420,7 @@ class RecordingController:
             )
             return 0
 
-    def _run_diarization_for_postprocess(self, wav_path: Path) -> "DiarizationResult":
+    def _run_diarization_for_postprocess(self, wav_path: Path) -> Optional["DiarizationResult"]:
         """Run diarization in the context of post-processing.
 
         This is the callback passed to PostProcessingQueue so diarization
@@ -1396,7 +1432,9 @@ class RecordingController:
             wav_path: Path to the saved WAV file.
 
         Returns:
-            DiarizationResult from the diarizer.
+            DiarizationResult from the diarizer, or None when diarization
+            is disabled/unavailable (the queue treats None as "no
+            diarization for this job").
         """
         # We need the result object back from _run_diarization, but
         # the current method stores it internally.  Call the diarizer
@@ -1655,7 +1693,12 @@ class RecordingController:
                 )
                 if self.on_recording_complete:
                     try:
-                        self.on_recording_complete(wav_path, transcript_path)
+                        if wav_path is None:
+                            logger.warning(
+                                "recording_complete_skipped: reason=no_wav_path"
+                            )
+                        else:
+                            self.on_recording_complete(wav_path, transcript_path)
                     except Exception as e:
                         logger.error(
                             "recording_complete_callback_failed: "
@@ -2659,7 +2702,8 @@ class RecordingController:
         """
         from meetandread.speaker.models import SpeakerSegment
 
-        words = self._transcript_store.get_all_words()
+        store = self._transcript_store
+        words = store.get_all_words() if store is not None else []
         if not words:
             return
 
@@ -2838,14 +2882,14 @@ class RecordingController:
                 device_id=effective_device_id,
                 blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
                 queue_size=10,
-                on_frame_dropped=self._on_session_frames_dropped,
+                on_frame_dropped=self._on_recovery_source_frames_dropped,
             )
         elif source_type == 'system':
             source = SystemSource(
                 device_id=effective_device_id,
                 blocksize=DEFAULT_AUDIO_CAPTURE_BLOCK_SIZE,
                 queue_size=10,
-                on_frame_dropped=self._on_session_frames_dropped,
+                on_frame_dropped=self._on_recovery_source_frames_dropped,
             )
         elif source_type == 'fake':
             source = FakeAudioModule(
@@ -3088,7 +3132,7 @@ class RecordingController:
             diarization_result = self._last_diarization_result
         if diarization_result:
             try:
-                result = self._last_diarization_result
+                result = diarization_result
                 raw_labels: set = set()
                 if hasattr(result, "segments"):
                     for seg in result.segments:

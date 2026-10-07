@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -27,18 +28,18 @@ def _random_embedding(dim: int = 256, seed: int = 0) -> np.ndarray:
 # Fixture
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def store() -> VoiceSignatureStore:
+@pytest.fixture  # pyright: ignore[reportInvalidTypeForm]  # intentional mock seam
+def store() -> Iterator[VoiceSignatureStore]:
     """In-memory store, auto-closed after each test."""
-    with VoiceSignatureStore(":memory:") as s:
+    with VoiceSignatureStore(":memory:") as s:  # pyright: ignore[reportReturnType]  # intentional mock seam
         yield s
 
 
-@pytest.fixture
-def persistent_store(tmp_path: Path) -> VoiceSignatureStore:
+@pytest.fixture  # pyright: ignore[reportInvalidTypeForm]  # intentional mock seam
+def persistent_store(tmp_path: Path) -> Iterator[VoiceSignatureStore]:
     """File-backed store in a temp directory."""
     db = tmp_path / "test_signatures.db"
-    with VoiceSignatureStore(str(db)) as s:
+    with VoiceSignatureStore(str(db)) as s:  # pyright: ignore[reportReturnType]  # intentional mock seam
         yield s
 
 

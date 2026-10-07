@@ -208,7 +208,7 @@ class TestBestEffortIO:
         def boom(payload):
             raise OSError("disk went away")
 
-        monkeypatch.setattr(rsnap._series._writer, "emit", boom)
+        monkeypatch.setattr(rsnap._series._writer, "emit", boom)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         with caplog.at_level(logging.ERROR):
             # Must not raise — diagnostics must not crash the run.
             persist_snapshot(_sample_snapshot())
@@ -219,7 +219,7 @@ class TestBestEffortIO:
 
     def test_series_usable_after_write_failure(self, installed, monkeypatch):
         calls = {"n": 0}
-        real_emit = rsnap._series._writer.emit
+        real_emit = rsnap._series._writer.emit  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         def flaky(payload):
             calls["n"] += 1
@@ -227,7 +227,7 @@ class TestBestEffortIO:
                 raise OSError("transient")
             return real_emit(payload)
 
-        monkeypatch.setattr(rsnap._series._writer, "emit", flaky)
+        monkeypatch.setattr(rsnap._series._writer, "emit", flaky)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert not persist_snapshot(_sample_snapshot())
         assert persist_snapshot(_sample_snapshot())
         records = read_snapshots(installed)
@@ -291,7 +291,7 @@ class TestDurabilityWriteSide:
         from unittest.mock import patch
 
         install_snapshot_series(capture_dir)
-        writer = rsnap._series._writer
+        writer = rsnap._series._writer  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         line = self._line()
         half = len(line) // 2
         buf = bytearray()
@@ -311,7 +311,7 @@ class TestDurabilityWriteSide:
         from unittest.mock import patch
 
         install_snapshot_series(capture_dir)
-        writer = rsnap._series._writer
+        writer = rsnap._series._writer  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         line = self._line()
         state = {"first": True}
         real_os_write = djsonl.os.write

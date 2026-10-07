@@ -764,7 +764,7 @@ class TestControllerQueueLogging:
 
     def test_preempt_none_no_info_event(self, caplog) -> None:
         controller = self._make_controller()
-        controller._post_processor.preempt_current_job.return_value = False
+        controller._post_processor.preempt_current_job.return_value = False  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         with caplog.at_level(logging.INFO, logger=CTRL_LOG):
             controller.preempt_post_processing(reason="new recording starting")
         infos = _info(caplog, CTRL_LOG)
@@ -774,9 +774,9 @@ class TestControllerQueueLogging:
         controller = self._make_controller()
         transcript = tmp_path / f"{CANARY_STEM}.md"
         transcript.write_text("# t", encoding="utf-8")
-        controller._post_processor.get_status_for_audio.return_value = None
+        controller._post_processor.get_status_for_audio.return_value = None  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         job = SimpleNamespace(job_id="job123")
-        controller._post_processor.schedule_post_process.return_value = job
+        controller._post_processor.schedule_post_process.return_value = job  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         with patch(
             "meetandread.audio.storage.paths.get_recordings_dir",
             return_value=tmp_path,
@@ -793,7 +793,7 @@ class TestControllerQueueLogging:
         controller = self._make_controller()
         transcript = tmp_path / f"{CANARY_STEM}.md"
         transcript.write_text("# t", encoding="utf-8")
-        controller._post_processor.get_status_for_audio.return_value = None
+        controller._post_processor.get_status_for_audio.return_value = None  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         with patch(
             "meetandread.audio.storage.paths.get_recordings_dir",
             return_value=tmp_path,

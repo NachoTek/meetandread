@@ -119,7 +119,7 @@ class TestVADChunkingProcessor:
         
         # Get chunk
         chunk = processor.get_chunk()
-        assert len(chunk) == 16000  # 1 second
+        assert len(chunk) == 16000  # 1 second  # pyright: ignore[reportArgumentType]  # intentional mock seam
     
     def test_speech_end_triggering(self):
         """Test that processor triggers on speech end."""
@@ -136,7 +136,7 @@ class TestVADChunkingProcessor:
         
         # Get chunk
         chunk = processor.get_chunk()
-        assert len(chunk) == 8000 + 4800  # All audio fed so far
+        assert len(chunk) == 8000 + 4800  # All audio fed so far  # pyright: ignore[reportArgumentType]  # intentional mock seam
     
     def test_remainder_keeping(self):
         """Test that remainder is kept for next chunk."""
@@ -148,7 +148,7 @@ class TestVADChunkingProcessor:
         
         # Get chunk - should return 1.0s and keep 0.5s
         chunk = processor.get_chunk()
-        assert len(chunk) == 16000
+        assert len(chunk) == 16000  # pyright: ignore[reportArgumentType]  # intentional mock seam
         
         # Buffer should have 0.5s remaining
         assert processor.get_buffer_duration() == 0.5
@@ -361,7 +361,7 @@ class TestTranscriptionPipeline:
         assert vad_processor.should_process()
         
         chunk = vad_processor.get_chunk()
-        assert len(chunk) == 16000  # 1 second
+        assert len(chunk) == 16000  # 1 second  # pyright: ignore[reportArgumentType]  # intentional mock seam
     
     def test_vad_to_agreement_pipeline(self):
         """Test VADChunkingProcessor feeding into LocalAgreementBuffer."""
@@ -424,10 +424,10 @@ class TestTranscriptionPipeline:
                 # Chunks from speech end can be smaller (remaining audio)
                 if is_end:
                     # Speech end chunks can be any size (remaining audio)
-                    assert len(audio_chunk) > 0
+                    assert len(audio_chunk) > 0  # pyright: ignore[reportArgumentType]  # intentional mock seam
                 else:
                     # Min chunk size chunks should be full size
-                    assert len(audio_chunk) >= 16000  # At least 1 second
+                    assert len(audio_chunk) >= 16000  # At least 1 second  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
 
 if __name__ == '__main__':

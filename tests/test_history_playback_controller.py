@@ -144,8 +144,8 @@ class _MockQUrl:
 # Only mock QtMultimedia (which has DLL issues in headless envs).
 # QtCore is left alone when available so that co-collected test modules
 # can still use Qt namespace, QUrl, etc.
-_mock_qt_multimedia.QMediaPlayer = _MockQMediaPlayer
-_mock_qt_multimedia.QAudioOutput = _MockQAudioOutput
+_mock_qt_multimedia.QMediaPlayer = _MockQMediaPlayer  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+_mock_qt_multimedia.QAudioOutput = _MockQAudioOutput  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 sys.modules.setdefault("PyQt6.QtMultimedia", _mock_qt_multimedia)
 
 # If real QtCore is unavailable, provide a minimal mock for QUrl.
@@ -153,7 +153,7 @@ try:
     from PyQt6.QtCore import QUrl as _RealQUrl  # noqa: F401
 except ImportError:
     _mock_qt_core = ModuleType("PyQt6.QtCore")
-    _mock_qt_core.QUrl = _MockQUrl
+    _mock_qt_core.QUrl = _MockQUrl  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     sys.modules.setdefault("PyQt6.QtCore", _mock_qt_core)
 
 # Now import the module under test — it will use our mocked Qt types
@@ -347,7 +347,7 @@ class TestTransportControls:
         ctrl.load_transcript_audio(md_path)
 
         # Force media status to Loaded so is_audio_available is True
-        ctrl._player._media_status = _MockQMediaPlayer.MediaStatus.LoadedMedia
+        ctrl._player._media_status = _MockQMediaPlayer.MediaStatus.LoadedMedia  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         with patch.object(ctrl._player, "play") as mock_play:
             ctrl.play()
@@ -364,7 +364,7 @@ class TestTransportControls:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         with patch.object(ctrl._player, "pause") as mock_pause:
             ctrl.pause()
@@ -373,7 +373,7 @@ class TestTransportControls:
     def test_pause_noop_when_not_playing(self, tmp_path: Path) -> None:
         """pause() is a no-op when the player is not playing."""
         ctrl = HistoryPlaybackController(recordings_dir=tmp_path)
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PausedState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PausedState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         with patch.object(ctrl._player, "pause") as mock_pause:
             ctrl.pause()
@@ -467,7 +467,7 @@ class TestMediaErrorHandling:
         ctrl.load_transcript_audio(md_path)
 
         ctrl._on_media_error(
-            _MockQMediaPlayer.Error.ResourceError, "Resource not found"
+            _MockQMediaPlayer.Error.ResourceError, "Resource not found"  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
         assert ctrl.last_error == "Audio could not be loaded"
@@ -476,7 +476,7 @@ class TestMediaErrorHandling:
     def test_no_error_does_not_set_error(self, tmp_path: Path) -> None:
         """NoError does not set the error state."""
         ctrl = HistoryPlaybackController(recordings_dir=tmp_path)
-        ctrl._on_media_error(_MockQMediaPlayer.Error.NoError, "")
+        ctrl._on_media_error(_MockQMediaPlayer.Error.NoError, "")  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert ctrl.last_error is None
 
     def test_invalid_media_status_sets_error(self, tmp_path: Path) -> None:
@@ -490,7 +490,7 @@ class TestMediaErrorHandling:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)
+        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert ctrl.last_error == "Audio could not be loaded"
 
     def test_no_media_status_clears_status(self, tmp_path: Path) -> None:
@@ -498,7 +498,7 @@ class TestMediaErrorHandling:
         ctrl = HistoryPlaybackController(recordings_dir=tmp_path)
         ctrl._status_text = "Playing"
 
-        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.NoMedia)
+        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.NoMedia)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert ctrl._status_text == ""
 
 
@@ -539,7 +539,7 @@ class TestStatusText:
         ctrl.load_transcript_audio(md_path)
 
         # Default mock state is StoppedState
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.StoppedState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.StoppedState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.status_text == "Ready"
 
     def test_playing_status(self, tmp_path: Path) -> None:
@@ -553,7 +553,7 @@ class TestStatusText:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.status_text == "Playing"
 
     def test_paused_status(self, tmp_path: Path) -> None:
@@ -567,7 +567,7 @@ class TestStatusText:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PausedState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PausedState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.status_text == "Paused"
 
 
@@ -608,7 +608,7 @@ class TestIsAudioAvailable:
         ctrl.load_transcript_audio(md_path)
 
         # Force LoadedMedia status
-        ctrl._player._media_status = _MockQMediaPlayer.MediaStatus.LoadedMedia
+        ctrl._player._media_status = _MockQMediaPlayer.MediaStatus.LoadedMedia  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         assert ctrl.is_audio_available is True
 
@@ -624,7 +624,7 @@ class TestIsAudioAvailable:
         ctrl.load_transcript_audio(md_path)
 
         # BufferingMedia is not in the "ready" set
-        ctrl._player._media_status = _MockQMediaPlayer.MediaStatus.BufferingMedia
+        ctrl._player._media_status = _MockQMediaPlayer.MediaStatus.BufferingMedia  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         assert ctrl.is_audio_available is False
 
@@ -710,7 +710,7 @@ class TestPositionAndDuration:
     def test_position_ms_returns_player_position(self) -> None:
         """position_ms delegates to player.position()."""
         ctrl = HistoryPlaybackController(recordings_dir=Path("/tmp"))
-        ctrl._player._position = 12345
+        ctrl._player._position = 12345  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.position_ms == 12345
 
     def test_position_ms_starts_at_zero(self) -> None:
@@ -721,7 +721,7 @@ class TestPositionAndDuration:
     def test_duration_ms_returns_player_duration(self) -> None:
         """duration_ms delegates to player.duration()."""
         ctrl = HistoryPlaybackController(recordings_dir=Path("/tmp"))
-        ctrl._player._duration = 60000
+        ctrl._player._duration = 60000  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.duration_ms == 60000
 
     def test_duration_ms_is_zero_before_load(self) -> None:
@@ -798,7 +798,7 @@ class TestSeekTo:
     def test_seek_to_zero_when_no_duration(self) -> None:
         """seek_to without loaded audio does not clamp to duration."""
         ctrl = HistoryPlaybackController(recordings_dir=Path("/tmp"))
-        ctrl._player._position = 0
+        ctrl._player._position = 0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.seek_to(500)
         # Duration is 0, so no upper clamping; position set as-is
         assert ctrl.position_ms == 500
@@ -837,7 +837,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 10000
+        ctrl._player._position = 10000  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_forward()
         assert ctrl.position_ms == 15000
 
@@ -852,7 +852,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 15000
+        ctrl._player._position = 15000  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_backward()
         assert ctrl.position_ms == 10000
 
@@ -867,7 +867,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 28000
+        ctrl._player._position = 28000  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_forward()
         assert ctrl.position_ms == 30000  # clamped to duration
 
@@ -882,7 +882,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 2000
+        ctrl._player._position = 2000  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_backward()
         assert ctrl.position_ms == 0  # clamped to 0
 
@@ -897,7 +897,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 5000
+        ctrl._player._position = 5000  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_forward(10.0)
         assert ctrl.position_ms == 15000
 
@@ -912,7 +912,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 15000
+        ctrl._player._position = 15000  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_backward(10.0)
         assert ctrl.position_ms == 5000
 
@@ -927,7 +927,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 0
+        ctrl._player._position = 0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_forward()
         assert ctrl.position_ms == 5000
 
@@ -942,7 +942,7 @@ class TestSkipForwardBackward:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._player._position = 0
+        ctrl._player._position = 0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl.skip_backward()
         assert ctrl.position_ms == 0
 
@@ -1011,7 +1011,7 @@ class TestInvalidMediaHandling:
 
         # Simulate the player detecting corrupt data
         ctrl._on_media_error(
-            _MockQMediaPlayer.Error.ResourceError, "Resource error"
+            _MockQMediaPlayer.Error.ResourceError, "Resource error"  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
         assert ctrl.last_error == "Audio could not be loaded"
@@ -1028,7 +1028,7 @@ class TestInvalidMediaHandling:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md_path)
 
-        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)
+        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert ctrl.last_error == "Audio could not be loaded"
         assert ctrl.is_audio_available is False
@@ -1036,7 +1036,7 @@ class TestInvalidMediaHandling:
     def test_no_error_does_not_set_error_state(self) -> None:
         """NoError does not modify the error or status state."""
         ctrl = HistoryPlaybackController(recordings_dir=Path("/tmp"))
-        ctrl._on_media_error(_MockQMediaPlayer.Error.NoError, "")
+        ctrl._on_media_error(_MockQMediaPlayer.Error.NoError, "")  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert ctrl.last_error is None
         assert ctrl.is_audio_available is False  # still no audio loaded
@@ -1052,7 +1052,7 @@ class TestInvalidMediaHandling:
         ctrl.load_transcript_audio(md_path)
 
         ctrl._on_media_error(
-            _MockQMediaPlayer.Error.FormatError, "Format error"
+            _MockQMediaPlayer.Error.FormatError, "Format error"  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
         assert ctrl.last_error == "Audio could not be loaded"
@@ -1185,7 +1185,7 @@ class TestDiagnostics:
         ctrl.load_transcript_audio(md_path)
 
         ctrl._on_media_error(
-            _MockQMediaPlayer.Error.ResourceError, "Resource error"
+            _MockQMediaPlayer.Error.ResourceError, "Resource error"  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
         diag = ctrl.get_diagnostics()
@@ -1235,7 +1235,7 @@ class TestStatusMessageRegression:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md)
 
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.StoppedState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.StoppedState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.status_text == "Ready"
 
     def test_playing_status(self, tmp_path: Path) -> None:
@@ -1248,7 +1248,7 @@ class TestStatusMessageRegression:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md)
 
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.status_text == "Playing"
 
     def test_paused_status(self, tmp_path: Path) -> None:
@@ -1261,7 +1261,7 @@ class TestStatusMessageRegression:
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md)
 
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PausedState
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PausedState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl.status_text == "Paused"
 
     def test_missing_wav_status(self, tmp_path: Path) -> None:
@@ -1285,7 +1285,7 @@ class TestStatusMessageRegression:
 
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md)
-        ctrl._on_media_error(_MockQMediaPlayer.Error.ResourceError, "fail")
+        ctrl._on_media_error(_MockQMediaPlayer.Error.ResourceError, "fail")  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert ctrl.status_text == "Audio could not be loaded"
         assert ctrl.last_error == "Audio could not be loaded"
@@ -1299,7 +1299,7 @@ class TestStatusMessageRegression:
 
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md)
-        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)
+        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert ctrl.status_text == "Audio could not be loaded"
         assert ctrl.last_error == "Audio could not be loaded"
@@ -1313,8 +1313,8 @@ class TestStatusMessageRegression:
 
         ctrl = HistoryPlaybackController(recordings_dir=recordings)
         ctrl.load_transcript_audio(md)
-        ctrl._on_media_error(_MockQMediaPlayer.Error.FormatError, "bad")
-        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState
+        ctrl._on_media_error(_MockQMediaPlayer.Error.FormatError, "bad")  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        ctrl._player._playback_state = _MockQMediaPlayer.PlaybackState.PlayingState  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         # Error message wins, not 'Playing'
         assert ctrl.status_text == "Audio could not be loaded"
@@ -1345,7 +1345,7 @@ class TestStatusMessageRegression:
         # Missing file
         ctrl.load_transcript_audio(md)
         # Now set media error
-        ctrl._on_media_error(_MockQMediaPlayer.Error.ResourceError, "x")
+        ctrl._on_media_error(_MockQMediaPlayer.Error.ResourceError, "x")  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert ctrl.status_text != ""
         assert ctrl.status_text != "Ready"
         assert ctrl.status_text != "Playing"
@@ -1354,6 +1354,6 @@ class TestStatusMessageRegression:
         # InvalidMedia
         ctrl._reset_state()
         ctrl._current_audio_path = recordings / "check.wav"
-        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)
+        ctrl._on_media_status_changed(_MockQMediaPlayer.MediaStatus.InvalidMedia)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert ctrl.status_text != ""
         assert "could not be loaded" in ctrl.status_text

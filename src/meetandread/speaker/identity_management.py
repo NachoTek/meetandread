@@ -197,14 +197,14 @@ def scan_identity_usage(
                 recording_count=count,
                 last_modified=mtime,
             )
-            usage[name].recordings.append(ref)
-            usage[name].total_mentions += count
-            if mtime is not None:
-                if (
-                    usage[name].last_activity is None
-                    or mtime > usage[name].last_activity
-                ):
-                    usage[name].last_activity = mtime
+            identity_usage = usage[name]
+            identity_usage.recordings.append(ref)
+            identity_usage.total_mentions += count
+            current_last = identity_usage.last_activity
+            if mtime is not None and (
+                current_last is None or mtime > current_last
+            ):
+                identity_usage.last_activity = mtime
 
     if skipped_count:
         logger.info(

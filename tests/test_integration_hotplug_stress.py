@@ -60,7 +60,7 @@ class TimePatch:
 def _source(source_type, device_id=None, friendly_name=None):
     """Create a SourceConfig for testing."""
     source = SourceConfig(type=source_type, device_id=device_id)
-    source.friendly_name = friendly_name
+    source.friendly_name = friendly_name  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return source
 
 
@@ -80,7 +80,7 @@ def _recording_controller(*sources, monitor=None, time_patch=None):
         import meetandread.recording.controller as controller_module
         original_time_func = controller_module._time.time
         controller_module._time.time = time_patch.now
-        controller._time_patch = original_time_func
+        controller._time_patch = original_time_func  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return controller
 
 

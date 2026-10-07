@@ -61,7 +61,7 @@ def _make_widget():
                             widget._cc_overlay = None
                             widget._error_hide_timer = None
                             widget._warning_hide_timer = None
-                            widget.toast_manager = None
+                            widget.toast_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
                             return widget
 
 
@@ -77,9 +77,9 @@ class TestExitApplicationCallsShutdown:
     def test_exit_calls_shutdown(self, mock_save, mock_quit):
         widget = _make_widget()
         widget._exit_application()
-        widget._controller.shutdown.assert_called_once()
+        widget._controller.shutdown.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         # Verify timeout arg is reasonable
-        call_args = widget._controller.shutdown.call_args
+        call_args = widget._controller.shutdown.call_args  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert call_args[1].get("timeout", 10.0) > 0
 
     @patch("meetandread.widgets.main_widget.QApplication.quit")
@@ -94,7 +94,7 @@ class TestExitApplicationCallsShutdown:
     def test_exit_proceeds_on_shutdown_error(self, mock_save, mock_quit):
         """If shutdown raises, exit still calls QApplication.quit()."""
         widget = _make_widget()
-        widget._controller.shutdown.side_effect = RuntimeError("boom")
+        widget._controller.shutdown.side_effect = RuntimeError("boom")  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         widget._exit_application()
         mock_quit.assert_called_once()
 
@@ -128,7 +128,7 @@ class TestCloseEventNoTray:
 
         mock_event = MagicMock()
         widget.closeEvent(mock_event)
-        widget._controller.shutdown.assert_called_once()
+        widget._controller.shutdown.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         mock_event.accept.assert_called_once()
         mock_event.ignore.assert_not_called()
 
@@ -139,7 +139,7 @@ class TestCloseEventNoTray:
     ):
         widget = _make_widget()
         widget._tray_manager = None
-        widget._controller.shutdown.side_effect = RuntimeError("boom")
+        widget._controller.shutdown.side_effect = RuntimeError("boom")  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         mock_event = MagicMock()
         widget.closeEvent(mock_event)
@@ -164,7 +164,7 @@ class TestCloseEventWithTray:
         widget.closeEvent(mock_event)
 
         # Should NOT call shutdown
-        widget._controller.shutdown.assert_not_called()
+        widget._controller.shutdown.assert_not_called()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         # Should hide instead
         widget.hide.assert_called_once()
         mock_event.ignore.assert_called_once()
@@ -226,7 +226,7 @@ class TestShutdownCallCount:
     def test_exit_application_calls_shutdown_once(self, mock_save, mock_quit):
         widget = _make_widget()
         widget._exit_application()
-        assert widget._controller.shutdown.call_count == 1
+        assert widget._controller.shutdown.call_count == 1  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     @patch("meetandread.widgets.main_widget.QApplication.quit")
     @patch("meetandread.widgets.main_widget.MeetAndReadWidget._save_position")
@@ -236,7 +236,7 @@ class TestShutdownCallCount:
 
         mock_event = MagicMock()
         widget.closeEvent(mock_event)
-        assert widget._controller.shutdown.call_count == 1
+        assert widget._controller.shutdown.call_count == 1  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     @patch("meetandread.widgets.main_widget.MeetAndReadWidget._save_position")
     def test_close_event_with_tray_calls_shutdown_zero(self, mock_save):
@@ -246,4 +246,4 @@ class TestShutdownCallCount:
 
         mock_event = MagicMock()
         widget.closeEvent(mock_event)
-        assert widget._controller.shutdown.call_count == 0
+        assert widget._controller.shutdown.call_count == 0  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam

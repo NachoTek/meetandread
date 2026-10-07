@@ -128,15 +128,15 @@ def _running_lifecycle(tmp_path):
     # still exercises the real consumer/swap path while no hardware is needed.
     session._sources[0].config.type = "mic"
 
-    active_identity = SourceConfig(type="mic", device_id=DEVICE_ID)
-    active_identity.friendly_name = DEVICE_NAME
+    active_identity = SourceConfig(type="mic", device_id=DEVICE_ID)  # pyright: ignore[reportArgumentType]  # intentional mock seam
+    active_identity.friendly_name = DEVICE_NAME  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     controller = RecordingController(enable_transcription=False)
     controller._session = session
     controller._state = ControllerState.RECORDING
     controller._snapshot_active_sources([active_identity])
 
     widget = MeetAndReadWidget.__new__(MeetAndReadWidget)
-    widget.toast_manager = RecordingToastManager()
+    widget.toast_manager = RecordingToastManager()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     widget._recovery_toast_id = TOAST_ID
     widget._controller = controller
 
@@ -174,12 +174,12 @@ def test_disconnect_auto_recovers_through_bridge_with_replacement_frames(tmp_pat
         )
         qapp.processEvents()
 
-        assert lost.outcome is RecoveryOutcome.TOTAL_LOSS
-        assert recovered.outcome is RecoveryOutcome.AUTO_RECOVERED
+        assert lost.outcome is RecoveryOutcome.TOTAL_LOSS  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
+        assert recovered.outcome is RecoveryOutcome.AUTO_RECOVERED  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert controller.get_state() is ControllerState.RECORDING
         _assert_replacement_frames(session, replacement)
 
-        toasts = widget.toast_manager.shown
+        toasts = widget.toast_manager.shown  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert [toast["title"] for toast in toasts] == [
             "Recording device disconnected",
             "Recording paused",
@@ -211,9 +211,9 @@ def test_expired_recovery_uses_toast_action_without_starting_new_session(tmp_pat
         )
         qapp.processEvents()
 
-        assert lost.outcome is RecoveryOutcome.TOTAL_LOSS
-        assert expired.outcome is RecoveryOutcome.MANUAL_RETRY_REQUIRED
-        paused = widget.toast_manager.shown[-1]
+        assert lost.outcome is RecoveryOutcome.TOTAL_LOSS  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
+        assert expired.outcome is RecoveryOutcome.MANUAL_RETRY_REQUIRED  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
+        paused = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert paused["toast_id"] == TOAST_ID
         assert paused["title"] == "Recording paused"
         assert paused["duration_ms"] == 0
@@ -225,12 +225,12 @@ def test_expired_recovery_uses_toast_action_without_starting_new_session(tmp_pat
 
         assert controller._session is original_session
         assert session._consumer_thread is original_consumer
-        assert original_consumer.is_alive()
+        assert original_consumer.is_alive()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert controller.get_state() is ControllerState.RECORDING
-        assert controller._last_recovery_result.outcome is RecoveryOutcome.MANUAL_RECOVERED
+        assert controller._last_recovery_result.outcome is RecoveryOutcome.MANUAL_RECOVERED  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         _assert_replacement_frames(session, replacement)
 
-        resumed = widget.toast_manager.shown[-1]
+        resumed = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert resumed["toast_id"] == TOAST_ID
         assert resumed["title"] == "Recording resumed"
         assert resumed["duration_ms"] > 0

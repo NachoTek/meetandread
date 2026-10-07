@@ -63,7 +63,7 @@ class FakeAudioSession:
             frames_recorded=0,
             frames_dropped=0,
             duration_seconds=0.0,
-            source_stats=[],
+            source_stats=[],  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
     def get_error(self):
@@ -86,7 +86,7 @@ def ctrl_recording(tmp_path: Path):
     ctrl = RecordingController(enable_transcription=False)
     wav_path = tmp_path / "test.wav"
     wav_path.write_text("fake wav")
-    ctrl._session = FakeAudioSession(wav_path)
+    ctrl._session = FakeAudioSession(wav_path)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     ctrl._state = ControllerState.RECORDING
     return ctrl
 
@@ -459,7 +459,7 @@ class TestStopToStartLatency:
         ctrl = RecordingController(enable_transcription=True)
         wav_path = tmp_path / "test.wav"
         wav_path.write_text("fake wav")
-        ctrl._session = FakeAudioSession(wav_path)
+        ctrl._session = FakeAudioSession(wav_path)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         # Set up a fake transcription processor and transcript store
         ctrl._transcript_store = MagicMock()
@@ -506,7 +506,7 @@ class TestStopToStartLatency:
         ctrl = RecordingController(enable_transcription=False)
         wav_path = tmp_path / "test.wav"
         wav_path.write_text("fake wav")
-        ctrl._session = FakeAudioSession(wav_path)
+        ctrl._session = FakeAudioSession(wav_path)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         ctrl._post_processor = MagicMock()
         ctrl._post_processor.schedule_post_process = MagicMock(
             return_value=MagicMock(job_id="test-job")

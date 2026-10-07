@@ -156,7 +156,7 @@ class TestEngineFailurePathCanaries:
 class TestReturnedTranscriptionErrorCanaries:
     def test_poisoned_typed_message_never_reaches_log(self, caplog) -> None:
         proc = _make_processor()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type="model_error",
             message=(
                 f"model exploded on {CANARY_TRANSCRIPT} "
@@ -169,7 +169,7 @@ class TestReturnedTranscriptionErrorCanaries:
 
     def test_typed_error_event_carries_category_only(self, caplog) -> None:
         proc = _make_processor()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type="model_error",
             message=f"{CANARY_TRANSCRIPT} {CANARY_TITLE}",
         )

@@ -115,12 +115,12 @@ class TestHistoryRowRetryButton:
             path=path,
             panel=panel,
             item=item,
-            parent=history_list.viewport(),
+            parent=history_list.viewport(),  # pyright: ignore[reportArgumentType]  # intentional mock seam
             italic=False,
         )
         # Keep the list alive for the test's lifetime; the row is parented
         # to its viewport.
-        row._test_history_list = history_list
+        row._test_history_list = history_list  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         return row, panel, item
 
     def test_retry_button_hidden_by_default(self, qapp):
@@ -290,7 +290,7 @@ class TestOnRetryPostProcessing:
     def test_failed_schedule_shows_information(self, panel, qapp, tmp_path):
         md = tmp_path / "recording-x.md"
         item = self._item(panel, qapp, md)
-        panel._controller = RetryControllerStub(retry_result=None)
+        panel._controller = RetryControllerStub(retry_result=None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         with patch("meetandread.widgets.floating_panels.QMessageBox") as mb:
             panel._on_retry_post_processing(item)
@@ -346,7 +346,7 @@ class TestPostProcessFailureDialog:
             from PyQt6.QtWidgets import QApplication
 
             dialog._copy_details()
-            clipboard = QApplication.clipboard().text()
+            clipboard = QApplication.clipboard().text()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
             assert "torch not available" in clipboard
             assert "Model loading" in clipboard
         finally:

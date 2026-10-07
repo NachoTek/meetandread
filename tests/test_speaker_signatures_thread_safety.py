@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -34,11 +35,11 @@ def _random_embedding(dim: int = 256, seed: int = 0) -> np.ndarray:
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def file_store(tmp_path: Path) -> VoiceSignatureStore:
+@pytest.fixture  # pyright: ignore[reportInvalidTypeForm]  # intentional mock seam
+def file_store(tmp_path: Path) -> Iterator[VoiceSignatureStore]:
     """File-backed store for thread-safety tests (WAL mode)."""
     db = tmp_path / "thread_safety_test.db"
-    with VoiceSignatureStore(str(db)) as s:
+    with VoiceSignatureStore(str(db)) as s:  # pyright: ignore[reportReturnType]  # intentional mock seam
         yield s
 
 

@@ -65,7 +65,7 @@ def _make_controller_with_queue(queue: Optional[object]):
     from meetandread.recording.controller import RecordingController
 
     ctrl = RecordingController(enable_transcription=True)
-    ctrl._post_processor = queue
+    ctrl._post_processor = queue  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return ctrl
 
 

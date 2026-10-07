@@ -325,7 +325,7 @@ class TestBenchmarkCompletePersistence:
         panel._on_benchmark_complete(result)
 
         # Check the label was updated with model name
-        label_text = panel._benchmark_history_label.setText.call_args[0][0]
+        label_text = panel._benchmark_history_label.setText.call_args[0][0]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert "base" in label_text
         assert "WER 17.3%" in label_text
         assert "Speed 2.0x" in label_text

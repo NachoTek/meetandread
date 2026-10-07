@@ -108,7 +108,7 @@ class TestPauseDetectionProportional:
         scrollbar.setValue(scrollbar.maximum())
         # Process events so _on_scroll_value_changed fires
         qapp = QApplication.instance()
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         # Reset state
         panel._auto_scroll_paused = False
@@ -117,7 +117,7 @@ class TestPauseDetectionProportional:
         threshold = panel._near_bottom_threshold()
         near_bottom = scrollbar.maximum() - threshold + 1
         scrollbar.setValue(near_bottom)
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         # Should NOT be paused
         assert not panel._auto_scroll_paused
@@ -129,7 +129,7 @@ class TestPauseDetectionProportional:
         # Scroll to top region
         scrollbar.setValue(0)
         qapp = QApplication.instance()
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         assert panel._auto_scroll_paused
 
@@ -143,7 +143,7 @@ class TestPauseDetectionProportional:
         # Scroll well above bottom
         scrollbar.setValue(0)
         qapp = QApplication.instance()
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         assert panel._pause_timer.isActive()
 
@@ -161,7 +161,7 @@ class TestIsAtBottomConsistent:
         scrollbar = panel.text_edit.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
         qapp = QApplication.instance()
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         assert panel._is_at_bottom is True
 
@@ -172,7 +172,7 @@ class TestIsAtBottomConsistent:
         # Scroll to top
         scrollbar.setValue(0)
         qapp = QApplication.instance()
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         assert panel._is_at_bottom is False
 
@@ -185,7 +185,7 @@ class TestIsAtBottomConsistent:
         value_at_threshold = scrollbar.maximum() - threshold
         scrollbar.setValue(value_at_threshold)
         qapp = QApplication.instance()
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         assert panel._is_at_bottom is True
 
@@ -291,7 +291,7 @@ class TestScrollToBottomResumes:
         # First scroll away from bottom so setValue(max) will actually change
         scrollbar.setValue(0)
         qapp = QApplication.instance()
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         # Pause auto-scroll
         panel._auto_scroll_paused = True
@@ -301,7 +301,7 @@ class TestScrollToBottomResumes:
 
         # Simulate user scrolling to bottom
         scrollbar.setValue(scrollbar.maximum())
-        qapp.processEvents()
+        qapp.processEvents()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         assert panel._auto_scroll_paused is False
         assert panel._pending_content_count == 0

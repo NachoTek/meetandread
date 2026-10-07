@@ -22,7 +22,7 @@ class FakeSession:
         self._state_val = ControllerState.RECORDING
 
     def stop(self):
-        self._state_val = ControllerState.FINALIZED
+        self._state_val = ControllerState.FINALIZED  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         return self._stop_return or "recording.wav"
 
     def get_state(self):

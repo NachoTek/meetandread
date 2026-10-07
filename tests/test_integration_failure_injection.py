@@ -37,7 +37,7 @@ class FakeRetrySession:
         self._state_val = ControllerState.RECORDING
 
     def stop(self):
-        self._state_val = ControllerState.FINALIZED
+        self._state_val = ControllerState.FINALIZED  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         return "recording.wav"
 
     def get_state(self):
@@ -103,7 +103,7 @@ class FailureInjectionTest:
             m.setattr("meetandread.widgets.main_widget.RecordingController", lambda *a, **k: controller)
             widget = MeetAndReadWidget()
         widget._controller = controller
-        widget.toast_manager.show = getattr(widget.toast_manager, "show", lambda *a, **k: "wasapi-retry")
+        widget.toast_manager.show = getattr(widget.toast_manager, "show", lambda *a, **k: "wasapi-retry")  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         widget._show_error = lambda *args, **kwargs: None
         return widget
 

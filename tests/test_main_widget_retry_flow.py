@@ -126,7 +126,7 @@ def test_retry_toast_shows_attempt_number_and_countdown(monkeypatch):
     def capture_toast(toast_id, title, message, **kwargs):
         toast_calls.append({'id': toast_id, 'title': title, 'message': message})
 
-    widget.toast_manager.show = capture_toast
+    widget.toast_manager.show = capture_toast  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     widget.mic_lobe.is_active = True
     widget.system_lobe.is_active = True
@@ -320,7 +320,7 @@ def test_retry_updates_same_toast_widget_instead_of_spamming(monkeypatch):
         if toast_id == 'wasapi-retry':
             toast_count[0] += 1
 
-    widget.toast_manager.show = count_toasts
+    widget.toast_manager.show = count_toasts  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     widget.mic_lobe.is_active = True
     widget.system_lobe.is_active = True

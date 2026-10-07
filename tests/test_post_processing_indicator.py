@@ -28,11 +28,11 @@ def _make_meta(
     path: str = "recording-2026-01-01-120000.md",
     word_count: int = 100,
     speaker_count: int = 2,
-    speakers: list = None,
+    speakers: list = None,  # pyright: ignore[reportArgumentType]  # intentional mock seam
     recording_time: str = "2026-01-01T12:00:00",
     duration_seconds: float = 60.0,
     wav_exists: bool = True,
-    outcome: PostProcessOutcome = None,
+    outcome: PostProcessOutcome = None,  # pyright: ignore[reportArgumentType]  # intentional mock seam
 ) -> RecordingMeta:
     """Create a RecordingMeta with sensible defaults."""
     return RecordingMeta(

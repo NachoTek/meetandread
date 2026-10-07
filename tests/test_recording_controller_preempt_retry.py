@@ -360,8 +360,8 @@ class TestRecordStartPreemptsEndToEnd:
             auto_requeue_stalled=False,
         )
         engine = FakeEngine(on_chunk=on_chunk)
-        queue._engines["base"] = engine
-        queue._load_audio_file = lambda path: np.zeros(
+        queue._engines["base"] = engine  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        queue._load_audio_file = lambda path: np.zeros(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             windows * _window_samples(queue), dtype=np.float32
         )
         ctrl._post_processor = queue
@@ -533,7 +533,7 @@ class TestGetPostProcessFailure:
             user_initiated=True,
         )
         defaults.update(kwargs)
-        return PostProcessJob(**defaults)
+        return PostProcessJob(**defaults)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
     def test_failed_user_initiated_job(self, tmp_path):
         queue = FakePreemptibleQueue()
@@ -558,8 +558,8 @@ class TestGetPostProcessFailure:
 
         failure = ctrl.get_post_process_failure("job-9")
 
-        assert failure["user_initiated"] is False
-        assert failure["stage"] == transcript_footer.STAGE_TRANSCRIBE
+        assert failure["user_initiated"] is False  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert failure["stage"] == transcript_footer.STAGE_TRANSCRIBE  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
 
     def test_none_when_job_missing(self):
         ctrl = _controller_with_queue(FakePreemptibleQueue())

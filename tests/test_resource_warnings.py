@@ -74,12 +74,12 @@ class TestBarColorThresholds:
     """Verify the color-coding thresholds match the budget (RAM ≥85 orange, CPU ≥80 orange)."""
 
     def _make_snapshot(self, ram_pct, cpu_pct):
-        return ResourceSnapshot(
+        return ResourceSnapshot(  # pyright: ignore[reportCallIssue]  # intentional mock seam
             ram_percent=ram_pct,
             cpu_percent=cpu_pct,
-            ram_mb=1024.0,
-            cpu_cores=4,
-            timestamp=0.0,
+            ram_mb=1024.0,  # pyright: ignore[reportCallIssue]  # intentional mock seam
+            cpu_cores=4,  # pyright: ignore[reportCallIssue]  # intentional mock seam
+            timestamp=0.0,  # pyright: ignore[reportCallIssue]  # intentional mock seam
         )
 
     def _get_bar_color(self, bar_value, resource):
