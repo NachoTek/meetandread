@@ -6440,7 +6440,7 @@ class FloatingSettingsPanel(QWidget):
                 type(exc).__name__,
             )
         logger.debug(
-            "noise_filter_set: enabled=%s", enabled
+            "denoising_toggle: enabled=%s source=handler", enabled
         )
 
     def _on_denoising_auto_disable_toggled(self, state: int) -> None:
@@ -6459,7 +6459,7 @@ class FloatingSettingsPanel(QWidget):
                 type(exc).__name__,
             )
         logger.debug(
-            "denoising_auto_disable_set: enabled=%s",
+            "denoising_auto_disable_toggle: auto_disable=%s source=handler",
             enabled,
         )
 
