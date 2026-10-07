@@ -46,6 +46,11 @@ imports ONLY from sibling stdlib-only modules: ``capture_mode`` (the
   problem is written into the capture directory
   (``description.txt``) and carried forward for the later
   review/submission steps (#108/#109).
+- **Manual cleanup of capture runs** (issue #112, the 2026-09-05
+  retention decision): capture artifacts are excluded from the app's
+  automatic retention cleanup ENTIRELY, so the wizard offers the
+  deletion instead — ``list_capture_runs`` /
+  ``delete_capture_runs`` are the pure listing/deletion seams.
 
 ## Launching the app (the supervise seam)
 
@@ -66,6 +71,7 @@ subprocess tests (tests/test_reporter_subprocess.py).
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -609,6 +615,122 @@ def resume_capture(capture_dir: Path, data_base: Path) -> dict:
         except OSError:
             pass
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Manual cleanup of capture runs (issue #112, the 2026-09-05 retention
+# decision's other half: capture artifacts are excluded from automatic
+# cleanup ENTIRELY, so the wizard offers the deletion instead)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CaptureRunListing:
+    """One capture run offered by the wizard's manual cleanup step.
+
+    Pure value over the capture-state scan: the run's directory, its
+    state name, whether a Diagnostics Bundle sits inside it, and the
+    run's total on-disk size in bytes (rounded up to whole filesystem
+    blocks would be overkill — the raw byte sum of ``stat().st_size``
+    over the directory tree is plenty for a "how much space" display).
+    """
+
+    path: Path
+    state_name: str
+    has_bundle: bool
+    size_bytes: int
+
+
+def _dir_tree_size(path: Path) -> int:
+    """Sum file sizes under *path* (0 on any error — display-only)."""
+    total = 0
+    try:
+        for entry in path.rglob("*"):
+            try:
+                total += entry.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return 0
+    return total
+
+
+def list_capture_runs(base: Path) -> List[CaptureRunListing]:
+    """List every capture run under the data base, newest first.
+
+    A directory qualifies when it is a CAPTURE directory — recognized
+    by the contract artifacts the state scan already trusts (a claim
+    or a termination record; ``scan_capture_state``'s ``absent``
+    verdict skips foreign directories). EVERY state qualifies
+    (incomplete, review_ready, done): the cleanup listing is the
+    user's file manager for capture artifacts, not a recovery flow.
+    A missing base is an empty list, never an error.
+    """
+    captures = Path(base) / CAPTURES_DIRNAME
+    if not captures.is_dir():
+        return []
+    try:
+        entries = sorted(captures.iterdir(), reverse=True)
+    except OSError:
+        return []
+    listings: List[CaptureRunListing] = []
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        state = scan_capture_state(entry)
+        if state.state_name == "absent":
+            continue
+        listings.append(
+            CaptureRunListing(
+                path=entry,
+                state_name=state.state_name,
+                has_bundle=(entry / "diagnostics_bundle.txt").is_file(),
+                size_bytes=_dir_tree_size(entry),
+            )
+        )
+    return listings
+
+
+def delete_capture_runs(runs: List[Path], base: Path) -> List[Path]:
+    """Delete whole capture runs; return the directories removed.
+
+    The wizard's manual-cleanup delete seam (issue #112). Deleting a
+    run removes its capture directory — the Diagnostics Bundle lives
+    INSIDE it, so directory and bundle go together by construction.
+
+    Safety contract (the deletion boundary is narrow BY DESIGN):
+    - Only directories inside ``<base>/captures`` are ever deleted —
+      the path is resolved and checked against the captures root, so
+      no absolute-path or traversal trickery can point the deletion
+      at the user's Recordings, Audio, or Transcripts (which live
+      under Documents/meetandread, a different tree entirely).
+    - Only CAPTURE directories are deleted: recognized by the same
+      contract artifacts as the listing (a claim or termination
+      record); an empty or foreign directory inside captures/ is
+      never touched.
+    - Per-run errors (locked file, vanished mid-scan) are skipped,
+      never raised — cleanup must not die on the first locked handle.
+    """
+    captures_root = (Path(base) / CAPTURES_DIRNAME).resolve()
+    deleted: List[Path] = []
+    for run in runs:
+        d = Path(run)
+        try:
+            resolved = d.resolve()
+            if not resolved.is_relative_to(captures_root):
+                continue
+            if resolved == captures_root:
+                continue
+        except OSError:
+            continue
+        if scan_capture_state(d).state_name == "absent":
+            continue
+        try:
+            shutil.rmtree(d)
+            deleted.append(d)
+        except OSError:
+            continue
+    return deleted
 
 
 # Re-exported for the wizard/tests: probing wait helper.

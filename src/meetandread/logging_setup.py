@@ -13,11 +13,13 @@ only: stdout is never routed into the logging framework, so
 transcript-bearing output may reach the console but never enters any
 log stream, in any run mode.
 
-Retention (decided 2026-09-05): on startup, normal-run log files older
-than 30 days are deleted. Capture-mode DEBUG logs and capture artifacts
-are never touched by this cleanup at any age. Since issue #104, capture
-logs live inside capture directories (``capture_mode`` module) and the
-retention scan never targets a capture directory.
+Retention (decided 2026-09-05; user-selectable since issue #112): on
+startup, normal-run log files older than the configured retention
+period (default 30 days, ``logging.log_retention_days``) are deleted.
+Capture-mode DEBUG logs and capture artifacts are never touched by
+this cleanup at any age. Since issue #104, capture logs live inside
+capture directories (``capture_mode`` module) and the retention scan
+never targets a capture directory.
 
 This module is structured for testability (ADR 0001 fast lane):
 ``normalize_level`` and ``select_expired_normal_logs`` are pure, and
@@ -116,20 +118,52 @@ def select_expired_normal_logs(
     return expired
 
 
+def resolve_retention_days() -> int:
+    """Resolve the user-selectable retention period (days) from config.
+
+    Reads ``logging.log_retention_days`` through the ConfigManager
+    seam. ANY failure (config unavailable, value missing or malformed)
+    falls back to ``LOG_RETENTION_DAYS`` (30) — cleanup must never
+    break startup, and the capture-exclusion contract holds at every
+    value regardless.
+    """
+    try:
+        from meetandread.config import get_config
+
+        value = get_config("logging.log_retention_days")
+    except Exception:
+        return LOG_RETENTION_DAYS
+    if isinstance(value, bool) or not isinstance(value, int):
+        return LOG_RETENTION_DAYS
+    if value < 1:
+        return LOG_RETENTION_DAYS
+    return value
+
+
 def cleanup_expired_logs(
     logs_dir: Path,
     now: Optional[datetime] = None,
+    retention_days: Optional[int] = None,
 ) -> List[Path]:
     """Delete expired normal-run logs from *logs_dir*; return what was deleted.
 
-    The 30-day startup retention hook (``LOG_RETENTION_DAYS``; a
-    user-selectable setting is deferred to a follow-up). Capture-mode
-    logs and any non-log files are never touched (see
-    ``select_expired_normal_logs``). A missing *logs_dir* is a no-op.
+    The startup retention hook. The retention period is the
+    user-selectable setting (``logging.log_retention_days``, default
+    ``LOG_RETENTION_DAYS`` = 30) resolved when *retention_days* is
+    None; tests inject the value explicitly. Capture-mode logs and any
+    non-log files are never touched (see ``select_expired_normal_logs``
+    — the exclusion holds at every retention value). A missing
+    *logs_dir* is a no-op.
+
+    Emits the named DEBUG event ``log_retention_cleanup`` with
+    count deleted and the retention value (safe fields only, issue
+    #112's named-event convention) whenever the scan runs.
     """
     if now is None:
         now = datetime.now()
-    cutoff = now - timedelta(days=LOG_RETENTION_DAYS)
+    if retention_days is None:
+        retention_days = resolve_retention_days()
+    cutoff = now - timedelta(days=retention_days)
     try:
         entries = list(logs_dir.iterdir())
     except OSError:
@@ -141,6 +175,11 @@ def cleanup_expired_logs(
             deleted.append(path)
         except OSError:
             continue
+    logger.debug(
+        "log_retention_cleanup: deleted=%d retention_days=%d",
+        len(deleted),
+        retention_days,
+    )
     return deleted
 
 
@@ -179,9 +218,10 @@ def configure_logging(
     One timestamped file per run is created under *logs_dir* (resolved
     via the storage seam when None) — capture runs carry the capture
     prefix so retention never selects them. Expired normal logs are
-    cleaned up alongside (the startup retention hook). Stdout is teed
-    console-only: transcript-bearing output never enters the log stream
-    in ANY mode (normal INFO or capture DEBUG).
+    cleaned up alongside (the startup retention hook, honoring the
+    user-selectable ``logging.log_retention_days`` setting since issue
+    #112). Stdout is teed console-only: transcript-bearing output never
+    enters the log stream in ANY mode (normal INFO or capture DEBUG).
 
     Issue Capture Mode (issue #104): when *logs_dir* is a capture
     directory (``is_capture_dir=True``, set by

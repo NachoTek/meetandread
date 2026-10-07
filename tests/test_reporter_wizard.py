@@ -202,6 +202,7 @@ class TestWizardRecovery:
         inp = ScriptedInput(
             [
                 "n",  # decline resume
+                "",  # cleanup offer (#112): keep all runs
                 "Fresh description",
                 "",  # finish reproducing
                 "n",  # decline the submit step (#109)
@@ -429,6 +430,7 @@ class TestRecoverySkipsResolved:
         self._make_resolved(tmp_path, state)
         inp = ScriptedInput(
             [
+                "",  # cleanup offer (#112): keep all runs
                 "Fresh description",
                 "",  # finish reproducing
                 "n",  # decline the submit step
@@ -442,7 +444,10 @@ class TestRecoverySkipsResolved:
             print_fn=out,
         )
         assert run is not None  # straight to a fresh run
-        assert "run-resolved" not in out.text()
+        # Not re-offered for RESUME (the #112 cleanup listing may name
+        # the run — that is a different offer).
+        assert "Found an interrupted" not in out.text()
+        assert "Resume it?" not in out.text()
 
     def test_unresolved_run_still_offered(self, tmp_path):
         self._make_resolved(tmp_path)  # no state → unresolved

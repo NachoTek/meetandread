@@ -1,4 +1,4 @@
-"""Tests for configuration system.
+﻿"""Tests for configuration system.
 
 Covers models, persistence, and manager functionality.
 """
@@ -85,7 +85,7 @@ class TestModelSettings:
     def test_from_dict(self):
         """Test deserialization from dict."""
         settings = ModelSettings.from_dict({"realtime_model_size": "base"})
-        # Field is silently ignored — no longer part of ModelSettings
+        # Field is silently ignored â€” no longer part of ModelSettings
         assert isinstance(settings, ModelSettings)
 
     def test_from_dict_empty_dict(self):
@@ -297,7 +297,7 @@ class TestAppSettings:
     def test_default_values(self):
         """Test default values and nested settings."""
         settings = AppSettings()
-        assert settings.config_version == 8
+        assert settings.config_version == 9
         assert isinstance(settings.model, ModelSettings)
         assert isinstance(settings.transcription, TranscriptionSettings)
         assert isinstance(settings.hardware, HardwareSettings)
@@ -307,7 +307,7 @@ class TestAppSettings:
         """Test full serialization."""
         settings = AppSettings()
         d = settings.to_dict()
-        assert d["config_version"] == 8
+        assert d["config_version"] == 9
         assert "model" in d
         assert "transcription" in d
         assert "hardware" in d
@@ -388,7 +388,7 @@ class TestSettingsPersistence:
         """Test loading when file doesn't exist returns defaults."""
         loaded = persistence.load_settings()
         assert loaded.transcription.realtime_model_size == "tiny"
-        assert loaded.config_version == 8
+        assert loaded.config_version == 9
     
     def test_load_corrupted_json_returns_defaults(self, persistence):
         """Test loading corrupted file returns defaults."""
@@ -438,7 +438,7 @@ class TestSettingsPersistence:
         assert "path" in info
         assert "exists" in info
         assert info["exists"] is False  # No file yet
-        assert info["current_version"] == 8
+        assert info["current_version"] == 9
     
     def test_config_info_after_save(self, persistence):
         """Test config info after saving."""
@@ -447,7 +447,7 @@ class TestSettingsPersistence:
         
         info = persistence.get_config_info()
         assert info["exists"] is True
-        assert info["version"] == 8
+        assert info["version"] == 9
         assert info["needs_migration"] is False
 
 
@@ -462,7 +462,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 0)
-        assert migrated["config_version"] == 8
+        assert migrated["config_version"] == 9
         assert "transcription" in migrated
         assert "hardware" in migrated
         assert "ui" in migrated
@@ -482,7 +482,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(old_config, 2)
-        assert migrated["config_version"] == 8
+        assert migrated["config_version"] == 9
         
         # Denoising defaults added (disabled by default)
         ts = migrated["transcription"]
@@ -496,7 +496,7 @@ class TestConfigMigration:
         assert ts["benchmark_history"] == {"base": {"wer": 0.17}}
         assert migrated["model"]["realtime_model_size"] == "small"
 
-        # Speaker min-duration defaults added by v3→v4 migration
+        # Speaker min-duration defaults added by v3â†’v4 migration
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
         assert speaker["min_duration_off"] == 0.5
@@ -519,7 +519,7 @@ class TestConfigMigration:
         assert ts["microphone_denoising_latency_budget_ms"] == 50
     
     def test_migration_from_version_3_adds_speaker_min_duration(self, persistence):
-        """Test v3→v4→v5 migration adds min_duration_on/off and disables denoising."""
+        """Test v3â†’v4â†’v5 migration adds min_duration_on/off and disables denoising."""
         old_config = {
             "config_version": 3,
             "speaker": {
@@ -530,7 +530,7 @@ class TestConfigMigration:
         }
 
         migrated = persistence.migrate_config(old_config, 3)
-        assert migrated["config_version"] == 8
+        assert migrated["config_version"] == 9
 
         speaker = migrated["speaker"]
         assert speaker["min_duration_on"] == 0.3
@@ -539,11 +539,11 @@ class TestConfigMigration:
         assert speaker["enabled"] is True
         assert speaker["confidence_threshold"] == 0.7
         assert speaker["clustering_threshold"] == 0.6
-        # v4→v5 disables denoising
+        # v4â†’v5 disables denoising
         assert migrated["transcription"]["microphone_denoising_enabled"] is False
 
     def test_migration_from_version_3_preserves_existing_min_duration(self, persistence):
-        """Test v3→v4 migration doesn't clobber existing min_duration fields."""
+        """Test v3â†’v4 migration doesn't clobber existing min_duration fields."""
         old_config = {
             "config_version": 3,
             "speaker": {
@@ -560,7 +560,7 @@ class TestConfigMigration:
         assert speaker["enabled"] is False
 
     def test_migration_from_version_3_missing_speaker_section(self, persistence):
-        """Test v3→v4 migration handles missing speaker section."""
+        """Test v3â†’v4 migration handles missing speaker section."""
         old_config = {
             "config_version": 3,
         }
@@ -578,7 +578,7 @@ class TestConfigMigration:
         }
         
         migrated = persistence.migrate_config(current_config, 5)
-        assert migrated["config_version"] == 8
+        assert migrated["config_version"] == 9
 
 
 # ============================================================================
@@ -1004,7 +1004,7 @@ class TestStoragePaths:
         assert sp.transcripts_path is None
 
     def test_roundtrip(self):
-        """to_dict → from_dict round-trip preserves values."""
+        """to_dict â†’ from_dict round-trip preserves values."""
         original = StoragePaths(transcripts_path="/x", logs_path="/y")
         restored = StoragePaths.from_dict(original.to_dict())
         assert restored.transcripts_path == "/x"
@@ -1115,13 +1115,13 @@ class TestStoragePathsMigration:
     """Tests for config migration adding storage_paths."""
 
     def test_migration_from_version_7_adds_storage_paths(self, persistence):
-        """v7→v8 migration adds storage_paths section."""
+        """v7â†’v8 migration adds storage_paths section."""
         old_config = {
             "config_version": 7,
             "model": {"realtime_model_size": "small"},
         }
         migrated = persistence.migrate_config(old_config, 7)
-        assert migrated["config_version"] == 8
+        assert migrated["config_version"] == 9
         assert "storage_paths" in migrated
 
     def test_migration_preserves_existing_storage_paths(self, persistence):
@@ -1131,7 +1131,7 @@ class TestStoragePathsMigration:
             "storage_paths": {"recordings_path": "/custom"},
         }
         migrated = persistence.migrate_config(old_config, 7)
-        assert migrated["config_version"] == 8
+        assert migrated["config_version"] == 9
         assert migrated["storage_paths"]["recordings_path"] == "/custom"
 
     def test_storage_paths_save_load_roundtrip(self, persistence):

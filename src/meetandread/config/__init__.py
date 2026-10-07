@@ -45,6 +45,7 @@ from meetandread.config.manager import (
 from meetandread.config.models import (
     AppSettings,
     HardwareSettings,
+    LoggingSettings,
     ModelSettings,
     StoragePaths,
     TranscriptionSettings,
@@ -64,6 +65,7 @@ __all__ = [
     "HardwareSettings",
     "UISettings",
     "StoragePaths",
+    "LoggingSettings",
     # Manager
     "ConfigManager",
     "get_config_manager",
