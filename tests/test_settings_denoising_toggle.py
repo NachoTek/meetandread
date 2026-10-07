@@ -5,11 +5,13 @@ Covers:
 - Frame-drop denoising auto-disable defaults on, persists, and has a settings handler
 - Settings panel handlers call set_config + save_config
 - Non-bool, malformed, and missing setting edge cases preserved
+- Named DEBUG toggle events on both handlers (#119), privacy-safe fields only
 """
 
 import json
+import logging
 from pathlib import Path
-from unittest.mock import call, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -19,6 +21,8 @@ from meetandread.config import (
     set_config,
     save_config,
 )
+
+FP_LOG = "meetandread.widgets.floating_panels"
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +210,82 @@ class TestNoiseFilterHandler:
             "transcription.microphone_denoising_auto_disable_on_frame_drops", False
         )
         mock_save.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 2b. Named DEBUG toggle events (#119)
+# ---------------------------------------------------------------------------
+
+class TestNoiseFilterDebugToggleEvents:
+    """Both denoising handlers emit named, privacy-safe DEBUG toggle events."""
+
+    @pytest.fixture
+    def panel(self, isolated_config):
+        """Create a minimal FloatingSettingsPanel via __new__ (no Qt init)."""
+        from meetandread.widgets.floating_panels import FloatingSettingsPanel
+        return FloatingSettingsPanel.__new__(FloatingSettingsPanel)
+
+    def test_enable_toggle_on_emits_named_debug_event(self, panel, isolated_config, caplog):
+        """Toggling denoising on emits denoising_toggle: enabled=True source=handler."""
+        with caplog.at_level(logging.DEBUG, logger=FP_LOG):
+            panel._on_noise_filter_toggled(2)
+        debugs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == FP_LOG and r.levelno == logging.DEBUG
+        ]
+        assert "denoising_toggle: enabled=True source=handler" in debugs, debugs
+
+    def test_enable_toggle_off_emits_named_debug_event(self, panel, isolated_config, caplog):
+        """Toggling denoising off emits denoising_toggle: enabled=False source=handler."""
+        with caplog.at_level(logging.DEBUG, logger=FP_LOG):
+            panel._on_noise_filter_toggled(0)
+        debugs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == FP_LOG and r.levelno == logging.DEBUG
+        ]
+        assert "denoising_toggle: enabled=False source=handler" in debugs, debugs
+
+    def test_auto_disable_on_emits_named_debug_event(self, panel, isolated_config, caplog):
+        """Toggling auto-disable on emits denoising_auto_disable_toggle: auto_disable=True."""
+        with caplog.at_level(logging.DEBUG, logger=FP_LOG):
+            panel._on_denoising_auto_disable_toggled(2)
+        debugs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == FP_LOG and r.levelno == logging.DEBUG
+        ]
+        assert (
+            "denoising_auto_disable_toggle: auto_disable=True source=handler" in debugs
+        ), debugs
+
+    def test_auto_disable_off_emits_named_debug_event(self, panel, isolated_config, caplog):
+        """Toggling auto-disable off emits denoising_auto_disable_toggle: auto_disable=False."""
+        with caplog.at_level(logging.DEBUG, logger=FP_LOG):
+            panel._on_denoising_auto_disable_toggled(0)
+        debugs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == FP_LOG and r.levelno == logging.DEBUG
+        ]
+        assert (
+            "denoising_auto_disable_toggle: auto_disable=False source=handler" in debugs
+        ), debugs
+
+    def test_toggle_events_quiet_at_info(self, panel, isolated_config, caplog):
+        """Per-toggle detail stays DEBUG: nothing at INFO or above on the toggle path."""
+        with caplog.at_level(logging.INFO, logger=FP_LOG):
+            panel._on_noise_filter_toggled(2)
+            panel._on_noise_filter_toggled(0)
+            panel._on_denoising_auto_disable_toggled(2)
+            panel._on_denoising_auto_disable_toggled(0)
+        loud = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == FP_LOG and r.levelno >= logging.INFO
+        ]
+        assert loud == [], loud
 
 
 # ---------------------------------------------------------------------------

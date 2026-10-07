@@ -335,7 +335,7 @@ class TestSettingsPanelLogging:
             panel._on_waveform_toggled(0)  # unchecked
             panel._on_cc_auto_open_toggled(2)
         debug_msgs = _debug(caplog, FP_LOG)
-        assert any(m == "noise_filter_set: enabled=True" for m in debug_msgs), debug_msgs
+        assert any(m == "denoising_toggle: enabled=True source=handler" for m in debug_msgs), debug_msgs
         assert any(m == "waveform_set: enabled=False" for m in debug_msgs), debug_msgs
         assert any(m == "cc_auto_open_set: enabled=True" for m in debug_msgs)
 
