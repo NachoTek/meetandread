@@ -20,6 +20,7 @@ Seams covered here:
    runs before the preempted job.
 """
 
+import itertools
 import threading
 import time
 from pathlib import Path
@@ -84,6 +85,11 @@ def _make_queue(
     return queue
 
 
+# Shared monotonic witness for cross-engine ordering: a clock sample can tie
+# on coarse runners (issue #128), a sequence number never does.
+_CALL_SEQ = itertools.count()
+
+
 class FakeEngine:
     """Engine fake that records per-window calls and runs an optional hook.
 
@@ -94,12 +100,12 @@ class FakeEngine:
 
     def __init__(self, on_chunk=None):
         self.calls: List[int] = []
-        self.first_call_at: Optional[float] = None
+        self.first_seq: Optional[int] = None
         self.on_chunk = on_chunk
 
     def transcribe_chunk(self, audio, word_level=False):
-        if self.first_call_at is None:
-            self.first_call_at = time.monotonic()
+        if self.first_seq is None:
+            self.first_seq = next(_CALL_SEQ)
         index = len(self.calls) + 1
         self.calls.append(len(audio))
         if self.on_chunk is not None:
@@ -473,9 +479,9 @@ class TestWorkerPreemptionEndToEnd:
             assert _wait_for(done.is_set), f"jobs did not complete: {completed}"
 
             # The Retry ran first (front lane) — before A ever started.
-            assert engine_b.first_call_at is not None
-            assert engine_a.first_call_at is not None
-            assert engine_b.first_call_at < engine_a.first_call_at
+            assert engine_b.first_seq is not None
+            assert engine_a.first_seq is not None
+            assert engine_b.first_seq < engine_a.first_seq
 
             # A was preempted after its second window and re-ran from scratch.
             assert preempt_results == [True]
