@@ -12,7 +12,7 @@ Proves:
 9. Processor emits no SegmentResult on TranscriptionError.
 10. Processor increments transcription count on both success and error.
 11. Error messages are sanitized (no filesystem paths leaked in typed result).
-12. _categorize_error sanitizes long messages.
+12. _categorize_error returns fixed category text — never an exception echo (issue #130).
 """
 
 import logging
@@ -200,8 +200,9 @@ class TestEngineReturnsError:
         result = engine.transcribe_chunk(_audio())
         assert isinstance(result, TranscriptionError)
         assert result.error_type == 'model_error'
-        # Message is bounded (truncated to 120 chars max) and typed
-        assert len(result.message) <= 123
+        # Message is the fixed category text — never the exception echo
+        # (issue #130); it cannot grow with exception size at all.
+        assert len(result.message) <= 60
 
     def test_oom_error_categorized(self):
         """OOM-related exceptions map to 'oom' error_type."""
@@ -268,33 +269,35 @@ class TestEngineReturnsError:
 # ===========================================================================
 
 class TestCategorizeError:
-    """_categorize_error produces sanitized error types and messages."""
+    """_categorize_error produces typed categories and fixed messages."""
 
-    def test_long_message_truncated(self):
-        """Messages longer than 120 chars are truncated."""
+    def test_long_message_not_echoed(self):
+        """The exception text never appears in the message, however long
+        (issue #130: truncation was not sanitization)."""
         long_msg = "A" * 200
         error_type, message = WhisperTranscriptionEngine._categorize_error(
             RuntimeError(long_msg)
         )
-        assert len(message) <= 123  # 117 + '...'
-        assert message.endswith('...')
+        assert error_type == 'model_error'
+        assert "A" * 10 not in message
+        assert message == 'Model error during transcription'
 
-    def test_short_message_preserved(self):
-        """Short messages are preserved as-is."""
+    def test_short_message_not_echoed(self):
+        """Even short exception text is replaced by the category text."""
         error_type, message = WhisperTranscriptionEngine._categorize_error(
             RuntimeError("short error")
         )
-        assert message == "short error"
+        assert error_type == 'model_error'
+        assert message == 'Model error during transcription'
+        assert 'short error' not in message
 
-    def test_oom_sanitized_message(self):
-        """OOM error has generic message, not the raw exception text."""
+    def test_crlf_in_exception_neutralized(self):
+        """CR/LF in the exception cannot reach the typed message."""
         error_type, message = WhisperTranscriptionEngine._categorize_error(
-            MemoryError("CUDA out of memory: tried to allocate 2.00 GiB")
+            RuntimeError("crash now\r\n2000-01-01 - INFO - FORGED")
         )
-        assert error_type == 'oom'
-        assert 'Out of memory' in message
-        # Should not include raw details like "2.00 GiB"
-        assert 'GiB' not in message
+        assert message == 'Model error during transcription'
+        assert '\r' not in message and '\n' not in message
 
 
 # ===========================================================================
@@ -561,7 +564,8 @@ class TestErrorSanitization:
     """Error messages must not leak filesystem paths or model internals."""
 
     def test_error_message_excludes_temp_path(self):
-        """TranscriptionError message is bounded; temp-related errors get temp_file_error type."""
+        """Temp-related errors get temp_file_error type and fixed text —
+        the exception's path-bearing payload is never echoed (issue #130)."""
         engine = _make_engine_loaded()
         # Simulate an error that includes a temp file path
         engine._model.transcribe.side_effect = RuntimeError(
@@ -572,8 +576,10 @@ class TestErrorSanitization:
         assert isinstance(result, TranscriptionError)
         # 'tmp' in message triggers temp_file_error categorization
         assert result.error_type == 'temp_file_error'
-        # Message is bounded
-        assert len(result.message) <= 123
+        # Message is fixed category text — no path fragment survives
+        assert result.message == 'Temporary audio file could not be written or read'
+        assert '/tmp/' not in result.message
+        assert 'tmpXabc123' not in result.message
 
     def test_oom_error_has_generic_message(self):
         """OOM TranscriptionError has a generic message, not raw GPU details."""

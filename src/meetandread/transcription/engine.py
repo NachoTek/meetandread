@@ -63,11 +63,20 @@ class TranscriptionError:
     Categorizes model failures so callers can distinguish errors from
     genuine silence.  ``error_type`` is a short machine-readable token:
     ``'oom'``, ``'temp_file_error'``, or ``'model_error'``.
-    ``message`` is sanitized (no filesystem paths, model internals, or
-    audio content).
+    ``message`` is the fixed human-readable text for that category —
+    never exception-derived text, which can embed filesystem paths,
+    recording titles, or transcript fragments (issue #130).
     """
     error_type: str
     message: str
+
+
+def safe_log_value(value: str) -> str:
+    """Neutralize CR/LF so no interpolated log field can forge
+    multiline log records (issue #130). Applied defensively at the
+    transcription error-log boundaries.
+    """
+    return value.replace('\r', ' ').replace('\n', ' ')
 
 
 # Union type for transcription results
@@ -495,12 +504,14 @@ class WhisperTranscriptionEngine:
 
         except Exception as e:
             error_type, message = self._categorize_error(e)
-            # The typed message is exception-derived and can embed paths or
-            # transcript fragments — log the category only; detail travels
-            # in the returned TranscriptionError, never in the log stream.
+            # Named event with safe fields only (issue #130): typed
+            # category and error class — never exception-derived text,
+            # which can embed paths, titles, or transcript fragments.
+            # safe_log_value guards against CR/LF forging multiline
+            # records even if a subclass returns an exotic token.
             logger.error(
                 "engine_transcription_error: error_type=%s error_class=%s",
-                error_type, type(e).__name__,
+                safe_log_value(error_type), safe_log_value(type(e).__name__),
             )
             return TranscriptionError(error_type=error_type, message=message)
 
@@ -519,9 +530,12 @@ class WhisperTranscriptionEngine:
     def _categorize_error(exc: Exception) -> Tuple[str, str]:
         """Categorize a transcription exception into a typed error.
 
-        Returns (error_type, sanitized_message) where error_type is one of
-        'oom', 'temp_file_error', or 'model_error'. The message is truncated
-        and stripped of filesystem paths or model internals.
+        Returns (error_type, message) where error_type is one of 'oom',
+        'temp_file_error', or 'model_error'. The message is the FIXED
+        text for the category — the exception's own text is never
+        echoed: it can embed filesystem paths, recording titles, or
+        transcript fragments, and truncation does not make it safe
+        (issue #130).
         """
         msg = str(exc).strip()
         lower = msg.lower()
@@ -535,13 +549,10 @@ class WhisperTranscriptionEngine:
         if isinstance(exc, (OSError, wave.Error)) or any(
             tok in lower for tok in ('wav', 'temp', 'temporary file', 'no such file')
         ):
-            # Sanitize: remove any file paths from the message
-            sanitized = msg if len(msg) <= 120 else msg[:117] + '...'
-            return 'temp_file_error', sanitized
+            return 'temp_file_error', 'Temporary audio file could not be written or read'
 
-        # Generic model error — sanitize message
-        sanitized = msg if len(msg) <= 120 else msg[:117] + '...'
-        return 'model_error', sanitized
+        # Generic model error
+        return 'model_error', 'Model error during transcription'
     
     def _normalize_confidence(self, avg_log_prob: float) -> int:
         """Convert Whisper's avg_log_prob to 0-100 scale.

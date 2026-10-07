@@ -25,6 +25,7 @@ from dataclasses import dataclass  # noqa: E402
 from datetime import datetime  # noqa: E402
 from queue import Queue, Empty  # noqa: E402
 
+from meetandread.transcription.engine import safe_log_value  # noqa: E402
 from meetandread.transcription.vad import VoiceActivityDetector, VADStats  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -244,10 +245,12 @@ class AccumulatingTranscriptionProcessor:
                 vad_is_speech = vad_result.is_speech
             except Exception as exc:
                 # VAD must never raise into the audio callback.
-                # Fall back to energy-based decision.
+                # Fall back to energy-based decision. The exception
+                # payload can embed arbitrary values — log the error
+                # class only (issue #130).
                 logger.warning(
-                    "VAD exception in feed_audio, falling back to energy: %s: %s",
-                    type(exc).__name__, exc,
+                    "vad_exception_fallback: error_class=%s fallback=energy",
+                    safe_log_value(type(exc).__name__),
                 )
                 if len(audio_chunk) > 0:
                     energy = float(np.sqrt(np.mean(audio_chunk.astype(np.float64) ** 2)))
@@ -383,7 +386,7 @@ class AccumulatingTranscriptionProcessor:
             except Exception as exc:
                 logger.error(
                     "transcription_loop_error: error_class=%s",
-                    type(exc).__name__,
+                    safe_log_value(type(exc).__name__),
                 )
                 _time.sleep(0.5)
         
@@ -444,12 +447,12 @@ class AccumulatingTranscriptionProcessor:
             from meetandread.transcription.engine import TranscriptionError
 
             if isinstance(result, TranscriptionError):
-                # The typed message is exception-derived and can embed paths
-                # or transcript fragments — log the category only; never log
-                # audio content or transcript text.
+                # Named event with safe fields only (issue #130): the
+                # typed category — never result.message, which downstream
+                # callers may construct from exception-derived text.
                 logger.error(
                     "transcription_pass_failed: error_type=%s",
-                    result.error_type,
+                    safe_log_value(result.error_type),
                 )
                 # Do NOT emit any SegmentResult on error
                 return
@@ -534,10 +537,12 @@ class AccumulatingTranscriptionProcessor:
                 )
                 
         except Exception as exc:
-            # Exception payloads can embed paths or model internals —
-            # log the class only (typed detail travels via TranscriptionError).
+            # Exception payloads can embed paths, titles, or transcript
+            # fragments — log the class only (issue #130); typed detail
+            # travels via TranscriptionError.
             logger.error(
-                "transcription_pass_failed: error_class=%s", type(exc).__name__
+                "transcription_pass_failed: error_class=%s",
+                safe_log_value(type(exc).__name__),
             )
     
     def get_results(self) -> List[SegmentResult]:
