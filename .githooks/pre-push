@@ -1,23 +1,51 @@
 #!/bin/sh
-# pre-push hook: run the test suite against the real Windows native binaries
-# before pushing. See docs/adr/0001-test-execution-topology.md.
+# pre-push hook: mirror the CI fast lane against the central Windows venv
+# before pushing. See docs/adr/0001-test-execution-topology.md and #144.
 #
 # This hook is versioned under .githooks/. Activate it in a fresh clone with:
 #   git config core.hooksPath .githooks
 #
-# The product is a Windows app, so the authoritative pass runs under the
-# project's Windows venv (invoked via WSL interop from a Linux/WSL shell).
+# The interpreter resolves worktree-safely to the central venv in the MAIN
+# checkout (git rev-parse --git-common-dir works from any linked worktree),
+# while the tests run against the CURRENT checkout being pushed.
 # Override the interpreter:   WIN_PY=/path/to/python.exe
+# Deselect known flakes:      PRE_PUSH_DESELECT="path::test nodeid ..."
+#                             (space-separated, e.g. #149 while it is open)
 # Skip entirely:              git push --no-verify
 
-WIN_PY="${WIN_PY:-.venv/Scripts/python.exe}"
+MAIN_REPO=$(git rev-parse --path-format=absolute --git-common-dir)
+MAIN_REPO=${MAIN_REPO%/.git}
+WIN_PY="${WIN_PY:-$MAIN_REPO/.venv/Scripts/python.exe}"
 
-echo "Running pre-push test suite under $WIN_PY (ADR 0001)..."
+echo "pre-push: interpreter = $WIN_PY"
+echo "pre-push: running CI fast lane (-n auto -x, not slow, not requires_qt_widgets)..."
 
-# -x stops on first failure for speed.
-result=$(timeout 240 "$WIN_PY" -m pytest -m "not slow" --tb=line -q -x \
-    --timeout=60 -p no:qt 2>&1)
+# Fail closed if the interpreter is missing (e.g. unprovisioned clone).
+if [ ! -f "$WIN_PY" ]; then
+    echo "BLOCKED: interpreter not found: $WIN_PY"
+    echo "Provision the venv (see docs/adr/0001-test-execution-topology.md)"
+    echo "or set WIN_PY to a valid Windows python.exe."
+    exit 1
+fi
+
+# timeout 1500 = 25 min wrapper: ~10 min suite + 2.5x headroom so a hung
+# suite fails the push instead of hanging forever.
+DESELECT_ARGS=""
+for nodeid in ${PRE_PUSH_DESELECT:-}; do
+    DESELECT_ARGS="$DESELECT_ARGS --deselect=$nodeid"
+done
+
+result=$(timeout 1500 "$WIN_PY" -m pytest -n auto -x \
+    -m "not slow and not requires_qt_widgets" \
+    --tb=line -q --timeout=300 -p no:qt $DESELECT_ARGS 2>&1)
 exit_code=$?
+
+# Wrapper-timeout kill: no summary at all -> fail closed, do not allow.
+if [ $exit_code -eq 124 ] || [ $exit_code -eq 137 ]; then
+    echo "$result" | tail -5
+    echo "BLOCKED: test run timed out after 1500s (exit $exit_code)."
+    exit 1
+fi
 
 echo "$result" | tail -5
 
@@ -28,8 +56,15 @@ if [ $exit_code -ne 0 ]; then
         echo "BLOCKED: Test failures detected. Fix before pushing."
         exit 1
     fi
-    # No "failed" in output — teardown-only crash, allow push
-    echo "Tests passed (ignoring PyQt6 teardown exit code)"
+    if echo "$result" | grep -q "passed"; then
+        echo "Tests passed (ignoring PyQt6 teardown exit code)"
+    else
+        # Non-zero with neither "failed" nor "passed" (collection error,
+        # crash): fail closed.
+        echo ""
+        echo "BLOCKED: test run exited $exit_code with no passing summary."
+        exit 1
+    fi
 fi
 
 echo "OK: All tests pass"
