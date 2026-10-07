@@ -161,7 +161,7 @@ class TestSpeakerMatchesMetadata:
     def test_result_without_succeeded_attribute_returns_empty(self, tmp_path: Path):
         """Defensive: object with missing 'succeeded' attribute returns {}."""
         ctrl = _make_controller_with_store(tmp_path)
-        ctrl._last_diarization_result = object()
+        ctrl._last_diarization_result = object()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert ctrl._speaker_matches_metadata() == {}
 
 

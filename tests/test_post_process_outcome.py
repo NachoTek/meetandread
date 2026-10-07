@@ -54,7 +54,7 @@ def _store_with_words(*texts: str, speaker_id=None) -> TranscriptStore:
     return store
 
 
-def _make_queue(tmp_path: Path, monkeypatch, settings: AppSettings = None):
+def _make_queue(tmp_path: Path, monkeypatch, settings: AppSettings = None):  # pyright: ignore[reportArgumentType]  # intentional mock seam
     """Construct a queue whose persistence file lands in *tmp_path*."""
     data = tmp_path / "queue-data"
     data.mkdir(exist_ok=True)
@@ -180,7 +180,7 @@ class TestFailedJobWritesOutcome:
         assert outcome is not None
         assert outcome.status == transcript_footer.STATUS_FAILED
         assert outcome.stage == transcript_footer.STAGE_ENGINE_LOAD
-        assert "torch not available" in outcome.error
+        assert "torch not available" in outcome.error  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
         assert outcome.attempted_at
 
     @patch.object(PostProcessingQueue, "_get_or_create_engine")
@@ -205,7 +205,7 @@ class TestFailedJobWritesOutcome:
         outcome = _read_outcome(tmp_path / "recording_job-1.md")
         assert outcome is not None
         assert outcome.stage == transcript_footer.STAGE_TRANSCRIBE
-        assert "out of memory" in outcome.error
+        assert "out of memory" in outcome.error  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
 
     def test_missing_audio_stage(self, tmp_path, monkeypatch):
         queue = _make_queue(tmp_path, monkeypatch)

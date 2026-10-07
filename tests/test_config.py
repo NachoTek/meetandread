@@ -787,7 +787,7 @@ class TestConfigIntegration:
         # Reset singleton and module-level instance
         ConfigManager._instance = None
         ConfigManager._initialized = False
-        manager_module._config_manager = None
+        manager_module._config_manager = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         
         # Create persistence first
         persistence = SettingsPersistence(config_dir=temp_config_dir)
@@ -796,7 +796,7 @@ class TestConfigIntegration:
         cm = ConfigManager(persistence=persistence)
         
         # Also set the module-level reference
-        manager_module._config_manager = cm
+        manager_module._config_manager = cm  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         
         # Use convenience functions
         assert get_config("transcription.realtime_model_size") == "tiny"
@@ -1000,7 +1000,7 @@ class TestStoragePaths:
 
     def test_from_dict_non_dict(self):
         """Non-dict input returns defaults."""
-        sp = StoragePaths.from_dict("not a dict")
+        sp = StoragePaths.from_dict("not a dict")  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert sp.transcripts_path is None
 
     def test_roundtrip(self):

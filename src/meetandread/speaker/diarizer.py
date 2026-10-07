@@ -425,11 +425,13 @@ class Diarizer:
         wav_path = Path(wav_path)
         t0 = time.monotonic()
 
-        try:
-            import subprocess
-            import json
-            import struct
+        # Module-level imports kept local so a missing stdlib dep can't
+        # break import of the diarizer class itself.
+        import subprocess
+        import json
+        import struct
 
+        try:
             # Ensure models are downloaded before spawning subprocess
             self._ensure_initialized()
 

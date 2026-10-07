@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -97,10 +98,10 @@ def _orthogonal_embedding(
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def store() -> VoiceSignatureStore:
+@pytest.fixture  # pyright: ignore[reportInvalidTypeForm]  # intentional mock seam
+def store() -> Iterator[VoiceSignatureStore]:
     """In-memory store, auto-closed after each test."""
-    with VoiceSignatureStore(":memory:") as s:
+    with VoiceSignatureStore(":memory:") as s:  # pyright: ignore[reportReturnType]  # intentional mock seam
         yield s
 
 
@@ -257,12 +258,12 @@ class TestMultiSpeakerDiscrimination:
 
     NUM_SPEAKERS = 5
 
-    @pytest.fixture
-    def multi_store(self) -> VoiceSignatureStore:
+    @pytest.fixture  # pyright: ignore[reportInvalidTypeForm]  # intentional mock seam
+    def multi_store(self) -> Iterator[VoiceSignatureStore]:
         """Store pre-loaded with 5 distinct speakers."""
         with VoiceSignatureStore(":memory:") as s:
             for i in range(self.NUM_SPEAKERS):
-                s.save_signature(f"speaker_{i}", _random_embedding(seed=i * 100))
+                s.save_signature(f"speaker_{i}", _random_embedding(seed=i * 100))  # pyright: ignore[reportReturnType]  # intentional mock seam
             yield s
 
     def test_all_speakers_correctly_identified(

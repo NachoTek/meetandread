@@ -63,7 +63,7 @@ def get_default_loopback_device() -> Optional[Dict[str, Any]]:
         return None
 
     try:
-        with _paw.PyAudio() as pa:
+        with _paw.PyAudio() as pa:  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH above
             info = pa.get_default_wasapi_loopback()
             if info is not None:
                 logger.info(
@@ -233,7 +233,7 @@ def list_loopback_outputs() -> List[Dict[str, Any]]:
     if _HAS_PYAUDIOWPATCH:
         try:
             loopback_devices = []
-            with _paw.PyAudio() as pa:
+            with _paw.PyAudio() as pa:  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH above
                 for dev_info in pa.get_loopback_device_info_generator():
                     device = dict(dev_info)
                     device['loopback_ok'] = True

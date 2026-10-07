@@ -691,7 +691,7 @@ class TestRetranscribeSpeakerIdentification:
         assert words[1].speaker_id == "Alice"
         # Verify speaker_matches metadata was stored
         assert hasattr(result_store, "_speaker_matches")
-        assert result_store._speaker_matches["spk0"]["identity_name"] == "Alice"
+        assert result_store._speaker_matches["spk0"]["identity_name"] == "Alice"  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     def test_speaker_id_diarization_failure_returns_unchanged(self, settings):
         """If diarization fails, return store with no speaker labels."""
@@ -811,8 +811,8 @@ class TestRetranscribeSpeakerIdentification:
         words = result_store.get_all_words()
         assert words[0].speaker_id == "Commercial Guy"
         assert words[1].speaker_id == "Commercial Guy"
-        assert result_store._speaker_matches["spk0"]["identity_name"] == "Commercial Guy"
-        assert result_store._speaker_matches["spk0"]["confidence"] == "carried"
+        assert result_store._speaker_matches["spk0"]["identity_name"] == "Commercial Guy"  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert result_store._speaker_matches["spk0"]["confidence"] == "carried"  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     def test_speaker_id_carries_forward_with_integer_labels(self, settings, tmp_path):
         """Carry-forward works when diarizer returns integer speaker labels."""
@@ -826,12 +826,12 @@ class TestRetranscribeSpeakerIdentification:
         # sherpa-onnx returns integer speaker labels
         result = DiarizationResult(
             segments=[
-                SpeakerSegment(start=0.0, end=2.0, speaker=0),
+                SpeakerSegment(start=0.0, end=2.0, speaker=0),  # pyright: ignore[reportArgumentType]  # intentional mock seam
             ],
             signatures={
-                0: VoiceSignature(
+                0: VoiceSignature(  # pyright: ignore[reportArgumentType]  # intentional mock seam
                     embedding=np.random.rand(256).astype(np.float32),
-                    speaker_label=0,
+                    speaker_label=0,  # pyright: ignore[reportArgumentType]  # intentional mock seam
                     num_segments=1,
                 ),
             },

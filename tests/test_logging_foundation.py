@@ -444,7 +444,7 @@ class TestTranscriptLeakCanaries:
         controller_self = SimpleNamespace(
             _try_live_speaker_match=lambda: None,
             _segment_to_words=(
-                lambda result: RecordingController._segment_to_words(None, result)
+                lambda result: RecordingController._segment_to_words(None, result)  # pyright: ignore[reportArgumentType]  # intentional mock seam
             ),
             _transcript_store=SimpleNamespace(
                 get_word_count=lambda: 0,
@@ -455,7 +455,7 @@ class TestTranscriptLeakCanaries:
         )
 
         RecordingController._on_phrase_result(
-            controller_self, self._make_canary_result()
+            controller_self, self._make_canary_result()  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
         content = self._capture_log_content(tmp_path)
@@ -477,7 +477,7 @@ class TestTranscriptLeakCanaries:
         )
 
         MeetAndReadWidget._on_phrase_result(
-            widget_self, self._make_canary_result()
+            widget_self, self._make_canary_result()  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
         content = self._capture_log_content(tmp_path)

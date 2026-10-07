@@ -148,10 +148,10 @@ class TestPendingJobQueueOrdering:
         q = _PendingJobQueue()
         back_a, front_a, front_b, back_b = "back-a", "front-a", "front-b", "back-b"
 
-        q.put(back_a)
-        q.put_front(front_a)
-        q.put_front(front_b)
-        q.put(back_b)
+        q.put(back_a)  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        q.put_front(front_a)  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        q.put_front(front_b)  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        q.put(back_b)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert q.get(timeout=0.1) is front_a
         assert q.get(timeout=0.1) is front_b
@@ -165,8 +165,8 @@ class TestPendingJobQueueOrdering:
     def test_front_lane_is_fifo(self):
         """Two Retries queued at the front keep their schedule order."""
         q = _PendingJobQueue()
-        q.put_front("r1")
-        q.put_front("r2")
+        q.put_front("r1")  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        q.put_front("r2")  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert q.get(timeout=0.1) == "r1"
         assert q.get(timeout=0.1) == "r2"
 
@@ -174,9 +174,9 @@ class TestPendingJobQueueOrdering:
         """Retry enqueued at the front while a job is being preempted lands
         AHEAD of the preempted job (which re-enters the front lane later)."""
         q = _PendingJobQueue()
-        q.put("backlog")
-        q.put_front("retry")  # Retry scheduled while A is still RUNNING
-        q.put_front("preempted-a")  # A lands in the front lane afterwards
+        q.put("backlog")  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        q.put_front("retry")  # Retry scheduled while A is still RUNNING  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        q.put_front("preempted-a")  # A lands in the front lane afterwards  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert q.get(timeout=0.1) == "retry"
         assert q.get(timeout=0.1) == "preempted-a"
@@ -198,7 +198,7 @@ def _job(tmp_path: Path, status=PostProcessStatus.PENDING, **kwargs) -> PostProc
         status=status,
     )
     defaults.update(kwargs)
-    return PostProcessJob(**defaults)
+    return PostProcessJob(**defaults)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
 
 class TestPreemptJob:
@@ -326,7 +326,7 @@ class TestTranscribeSegmented:
         audio = np.zeros(16000, dtype=np.float32)  # 1s — well under one window
         job = _job(Path("."))
 
-        segments = queue._transcribe_audio_segmented(engine, audio, job)
+        segments = queue._transcribe_audio_segmented(engine, audio, job)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert len(engine.calls) == 1
         assert segments[0].start == 0.0
@@ -337,7 +337,7 @@ class TestTranscribeSegmented:
         audio = self._audio(queue, windows=3)
         job = _job(Path("."))
 
-        segments = queue._transcribe_audio_segmented(engine, audio, job)
+        segments = queue._transcribe_audio_segmented(engine, audio, job)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert len(engine.calls) == 3
         # Window 2 starts at TRANSCRIBE_WINDOW_SECONDS; the engine's
@@ -362,7 +362,7 @@ class TestTranscribeSegmented:
         audio = self._audio(queue, windows=4)
 
         with pytest.raises(_JobPreempted):
-            queue._transcribe_audio_segmented(engine, audio, job)
+            queue._transcribe_audio_segmented(engine, audio, job)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         # Preempt honored after the in-flight window completed: within one
         # segment of the request, not after the whole audio.
@@ -381,7 +381,7 @@ class TestTranscribeSegmented:
         audio = self._audio(queue, windows=3)
 
         with pytest.raises(_JobCancelled):
-            queue._transcribe_audio_segmented(engine, audio, job)
+            queue._transcribe_audio_segmented(engine, audio, job)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert len(engine.calls) == 1
 
@@ -396,9 +396,9 @@ class TestTranscribeSegmented:
 
         with pytest.raises(Exception) as excinfo:
             queue._transcribe_audio_segmented(
-                BrokenEngine(), np.zeros(16000, dtype=np.float32), _job(Path("."))
+                BrokenEngine(), np.zeros(16000, dtype=np.float32), _job(Path("."))  # pyright: ignore[reportArgumentType]  # intentional mock seam
             )
-        assert excinfo.value.stage == transcript_footer.STAGE_TRANSCRIBE
+        assert excinfo.value.stage == transcript_footer.STAGE_TRANSCRIBE  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
     def test_progress_advances_within_transcribe_band(self):
         progress: List[int] = []
@@ -409,7 +409,7 @@ class TestTranscribeSegmented:
         audio = self._audio(queue, windows=2)
         job = _job(Path("."))
 
-        queue._transcribe_audio_segmented(engine, audio, job)
+        queue._transcribe_audio_segmented(engine, audio, job)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert progress  # progress reported between windows
         assert all(35 <= p <= 80 for p in progress)
@@ -447,9 +447,9 @@ class TestWorkerPreemptionEndToEnd:
 
         engine_a = FakeEngine(on_chunk=on_chunk_a)
         engine_b = FakeEngine()
-        queue._engines["base"] = engine_a
-        queue._engines["small"] = engine_b
-        queue._load_audio_file = lambda path: np.zeros(
+        queue._engines["base"] = engine_a  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        queue._engines["small"] = engine_b  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        queue._load_audio_file = lambda path: np.zeros(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             windows * _window_samples(queue), dtype=np.float32
         )
 
@@ -518,8 +518,8 @@ class TestWorkerPreemptionEndToEnd:
                 second_attempt_preempt.append(queue.preempt_job(job_a_ref["id"]))
 
         engine_a = FakeEngine(on_chunk=on_chunk_a)
-        queue._engines["base"] = engine_a
-        queue._load_audio_file = lambda path: np.zeros(
+        queue._engines["base"] = engine_a  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        queue._load_audio_file = lambda path: np.zeros(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             windows * _window_samples(queue), dtype=np.float32
         )
 
@@ -555,8 +555,8 @@ class TestWorkerPreemptionEndToEnd:
                 queue.cancel_current_job(reason="test cancel")
 
         engine_a = FakeEngine(on_chunk=on_chunk)
-        queue._engines["base"] = engine_a
-        queue._load_audio_file = lambda path: np.zeros(
+        queue._engines["base"] = engine_a  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        queue._load_audio_file = lambda path: np.zeros(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             3 * _window_samples(queue), dtype=np.float32
         )
 
@@ -598,8 +598,8 @@ class TestWorkerPreemptionEndToEnd:
                 release_second_run.wait(timeout=10)
 
         engine_a = FakeEngine(on_chunk=on_chunk)
-        queue._engines["base"] = engine_a
-        queue._load_audio_file = lambda path: np.zeros(
+        queue._engines["base"] = engine_a  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        queue._load_audio_file = lambda path: np.zeros(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             windows * _window_samples(queue), dtype=np.float32
         )
 
@@ -669,8 +669,8 @@ class TestWorkerPreemptionEndToEnd:
         queue = _make_queue(tmp_path, monkeypatch, is_recording=gate)
         windows = 2
         engine = FakeEngine()
-        queue._engines["base"] = engine
-        queue._load_audio_file = lambda path: np.zeros(
+        queue._engines["base"] = engine  # pyright: ignore[reportArgumentType]  # intentional mock seam
+        queue._load_audio_file = lambda path: np.zeros(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             windows * _window_samples(queue), dtype=np.float32
         )
 

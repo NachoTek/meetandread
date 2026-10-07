@@ -57,8 +57,8 @@ class TestOutcomeBlockRoundTrip:
         decoded = transcript_footer.outcome_from_block(outcome.to_block())
 
         assert decoded == outcome
-        assert decoded.stage == transcript_footer.STAGE_TRANSCRIBE
-        assert "boom" in decoded.error
+        assert decoded.stage == transcript_footer.STAGE_TRANSCRIBE  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
+        assert "boom" in decoded.error  # pyright: ignore[reportOperatorIssue, reportOptionalMemberAccess]  # intentional mock seam
 
     def test_completed_block_has_no_error(self):
         block = _completed().to_block()

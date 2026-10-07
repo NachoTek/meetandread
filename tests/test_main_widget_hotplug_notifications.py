@@ -43,9 +43,9 @@ class FakeToastManager:
 
 def widget_shell():
     widget = MeetAndReadWidget.__new__(MeetAndReadWidget)
-    widget.toast_manager = FakeToastManager()
+    widget.toast_manager = FakeToastManager()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     widget._recovery_toast_id = "recording-device-recovery"
-    widget._controller = None
+    widget._controller = None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return widget
 
 
@@ -71,7 +71,7 @@ def test_device_disconnect_notification_is_persistent_stable_toast(qapp):
 
     widget._on_device_changed(event)
 
-    toast = widget.toast_manager.shown[-1]
+    toast = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert toast["toast_id"] == "recording-device-recovery"
     assert toast["title"] == "Recording device disconnected"
     assert "disconnected" in toast["message"]
@@ -98,7 +98,7 @@ def test_recovery_outcome_notifications(
 
     widget._on_recovery_attempted(result)
 
-    toast = widget.toast_manager.shown[-1]
+    toast = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert toast["toast_id"] == "recording-device-recovery"
     assert toast["title"] == title
     assert expected_fragment in toast["message"]
@@ -114,4 +114,4 @@ def test_ignored_recovery_outcome_is_silent(qapp):
 
     widget._on_recovery_attempted(result)
 
-    assert widget.toast_manager.shown == []
+    assert widget.toast_manager.shown == []  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam

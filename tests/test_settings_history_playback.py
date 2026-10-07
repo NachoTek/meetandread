@@ -209,7 +209,7 @@ class TestCircularPlaybackControlStructure:
 
     @pytest.mark.skip(reason="References removed widget - needs update for new toolbar")
     def test_playback_control_is_graphics_view(self, settings_panel):
-        from meetandread.widgets.playback_control import CircularPlaybackControl
+        from meetandread.widgets.playback_control import CircularPlaybackControl  # pyright: ignore[reportMissingImports]  # module removed; test is skipped pending toolbar redesign
         assert isinstance(settings_panel._playback_control, CircularPlaybackControl)
 
     @pytest.mark.skip(reason="References removed widget - needs update for new toolbar")
@@ -450,7 +450,7 @@ class TestPlaybackSpeedRouting:
         _select_and_populate(panel, tmp_path, qapp)
 
         expected_rates = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-        from meetandread.widgets.playback_control import SPEED_RATES
+        from meetandread.widgets.playback_control import SPEED_RATES  # pyright: ignore[reportMissingImports]  # module removed; test is skipped pending toolbar redesign
         ctrl = panel._playback_control
         # Start from index -1 so the first step lands on 0
         ctrl._speed_index = -1
@@ -478,7 +478,7 @@ class TestPlaybackVolumeRouting:
         _select_and_populate(panel, tmp_path, qapp)
 
         # Trigger volume up via circular control
-        from meetandread.widgets.playback_control import PlaybackRegion
+        from meetandread.widgets.playback_control import PlaybackRegion  # pyright: ignore[reportMissingImports]  # module removed; test is skipped pending toolbar redesign
         panel._playback_control._handle_region_press(PlaybackRegion.VOL_UP, QPointF(0, 0))
         qapp.processEvents()
 
@@ -493,7 +493,7 @@ class TestPlaybackVolumeRouting:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        from meetandread.widgets.playback_control import PlaybackRegion
+        from meetandread.widgets.playback_control import PlaybackRegion  # pyright: ignore[reportMissingImports]  # module removed; test is skipped pending toolbar redesign
         panel._playback_control._handle_region_press(PlaybackRegion.VOL_DOWN, QPointF(0, 0))
         qapp.processEvents()
 
@@ -508,7 +508,7 @@ class TestPlaybackVolumeRouting:
 
         _select_and_populate(panel, tmp_path, qapp)
 
-        from meetandread.widgets.playback_control import PlaybackRegion
+        from meetandread.widgets.playback_control import PlaybackRegion  # pyright: ignore[reportMissingImports]  # module removed; test is skipped pending toolbar redesign
         ctrl = panel._playback_control
         # Set volume near max and step up
         ctrl._volume_val = 0.95
@@ -522,7 +522,7 @@ class TestPlaybackVolumeRouting:
 
         _select_and_populate(panel, tmp_path, qapp)
         # Circular control's helper is None when unavailable, so volume actions no-op
-        from meetandread.widgets.playback_control import PlaybackRegion
+        from meetandread.widgets.playback_control import PlaybackRegion  # pyright: ignore[reportMissingImports]  # module removed; test is skipped pending toolbar redesign
         ctrl = panel._playback_control
         # The control won't have a helper set when unavailable
         assert ctrl._helper is None or not ctrl._helper.is_audio_available
@@ -1203,7 +1203,7 @@ class TestKeyboardShortcuts:
         """Plus at max speed does not exceed bounds."""
         panel = settings_panel_on_history
         ctrl = panel._playback_control
-        from meetandread.widgets.playback_control import SPEED_RATES
+        from meetandread.widgets.playback_control import SPEED_RATES  # pyright: ignore[reportMissingImports]  # module removed; test is skipped pending toolbar redesign
         last_idx = len(SPEED_RATES) - 1
         ctrl._speed_index = last_idx
         event = self._make_key_event(Qt.Key.Key_Plus, text="+")

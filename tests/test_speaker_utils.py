@@ -128,7 +128,7 @@ class TestCosineSimilarityShapeValidation:
         a = np.float32(1.0)
         b = np.float32(1.0)
         with pytest.raises(ValueError, match="1-D"):
-            cosine_similarity(a, b)
+            cosine_similarity(a, b)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
 
 # ---------------------------------------------------------------------------

@@ -160,7 +160,7 @@ class TestSaveToFileSpeakerMatches:
         labels = {"spk_2": {"identity_name": "Carol", "score": 0.85, "confidence": "high"}}
         store = _store_with_words(("word", 0.0, 0.5, 90, "spk_2"))
         md = tmp_path / "recording.md"
-        store.save_to_file(md, speaker_matches=labels)
+        store.save_to_file(md, speaker_matches=labels)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         data = _parse_metadata_footer(md)
         assert "spk_2" in data["speaker_matches"]

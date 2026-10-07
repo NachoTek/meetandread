@@ -358,7 +358,7 @@ class TestProcessorUnwrapsSuccess:
             text="hello", confidence=85, start=0.0, end=1.0,
             words=[WordInfo(text="hello", start=0.0, end=1.0, confidence=85)],
         )
-        proc._engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[seg])
+        proc._engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[seg])  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
         # Feed some audio to the buffer
         proc._phrase_bytes = (np.zeros(16000, dtype=np.int16)).tobytes()
@@ -374,7 +374,7 @@ class TestProcessorUnwrapsSuccess:
     def test_success_empty_segments_emits_nothing(self):
         """TranscriptionSuccess with empty segments emits no SegmentResults."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
+        proc._engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
         proc._phrase_bytes = (np.zeros(16000, dtype=np.int16)).tobytes()
         proc._transcribe_accumulated(force_complete=False)
@@ -385,7 +385,7 @@ class TestProcessorUnwrapsSuccess:
     def test_transcription_count_increments_on_success(self):
         """Transcription count increments on success."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])
+        proc._engine.transcribe_chunk.return_value = TranscriptionSuccess(segments=[])  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
 
         proc._phrase_bytes = (np.zeros(16000, dtype=np.int16)).tobytes()
         initial_count = proc._transcription_count
@@ -410,7 +410,7 @@ class TestProcessorHandlesError:
     def test_error_emits_no_segment_result(self):
         """TranscriptionError produces no SegmentResults."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type='model_error', message='model crash'
         )
 
@@ -423,7 +423,7 @@ class TestProcessorHandlesError:
     def test_transcription_count_increments_on_error(self):
         """Transcription count increments even on error."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type='model_error', message='fail'
         )
 
@@ -437,7 +437,7 @@ class TestProcessorHandlesError:
         """TranscriptionError is logged with the typed category only —
         never the exception-derived message (batch D capture boundary)."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type='oom', message='Out of memory during transcription'
         )
 
@@ -462,7 +462,7 @@ class TestProcessorHandlesError:
     def test_error_no_callback_invoked(self):
         """on_result callback is NOT invoked for TranscriptionError."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type='model_error', message='fail'
         )
 
@@ -477,7 +477,7 @@ class TestProcessorHandlesError:
     def test_oom_error_emits_nothing(self):
         """OOM error specifically emits no SegmentResults."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type='oom', message='Out of memory'
         )
 
@@ -489,7 +489,7 @@ class TestProcessorHandlesError:
     def test_temp_file_error_emits_nothing(self):
         """Temp file error emits no SegmentResults."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type='temp_file_error', message='Failed to write WAV'
         )
 
@@ -501,7 +501,7 @@ class TestProcessorHandlesError:
     def test_repeated_errors_dont_flood_queue(self):
         """Multiple errors don't accumulate stale results."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type='model_error', message='fail'
         )
 

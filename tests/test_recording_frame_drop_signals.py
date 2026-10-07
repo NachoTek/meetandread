@@ -60,7 +60,7 @@ class TestControllerFrameDropCallback:
         ctrl = RecordingController(enable_transcription=False)
         received = []
         ctrl.on_frames_dropped = lambda c: received.append(c)
-        ctrl._on_session_frames_dropped(7.9)
+        ctrl._on_session_frames_dropped(7.9)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert received == [7]
 
     def test_string_count_coerced_to_zero_noop(self):
@@ -68,7 +68,7 @@ class TestControllerFrameDropCallback:
         ctrl = RecordingController(enable_transcription=False)
         received = []
         ctrl.on_frames_dropped = lambda c: received.append(c)
-        ctrl._on_session_frames_dropped("not-a-number")
+        ctrl._on_session_frames_dropped("not-a-number")  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert received == []
 
     def test_none_count_coerced_to_zero_noop(self):
@@ -76,7 +76,7 @@ class TestControllerFrameDropCallback:
         ctrl = RecordingController(enable_transcription=False)
         received = []
         ctrl.on_frames_dropped = lambda c: received.append(c)
-        ctrl._on_session_frames_dropped(None)
+        ctrl._on_session_frames_dropped(None)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert received == []
 
     def test_no_callback_set_is_safe(self):

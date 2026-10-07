@@ -102,7 +102,7 @@ def test_cli_fake_seconds_truncates_output(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
-        env={**dict(subprocess.os.environ), **env},
+        env={**dict(subprocess.os.environ), **env},  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     )
     
     # Assert CLI succeeded

@@ -602,7 +602,7 @@ def main(capture_dir: Optional[Path] = None):
     # Widget placeholder — updated after widget creation.
     # Signal handlers read this via a lambda so they always get the
     # current widget (or None if the signal arrives too early).
-    _widget_holder = [None]
+    _widget_holder: List[Optional[MeetAndReadWidget]] = [None]
 
     # Setup signal handlers for graceful Ctrl+C shutdown
     setup_signal_handlers(app, widget_ref=lambda: _widget_holder[0])

@@ -102,7 +102,7 @@ class PyAudioWPatchSource:
         self._source_label: str = "system"
 
         # Create the PyAudio instance once — terminate() in close()
-        self._pyaudio = pyaudiowpatch.PyAudio()
+        self._pyaudio = pyaudiowpatch.PyAudio()  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH
 
     # ------------------------------------------------------------------
     # Audio callback (runs on PyAudio's callback thread)
@@ -122,7 +122,7 @@ class PyAudioWPatchSource:
         block, so we use put_nowait() and silently drop on overflow.
         """
         if not self._running:
-            return (None, pyaudiowpatch.paComplete)
+            return (None, pyaudiowpatch.paComplete)  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH
 
         if status:
             # Two-tier contract: loss-type bits (discarded audio) WARN, but
@@ -149,7 +149,7 @@ class PyAudioWPatchSource:
             # Validate buffer before conversion
             expected_bytes = frame_count * self.channels * 4  # float32 = 4 bytes
             if in_data is None or len(in_data) != expected_bytes:
-                return (None, pyaudiowpatch.paContinue)
+                return (None, pyaudiowpatch.paContinue)  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH
 
             # in_data is a ctypes buffer — convert to numpy and copy
             frames = np.frombuffer(in_data, dtype=np.float32).copy()
@@ -186,7 +186,7 @@ class PyAudioWPatchSource:
             # Swallow in callback thread — never raise into PyAudio
             logger.exception("Unexpected error in PyAudioWPatch callback")
 
-        return (None, pyaudiowpatch.paContinue)
+        return (None, pyaudiowpatch.paContinue)  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH
 
     # ------------------------------------------------------------------
     # Public interface (mirrors SoundDeviceSource)
@@ -207,8 +207,8 @@ class PyAudioWPatchSource:
                 self.blocksize,
             )
             try:
-                self._stream = self._pyaudio.open(
-                    format=pyaudiowpatch.paFloat32,
+                self._stream = self._pyaudio.open(  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH
+                    format=pyaudiowpatch.paFloat32,  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH
                     channels=self.channels,
                     rate=self.samplerate,
                     input=True,
@@ -220,7 +220,7 @@ class PyAudioWPatchSource:
 
                 # Log device info for diagnostics (redacted name only)
                 if self.device_index is not None:
-                    dev_info = self._pyaudio.get_device_info_by_index(
+                    dev_info = self._pyaudio.get_device_info_by_index(  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _HAS_PYAUDIOWPATCH
                         self.device_index
                     )
                     logger.info(
@@ -344,7 +344,7 @@ class PyAudioWPatchSource:
         # Include loopback device name if available
         if _HAS_PYAUDIOWPATCH and self.device_index is not None:
             try:
-                dev_info = self._pyaudio.get_device_info_by_index(
+                dev_info = self._pyaudio.get_device_info_by_index(  # pyright: ignore[reportOptionalMemberAccess]
                     self.device_index
                 )
                 meta["loopback_device"] = dev_info.get("name", "unknown")

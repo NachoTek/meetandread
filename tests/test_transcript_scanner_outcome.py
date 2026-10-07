@@ -52,7 +52,7 @@ class TestScannerSurfacesOutcome:
 
         meta = parse_metadata(md)
 
-        assert meta.post_process_outcome == outcome
+        assert meta.post_process_outcome == outcome  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
     def test_no_outcome_is_stalled_none(self, tmp_path):
         md = write_transcript(

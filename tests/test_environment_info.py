@@ -166,9 +166,9 @@ class TestEnvironmentArtifact:
         )
         assert path == tmp_path / ENVIRONMENT_FILE_NAME
         data = read_environment_info(tmp_path)
-        assert data["app_version"] == "0.19.1"
-        assert data["os"] == "Windows"
-        assert data["hardware_class"] == "medium"
+        assert data["app_version"] == "0.19.1"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["os"] == "Windows"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert data["hardware_class"] == "medium"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
 
     def test_schema_is_exactly_the_documented_fields(self, tmp_path):
         write_environment_info(

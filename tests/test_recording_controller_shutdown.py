@@ -53,7 +53,7 @@ class FakeAudioSession:
             frames_recorded=0,
             frames_dropped=0,
             duration_seconds=0.0,
-            source_stats=[],
+            source_stats=[],  # pyright: ignore[reportArgumentType]  # intentional mock seam
         )
 
     def get_error(self):
@@ -65,7 +65,7 @@ def _make_recording_controller(tmp_path: Path) -> RecordingController:
     ctrl = RecordingController(enable_transcription=False)
     wav_path = tmp_path / "test.wav"
     wav_path.write_text("fake wav")
-    ctrl._session = FakeAudioSession(wav_path)
+    ctrl._session = FakeAudioSession(wav_path)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     ctrl._state = ControllerState.RECORDING
     return ctrl
 
@@ -400,7 +400,7 @@ class TestStopNonBlocking:
         assert ctrl.get_state() == ControllerState.IDLE
 
         # Start should work immediately
-        ctrl._session = FakeAudioSession(tmp_path / "test2.wav")
+        ctrl._session = FakeAudioSession(tmp_path / "test2.wav")  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         error = ctrl.start(
             {'fake'},
             fake_path=str(tmp_path / "test2.wav"),

@@ -136,8 +136,8 @@ class _MockQAudioOutput:
         return self._volume
 
 
-_mock_qt_multimedia.QMediaPlayer = _MockQMediaPlayer
-_mock_qt_multimedia.QAudioOutput = _MockQAudioOutput
+_mock_qt_multimedia.QMediaPlayer = _MockQMediaPlayer  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+_mock_qt_multimedia.QAudioOutput = _MockQAudioOutput  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 sys.modules.setdefault("PyQt6.QtMultimedia", _mock_qt_multimedia)
 
 try:
@@ -153,7 +153,7 @@ except ImportError:
         def fromLocalFile(cls, path):
             return cls(f"file:///{path}")
 
-    _mock_qt_core.QUrl = _MockQUrl
+    _mock_qt_core.QUrl = _MockQUrl  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     sys.modules.setdefault("PyQt6.QtCore", _mock_qt_core)
 
 from meetandread.playback.history import HistoryPlaybackController  # noqa: E402
@@ -858,7 +858,7 @@ class TestHistoryExtendedLogging:
         ctrl, _ = self._controller(tmp_path)
         with caplog.at_level(logging.DEBUG, logger=HISTORY_LOGGER):
             ctrl._on_media_status_changed(
-                _MockQMediaPlayer.MediaStatus.EndOfMedia
+                _MockQMediaPlayer.MediaStatus.EndOfMedia  # pyright: ignore[reportArgumentType]  # intentional mock seam
             )
         debugs = _debug_messages(caplog, HISTORY_LOGGER)
         assert _starts_with(debugs, "media_end_of_audio:")
@@ -869,7 +869,7 @@ class TestHistoryExtendedLogging:
         ctrl, _ = self._controller(tmp_path)
         with caplog.at_level(logging.DEBUG, logger=HISTORY_LOGGER):
             ctrl._on_playback_state_changed(
-                _MockQMediaPlayer.PlaybackState.PlayingState
+                _MockQMediaPlayer.PlaybackState.PlayingState  # pyright: ignore[reportArgumentType]  # intentional mock seam
             )
         debugs = _debug_messages(caplog, HISTORY_LOGGER)
         assert _starts_with(debugs, "playback_state_changed:")
@@ -899,10 +899,10 @@ class TestHistoryExtendedLogging:
             ctrl.load_transcript_audio(md)
             ctrl.seek_to(999999)
             ctrl._on_media_status_changed(
-                _MockQMediaPlayer.MediaStatus.EndOfMedia
+                _MockQMediaPlayer.MediaStatus.EndOfMedia  # pyright: ignore[reportArgumentType]  # intentional mock seam
             )
             ctrl._on_playback_state_changed(
-                _MockQMediaPlayer.PlaybackState.PlayingState
+                _MockQMediaPlayer.PlaybackState.PlayingState  # pyright: ignore[reportArgumentType]  # intentional mock seam
             )
             ctrl.release_source()
         msgs = _messages(caplog, HISTORY_LOGGER)
@@ -953,10 +953,10 @@ class TestHistoryExtendedLogging:
             ctrl.load_transcript_audio(md)
             ctrl.seek_to(999999)
             ctrl._on_media_status_changed(
-                _MockQMediaPlayer.MediaStatus.EndOfMedia
+                _MockQMediaPlayer.MediaStatus.EndOfMedia  # pyright: ignore[reportArgumentType]  # intentional mock seam
             )
             ctrl._on_playback_state_changed(
-                _MockQMediaPlayer.PlaybackState.PlayingState
+                _MockQMediaPlayer.PlaybackState.PlayingState  # pyright: ignore[reportArgumentType]  # intentional mock seam
             )
             ctrl.release_source()
         checked = 0

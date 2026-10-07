@@ -213,7 +213,9 @@ class ResourceMonitor:
             from PyQt6.QtCore import QTimer
         except ImportError:
             try:
-                from PyQt5.QtCore import QTimer
+                # Legacy fallback for environments without PyQt6; not
+                # installed in this project's venv (PyQt6 is the pin).
+                from PyQt5.QtCore import QTimer  # pyright: ignore[reportMissingImports]
             except ImportError:
                 logger.warning(
                     "resource_monitor_start_failed: reason=no_qt_timer "

@@ -160,8 +160,8 @@ class TestWizardHappyPath:
         assert run.outcome == RunOutcome.CRASH
         assert run.exit_code == 3
         record = read_termination_record(run.capture_dir)
-        assert record["outcome"] == "crash"
-        assert record["exit_code"] == 3
+        assert record["outcome"] == "crash"  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
+        assert record["exit_code"] == 3  # pyright: ignore[reportOptionalSubscript]  # intentional mock seam
         assert "exited unexpectedly" in out.text()
         # The capture directory (with description) survives.
         assert (run.capture_dir / "description.txt").exists()

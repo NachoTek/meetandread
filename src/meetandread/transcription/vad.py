@@ -14,7 +14,7 @@ Observability:
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -207,7 +207,7 @@ class VoiceActivityDetector:
         # Energy fallback
         return self._energy_decide(frame, chunk_start, error=None)
 
-    def _webrtc_decide(self, vad: object, frame: np.ndarray, chunk_start: float) -> VADResult:
+    def _webrtc_decide(self, vad: Any, frame: np.ndarray, chunk_start: float) -> VADResult:
         """Run WebRTC VAD on a single 480-sample frame."""
         # Clip to [-1, 1], then convert to int16 PCM
         clipped = np.clip(frame, -1.0, 1.0)
@@ -215,7 +215,7 @@ class VoiceActivityDetector:
         pcm_bytes = pcm_int16.tobytes()
 
         try:
-            is_speech = bool(vad.is_speech(pcm_bytes, _SAMPLE_RATE))
+            is_speech = bool(vad.is_speech(pcm_bytes, _SAMPLE_RATE))  # pyright: ignore[reportAttributeAccessIssue]  # duck-typed webrtcvad.Vad
         except Exception as exc:
             # WebRTC rejected the frame (e.g., wrong frame size)
             self._record_webrtc_error(exc)

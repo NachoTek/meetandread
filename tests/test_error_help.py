@@ -196,7 +196,7 @@ def test_show_error_uses_8s_timer(qtbot):
     # Mock __init__ to avoid full widget construction
     orig_init = MeetAndReadWidget.__init__
     try:
-        MeetAndReadWidget.__init__ = lambda self: None
+        MeetAndReadWidget.__init__ = lambda self: None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         widget = MeetAndReadWidget()
         widget._error_indicator = MagicMock()
         widget._error_hide_timer = None
@@ -220,7 +220,7 @@ def test_expanding_help_cancels_timer():
 
     orig_init = MeetAndReadWidget.__init__
     try:
-        MeetAndReadWidget.__init__ = lambda self: None
+        MeetAndReadWidget.__init__ = lambda self: None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         widget = MeetAndReadWidget()
         widget._error_indicator = MagicMock()
         widget._error_hide_timer = MagicMock()
@@ -239,7 +239,7 @@ def test_collapsing_help_restarts_timer():
 
     orig_init = MeetAndReadWidget.__init__
     try:
-        MeetAndReadWidget.__init__ = lambda self: None
+        MeetAndReadWidget.__init__ = lambda self: None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         widget = MeetAndReadWidget()
         widget._error_indicator = MagicMock()
         widget._error_hide_timer = MagicMock()
@@ -262,7 +262,7 @@ def test_on_controller_error_passes_recoverable():
 
     orig_init = MeetAndReadWidget.__init__
     try:
-        MeetAndReadWidget.__init__ = lambda self: None
+        MeetAndReadWidget.__init__ = lambda self: None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         widget = MeetAndReadWidget()
 
         error = MagicMock()

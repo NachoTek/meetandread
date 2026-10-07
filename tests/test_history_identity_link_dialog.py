@@ -94,7 +94,7 @@ class TestDialogInit:
         )
         list_widget = dlg._identity_list
         assert list_widget.count() == 3
-        names = [list_widget.item(i).text() for i in range(list_widget.count())]
+        names = [list_widget.item(i).text() for i in range(list_widget.count())]  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert names == ["Alice", "Bob", "Charlie"]
 
     def test_empty_store_shows_no_identities(self, qapp):
@@ -134,7 +134,7 @@ class TestDialogInit:
             speaker_matches={},
             store=store,
         )
-        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert names == ["Alice", "Bob"]
 
 
@@ -231,9 +231,9 @@ class TestFiltering:
         # Simulate typing "ali" in the filter
         dlg._filter_edit.setText("ali")
         visible_names = [
-            dlg._identity_list.item(i).text()
+            dlg._identity_list.item(i).text()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
             for i in range(dlg._identity_list.count())
-            if not dlg._identity_list.item(i).isHidden()
+            if not dlg._identity_list.item(i).isHidden()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         ]
         assert visible_names == ["Alice"]
 
@@ -248,9 +248,9 @@ class TestFiltering:
         )
         dlg._filter_edit.setText("ALI")
         visible_names = [
-            dlg._identity_list.item(i).text()
+            dlg._identity_list.item(i).text()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
             for i in range(dlg._identity_list.count())
-            if not dlg._identity_list.item(i).isHidden()
+            if not dlg._identity_list.item(i).isHidden()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         ]
         assert visible_names == ["Alice"]
 
@@ -265,9 +265,9 @@ class TestFiltering:
         )
         dlg._filter_edit.setText("xyz")
         visible_names = [
-            dlg._identity_list.item(i).text()
+            dlg._identity_list.item(i).text()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
             for i in range(dlg._identity_list.count())
-            if not dlg._identity_list.item(i).isHidden()
+            if not dlg._identity_list.item(i).isHidden()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         ]
         assert visible_names == []
 
@@ -283,9 +283,9 @@ class TestFiltering:
         dlg._filter_edit.setText("ali")
         dlg._filter_edit.setText("")
         visible_names = [
-            dlg._identity_list.item(i).text()
+            dlg._identity_list.item(i).text()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
             for i in range(dlg._identity_list.count())
-            if not dlg._identity_list.item(i).isHidden()
+            if not dlg._identity_list.item(i).isHidden()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         ]
         assert visible_names == ["Alice", "Bob"]
 
@@ -508,7 +508,7 @@ class TestExtraIdentityNames:
             store=store,
             extra_identity_names={"Bob", "Carol"},
         )
-        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert "Alice" in names
         assert "Bob" in names
         assert "Carol" in names
@@ -522,7 +522,7 @@ class TestExtraIdentityNames:
             store=store,
             extra_identity_names={"Alice", "Bob"},
         )
-        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert names.count("Alice") == 1
         assert "Bob" in names
 
@@ -531,10 +531,10 @@ class TestExtraIdentityNames:
         dlg = SpeakerIdentityLinkDialog(
             current_label="SPK_0",
             speaker_matches={},
-            store=None,
+            store=None,  # pyright: ignore[reportArgumentType]  # intentional mock seam
             extra_identity_names={"Alice"},
         )
-        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert "Alice" in names
 
     def test_extra_names_empty_when_none(self, qapp):
@@ -556,7 +556,7 @@ class TestExtraIdentityNames:
             store=store,
             extra_identity_names={"Zara", "Alice", "Bob"},
         )
-        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]
+        names = [dlg._identity_list.item(i).text() for i in range(dlg._identity_list.count())]  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert names == ["Alice", "Bob", "Zara"]
 
     def test_extra_names_selectable(self, qapp):

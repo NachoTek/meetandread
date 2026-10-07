@@ -223,7 +223,7 @@ class TestCursorMapping:
 # ---------------------------------------------------------------------------
 
 def _make_mouse_event(local_pos: QPoint, button=Qt.MouseButton.LeftButton,
-                      global_pos: QPoint = None) -> QMouseEvent:
+                      global_pos: QPoint = None) -> QMouseEvent:  # pyright: ignore[reportArgumentType]  # intentional mock seam
     """Create a QMouseEvent for testing mouse interactions."""
     if global_pos is None:
         global_pos = local_pos
@@ -237,7 +237,7 @@ def _make_mouse_event(local_pos: QPoint, button=Qt.MouseButton.LeftButton,
     )
 
 
-def _send_edge_press(panel, local_pos: QPoint, global_pos: QPoint = None) -> None:
+def _send_edge_press(panel, local_pos: QPoint, global_pos: QPoint = None) -> None:  # pyright: ignore[reportArgumentType]  # intentional mock seam
     """Send a mouse press via the panel's eventFilter (simulates child-widget event)."""
     if global_pos is None:
         global_pos = panel.mapToGlobal(local_pos)
@@ -251,7 +251,7 @@ def _send_edge_press(panel, local_pos: QPoint, global_pos: QPoint = None) -> Non
     panel.eventFilter(panel, event)
 
 
-def _send_edge_move(panel, local_pos: QPoint, global_pos: QPoint = None) -> None:
+def _send_edge_move(panel, local_pos: QPoint, global_pos: QPoint = None) -> None:  # pyright: ignore[reportArgumentType]  # intentional mock seam
     """Send a mouse move via the panel's eventFilter."""
     if global_pos is None:
         global_pos = panel.mapToGlobal(local_pos)
@@ -264,7 +264,7 @@ def _send_edge_move(panel, local_pos: QPoint, global_pos: QPoint = None) -> None
     panel.eventFilter(panel, event)
 
 
-def _send_edge_release(panel, local_pos: QPoint, global_pos: QPoint = None) -> None:
+def _send_edge_release(panel, local_pos: QPoint, global_pos: QPoint = None) -> None:  # pyright: ignore[reportArgumentType]  # intentional mock seam
     """Send a mouse release via the panel's eventFilter."""
     if global_pos is None:
         global_pos = panel.mapToGlobal(local_pos)

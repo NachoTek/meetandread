@@ -307,7 +307,7 @@ class TestAccumulatingProcessorLogging:
         engine = MagicMock(spec=WhisperTranscriptionEngine)
         engine.transcribe_chunk.return_value = TranscriptionSuccess(
             segments=[
-                SimpleNamespace(
+                SimpleNamespace(  # pyright: ignore[reportArgumentType]  # intentional mock seam
                     text=transcript_text,
                     confidence=90,
                     start=0.0,
@@ -448,7 +448,7 @@ class TestAccumulatingProcessorLogging:
     def test_transcription_pass_exception_named_event(self, caplog) -> None:
         """An unexpected pass failure logs a named event, error_class only."""
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.side_effect = OSError("disk on fire")
+        proc._engine.transcribe_chunk.side_effect = OSError("disk on fire")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         with caplog.at_level(logging.DEBUG, logger=PROC_LOG):
             proc._transcribe_accumulated(force_complete=False)
         for line in _formatted_output(caplog, PROC_LOG):
@@ -468,7 +468,7 @@ class TestAccumulatingProcessorLogging:
         category only (re-review finding 1, PR #129).
         """
         proc = self._make_processor_with_engine()
-        proc._engine.transcribe_chunk.return_value = TranscriptionError(
+        proc._engine.transcribe_chunk.return_value = TranscriptionError(  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
             error_type="model_error",
             message=f"model exploded on {CANARY_TRANSCRIPT} in {CANARY_WAV_STEM}.wav",
         )
@@ -1281,7 +1281,7 @@ class TestSameFlowRecordingTrail:
         eng = MagicMock(spec=WhisperTranscriptionEngine)
         eng.transcribe_chunk.return_value = TranscriptionSuccess(
             segments=[
-                SimpleNamespace(
+                SimpleNamespace(  # pyright: ignore[reportArgumentType]  # intentional mock seam
                     text=CANARY_TRANSCRIPT,
                     confidence=90,
                     start=0.0,

@@ -187,7 +187,7 @@ class TestParseSelectsLastFooter:
         content = join(body_with_fake, {"real": True, "word_count": 10})
         result = parse(content)
         assert result == {"real": True, "word_count": 10}
-        assert "fake" not in result
+        assert "fake" not in result  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
 
     def test_multiple_earlier_footers(self):
         parts = ["# Transcript\n\n"]
@@ -203,7 +203,7 @@ class TestParseSelectsLastFooter:
         content = join(body, {"real": True})
         result = parse(content)
         assert result == {"real": True}
-        assert "fake_index" not in result
+        assert "fake_index" not in result  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
 
 
 # ---------------------------------------------------------------------------

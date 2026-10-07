@@ -57,10 +57,14 @@ def _mock_msg_box(reply: str):
     class _MockMsgBox:
         StandardButton = _RealMsgBox.StandardButton
         Icon = _RealMsgBox.Icon
+        # Class-level recorders: instances for constructor calls, infos
+        # for the static informational API (the offer's fallback path).
+        instances: list = []
+        infos: list = []
         # Class-level informational dialog recorder (the offer's
         # clipboard/browser failure fallbacks use the static API).
         information = staticmethod(
-            lambda *a, **k: infos.append(a) or None
+            lambda *a, **k: _MockMsgBox.infos.append(a) or None
         )
 
         def __init__(self, *args, **kwargs):
@@ -77,11 +81,8 @@ def _mock_msg_box(reply: str):
             self.setStandardButtons = lambda *a: None
             self.setDefaultButton = lambda *a: None
             self.setIcon = lambda *a: None
-            instances.append(self)
+            _MockMsgBox.instances.append(self)
 
-    infos: list = []
-    _MockMsgBox.infos = infos  # type: ignore[attr-defined]
-    _MockMsgBox.instances = instances  # type: ignore[attr-defined]
     return _MockMsgBox
 
 
@@ -126,7 +127,7 @@ def _run_offer(monkeypatch, reply: str, staged: Path):
     result = main_mod.check_and_offer_diagnostics_resume(
         data_base=staged,
         parent=None,
-    )
+    )  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return result, opened, copied, box.instances
 
 
@@ -140,7 +141,7 @@ class TestDetection:
         result = main_mod.check_and_offer_diagnostics_resume(
             data_base=empty, parent=None
         )
-        assert result is None
+        assert result is None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert box.instances == []
 
     def test_no_unsubmitted_bundle_no_dialog(self, monkeypatch,
@@ -153,7 +154,7 @@ class TestDetection:
         result = main_mod.check_and_offer_diagnostics_resume(
             data_base=base, parent=None
         )
-        assert result is None
+        assert result is None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert box.instances == []
 
     def test_capture_mode_launch_skips_offer_entirely(
@@ -169,7 +170,7 @@ class TestDetection:
         result = main_mod.check_and_offer_diagnostics_resume(
             data_base=base, parent=None, capture_mode=True
         )
-        assert result is None
+        assert result is None  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert box.instances == []
 
 
@@ -263,7 +264,7 @@ class TestResume:
         assert result == d
         # The fallback dialog carried the bundle path.
         assert any(
-            str(d / BUNDLE_FILE_NAME) in " ".join(str(a) for a in args)
+            str(d / BUNDLE_FILE_NAME) in " ".join(str(a) for a in args)  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             for args in box.infos
         )
 

@@ -67,7 +67,7 @@ class TestSoundDeviceSourceDropCounting:
 
         # Simulate callback — should drop and increment
         indata = _make_indata()
-        src._callback(indata, 1024, {}, 0)
+        src._callback(indata, 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert src.get_frames_dropped() == 1
 
     def test_repeated_drops_accumulate(self):
@@ -82,7 +82,7 @@ class TestSoundDeviceSourceDropCounting:
         src._queue.put(_make_indata())
 
         for expected in range(1, 6):
-            src._callback(_make_indata(), 1024, {}, 0)
+            src._callback(_make_indata(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
             assert src.get_frames_dropped() == expected
 
     def test_no_increment_when_queue_has_room(self):
@@ -93,7 +93,7 @@ class TestSoundDeviceSourceDropCounting:
         src._source_label = "test"
         src._lock = threading.Lock()
 
-        src._callback(_make_indata(), 1024, {}, 0)
+        src._callback(_make_indata(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert src.get_frames_dropped() == 0
 
 
@@ -110,7 +110,7 @@ class TestSoundDeviceSourceDropCallback:
         src._lock = threading.Lock()
 
         src._queue.put(_make_indata())
-        src._callback(_make_indata(), 1024, {}, 0)
+        src._callback(_make_indata(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert drops == [("mic", 1)]
 
     def test_callback_failure_does_not_prevent_counter_increment(self):
@@ -127,7 +127,7 @@ class TestSoundDeviceSourceDropCallback:
 
         src._queue.put(_make_indata())
         # Should not raise despite bad callback
-        src._callback(_make_indata(), 1024, {}, 0)
+        src._callback(_make_indata(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert src.get_frames_dropped() == 1
 
     def test_no_callback_when_none(self):
@@ -140,7 +140,7 @@ class TestSoundDeviceSourceDropCallback:
         src._lock = threading.Lock()
 
         src._queue.put(_make_indata())
-        src._callback(_make_indata(), 1024, {}, 0)
+        src._callback(_make_indata(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         assert src.get_frames_dropped() == 1
 
 
@@ -157,7 +157,7 @@ class TestSoundDeviceSourceDropLogging:
 
         src._queue.put(_make_indata())
         with caplog.at_level(logging.INFO, logger="meetandread.audio.capture.sounddevice_source"):
-            src._callback(_make_indata(), 1024, {}, 0)
+            src._callback(_make_indata(), 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert any(
             "frame dropped" in rec.message.lower() and "mic" in rec.message

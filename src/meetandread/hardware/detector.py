@@ -104,6 +104,13 @@ class HardwareDetector:
             psutil.cpu_count(logical=False) or cpu_count_logical
         )
 
+        # cpu_count() returns None only when indeterminate; default to 1
+        # so SystemSpecs' non-optional ints stay satisfiable.
+        if cpu_count_logical is None:
+            cpu_count_logical = 1
+        if cpu_count_physical is None:
+            cpu_count_physical = 1
+
         # Detect CPU frequency (may not be available on all platforms)
         cpu_freq = psutil.cpu_freq()
         cpu_freq_mhz = cpu_freq.current if cpu_freq else None

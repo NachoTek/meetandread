@@ -49,8 +49,8 @@ class FakeController:
 
 def widget_shell(controller=None):
     widget = MeetAndReadWidget.__new__(MeetAndReadWidget)
-    widget.toast_manager = FakeToastManager()
-    widget._controller = controller or FakeController()
+    widget.toast_manager = FakeToastManager()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+    widget._controller = controller or FakeController()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     widget._recovery_toast_id = "recording-device-recovery"
     return widget
 
@@ -69,7 +69,7 @@ def test_device_loss_and_auto_recovery_replace_one_stable_toast():
         RecoveryResult(RecoveryOutcome.AUTO_RECOVERED, "mic", "mic-1")
     )
 
-    pending, recovered = widget.toast_manager.shown
+    pending, recovered = widget.toast_manager.shown  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert pending["toast_id"] == recovered["toast_id"] == "recording-device-recovery"
     assert pending["title"] == "Recording device disconnected"
     assert pending["duration_ms"] == 0
@@ -88,7 +88,7 @@ def test_manual_retry_action_preserves_session_and_success_replaces_failure():
         RecoveryResult(RecoveryOutcome.MANUAL_RETRY_REQUIRED, "mic", "mic-1")
     )
 
-    required = widget.toast_manager.shown[-1]
+    required = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert required["toast_id"] == "recording-device-recovery"
     assert required["title"] == "Recording paused"
     assert required["duration_ms"] == 0
@@ -101,7 +101,7 @@ def test_manual_retry_action_preserves_session_and_success_replaces_failure():
     # The real controller emits this result through _ControllerBridge. Simulate
     # that signal delivery to prove it replaces the persistent action toast.
     widget._on_recovery_attempted(result)
-    resumed = widget.toast_manager.shown[-1]
+    resumed = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert resumed["toast_id"] == required["toast_id"]
     assert resumed["title"] == "Recording resumed"
     assert resumed["duration_ms"] > 0
@@ -116,7 +116,7 @@ def test_total_loss_also_offers_non_expiring_resume_action():
         RecoveryResult(RecoveryOutcome.TOTAL_LOSS, "system", "speaker-1")
     )
 
-    toast = widget.toast_manager.shown[-1]
+    toast = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert toast["title"] == "Recording paused"
     assert toast["duration_ms"] == 0
     assert toast["action_label"] == "Resume Recording"
@@ -130,9 +130,9 @@ def test_retry_failure_keeps_actionable_toast_visible():
         RecoveryResult(RecoveryOutcome.MANUAL_RETRY_REQUIRED, "mic", "mic-1")
     )
 
-    widget.toast_manager.shown[-1]["action_callback"]()
+    widget.toast_manager.shown[-1]["action_callback"]()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
-    failed = widget.toast_manager.shown[-1]
+    failed = widget.toast_manager.shown[-1]  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     assert controller.retry_calls == 1
     assert failed["toast_id"] == "recording-device-recovery"
     assert failed["title"] == "Recording recovery failed"

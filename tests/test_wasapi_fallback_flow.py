@@ -258,8 +258,8 @@ def test_fallback_dialog_cancels_retry_ui(monkeypatch):
         assert widget._retry_in_progress is False
         
         # Toast should be dismissed
-        assert widget.toast_manager.dismiss.called
-        assert widget.toast_manager.dismiss.call_args[0][0] == 'wasapi-retry'
+        assert widget.toast_manager.dismiss.called  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        assert widget.toast_manager.dismiss.call_args[0][0] == 'wasapi-retry'  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
 
 def test_fallback_dialog_uses_correct_message_text(monkeypatch):

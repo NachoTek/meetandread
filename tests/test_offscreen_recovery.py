@@ -104,7 +104,7 @@ class TestOffScreenRecovery:
         """Widget at x=5000 recovers to primary center."""
         widget.move(5000, 500)
         widget._recover_offscreen_position()
-        primary = QApplication.primaryScreen().geometry()
+        primary = QApplication.primaryScreen().geometry()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         expected_x = primary.x() + (primary.width() - widget.width()) // 2
         expected_y = primary.y() + (primary.height() - widget.height()) // 2
         assert widget.pos().x() == expected_x
@@ -114,7 +114,7 @@ class TestOffScreenRecovery:
         """Widget at y=5000 recovers to primary center."""
         widget.move(500, 5000)
         widget._recover_offscreen_position()
-        primary = QApplication.primaryScreen().geometry()
+        primary = QApplication.primaryScreen().geometry()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         expected_x = primary.x() + (primary.width() - widget.width()) // 2
         expected_y = primary.y() + (primary.height() - widget.height()) // 2
         assert widget.pos().x() == expected_x
@@ -124,7 +124,7 @@ class TestOffScreenRecovery:
         """Widget at (-500, -500) recovers to primary center."""
         widget.move(-500, -500)
         widget._recover_offscreen_position()
-        primary = QApplication.primaryScreen().geometry()
+        primary = QApplication.primaryScreen().geometry()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         expected_x = primary.x() + (primary.width() - widget.width()) // 2
         expected_y = primary.y() + (primary.height() - widget.height()) // 2
         assert widget.pos().x() == expected_x
@@ -142,7 +142,7 @@ class TestOffScreenRecovery:
         # If center is on screen, no recovery
         center_x = -50 + widget.width() // 2
         center_y = -50 + widget.height() // 2
-        primary = QApplication.primaryScreen().geometry()
+        primary = QApplication.primaryScreen().geometry()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         center_on_screen = primary.contains(QPoint(center_x, center_y))
         if center_on_screen:
             # Should NOT have moved
@@ -184,7 +184,7 @@ class TestMultiMonitorRecovery:
             w._recover_offscreen_position()
 
             # Should recover to primary center
-            primary = QApplication.primaryScreen().geometry()
+            primary = QApplication.primaryScreen().geometry()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
             expected_x = primary.x() + (primary.width() - w.width()) // 2
             expected_y = primary.y() + (primary.height() - w.height()) // 2
             assert w.pos().x() == expected_x

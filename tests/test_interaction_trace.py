@@ -92,7 +92,7 @@ class TestClosedVocabulary:
         import inspect
 
         for name in sorted(EVENT_VOCABULARY):
-            assert name in inspect.getdoc(itrace), (
+            assert name in inspect.getdoc(itrace), (  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
                 f"event name {name!r} missing from the module docstring"
             )
 
@@ -243,7 +243,7 @@ class TestDurabilityWriteSide:
             return n
 
         with patch.object(djsonl.os, "write", side_effect=fake_os_write):
-            ok = writer.emit(self.PAYLOAD)
+            ok = writer.emit(self.PAYLOAD)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert ok is True
         assert bytes(buf) == line
         assert bytes(buf).endswith(b"\n")
@@ -262,7 +262,7 @@ class TestDurabilityWriteSide:
             raise OSError("write side closed")
 
         with patch.object(djsonl.os, "write", side_effect=stop_after_zero):
-            ok = writer.emit(self.PAYLOAD)
+            ok = writer.emit(self.PAYLOAD)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert ok is False
         assert (trace_dir / TRACE_FILE_NAME).read_bytes() == b""
 
@@ -276,7 +276,7 @@ class TestDurabilityWriteSide:
             return 0
 
         with patch.object(djsonl.os, "write", side_effect=zero_write):
-            ok = writer.emit(self.PAYLOAD)
+            ok = writer.emit(self.PAYLOAD)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert ok is False
         raw = (trace_dir / TRACE_FILE_NAME).read_bytes()
         assert raw == b""
@@ -304,13 +304,13 @@ class TestDurabilityWriteSide:
         with patch.object(
             djsonl.os, "write", side_effect=partial_then_error
         ):
-            ok = writer.emit(self.PAYLOAD)
+            ok = writer.emit(self.PAYLOAD)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert ok is False
 
         # Retry after the partial failure: the writer is poisoned —
         # no append to the unterminated fragment, no True.
         with patch.object(djsonl.os, "write") as mock_write:
-            ok2 = writer.emit(self.PAYLOAD)
+            ok2 = writer.emit(self.PAYLOAD)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert ok2 is False
         mock_write.assert_not_called()
 
@@ -333,12 +333,12 @@ class TestDurabilityWriteSide:
         with patch.object(
             djsonl.os, "fsync", side_effect=OSError("fsync failed")
         ):
-            ok = writer.emit(self.PAYLOAD)
+            ok = writer.emit(self.PAYLOAD)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert ok is False
 
         # Writer NOT poisoned: the next emit goes through the real
         # os.write/fsync and returns True.
-        ok2 = writer.emit(self.PAYLOAD)
+        ok2 = writer.emit(self.PAYLOAD)  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert ok2 is True
         events = read_trace_events(trace_dir)
         assert len(events) == 2

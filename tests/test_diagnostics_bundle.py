@@ -171,7 +171,7 @@ COMPLETE = dict(
 def make_complete(tmp_path, **overrides) -> Path:
     spec = dict(COMPLETE)
     spec.update(overrides)
-    return make_capture(tmp_path, **spec)
+    return make_capture(tmp_path, **spec)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ class TestAssembleComplete:
 
     def test_sections_appear_in_fixed_order(self, tmp_path):
         d = make_complete(tmp_path)
-        text = assemble_bundle(d, identifiers=IDS).text
+        text = assemble_bundle(d, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         positions = [
             text.index("== environment =="),
             text.index("== termination =="),
@@ -336,8 +336,8 @@ class TestAssembleComplete:
     def test_any_two_reports_read_the_same_way(self, tmp_path):
         d1 = make_complete(tmp_path, name="run-one")
         d2 = make_complete(tmp_path, name="run-two")
-        t1 = assemble_bundle(d1, identifiers=IDS).text
-        t2 = assemble_bundle(d2, identifiers=IDS).text
+        t1 = assemble_bundle(d1, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        t2 = assemble_bundle(d2, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         headers1 = [ln for ln in t1.splitlines() if ln.startswith("==")]
         headers2 = [ln for ln in t2.splitlines() if ln.startswith("==")]
         assert headers1 == headers2
@@ -347,7 +347,7 @@ class TestAssembleComplete:
         d = make_complete(tmp_path)
         assert "diagnostics bundle v1" in assemble_bundle(
             d, identifiers=IDS
-        ).text
+        ).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
 
 class TestAssembleCrashed:
@@ -378,7 +378,7 @@ class TestAssembleCrashed:
     def test_markerless_run_reports_absent_marker(self, tmp_path):
         d = make_complete(tmp_path, marker=False,
                           termination=(RunOutcome.CRASH, 1, False))
-        text = assemble_bundle(d, identifiers=IDS).text
+        text = assemble_bundle(d, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert "completion marker: absent" in text
 
     def test_missing_artifacts_assemble_with_absent_markers(
@@ -413,7 +413,7 @@ class TestRedactionAcrossComponents:
                 "2026-09-10 - DEBUG - mail bob@example.com failed",
             ],
         )
-        text = assemble_bundle(d, identifiers=IDS).text
+        text = assemble_bundle(d, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert "Bob" not in text.replace("<redacted", "")
         assert "BOB-PC" not in text
         assert "bob@example.com" not in text
@@ -426,7 +426,7 @@ class TestRedactionAcrossComponents:
                  "target": "C:\\Users\\Bob\\panel"},
             ],
         )
-        text = assemble_bundle(d, identifiers=IDS).text
+        text = assemble_bundle(d, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert "Bob" not in text
 
     def test_termination_identifiers_redacted(self, tmp_path):
@@ -445,7 +445,7 @@ class TestRedactionAcrossComponents:
             + "\n",
             encoding="utf-8",
         )
-        text = assemble_bundle(d, identifiers=IDS).text
+        text = assemble_bundle(d, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert "BOB-PC" not in text
         assert "bob@example.com" not in text
 
@@ -458,7 +458,7 @@ class TestRedactionAcrossComponents:
                 "hardware_class": "medium",
             },
         )
-        text = assemble_bundle(d, identifiers=IDS).text
+        text = assemble_bundle(d, identifiers=IDS).text  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         assert "BOB-PC" not in text
 
     def test_snapshots_scanned_too(self, tmp_path):
@@ -492,7 +492,7 @@ class TestFailClosedCanary:
         d = make_complete(
             tmp_path,
             canary_texts=[SECRET],
-            log_lines=COMPLETE["log_lines"]
+            log_lines=COMPLETE["log_lines"]  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
             + [f"transcribe failed near {SECRET} (chunk 3)"],
         )
         result = create_reviewable_bundle(d, identifiers=IDS)
@@ -506,7 +506,7 @@ class TestFailClosedCanary:
         d = make_complete(
             tmp_path,
             canary_texts=[SECRET],
-            trace=COMPLETE["trace"]
+            trace=COMPLETE["trace"]  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
             + [
                 {"ts": "2026-09-10T10:00:05", "event": "panel_opened",
                  "target": SECRET},
@@ -571,7 +571,7 @@ class TestFailClosedCanary:
         d = make_complete(
             tmp_path,
             canary_texts=[title],
-            log_lines=COMPLETE["log_lines"]
+            log_lines=COMPLETE["log_lines"]  # pyright: ignore[reportOperatorIssue]  # intentional mock seam
             + [f"rename finished: {title}"],
         )
         result = create_reviewable_bundle(d, identifiers=IDS)
@@ -640,8 +640,8 @@ class TestCreateReviewableBundle:
         result = create_reviewable_bundle(d, identifiers=IDS)
         assert not isinstance(result, dbundle.AssemblyFailure), result
         assert result.path == d / BUNDLE_FILE_NAME
-        assert result.path.exists()
-        assert result.path.read_text(encoding="utf-8") == result.text
+        assert result.path.exists()  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
+        assert result.path.read_text(encoding="utf-8") == result.text  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
     def test_written_artifact_is_redacted(self, tmp_path):
         d = make_complete(
@@ -652,7 +652,7 @@ class TestCreateReviewableBundle:
         )
         result = create_reviewable_bundle(d, identifiers=IDS)
         assert not isinstance(result, dbundle.AssemblyFailure), result
-        written = result.path.read_text(encoding="utf-8")
+        written = result.path.read_text(encoding="utf-8")  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         assert "Bob" not in written
         assert "<redacted:home>" in written
 

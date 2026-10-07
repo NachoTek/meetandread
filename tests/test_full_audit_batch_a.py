@@ -281,7 +281,7 @@ class TestSoundDeviceSourceLifecycle:
         buf = np.zeros((1024, 1), dtype=np.float32)
         with caplog.at_level(logging.DEBUG, logger=SD_LOG):
             # Empty queue: exercises the enqueue path (stats at bucket 1).
-            src._callback(buf, 1024, {}, 0)
+            src._callback(buf, 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         debug_msgs = _messages_at(caplog.records, logging.DEBUG)
         assert any("callback_stats" in m for m in debug_msgs), (
@@ -290,7 +290,7 @@ class TestSoundDeviceSourceLifecycle:
 
         caplog.clear()
         with caplog.at_level(logging.INFO, logger=SD_LOG):
-            src._callback(buf, 1024, {}, 0)
+            src._callback(buf, 1024, {}, 0)  # pyright: ignore[reportArgumentType]  # intentional mock seam
         info_msgs = _messages_at(caplog.records, logging.INFO)
         assert not any(
             "callback_stats" in m for m in info_msgs
@@ -441,7 +441,7 @@ class TestPyAudioWPatchSourceLifecycle:
 
     def test_open_failure_stays_error(self, caplog):
         src = _make_paw_source()
-        src._pyaudio.open.side_effect = OSError("device gone")
+        src._pyaudio.open.side_effect = OSError("device gone")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
             with pytest.raises(OSError):
                 src.start()
@@ -469,7 +469,7 @@ class TestPyAudioWPatchSourceLifecycle:
 
     def test_open_failure_error_redacts_endpoint_id(self, caplog):
         src = _make_paw_source(device_index=PRIVACY_ENDPOINT_ID)
-        src._pyaudio.open.side_effect = OSError("device gone")
+        src._pyaudio.open.side_effect = OSError("device gone")  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]  # intentional mock seam
         with caplog.at_level(logging.DEBUG, logger=PAW_LOG):
             with pytest.raises(OSError):
                 src.start()

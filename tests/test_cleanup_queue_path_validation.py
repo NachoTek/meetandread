@@ -49,7 +49,7 @@ class TestInsideRootPaths:
     def test_file_in_recordings_dir_deleted(self, tmp_path: Path) -> None:
         """File under recordings_dir is deleted successfully."""
         q = _make_queue(tmp_path)
-        target = q._recordings_dir / "speaker_cache.bin"
+        target = q._recordings_dir / "speaker_cache.bin"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         target.write_text("cache-data")
 
         q.enqueue_identity_cleanup("speaker1", paths=[str(target)])
@@ -61,7 +61,7 @@ class TestInsideRootPaths:
     def test_file_in_transcripts_dir_deleted(self, tmp_path: Path) -> None:
         """File under transcripts_dir is deleted successfully."""
         q = _make_queue(tmp_path)
-        target = q._transcripts_dir / "old_transcript.md"
+        target = q._transcripts_dir / "old_transcript.md"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         target.write_text("# transcript")
 
         q.enqueue_identity_cleanup("old", paths=[str(target)])
@@ -73,7 +73,7 @@ class TestInsideRootPaths:
     def test_nested_path_inside_root_deleted(self, tmp_path: Path) -> None:
         """Nested path inside recordings_dir is deleted."""
         q = _make_queue(tmp_path)
-        nested = q._recordings_dir / "speakers" / "john_doe.json"
+        nested = q._recordings_dir / "speakers" / "john_doe.json"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         nested.parent.mkdir(parents=True)
         nested.write_text("{}")
 
@@ -86,8 +86,8 @@ class TestInsideRootPaths:
     def test_multiple_valid_paths_all_deleted(self, tmp_path: Path) -> None:
         """Multiple valid paths across both roots are all deleted."""
         q = _make_queue(tmp_path)
-        f1 = q._recordings_dir / "a.bin"
-        f2 = q._transcripts_dir / "b.md"
+        f1 = q._recordings_dir / "a.bin"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
+        f2 = q._transcripts_dir / "b.md"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         f1.write_text("a")
         f2.write_text("b")
 
@@ -101,7 +101,7 @@ class TestInsideRootPaths:
     def test_missing_inside_root_path_completes(self, tmp_path: Path) -> None:
         """Missing file inside root is treated as already-clean."""
         q = _make_queue(tmp_path)
-        missing = q._recordings_dir / "nonexistent.bin"
+        missing = q._recordings_dir / "nonexistent.bin"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
 
         q.enqueue_identity_cleanup("ghost", paths=[str(missing)])
         result = q.process_pending()
@@ -139,7 +139,7 @@ class TestOutsideRootPaths:
         # recordings_dir is tmp_path/recordings, so
         # recordings_dir/../../etc/passwd resolves outside
         traversal = str(
-            q._recordings_dir / ".." / ".." / "etc" / "passwd"
+            q._recordings_dir / ".." / ".." / "etc" / "passwd"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         )
         q.enqueue_identity_cleanup("traversal", paths=[traversal])
         result = q.process_pending()
@@ -200,7 +200,7 @@ class TestOutsideRootPaths:
     def test_mixed_valid_and_invalid_paths(self, tmp_path: Path) -> None:
         """Some paths valid, some invalid — partial failure stays pending."""
         q = _make_queue(tmp_path)
-        valid = q._recordings_dir / "ok.bin"
+        valid = q._recordings_dir / "ok.bin"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         valid.write_text("ok")
         outside = tmp_path / "nope.txt"
         outside.write_text("nope")
@@ -233,7 +233,7 @@ class TestSymlinkHandling:
         q = _make_queue(tmp_path)
         outside = tmp_path / "real_secret.txt"
         outside.write_text("secret")
-        symlink = q._recordings_dir / "link_to_secret"
+        symlink = q._recordings_dir / "link_to_secret"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         symlink.symlink_to(outside)
 
         q.enqueue_identity_cleanup("symlink", paths=[str(symlink)])
@@ -250,9 +250,9 @@ class TestSymlinkHandling:
     def test_symlink_inside_roots_allowed(self, tmp_path: Path) -> None:
         """Symlink inside recordings_dir pointing within roots is allowed."""
         q = _make_queue(tmp_path)
-        real = q._recordings_dir / "real_data.bin"
+        real = q._recordings_dir / "real_data.bin"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         real.write_text("data")
-        link = q._recordings_dir / "link_data"
+        link = q._recordings_dir / "link_data"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         link.symlink_to(real)
 
         q.enqueue_identity_cleanup("goodlink", paths=[str(link)])

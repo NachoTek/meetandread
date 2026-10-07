@@ -674,7 +674,7 @@ class TestRecordingControllerDenoisingDiarizationIntegration:
             assert Path(diar_wav_path).exists(), (
                 f"Diarization WAV missing: {diar_wav_path}"
             )
-            diarization_invoked_path[0] = str(diar_wav_path)
+            diarization_invoked_path[0] = str(diar_wav_path)  # pyright: ignore[reportArgumentType, reportCallIssue]  # intentional mock seam
 
             # Build a simple two-speaker DiarizationResult matching ground truth
             segments = [
@@ -719,7 +719,7 @@ class TestRecordingControllerDenoisingDiarizationIntegration:
                 controller._worker_thread.join(timeout=5.0)
             if controller._finalizer_thread:
                 controller._finalizer_thread.join(timeout=10.0)
-                assert not controller._worker_thread.is_alive(), (
+                assert not controller._worker_thread.is_alive(), (  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
                     "Worker thread did not finish within 5s timeout"
                 )
 

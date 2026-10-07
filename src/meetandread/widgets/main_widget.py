@@ -24,10 +24,25 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene,
     QGraphicsEllipseItem, QGraphicsRectItem,
-    QApplication, QMenu, QDialog
+    QApplication, QMenu, QDialog,
+    QGraphicsSceneHoverEvent,
+    QGraphicsSceneMouseEvent,
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QPoint, QTimer, QTime, pyqtSignal, QObject
-from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPainter, QLinearGradient
+from PyQt6.QtGui import (
+    QColor,
+    QBrush,
+    QPen,
+    QFont,
+    QPainter,
+    QLinearGradient,
+    QCloseEvent,
+    QHideEvent,
+    QMouseEvent,
+    QMoveEvent,
+    QPolygonF,
+    QShowEvent,
+)
 
 from meetandread.recording import RecordingController, ControllerState
 from meetandread.recording.controller import RecoveryOutcome
@@ -172,7 +187,7 @@ class DragSurfaceItem(QGraphicsRectItem):
         # Accept left mouse button for hit-testing
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
     
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         """Override paint to render the near-invisible background."""
         # Fill with near-transparent color to be hit-testable
         painter.fillRect(self.rect(), self.brush())
@@ -281,8 +296,10 @@ to avoid clipping issues and enable proper text rendering.
         self._controller.on_frames_dropped = lambda count: self._bridge.frames_dropped.emit(count)
         self._controller.on_device_change = lambda event: self._bridge.device_changed.emit(event)
         self._controller.on_recovery_attempt = lambda result: self._bridge.recovery_attempted.emit(result)
-        self._error_indicator = None  # For showing errors
-        self._warning_indicator = None  # For showing resource warnings
+        # Error/warning indicators: created in _create_components()
+        # (called a few lines below) — never None afterwards.
+        self._error_indicator: ErrorIndicatorItem
+        self._warning_indicator: ErrorIndicatorItem
         self._warning_hide_timer: Optional[QTimer] = None  # Auto-hide timer for warnings
         self._error_hide_timer: Optional[QTimer] = None  # Auto-hide timer for errors
         
@@ -527,7 +544,7 @@ to avoid clipping issues and enable proper text rendering.
         # Warning indicator below error indicator
         self._warning_indicator.setPos(10, 120)
     
-    def moveEvent(self, event):
+    def moveEvent(self, event: QMoveEvent):
         """Handle widget move — no panel repositioning (panels are independent)."""
         super().moveEvent(event)
         manager = getattr(self, "toast_manager", None)
@@ -554,11 +571,14 @@ to avoid clipping issues and enable proper text rendering.
                 type(e).__name__,
             )
         
-        # Default: Start in bottom-right corner
-        screen = QApplication.primaryScreen().geometry()
-        x = screen.width() - self.width() - 20
-        y = screen.height() - self.height() - 40
-        self.move(x, y)
+        # Default: Start in bottom-right corner. primaryScreen() is
+        # None only in offscreen/test contexts without a display.
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.geometry()
+            x = geo.width() - self.width() - 20
+            y = geo.height() - self.height() - 40
+            self.move(x, y)
     
     def _recover_offscreen_position(self):
         """Recover widget position if it's off all available screens.
@@ -582,9 +602,12 @@ to avoid clipping issues and enable proper text rendering.
                 break
 
         if not on_screen:
-            primary = QApplication.primaryScreen().geometry()
-            new_x = primary.x() + (primary.width() - self.width()) // 2
-            new_y = primary.y() + (primary.height() - self.height()) // 2
+            primary = QApplication.primaryScreen()
+            if primary is None:
+                return
+            geo = primary.geometry()
+            new_x = geo.x() + (geo.width() - self.width()) // 2
+            new_y = geo.y() + (geo.height() - self.height()) // 2
             logger.info(
                 "widget_position_recovered: from_x=%d from_y=%d to_x=%d to_y=%d",
                 pos.x(), pos.y(), new_x, new_y,
@@ -690,7 +713,7 @@ to avoid clipping issues and enable proper text rendering.
                 self.record_button._state_t = 0.0
                 self.record_button.update()
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         """Record press position for click vs drag detection."""
         if event.button() == Qt.MouseButton.LeftButton:
             self.drag_start_pos = event.globalPosition().toPoint()
@@ -702,7 +725,7 @@ to avoid clipping issues and enable proper text rendering.
         else:
             super().mousePressEvent(event)
     
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent):
         """Handle dragging from any component, clamped to visible screen area."""
         if self.is_dragging:
             delta = event.globalPosition().toPoint() - self.drag_start_pos
@@ -723,7 +746,7 @@ to avoid clipping issues and enable proper text rendering.
         else:
             super().mouseMoveEvent(event)
     
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         """Handle click vs drag release."""
         if event.button() == Qt.MouseButton.LeftButton:
             if self.is_dragging:
@@ -838,7 +861,8 @@ to avoid clipping issues and enable proper text rendering.
                 self.system_lobe._pulse_opacity = 1.0
                 self.mic_lobe.update()
                 self.system_lobe.update()
-                self._pulse_timer.stop()
+                if self._pulse_timer is not None:
+                    self._pulse_timer.stop()
         
         self._pulse_timer = QTimer(self)
         self._pulse_timer.timeout.connect(_tick)
@@ -931,8 +955,8 @@ to avoid clipping issues and enable proper text rendering.
                             offset_x = self.x() - self._cc_overlay.width() - 10
                             offset_y = self.y()
                             # Ensure it stays on screen
-                            screen = QApplication.primaryScreen().geometry()
-                            if offset_x < screen.left():
+                            screen = QApplication.primaryScreen()
+                            if screen is not None and offset_x < screen.geometry().left():
                                 offset_x = self.x() + self.width() + 10
                             self._cc_overlay.move(offset_x, offset_y)
                             ensure_on_screen(self._cc_overlay)
@@ -1237,7 +1261,9 @@ to avoid clipping issues and enable proper text rendering.
                 type(exc).__name__,
             )
             return
-        if not failure or not failure.get("user_initiated"):
+        # Test seams may stub the controller; the getter returns a plain
+        # failure dict in production.
+        if not isinstance(failure, dict) or not failure.get("user_initiated"):
             return
 
         dialog = PostProcessFailureDialog(
@@ -1716,6 +1742,8 @@ to avoid clipping issues and enable proper text rendering.
         # Recording toggle
         toggle_text = "Stop Recording" if self.is_recording else "Start Recording"
         toggle_action = menu.addAction(toggle_text)
+        if toggle_action is None:  # pragma: no cover - text overload returns one
+            return
         toggle_action.triggered.connect(
             lambda: (
                 emit_interaction_event(
@@ -1729,6 +1757,8 @@ to avoid clipping issues and enable proper text rendering.
 
         # Settings
         settings_action = menu.addAction("Settings")
+        if settings_action is None:  # pragma: no cover - text overload returns one
+            return
         settings_action.triggered.connect(
             lambda: (
                 emit_interaction_event(
@@ -1742,6 +1772,8 @@ to avoid clipping issues and enable proper text rendering.
 
         # Exit
         exit_action = menu.addAction("Exit")
+        if exit_action is None:  # pragma: no cover - text overload returns one
+            return
         exit_action.triggered.connect(
             lambda: (
                 emit_interaction_event("menu_item_selected", target="menu.exit"),
@@ -1789,7 +1821,7 @@ to avoid clipping issues and enable proper text rendering.
                 type(e).__name__,
             )
     
-    def showEvent(self, event):
+    def showEvent(self, event: QShowEvent):
         """Reset opacity to match current state when widget reappears."""
         super().showEvent(event)
         # Immediately set correct opacity for current state without animation
@@ -1802,12 +1834,12 @@ to avoid clipping issues and enable proper text rendering.
             self._visual_state.current.name,
         )
 
-    def hideEvent(self, event):
+    def hideEvent(self, event: QHideEvent):
         """Reset opacity to 1.0 on hide so reappear isn't stale at low opacity."""
         super().hideEvent(event)
         self.setWindowOpacity(1.0)
 
-    def closeEvent(self, event):
+    def closeEvent(self, event: QCloseEvent):
         """Handle close event — close-to-tray if tray is active, else quit.
 
         When a TrayIconManager is wired in, closing the window hides it to
@@ -2188,7 +2220,7 @@ class RecordButtonItem(QGraphicsEllipseItem):
             painter.setPen(seg_pen)
             painter.drawLine(QPointF(x1, y1), QPointF(x2, y2))
     
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         """Custom paint with eased cross-fade between states."""
         rect = self.rect()
         
@@ -2304,12 +2336,12 @@ class RecordButtonItem(QGraphicsEllipseItem):
             painter.drawEllipse(int(center.x() - size/2), int(center.y() - size/2),
                                 size, size)
     
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         """Accept press to get release event — action fires on release."""
         if event.button() == Qt.MouseButton.LeftButton:
             event.accept()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         """Fire action on release, only if this wasn't a drag."""
         if event.button() == Qt.MouseButton.LeftButton:
             if not self.parent_widget.is_dragging and not self.parent_widget._click_consumed:
@@ -2337,21 +2369,21 @@ class ToggleLobeItem(QGraphicsEllipseItem):
         self.setTransformOriginPoint(20, 20)  # Center of 40×40
         self._hovered = False
     
-    def hoverEnterEvent(self, event):
+    def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent):
         """Scale up and brighten on hover."""
         self._hovered = True
         self.setScale(1.05)
         self.update()
         super().hoverEnterEvent(event)
     
-    def hoverLeaveEvent(self, event):
+    def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent):
         """Revert to normal on hover leave."""
         self._hovered = False
         self.setScale(1.0)
         self.update()
         super().hoverLeaveEvent(event)
     
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         """Paint the lobe with hover glow effect.
 
         Rendering priority: unavailable > locked > normal (active/inactive).
@@ -2421,22 +2453,22 @@ class ToggleLobeItem(QGraphicsEllipseItem):
                 painter.drawArc(int(center.x() - 6), int(center.y() - 4), 12, 12,
                                 0, 180 * 16)
             else:
-                # Simple speaker icon
-                painter.drawPolygon([
+                # Simple speaker icon (QPolygonF overload)
+                painter.drawPolygon(QPolygonF([
                     QPointF(center.x() - 4, center.y() - 6),
                     QPointF(center.x() + 2, center.y() - 6),
                     QPointF(center.x() + 6, center.y() - 10),
                     QPointF(center.x() + 6, center.y() + 10),
                     QPointF(center.x() + 2, center.y() + 6),
                     QPointF(center.x() - 4, center.y() + 6)
-                ])
+                ]))
     
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         """Accept press to get release event — action fires on release."""
         if event.button() == Qt.MouseButton.LeftButton:
             event.accept()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         """Toggle on release, only if this wasn't a drag."""
         if event.button() == Qt.MouseButton.LeftButton:
             # Prevent toggle when locked or unavailable
@@ -2489,21 +2521,21 @@ class SettingsLobeItem(QGraphicsEllipseItem):
         self.setTransformOriginPoint(11, 11)  # Center of 22×22
         self._hovered = False
     
-    def hoverEnterEvent(self, event):
+    def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent):
         """Scale up and brighten on hover."""
         self._hovered = True
         self.setScale(1.05)
         self.update()
         super().hoverEnterEvent(event)
     
-    def hoverLeaveEvent(self, event):
+    def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent):
         """Revert to normal on hover leave."""
         self._hovered = False
         self.setScale(1.0)
         self.update()
         super().hoverLeaveEvent(event)
     
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         """Paint settings lobe with hover glow effect."""
         rect = self.rect()
         
@@ -2526,12 +2558,12 @@ class SettingsLobeItem(QGraphicsEllipseItem):
         painter.drawEllipse(int(center.x() - 4), int(center.y() - 4), 8, 8)
         painter.drawPoint(int(center.x()), int(center.y()))
     
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         """Accept press to get release event — action fires on release."""
         if event.button() == Qt.MouseButton.LeftButton:
             event.accept()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         """Open settings on release, only if this wasn't a drag."""
         if event.button() == Qt.MouseButton.LeftButton:
             if not self.parent_widget.is_dragging and not self.parent_widget._click_consumed:
@@ -2551,21 +2583,21 @@ class TranscriptLobeItem(QGraphicsEllipseItem):
         self.setTransformOriginPoint(11, 11)  # Center of 22×22
         self._hovered = False
     
-    def hoverEnterEvent(self, event):
+    def hoverEnterEvent(self, event: QGraphicsSceneHoverEvent):
         """Scale up and brighten on hover."""
         self._hovered = True
         self.setScale(1.05)
         self.update()
         super().hoverEnterEvent(event)
     
-    def hoverLeaveEvent(self, event):
+    def hoverLeaveEvent(self, event: QGraphicsSceneHoverEvent):
         """Revert to normal on hover leave."""
         self._hovered = False
         self.setScale(1.0)
         self.update()
         super().hoverLeaveEvent(event)
     
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         """Paint transcript lobe with document/text icon and hover glow."""
         rect = self.rect()
         
@@ -2598,12 +2630,12 @@ class TranscriptLobeItem(QGraphicsEllipseItem):
         painter.drawLine(line_left, int(center.y()), line_right, int(center.y()))
         painter.drawLine(line_left, int(center.y() + 2), line_right, int(center.y() + 2))
     
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent):
         """Accept press to get release event — action fires on release."""
         if event.button() == Qt.MouseButton.LeftButton:
             event.accept()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent):
         """Toggle transcript panel on release, only if this wasn't a drag."""
         if event.button() == Qt.MouseButton.LeftButton:
             if not self.parent_widget.is_dragging and not self.parent_widget._click_consumed:
@@ -2693,12 +2725,12 @@ class ErrorIndicatorItem(QGraphicsRectItem):
         self._recalc_rect()
         self.update()
     
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent):
         """Handle clicks — toggle help panel if '?' button clicked."""
         if self._help_text is not None:
             btn_rect = self._help_button_rect()
             pos = event.pos()
-            if btn_rect.contains(pos):
+            if btn_rect.contains(QPointF(pos)):
                 self._help_expanded = not self._help_expanded
                 self._recalc_rect()
                 self.update()
@@ -2712,7 +2744,7 @@ class ErrorIndicatorItem(QGraphicsRectItem):
         except TypeError:
             pass
     
-    def paint(self, painter, option, widget=None):
+    def paint(self, painter: QPainter, option, widget=None):
         """Paint error indicator."""
         if not self._visible:
             return

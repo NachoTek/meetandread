@@ -52,7 +52,7 @@ class TestAutoPruneOnProcess:
         q = _make_queue(tmp_path)
         # Create a recording file so deletion succeeds
         stem = "test-rec"
-        rec_file = q._recordings_dir / f"{stem}.wav"
+        rec_file = q._recordings_dir / f"{stem}.wav"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         rec_file.write_text("audio")
 
         q.enqueue_file_deletion(stem)
@@ -72,7 +72,7 @@ class TestAutoPruneOnProcess:
     def test_completed_identity_cleanup_pruned(self, tmp_path: Path) -> None:
         """An identity_cleanup that succeeds is pruned from persisted queue."""
         q = _make_queue(tmp_path)
-        target_file = q._recordings_dir / "speaker_cache.bin"
+        target_file = q._recordings_dir / "speaker_cache.bin"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         target_file.write_text("data")
 
         q.enqueue_identity_cleanup("speaker1", paths=[str(target_file)])
@@ -90,7 +90,7 @@ class TestAutoPruneOnProcess:
         # Enqueue a stem that has no files — delete_recording_structured
         # will succeed (0 files found, 0 failures) so it completes.
         # Instead, test identity_cleanup with a permission-denied path.
-        target = q._recordings_dir / "locked.bin"
+        target = q._recordings_dir / "locked.bin"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         target.write_text("data")
 
         q.enqueue_identity_cleanup("locked", paths=[str(target)])
@@ -152,7 +152,7 @@ class TestAutoPruneOnProcess:
         q = _make_queue(tmp_path)
 
         # One that will succeed
-        good_file = q._recordings_dir / "good.wav"
+        good_file = q._recordings_dir / "good.wav"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
         good_file.write_text("audio")
         q.enqueue_file_deletion("good")
 
@@ -195,7 +195,7 @@ class TestAutoPruneOnProcess:
 
         for i in range(5):
             stem = f"rec-{i}"
-            rec = q._recordings_dir / f"{stem}.wav"
+            rec = q._recordings_dir / f"{stem}.wav"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
             rec.write_text("x")
             q.enqueue_file_deletion(stem)
             result = q.process_pending()
@@ -212,7 +212,7 @@ class TestAutoPruneOnProcess:
 
         for i in range(30):
             stem = f"bulk-{i}"
-            rec = q._recordings_dir / f"{stem}.wav"
+            rec = q._recordings_dir / f"{stem}.wav"  # pyright: ignore[reportOptionalOperand]  # intentional mock seam
             rec.write_text("x")
             q.enqueue_file_deletion(stem)
 

@@ -356,11 +356,12 @@ class SpectralGateProvider(DenoisingProvider):
         output = output / window_sum
 
         # Save tail for next call (last fft_size samples of combined input)
-        self._overlap_tail = combined[-self._fft_size:].copy()
+        overlap_tail = combined[-self._fft_size:].copy()
+        self._overlap_tail = overlap_tail
         logger.debug(
             "denoise_overlap_buffered: provider=%s tail_samples=%d frame_samples=%d",
             self.name,
-            int(self._overlap_tail.size),
+            int(overlap_tail.size),
             int(n),
         )
 

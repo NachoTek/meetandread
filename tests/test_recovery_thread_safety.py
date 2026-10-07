@@ -81,7 +81,7 @@ def _run_recovery(monkeypatch, recover_fn, has_partials=True):
     with patch.object(main_mod, "recover_part_files", recover_fn):
         result = main_mod.check_and_offer_recovery(parent=None)
 
-    return result, mock_box.instances
+    return result, mock_box.instances  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +117,10 @@ class TestUserDeclines:
 
         def _init_that_declines(self_inner, *a, **kw):
             original_init(self_inner, *a, **kw)
-            if len(mock_box.instances) == 1:
+            if len(mock_box.instances) == 1:  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
                 self_inner.exec.return_value = _RealMsgBox.StandardButton.No.value
 
-        mock_box.__init__ = _init_that_declines
+        mock_box.__init__ = _init_that_declines  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         monkeypatch.setattr(main_mod, "get_recordings_dir", MagicMock(return_value=Path("/fake")))
         monkeypatch.setattr(main_mod, "has_partial_recordings", MagicMock(return_value=True))

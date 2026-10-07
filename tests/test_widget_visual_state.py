@@ -185,8 +185,8 @@ class TestWidgetIntegration:
              patch("meetandread.widgets.main_widget.save_config"):
             w = MeetAndReadWidget()
         # Stub floating panels to avoid side effects in integration tests
-        w._floating_transcript_panel = MagicMock()
-        w._floating_transcript_panel.isVisible.return_value = False
+        w._floating_transcript_panel = MagicMock()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        w._floating_transcript_panel.isVisible.return_value = False  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         w._floating_settings_panel = MagicMock()
         w._floating_settings_panel.isVisible.return_value = False
         w._cc_overlay = MagicMock()
@@ -253,8 +253,8 @@ class TestGlassOpacity:
              patch("meetandread.widgets.main_widget.get_config", return_value=None), \
              patch("meetandread.widgets.main_widget.save_config"):
             w = MeetAndReadWidget()
-        w._floating_transcript_panel = MagicMock()
-        w._floating_transcript_panel.isVisible.return_value = False
+        w._floating_transcript_panel = MagicMock()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        w._floating_transcript_panel.isVisible.return_value = False  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         w._floating_settings_panel = MagicMock()
         w._floating_settings_panel.isVisible.return_value = False
         w._cc_overlay = MagicMock()
@@ -377,8 +377,8 @@ class TestIntegratedStateTransitions:
              patch("meetandread.widgets.main_widget.get_config", return_value=None), \
              patch("meetandread.widgets.main_widget.save_config"):
             w = MeetAndReadWidget()
-        w._floating_transcript_panel = MagicMock()
-        w._floating_transcript_panel.isVisible.return_value = False
+        w._floating_transcript_panel = MagicMock()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
+        w._floating_transcript_panel.isVisible.return_value = False  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         w._floating_settings_panel = MagicMock()
         w._floating_settings_panel.isVisible.return_value = False
         w._cc_overlay = MagicMock()

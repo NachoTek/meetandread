@@ -93,7 +93,7 @@ class TestRebuildSourceWrapper:
     def test_rebuild_fake_source(self):
         """_rebuild_source_wrapper should create a FakeAudioModule for type='fake'."""
         controller = RecordingController(enable_transcription=False)
-        controller._session = _FakeAudioSession()
+        controller._session = _FakeAudioSession()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         controller._session._config = SessionConfig(
             sources=[_make_fake_source_config(SILENCE_WAV, loop=True)],
         )
@@ -120,7 +120,7 @@ class TestRebuildSourceWrapper:
             "hostapi": 0,
         }
         controller = RecordingController(enable_transcription=False)
-        controller._session = _FakeAudioSession()
+        controller._session = _FakeAudioSession()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         controller._session._config = SessionConfig(
             sources=[SourceConfig(type="mic")],
         )
@@ -149,7 +149,7 @@ class TestRebuildSourceWrapper:
         hosted runners enumerate devices they cannot actually open.
         """
         controller = RecordingController(enable_transcription=False)
-        controller._session = _FakeAudioSession()
+        controller._session = _FakeAudioSession()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         controller._session._config = SessionConfig(
             sources=[SourceConfig(type="mic")],
         )
@@ -162,7 +162,7 @@ class TestRebuildSourceWrapper:
     def test_rebuild_unknown_type_returns_none(self):
         """_rebuild_source_wrapper should return None for unknown types."""
         controller = RecordingController(enable_transcription=False)
-        controller._session = _FakeAudioSession()
+        controller._session = _FakeAudioSession()  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
         controller._session._config = SessionConfig(
             sources=[SourceConfig(type="mic")],
         )
@@ -178,10 +178,10 @@ class TestSwapSessionSource:
         """swap_session_source should call session.swap_source."""
         controller = RecordingController(enable_transcription=False)
         fake_session = _FakeAudioSession()
-        controller._session = fake_session
+        controller._session = fake_session  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         wrapper = _FakeSourceWrapper("fake")
-        result = controller.swap_session_source("fake", wrapper)
+        result = controller.swap_session_source("fake", wrapper)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert result is True
         assert len(fake_session._swap_calls) == 1
@@ -192,10 +192,10 @@ class TestSwapSessionSource:
         controller = RecordingController(enable_transcription=False)
         fake_session = _FakeAudioSession()
         fake_session.swap_source = MagicMock(side_effect=RuntimeError("fail"))
-        controller._session = fake_session
+        controller._session = fake_session  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         wrapper = _FakeSourceWrapper("fake")
-        result = controller.swap_session_source("fake", wrapper)
+        result = controller.swap_session_source("fake", wrapper)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
         assert result is False
 
@@ -227,10 +227,10 @@ class TestAutoRecoverySwapsSource:
         """AUTO_RECOVERED outcome should call _rebuild_source_wrapper and swap_session_source."""
         controller = RecordingController(enable_transcription=False)
         fake_session = _FakeAudioSession()
-        fake_session._config = SessionConfig(
+        fake_session._config = SessionConfig(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             sources=[SourceConfig(type="mic")],
         )
-        controller._session = fake_session
+        controller._session = fake_session  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         # Start recording state
         controller._state = ControllerState.RECORDING
@@ -239,7 +239,7 @@ class TestAutoRecoverySwapsSource:
         # Simulate device loss
         loss_event = self._make_loss_event()
         result = controller.handle_device_event(loss_event)
-        assert result.outcome.value in ("total_loss", "degraded")
+        assert result.outcome.value in ("total_loss", "degraded")  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
 
         # Simulate reconnect within recovery window
         reconnect_event = self._make_reconnect_event()
@@ -252,7 +252,7 @@ class TestAutoRecoverySwapsSource:
                 mock_swap.side_effect = lambda st, w: swap_calls.append((st, w)) or True
                 result = controller.handle_device_event(reconnect_event)
 
-        assert result.outcome.value == "auto_recovered"
+        assert result.outcome.value == "auto_recovered"  # pyright: ignore[reportOptionalMemberAccess]  # intentional mock seam
         # For mic type, _rebuild_source_wrapper should have been called
         # (it may fail to create a real MicSource without hardware, but the call should happen)
         # swap_session_source should also have been attempted
@@ -262,10 +262,10 @@ class TestAutoRecoverySwapsSource:
         """retry_recovery should call _rebuild_source_wrapper and swap_session_source."""
         controller = RecordingController(enable_transcription=False)
         fake_session = _FakeAudioSession()
-        fake_session._config = SessionConfig(
+        fake_session._config = SessionConfig(  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
             sources=[SourceConfig(type="mic")],
         )
-        controller._session = fake_session
+        controller._session = fake_session  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
 
         # Set up lost state
         from meetandread.recording.controller import ActiveSourceIdentity

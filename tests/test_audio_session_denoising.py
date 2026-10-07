@@ -15,6 +15,7 @@ import time
 import logging
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 from dataclasses import dataclass
 
@@ -23,6 +24,9 @@ import pytest
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+if TYPE_CHECKING:
+    from meetandread.recording.controller import RecordingController
 
 from meetandread.audio import (
     AudioSession,
@@ -1086,7 +1090,7 @@ class TestControllerDenoisingWiring:
         ):
             yield
 
-        # Cleanup after test
+        # Cleanup after test  # pyright: ignore[reportUndefinedVariable]  # intentional mock seam
         ConfigManager._instance = None
         ConfigManager._initialized = False
 

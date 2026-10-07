@@ -190,9 +190,12 @@ class InteractionTraceFilter(QObject):
 
     def _handle_mouse_release(self, watched: QObject, event: QEvent) -> None:
         from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QMouseEvent
 
         if not isinstance(watched, QPushButton):
             return
+        if not isinstance(event, QMouseEvent):
+            return  # non-mouse release events carry no button
         if event.button() != Qt.MouseButton.LeftButton:
             return
         # A semantic funnel (record button, lobes, panels' own handlers)
@@ -232,7 +235,8 @@ class InteractionTraceFilter(QObject):
 
     @staticmethod
     def _window_target(widget: QObject) -> str:
-        name = widget.metaObject().className()
+        meta = widget.metaObject()
+        name = meta.className() if meta is not None else type(widget).__name__
         return f"window:{name}"
 
 
@@ -253,7 +257,8 @@ def install_interaction_trace_qt_filter(
     if _installed_filter is not None:
         return _installed_filter  # idempotent — one filter per run
     if app is None:
-        app = QApplication.instance()
+        instance = QApplication.instance()
+        app = instance if isinstance(instance, QApplication) else None
         if app is None:
             raise InteractionTraceFilterError("no QApplication to filter")
     filt = InteractionTraceFilter(app)
@@ -282,10 +287,12 @@ def remove_interaction_trace_qt_filter(
     global _installed_filter
     filt = _installed_filter
     if filt is not None:
-        if app is None:
-            app = QApplication.instance()
-        if app is not None:
-            app.removeEventFilter(filt)
+        current_app: Optional[QApplication] = app
+        if current_app is None:
+            instance = QApplication.instance()
+            current_app = instance if isinstance(instance, QApplication) else None
+        if current_app is not None:
+            current_app.removeEventFilter(filt)
         filt.deleteLater()
         _installed_filter = None
 

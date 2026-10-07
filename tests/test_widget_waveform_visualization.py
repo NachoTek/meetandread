@@ -57,7 +57,7 @@ def button(qapp):
     # Add to scene so paint() can work — keep scene alive for fixture lifetime
     scene = QGraphicsScene()
     scene.addItem(btn)
-    btn._test_scene = scene  # prevent GC
+    btn._test_scene = scene  # prevent GC  # pyright: ignore[reportAttributeAccessIssue]  # intentional mock seam
     return btn
 
 

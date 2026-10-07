@@ -635,7 +635,7 @@ class AudioSession:
         # Find the target wrapper first (read-only, under lock)
         with self._sources_lock:
             old_wrapper = None
-            old_index = None
+            old_index = -1
             for i, wrapper in enumerate(self._sources):
                 if wrapper.config.type == source_type:
                     old_wrapper = wrapper
@@ -942,6 +942,9 @@ class AudioSession:
         # Fast path: denoising disabled (init failure or already hard-disabled)
         if self._denoising_disabled or self._denoising_provider is None:
             return frames
+        config = self._config
+        if config is None:
+            return frames
 
         try:
             # Flatten to 1-D for provider (which expects mono float32)
@@ -952,15 +955,15 @@ class AudioSession:
                 self._stats.denoising.record_fallback(result.latency_ms, result.error)
             else:
                 self._stats.denoising.record_success(
-                    result.latency_ms, self._config.denoising_latency_budget_ms
+                    result.latency_ms, config.denoising_latency_budget_ms
                 )
 
             # Budget warning (not a hard failure)
-            if result.latency_ms > self._config.denoising_latency_budget_ms:
+            if result.latency_ms > config.denoising_latency_budget_ms:
                 _log.info(
                     "Denoising latency exceeded budget: %.1fms > %.1fms",
                     result.latency_ms,
-                    self._config.denoising_latency_budget_ms,
+                    config.denoising_latency_budget_ms,
                 )
 
             # Validate output shape
@@ -1415,7 +1418,8 @@ class AudioSession:
                 # caller's timeline accounting must still advance by n.
                 mixed = mixed[:remaining]
                 int16_bytes = self._float32_to_int16_bytes(mixed)
-                self._writer.write_frames_i16(int16_bytes)
+                if self._writer is not None:  # set in start(); mid-recording invariant
+                    self._writer.write_frames_i16(int16_bytes)
                 self._stats.frames_recorded += len(mixed)
                 # Switch to discard mode after final write
                 return n, True
@@ -1426,7 +1430,8 @@ class AudioSession:
 
         # Convert to int16 and write
         int16_bytes = self._float32_to_int16_bytes(mixed)
-        self._writer.write_frames_i16(int16_bytes)
+        if self._writer is not None:  # set in start(); mid-recording invariant
+            self._writer.write_frames_i16(int16_bytes)
         self._stats.frames_recorded += len(mixed)
         return n, False
     
