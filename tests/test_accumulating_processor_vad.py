@@ -299,7 +299,8 @@ class TestVADExceptionFallback:
         assert proc._last_audio_time is None
 
     def test_vad_exception_logged_as_warning(self, caplog):
-        """VAD exceptions produce a sanitized warning log."""
+        """VAD exceptions produce a sanitized named-event warning log —
+        error class only, never the exception payload (issue #130)."""
         proc = _make_processor()
 
         bad_vad = MagicMock(spec=VoiceActivityDetector)
@@ -309,7 +310,17 @@ class TestVADExceptionFallback:
         with caplog.at_level(logging.WARNING, logger="meetandread.transcription.accumulating_processor"):
             proc.feed_audio(_make_tone())
 
-        assert any("VAD exception" in r.message for r in caplog.records)
+        assert any(
+            r.message.startswith("vad_exception_fallback:")
+            and "error_class=RuntimeError" in r.message
+            for r in caplog.records
+        )
+        # The exception payload must not enter the log stream.
+        assert not any(
+            "test VAD error" in r.getMessage()
+            for r in caplog.records
+            if r.name == "meetandread.transcription.accumulating_processor"
+        )
 
 
 # ===========================================================================
