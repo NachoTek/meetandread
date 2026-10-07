@@ -4633,6 +4633,103 @@ class FloatingSettingsPanel(QWidget):
         # Restore current storage path values from config
         self._restore_storage_paths()
 
+        # Separator before log retention
+        log_retention_sep = QFrame()
+        log_retention_sep.setFrameShape(QFrame.Shape.HLine)
+        log_retention_sep.setObjectName("AethericSeparator")
+        settings_layout.addWidget(log_retention_sep)
+
+        # Log retention (issue #112): user-selectable retention period
+        # for normal-run INFO logs; startup cleanup honors it. Capture
+        # logs/artifacts are never auto-deleted at any value.
+        log_retention_row = QHBoxLayout()
+        log_retention_row.setSpacing(8)
+        log_retention_label = QLabel("Keep Logs For:")
+        log_retention_label.setStyleSheet("color: #E0E0E0; font-size: 12px;")
+        log_retention_label.setMinimumWidth(140)
+        log_retention_row.addWidget(log_retention_label)
+
+        self._log_retention_spin = QSpinBox()
+        self._log_retention_spin.setObjectName("AethericSpinBox")
+        self._log_retention_spin.setRange(1, 365)
+        self._log_retention_spin.setSuffix(" days")
+        self._log_retention_spin.setSingleStep(1)
+        self._log_retention_spin.setStyleSheet("""
+            QSpinBox {
+                color: #E0E0E0;
+                background-color: #1e1d1e;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 8px;
+                padding: 4px 28px 4px 8px;
+                font-size: 12px;
+                min-width: 90px;
+                min-height: 24px;
+            }
+            QSpinBox:hover {
+                border-color: #ff5545;
+            }
+            QSpinBox::up-button {
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                width: 20px;
+                border: none;
+                border-left: 1px solid rgba(255, 255, 255, 30);
+                border-top-right-radius: 8px;
+            }
+            QSpinBox::up-button:hover {
+                background-color: rgba(255, 255, 255, 20);
+            }
+            QSpinBox::up-arrow {
+                image: url(%s);
+                width: 12px;
+                height: 12px;
+            }
+            QSpinBox::down-button {
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                width: 20px;
+                border: none;
+                border-left: 1px solid rgba(255, 255, 255, 30);
+                border-bottom-right-radius: 8px;
+            }
+            QSpinBox::down-button:hover {
+                background-color: rgba(255, 255, 255, 20);
+            }
+            QSpinBox::down-arrow {
+                image: url(%s);
+                width: 12px;
+                height: 12px;
+            }
+        """ % (ARROW_UP_SVG, ARROW_DOWN_SVG))
+        self._log_retention_spin.setCursor(Qt.CursorShape.ArrowCursor)
+        self._log_retention_spin.setToolTip(
+            "How long normal-run log files are kept before the\n"
+            "startup cleanup deletes them (issue diagnostics capture\n"
+            "logs are never deleted automatically — clean those up\n"
+            "from the Issue Reporter)."
+        )
+        # Restore from config
+        try:
+            from meetandread.config import get_config
+            _retention = get_config("logging.log_retention_days")
+            if isinstance(_retention, int) and not isinstance(_retention, bool) and 1 <= _retention <= 365:
+                self._log_retention_spin.setValue(int(_retention))
+            else:
+                self._log_retention_spin.setValue(30)
+        except Exception:
+            self._log_retention_spin.setValue(30)
+        self._log_retention_spin.valueChanged.connect(self._on_log_retention_changed)
+        log_retention_row.addWidget(self._log_retention_spin)
+        log_retention_row.addStretch()
+        settings_layout.addLayout(log_retention_row)
+
+        self._log_retention_note = QLabel(
+            "Issue-capture diagnostics are kept until you delete them in the Issue Reporter"
+        )
+        self._log_retention_note.setStyleSheet("color: #888; font-size: 10px;")
+        self._log_retention_note.setWordWrap(True)
+        settings_layout.addWidget(self._log_retention_note)
+
         settings_layout.addStretch()
         self._content_stack.addWidget(self._wrap_settings_page_for_scroll(settings_page, "settings"))
 
@@ -6651,6 +6748,26 @@ class FloatingSettingsPanel(QWidget):
             )
         logger.debug(
             "waveform_set: enabled=%s", enabled
+        )
+
+    def _on_log_retention_changed(self, value: int) -> None:
+        """Handle log-retention spinbox change (issue #112).
+
+        Persists the setting immediately; the next startup's retention
+        cleanup honors it. Capture-mode logs and capture artifacts are
+        excluded from that cleanup at any value.
+        """
+        try:
+            from meetandread.config import set_config, save_config
+            set_config("logging.log_retention_days", int(value))
+            save_config()
+        except Exception as exc:
+            logger.warning(
+                "log_retention_save_failed: error_class=%s",
+                type(exc).__name__,
+            )
+        logger.debug(
+            "log_retention_set: days=%d source=handler", value
         )
 
     def _on_clustering_threshold_changed(self, value: float) -> None:

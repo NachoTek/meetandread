@@ -337,6 +337,8 @@ class ConfigManager:
             "storage_paths.transcripts_path",
             "storage_paths.recordings_path",
             "storage_paths.logs_path",
+            # Logging settings (issue #112: user-selectable log retention)
+            "logging.log_retention_days",
         }
     
     def get_config_path(self) -> str:

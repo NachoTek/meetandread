@@ -407,6 +407,53 @@ class StoragePaths:
 
 
 @dataclass
+class LoggingSettings:
+    """Configuration for application logging behavior.
+
+    Attributes:
+        log_retention_days: How long normal-run INFO log files are kept
+            before the startup cleanup deletes them (issue #112).
+            Range: 1-365. Default: 30 (the pre-setting hard-coded value).
+            Capture-mode DEBUG logs and capture artifacts are excluded
+            from automatic cleanup at ANY retention value.
+    """
+    log_retention_days: int = field(
+        default=30,
+        metadata={"description": "Days to keep normal-run INFO logs before startup cleanup (1-365)"}
+    )
+
+    @staticmethod
+    def _coerce_int(value: object, fallback: int, min_val: int, max_val: int) -> int:
+        """Coerce a value to int, clamping to [min_val, max_val] with fallback.
+
+        Non-int values (including bools) and out-of-range values fall
+        back to the default rather than raising — a malformed config
+        must never break startup.
+        """
+        if isinstance(value, bool) or not isinstance(value, int):
+            return fallback
+        if value < min_val or value > max_val:
+            return fallback
+        return value
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LoggingSettings":
+        """Create from dictionary, using defaults for missing/invalid fields."""
+        return cls(
+            log_retention_days=cls._coerce_int(
+                data.get("log_retention_days", cls.log_retention_days),
+                cls.log_retention_days,
+                min_val=1,
+                max_val=365,
+            ),
+        )
+
+
+@dataclass
 class AppSettings:
     """Root container for all application settings.
     
@@ -415,14 +462,15 @@ class AppSettings:
     
     Attributes:
         config_version: Configuration schema version for migrations.
-            Current: 1
+            Current: 9
         model: Model selection settings.
         transcription: Transcription behavior settings.
         hardware: Hardware detection and recommendation settings.
         ui: UI behavior and appearance settings.
+        logging: Logging behavior settings (log retention).
     """
     config_version: int = field(
-        default=8,
+        default=9,
         metadata={"description": "Configuration schema version for migrations"}
     )
     model: ModelSettings = field(default_factory=ModelSettings)
@@ -431,6 +479,7 @@ class AppSettings:
     ui: UISettings = field(default_factory=UISettings)
     speaker: SpeakerSettings = field(default_factory=SpeakerSettings)
     storage_paths: StoragePaths = field(default_factory=StoragePaths)
+    logging: LoggingSettings = field(default_factory=LoggingSettings)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -442,8 +491,9 @@ class AppSettings:
             "ui": self.ui.to_dict(),
             "speaker": self.speaker.to_dict(),
             "storage_paths": self.storage_paths.to_dict(),
+            "logging": self.logging.to_dict(),
         }
-
+    
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AppSettings":
         """Create from dictionary, using defaults for missing/invalid fields."""
@@ -454,6 +504,7 @@ class AppSettings:
         ui_data = data.get("ui", {})
         speaker_data = data.get("speaker", {})
         storage_paths_data = data.get("storage_paths", {})
+        logging_data = data.get("logging", {})
         
         return cls(
             config_version=data.get("config_version", cls.config_version),
@@ -463,6 +514,7 @@ class AppSettings:
             ui=UISettings.from_dict(ui_data) if isinstance(ui_data, dict) else UISettings(),
             speaker=SpeakerSettings.from_dict(speaker_data) if isinstance(speaker_data, dict) else SpeakerSettings(),
             storage_paths=StoragePaths.from_dict(storage_paths_data) if isinstance(storage_paths_data, dict) else StoragePaths(),
+            logging=LoggingSettings.from_dict(logging_data) if isinstance(logging_data, dict) else LoggingSettings(),
         )
 
     @classmethod

@@ -12,27 +12,30 @@ submit — end to end.
 1. **Recovery offer** (standalone recovery, amended ADR 0003): on
    startup, scan for resumable capture directories and offer to
    resume the newest; declining proceeds to a fresh run.
-2. **Describe**: read the user's free-text description of the
+2. **Cleanup offer** (issue #112): when old capture runs / Diagnostics
+   Bundles sit on disk, list them and let the user delete per-run or
+   in bulk (capture artifacts are never deleted automatically).
+3. **Describe**: read the user's free-text description of the
    problem (carried into the capture directory, and forward to
    review/submission).
-3. **Single-instance gate** (decided 2026-09-05): if the app is
+4. **Single-instance gate** (decided 2026-09-05): if the app is
    already running, tell the user to close it and wait until they
    have — capture must start from a clean single instance.
-4. **Launch + reproduce**: create a FRESH capture directory
+5. **Launch + reproduce**: create a FRESH capture directory
    (``new_capture_dir``, ADR 0005), write the description, launch the
    app in Issue Capture Mode, and supervise. The user reproduces the
    bug in the app; the wizard waits.
-5. **Stop**: the user presses Enter in the wizard to stop the run —
+6. **Stop**: the user presses Enter in the wizard to stop the run —
    the reporter signals the app (CTRL_BREAK, the graceful user-stop
    path the capture-mode tests drive) and waits for the clean exit.
    If the app crashed on its own, the wizard reports the crash and
    CONTINUES — the crash itself is always reportable.
-6. **Review** (issue #108): assemble the Diagnostics Bundle from the
+7. **Review** (issue #108): assemble the Diagnostics Bundle from the
    capture directory alone (redaction first — nothing unredacted is
    ever shown), and show the user "here is what will be sent". On
    any assembly/redaction failure the user is told submission is
    unavailable and NO artifact is written (fail-closed, ADR 0004).
-7. **Submit** (issue #109, the review approval): after the review
+8. **Submit** (issue #109, the review approval): after the review
    screen, ask to open the prefilled GitHub New Issue form in the
    user's default browser — the ONLY outbound action of the whole
    feature (ADR 0004) — and copy the bundle's full local path to
@@ -74,7 +77,9 @@ from meetandread.reporter import (
     RunOutcome,
     SupervisedRun,
     app_is_running,
+    delete_capture_runs,
     find_resumable_captures,
+    list_capture_runs,
     new_capture_dir,
     resume_capture,
     scan_capture_state,
@@ -193,6 +198,81 @@ def offer_recovery(
         print_fn("Skipped.")
     print_fn("No more interrupted runs — starting a fresh flow.")
     return None
+
+
+def offer_cleanup(
+    data_base: Path,
+    input_fn: InputFn,
+    print_fn: PrintFn,
+) -> List[Path]:
+    """The manual cleanup step (issue #112): list the capture runs /
+    Diagnostics Bundles on disk and delete them per-run or in bulk.
+
+    Capture artifacts are excluded from the app's automatic retention
+    cleanup ENTIRELY (the 2026-09-05 decision) — this step is where
+    their cleanup lives instead. Offered at wizard startup on the way
+    to a fresh run (after the recovery offer), so it is reachable
+    without running a capture. Declining skips straight to describe.
+
+    Deleting a run removes its capture directory — the bundle lives
+    inside it — and nothing else: ``delete_capture_runs`` only ever
+    touches directories inside ``<data_base>/captures`` (the user's
+    Recordings/Audio/Transcripts live in a different tree and are
+    structurally out of reach). Returns the directories deleted.
+    """
+    listings = list_capture_runs(data_base)
+    if not listings:
+        return []
+    total_mb = sum(item.size_bytes for item in listings) / (1024 * 1024)
+    print_fn(
+        f"\n{len(listings)} capture run(s) from previous sessions are\n"
+        f"on disk ({total_mb:.1f} MB). Capture diagnostics are never\n"
+        "deleted automatically — you decide here."
+    )
+    for i, listing in enumerate(listings, start=1):
+        bundle = " [bundle]" if listing.has_bundle else ""
+        print_fn(
+            f"  {i}. {listing.path.name} ({listing.state_name}{bundle})"
+        )
+    print_fn(
+        "  A. Delete ALL listed runs\n"
+        "  <number>[,<number>...] to delete specific runs\n"
+        "  Enter to keep them all and continue"
+    )
+    answer = input_fn("Cleanup> ").strip().lower()
+    targets: List[Path] = []
+    if answer in ("a", "all"):
+        targets = [item.path for item in listings]
+    elif answer:
+        for part in answer.replace(" ", "").split(","):
+            if not part.isdigit():
+                continue
+            idx = int(part)
+            if 1 <= idx <= len(listings):
+                targets.append(listings[idx - 1].path)
+    if not targets:
+        print_fn("Nothing deleted — keeping all capture runs.")
+        return []
+    named = ", ".join(t.name for t in targets)
+    if not _ask_yes(
+        input_fn,
+        f"Permanently delete {len(targets)} run(s) ({named})? [y/N] ",
+    ):
+        print_fn("Nothing deleted.")
+        return []
+    deleted = delete_capture_runs(targets, data_base)
+    failed = len(targets) - len(deleted)
+    if deleted:
+        print_fn(
+            f"Deleted {len(deleted)} capture run(s): "
+            + ", ".join(t.name for t in deleted)
+        )
+    if failed:
+        print_fn(
+            f"({failed} run(s) could not be fully deleted — a file may\n"
+            "be locked; close other programs and try again.)"
+        )
+    return deleted
 
 
 def gate_on_single_instance(
@@ -332,6 +412,12 @@ def run_wizard(
     resumed = offer_recovery(data_base, input_fn, print_fn)
     if resumed is not None:
         return None
+
+    # 1b. Manual cleanup (issue #112): capture artifacts never age out
+    #     automatically — the wizard startup is where the user reviews
+    #     and deletes old capture runs / Diagnostics Bundles. Offered
+    #     only when runs exist; declining (or having none) continues.
+    offer_cleanup(data_base, input_fn, print_fn)
 
     # 2. Describe (carried forward for review/submission, #108/#109).
     description = ask_description(input_fn, print_fn)

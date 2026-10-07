@@ -1,4 +1,4 @@
-"""Tests for ui.waveform_enabled config contract.
+﻿"""Tests for ui.waveform_enabled config contract.
 
 Covers model field, persistence migration, save/reload round-trip,
 type validation, and edge cases per T01 must-haves and negative tests.
@@ -140,7 +140,7 @@ class TestWaveformEnabledAppSettings:
 # ============================================================================
 
 class TestWaveformEnabledMigration:
-    """Tests for v6→v7 migration adding waveform_enabled."""
+    """Tests for v6â†’v7 migration adding waveform_enabled."""
 
     def test_migration_from_v6_adds_waveform_enabled(self, persistence):
         """Migrating a v6 config adds waveform_enabled=True to ui."""
@@ -153,7 +153,7 @@ class TestWaveformEnabledMigration:
             },
         }
         migrated = persistence.migrate_config(old_config, 6)
-        assert migrated["config_version"] == 8
+        assert migrated["config_version"] == 9
         assert migrated["ui"]["waveform_enabled"] is True
         # Existing values preserved
         assert migrated["ui"]["show_confidence_legend"] is False
@@ -231,7 +231,7 @@ class TestWaveformEnabledPersistence:
         }
         config_path.write_text(json.dumps(v6_config, indent=2))
         loaded = persistence.load_settings()
-        assert loaded.config_version == 8
+        assert loaded.config_version == 9
         assert loaded.ui.waveform_enabled is True
         assert loaded.ui.show_confidence_legend is True
 
@@ -261,7 +261,7 @@ class TestWaveformEnabledManager:
     def test_type_validation_rejects_non_bool(self, manager):
         """Setting a non-bool value raises ValueError. Note: None bypasses
         validation by design in the existing ConfigManager to support
-        Optional fields — this is consistent with other bool fields."""
+        Optional fields â€” this is consistent with other bool fields."""
         with pytest.raises(ValueError, match="expected bool"):
             manager.set("ui.waveform_enabled", "yes")
         with pytest.raises(ValueError, match="expected bool"):
@@ -382,3 +382,4 @@ class TestWaveformToggleHandler:
         panel = panel_and_mocks
         assert "waveform" in panel._waveform_checkbox.text().lower()
         assert "recording" in panel._waveform_checkbox.text().lower()
+

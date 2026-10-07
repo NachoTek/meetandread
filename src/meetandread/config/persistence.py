@@ -32,7 +32,7 @@ class ConfigVersion:
 
 
 # Current config version - bump this when schema changes
-CURRENT_CONFIG_VERSION = 8
+CURRENT_CONFIG_VERSION = 9
 
 # Version history for migrations
 VERSION_HISTORY: Dict[int, ConfigVersion] = {
@@ -44,6 +44,7 @@ VERSION_HISTORY: Dict[int, ConfigVersion] = {
     6: ConfigVersion(6, "Added CC overlay font size and auto-open settings to TranscriptionSettings"),
     7: ConfigVersion(7, "Added waveform_enabled to UISettings"),
     8: ConfigVersion(8, "Added StoragePaths for configurable storage directories"),
+    9: ConfigVersion(9, "Added LoggingSettings with user-selectable log retention (issue #112)"),
 }
 
 
@@ -388,7 +389,16 @@ class SettingsPersistence:
             # Add storage_paths section for configurable directories
             if "storage_paths" not in config_dict:
                 config_dict["storage_paths"] = {}
-        
+
+        if from_version == 8 and to_version == 9:
+            # Add logging section with user-selectable normal-run log
+            # retention (issue #112); 30 days was the pre-setting
+            # hard-coded default.
+            if "logging" not in config_dict:
+                config_dict["logging"] = {}
+            if "log_retention_days" not in config_dict["logging"]:
+                config_dict["logging"]["log_retention_days"] = 30
+
         return config_dict
     
     def delete_config(self) -> bool:
