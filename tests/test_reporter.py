@@ -51,6 +51,7 @@ from meetandread.reporter import (
     DESCRIPTION_FILE_NAME,
     TERMINATION_FILE_NAME,
     RunOutcome,
+    default_app_command,
     find_resumable_captures,
     new_capture_dir,
     read_description,
@@ -110,10 +111,69 @@ class TestDefensiveBoundary:
             f"reporter imports heavy modules: {out.stdout.strip()}"
         )
 
+    def test_importing_reporter_bootstrap_pulls_no_audio_or_qt_stack(self):
+        """The frozen entry module (packaging #111) must keep the
+        wizard's stdlib-only import graph (ADR 0003): a user whose app
+        cannot start at all still reaches the wizard."""
+        import os as _os
+        import subprocess as sp
+
+        code = (
+            "import sys, meetandread.reporter_bootstrap; "
+            "heavy = sorted(m for m in sys.modules "
+            "if m.split('.')[0] in {"
+            + ",".join(repr(m) for m in sorted(_HEAVY_TOP_LEVELS))
+            + "}); "
+            "print(heavy)"
+        )
+        env = dict(_os.environ)
+        env["PYTHONPATH"] = str(
+            Path(reporter.__file__).resolve().parent.parent
+        )
+        out = sp.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+        assert out.returncode == 0, out.stderr
+        assert out.stdout.strip() == "[]", (
+            f"reporter_bootstrap imports heavy modules: "
+            f"{out.stdout.strip()}"
+        )
+
     def test_reporter_module_has_no_qt_imports_in_source(self):
         src = Path(reporter.__file__).read_text(encoding="utf-8")
         for banned in ("PyQt6", "sounddevice", "pyaudiowpatch"):
             assert banned not in src
+
+
+# ---------------------------------------------------------------------------
+# Frozen-build default app command (packaging #111)
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultAppCommand:
+    """The supervised app command when none is injected: the frozen
+    reporter (packaging #111) defaults to the sibling meetandread.exe
+    in the same onedir bundle; a dev interpreter keeps the
+    ``python -m meetandread`` bootstrap."""
+
+    def test_dev_default_is_interpreter_dash_m(self, monkeypatch):
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        cmd = default_app_command()
+        assert cmd[0] == sys.executable
+        assert cmd[1:] == ["-m", "meetandread"]
+
+    def test_frozen_default_is_sibling_app_exe(self, monkeypatch, tmp_path):
+        reporter_exe = tmp_path / "dist" / "issue-reporter.exe"
+        monkeypatch.setattr(
+            sys, "executable", str(reporter_exe), raising=False
+        )
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        cmd = default_app_command()
+        assert cmd == [str(tmp_path / "dist" / "meetandread.exe")]
 
 
 # ---------------------------------------------------------------------------

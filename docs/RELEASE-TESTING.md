@@ -13,6 +13,9 @@ python validate_build.py
 
 # 3. Test manually (optional)
 dist\meetandread\meetandread.exe
+
+# 4. Smoke the Issue Reporter entry (issue #111)
+dist\meetandread\issue-reporter.exe
 ```
 
 If validation passes, push your tag:
@@ -27,8 +30,27 @@ git push origin v0.19.2
 1. **Build directory exists** — Verifies PyInstaller ran successfully
 2. **Required DLLs present** — Checks for pywhispercpp, sherpa-onnx, PortAudio, PyQt6, etc.
 3. **Module imports work** — Imports each required module from the built exe
-4. **Assets bundled** — Verifies SVG icons and test data are included
-5. **Executable launches** — Tests that the exe starts without DLL errors
+4. **Issue Reporter entry point** — `issue-reporter.exe` exists beside the app exe (issue #111)
+5. **Assets bundled** — Verifies SVG icons and test data are included
+6. **Executable launches** — Tests that the exe starts without DLL errors
+
+## Smoke Test the Issue Reporter (issue #111)
+
+The bundle contains two exes: `meetandread.exe` (the app) and
+`issue-reporter.exe` (the Issue Reporter wizard, ADR 0003). Before
+tagging a release:
+
+1. Run `dist\meetandread\issue-reporter.exe` — the console wizard
+   must reach the "describe the problem" prompt WITHOUT the app's
+   subsystems (this is the startup-crash reporting path).
+2. Optionally complete a wizard run end to end (describe -> launch ->
+   reproduce -> stop -> review -> submit) to verify the frozen
+   reporter supervises the frozen app.
+3. Run `install-shortcuts.ps1` from the bundle and check both
+   Start-menu shortcuts launch their exes.
+
+The manual smoke check on a clean Windows install (no Python) is a
+maintainer step — record it in the release notes.
 
 ## CI Workflow
 

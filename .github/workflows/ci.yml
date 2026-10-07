@@ -46,6 +46,12 @@ jobs:
       - name: Build executable
         run: pyinstaller meetandread.spec --noconfirm
 
+      # Issue #111: the Start-menu shortcut installer ships at the
+      # bundle root (the release zip is portable - no installer - so
+      # this script IS the documented shortcut mechanism).
+      - name: Stage shortcut installer in bundle
+        run: Copy-Item install-shortcuts.ps1 dist/meetandread/
+
       - name: Validate build contains required libraries
         run: python validate_build.py
 
@@ -80,6 +86,9 @@ jobs:
 
       - name: Build
         run: pyinstaller meetandread.spec --noconfirm
+
+      - name: Stage shortcut installer in bundle
+        run: Copy-Item install-shortcuts.ps1 dist/meetandread/
 
       - name: Validate build contains required libraries
         run: python validate_build.py

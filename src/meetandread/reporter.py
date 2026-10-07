@@ -391,6 +391,24 @@ def _classify_exit(marker_present: bool, exit_code: int) -> RunOutcome:
     return RunOutcome.CRASH
 
 
+def default_app_command() -> List[str]:
+    """The supervised app command when the caller injects none.
+
+    Frozen reporter (packaging #111): the sibling ``meetandread.exe``
+    in the same onedir bundle (``sys._MEIPASS``-adjacent — for a
+    onedir build ``sys.executable`` IS the reporter exe, so the app
+    exe is its directory sibling). Development: the current
+    interpreter running the app's lightweight bootstrap, with no
+    ``-m`` under a frozen interpreter by construction.
+    """
+    if getattr(sys, "frozen", False):
+        app_exe = (
+            Path(sys.executable).parent / "meetandread.exe"
+        )
+        return [str(app_exe)]
+    return [sys.executable, "-m", "meetandread"]
+
+
 def launch_app(
     capture_dir: Path,
     app_command: Optional[List[str]] = None,
@@ -401,18 +419,21 @@ def launch_app(
     The command defaults to the current interpreter running the
     lightweight bootstrap (``python -m meetandread``) — the same
     production entrypoint the frozen exe and console script use —
-    with the capture flag FIRST. ``app_command`` overrides the
-    program (tests inject a stub, packaging #111 injects the frozen
-    exe path). The child is detached from the reporter's console
-    process group so the wizard's Ctrl+C (user stop) does not kill
-    the app out from under the supervised stop flow.
+    with the capture flag FIRST. When the REPORTER itself is frozen
+    (packaging #111), the default becomes the sibling ``meetandread.exe``
+    in the same bundle — a frozen interpreter has no ``-m``; the
+    packaged reporter must supervise the packaged app. ``app_command``
+    overrides the program (tests inject a stub). The child is detached
+    from the reporter's console process group so the wizard's Ctrl+C
+    (user stop) does not kill the app out from under the supervised
+    stop flow.
 
     The reporter does NOT suppress the app's stderr: startup failures
     must be visible to the user, and the capture log is the durable
     record either way.
     """
     if app_command is None:
-        app_command = [sys.executable, "-m", "meetandread"]
+        app_command = default_app_command()
     cmd = list(app_command) + [ISSUE_CAPTURE_FLAG, str(capture_dir)]
     env = dict(os.environ)
     if extra_env:

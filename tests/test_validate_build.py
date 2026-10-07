@@ -34,11 +34,14 @@ def _make_bundle(
     *,
     svg: str | None = None,
     test_data: str | None = None,
+    reporter_exe: bool = False,
 ) -> Path:
     """Create ``dist/meetandread`` populated with optional datas.
 
     ``svg``/``test_data`` are bundle-relative file paths to create, e.g.
-    ``"_internal/meetandread/widgets/icon.svg"``.
+    ``"_internal/meetandread/widgets/icon.svg"``. ``reporter_exe``
+    places a placeholder ``issue-reporter.exe`` at the bundle root
+    (PyInstaller's onedir layout puts both exes there).
     """
     bundle = tmp_path / "dist" / "meetandread"
     for relative in (svg, test_data):
@@ -46,6 +49,9 @@ def _make_bundle(
             target = bundle / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"data")
+    if reporter_exe:
+        bundle.mkdir(parents=True, exist_ok=True)
+        (bundle / "issue-reporter.exe").write_bytes(b"MZ-placeholder")
     return bundle
 
 
@@ -128,3 +134,23 @@ class TestCheckTestData:
         empty_dir.mkdir(parents=True, exist_ok=True)
         validate_build.BUILD_DIR = str(bundle)
         assert validate_build.check_test_data() is False
+
+
+class TestCheckReporterEntry:
+    """check_reporter_entry (issue #111): a bundle missing the Issue
+    Reporter exe — the second frozen entry point (ADR 0003) — must
+    fail validation, so a broken reporter build cannot ship."""
+
+    def test_reporter_exe_present_passes(
+        self, validate_build, tmp_path
+    ):
+        bundle = _make_bundle(tmp_path, reporter_exe=True)
+        validate_build.BUILD_DIR = str(bundle)
+        assert validate_build.check_reporter_entry() is True
+
+    def test_missing_reporter_exe_fails(
+        self, validate_build, tmp_path
+    ):
+        bundle = _make_bundle(tmp_path)
+        validate_build.BUILD_DIR = str(bundle)
+        assert validate_build.check_reporter_entry() is False
