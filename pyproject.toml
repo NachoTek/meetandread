@@ -62,6 +62,11 @@ dev = [
 # --issue-capture and configures capture logging BEFORE any heavy app
 # import — same discipline as `python -m meetandread` and the frozen exe.
 meetandread = "meetandread.__main__:run"
+# The Issue Reporter's own console script (packaging #111): the
+# reporter's lightweight bootstrap keeps the entry a named module with
+# the wizard's stdlib-only import graph (ADR 0003), and the PyInstaller
+# spec analyzes THIS module for the second frozen exe.
+issue-reporter = "meetandread.reporter_bootstrap:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]

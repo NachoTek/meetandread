@@ -177,6 +177,23 @@ def check_imports():
     return True
 
 
+def check_reporter_entry():
+    """Issue Reporter entry point (issue #111, ADR 0003): the second
+    frozen exe must exist beside the app exe. A build that drops or
+    breaks the reporter entry point must fail validation — the
+    bundle-validation CI gate depends on this check."""
+    print("\n🔍 Checking Issue Reporter entry point...")
+    exe_path = os.path.join(BUILD_DIR, "issue-reporter.exe")
+    if not os.path.exists(exe_path):
+        print(f"❌ Issue Reporter executable not found: {exe_path}")
+        print("   The spec must build issue-reporter.exe alongside "
+              "meetandread.exe (issue #111)")
+        return False
+    size_kb = os.path.getsize(exe_path) // 1024
+    print(f"✅ Found issue-reporter.exe ({size_kb} KB)")
+    return True
+
+
 def check_test_data():
     """Check that test data files are present."""
     print("\n🔍 Checking test data and assets...")
@@ -224,6 +241,7 @@ def main():
         check_build_directory,
         check_required_dlls,
         check_imports,
+        check_reporter_entry,
         check_test_data,
     ]
 

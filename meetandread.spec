@@ -3,6 +3,11 @@
 Collects all native DLLs that PyInstaller cannot auto-detect (ctypes-loaded,
 delvewheel-patched, and dynamically-discovered libraries).
 
+Produces TWO executables in one onedir bundle (issue #111):
+  - meetandread.exe        — the application
+  - issue-reporter.exe     — the Issue Reporter wizard (ADR 0003:
+                             stdlib-only supervisor, no app subsystems)
+
 Usage:
     pyinstaller meetandread.spec --noconfirm
 """
@@ -137,6 +142,10 @@ a = Analysis(
     datas=[
         ('src/meetandread/widgets/*.svg', 'meetandread/widgets'),
         ('src/meetandread/performance/test_data/*', 'meetandread/performance/test_data'),
+        # Start-menu shortcut installer (issue #111) ships at the
+        # bundle root — the documented install mechanism (no installer
+        # exists; releases are portable zips).
+        ('install-shortcuts.ps1', '.'),
     ],
     hiddenimports=hiddenimports,
     hookspath=['hooks'],  # custom hooks override broken contrib hooks
@@ -145,9 +154,64 @@ a = Analysis(
     noarchive=False,
 )
 
+# Issue Reporter entry point (issue #111, ADR 0003): its own Analysis
+# with an intentionally MINIMAL graph — the stdlib-only reporter chain
+# (reporter_bootstrap -> reporter_wizard -> reporter -> capture_mode,
+# plus the lazily-imported assembly modules diagnostics_bundle,
+# manual_submission, transcript_canary, environment_info,
+# interaction_trace, resource_snapshots, durable_jsonl,
+# logging_setup). Never the app's audio/Qt subsystems: a user whose
+# app cannot start at all must still reach the wizard. The shared
+# COLLECT below bundles both EXEs into one onedir; the reporter's few
+# extra pure-Python modules are negligible, and sharing the bundle
+# guarantees the reporter can always find the app exe it supervises
+# (reporter.default_app_command, frozen branch).
+reporter_hiddenimports = [
+    'meetandread.reporter_bootstrap',
+    'meetandread.reporter_wizard',
+    'meetandread.reporter',
+    'meetandread.capture_mode',
+    'meetandread.logging_setup',
+    'meetandread.diagnostics_bundle',
+    'meetandread.manual_submission',
+    'meetandread.transcript_canary',
+    'meetandread.environment_info',
+    'meetandread.interaction_trace',
+    'meetandread.resource_snapshots',
+    'meetandread.durable_jsonl',
+]
+
+reporter_excludes = [
+    # The app's subsystems must never be needed to reach the wizard.
+    'PyQt6',
+    'numpy',
+    'scipy',
+    'sounddevice',
+    'pyaudiowpatch',
+    'pywhispercpp',
+    'sherpa_onnx',
+    'soxr',
+    'comtypes',
+    'webrtcvad',
+    'psutil',
+]
+
+ra = Analysis(
+    [os.path.join('src', 'meetandread', 'reporter_bootstrap.py')],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=reporter_hiddenimports,
+    hookspath=[],
+    runtimehooks=[],  # no native DLL discovery needed — stdlib only
+    excludes=reporter_excludes,
+    noarchive=False,
+)
+
 # --- Bundle -----------------------------------------------------------------
 
 pyz = PYZ(a.pure)
+reporter_pyz = PYZ(ra.pure)
 
 exe = EXE(
     pyz,
@@ -167,10 +231,31 @@ exe = EXE(
     entitlements_file=None,
 )
 
+reporter_exe = EXE(
+    reporter_pyz,
+    ra.scripts,
+    [],
+    exclude_binaries=True,
+    name='issue-reporter',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=True,  # the wizard is a console flow (describe/review prompts)
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
 coll = COLLECT(
     exe,
+    reporter_exe,
     a.binaries,
+    ra.binaries,
     a.datas,
+    ra.datas,
     strip=False,
     upx=False,
     upx_exclude=[],

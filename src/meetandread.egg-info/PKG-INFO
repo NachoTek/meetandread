@@ -24,13 +24,15 @@ Requires-Dist: soxr>=0.3.0
 Requires-Dist: comtypes>=1.2.0
 Requires-Dist: pyaudiowpatch>=0.2.12
 Requires-Dist: pywhispercpp>=1.3.0
-Requires-Dist: sherpa-onnx>=1.10.0
+Requires-Dist: sherpa-onnx==1.13.5
+Requires-Dist: sherpa-onnx-core==1.13.5
 Requires-Dist: psutil>=5.9.0
 Requires-Dist: webrtcvad-wheels>=2.0.14
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0.0; extra == "dev"
 Requires-Dist: pytest-qt>=4.0.0; extra == "dev"
 Requires-Dist: pytest-timeout>=2.1.0; extra == "dev"
+Requires-Dist: pytest-xdist>=3.6; extra == "dev"
 Requires-Dist: black>=22.0.0; extra == "dev"
 Requires-Dist: mypy>=1.0.0; extra == "dev"
 Requires-Dist: flake8>=7.0.0; extra == "dev"
@@ -129,6 +131,21 @@ Download the latest zip from [GitHub Releases](https://github.com/NachoTek/meeta
 3. Run `meetandread.exe`
 
 No Python installation required.
+
+#### Start-menu shortcuts (optional)
+
+The bundle ships `install-shortcuts.ps1` — the documented shortcut
+mechanism (there is no installer). After extracting, run it once from
+the bundle folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-shortcuts.ps1
+```
+
+This creates two Start-menu entries: **MeetAndRead** and **MeetAndRead
+Issue Reporter**. Keep the Issue Reporter shortcut handy — if the app
+ever won't start at all, launch the reporter from the Start menu and it
+will walk you through reporting the startup crash ([ADR 0003](docs/adr/0003-issue-reporter-supervisor.md)).
 
 ### From Source
 
@@ -278,6 +295,7 @@ python validate_build.py
 The validation script checks:
 - All required DLLs are bundled (pywhispercpp, sherpa-onnx, PortAudio, MSVC runtimes)
 - Python modules can import from the built exe
+- The Issue Reporter entry point (`issue-reporter.exe`) is present (issue #111)
 - Assets (icons, test data) are included
 - Executable launches without errors
 

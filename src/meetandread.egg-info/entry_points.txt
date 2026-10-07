@@ -1,2 +1,3 @@
 [console_scripts]
+issue-reporter = meetandread.reporter_bootstrap:run
 meetandread = meetandread.__main__:run

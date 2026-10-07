@@ -8,6 +8,7 @@
   - [ ] Build succeeds: `pyinstaller meetandread.spec --noconfirm`
   - [ ] Validation passes: `python validate_build.py`
 - [ ] Manual test: Run `dist\meetandread\meetandread.exe` and verify it opens
+- [ ] Manual test: Run `dist\meetandread\issue-reporter.exe` and verify the wizard reaches the describe prompt (issue #111)
 - [ ] Test basic functionality: start/stop recording, check transcription works
 
 ## Create Release

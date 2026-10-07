@@ -91,6 +91,21 @@ Download the latest zip from [GitHub Releases](https://github.com/NachoTek/meeta
 
 No Python installation required.
 
+#### Start-menu shortcuts (optional)
+
+The bundle ships `install-shortcuts.ps1` — the documented shortcut
+mechanism (there is no installer). After extracting, run it once from
+the bundle folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-shortcuts.ps1
+```
+
+This creates two Start-menu entries: **MeetAndRead** and **MeetAndRead
+Issue Reporter**. Keep the Issue Reporter shortcut handy — if the app
+ever won't start at all, launch the reporter from the Start menu and it
+will walk you through reporting the startup crash ([ADR 0003](docs/adr/0003-issue-reporter-supervisor.md)).
+
 ### From Source
 
 ```bash
@@ -239,6 +254,7 @@ python validate_build.py
 The validation script checks:
 - All required DLLs are bundled (pywhispercpp, sherpa-onnx, PortAudio, MSVC runtimes)
 - Python modules can import from the built exe
+- The Issue Reporter entry point (`issue-reporter.exe`) is present (issue #111)
 - Assets (icons, test data) are included
 - Executable launches without errors
 
