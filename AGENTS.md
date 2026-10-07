@@ -39,4 +39,21 @@ A serial full-suite run takes ~60 min and will hit tool timeouts. Run the full s
 
 A versioned pre-push hook (`.githooks/pre-push`) gates every push on the full suite under the Windows venv. **If a push is blocked by `OSError: PortAudio library not found` or a `windows`-marked test, you are on the wrong interpreter** — switch to `make test-windows` / `.venv/Scripts/python.exe`. Do **not** reach for `--no-verify` to mask it; reserve `--no-verify` for content-free pushes (e.g. branch deletions).
 
+**Known flake:** if the hook blocks on `test_sustained_load_runs_quickly` ALONE (issue #149), retry the push with `$env:PRE_PUSH_DESELECT = "tests/test_integration_sustained_load.py::test_sustained_load_runs_quickly"; rtk git push`. Only for that documented flake — never to mask real failures.
+
 Activate hooks once per clone: `git config core.hooksPath .githooks`.
+
+### PR merge protocol
+
+Branch protection requires 1 approving review (TerminalSausage bot, auto-requested by `review-gate.yml` once CI is green; latency ~15 min–7 h) AND strict up-to-date checks. Proven flow:
+
+1. After approval, check `gh pr view <n> --json mergeStateStatus`.
+2. If BEHIND/BLOCKED: in your worktree `rtk git fetch origin`; `rtk git rebase origin/main`; `rtk git push --force-with-lease` (hook re-runs). Approvals survive force-push.
+3. Poll mergeStateStatus every 60 s (up to 25 min) until CLEAN.
+4. `gh pr merge <n> --squash --delete-branch`. Local branch-delete failure from a worktree is harmless — verify `state=MERGED`.
+
+`--admin` merges do NOT work (bot token lacks admin). Never push directly to main.
+
+### Pyright
+
+Baseline is 0 errors (landed in #154); files you touch must stay at 0. From a worktree: `& "..\..\.venv\Scripts\python.exe" -m pyright` (central venv: `C:\Users\CCSupport\meetandread\.venv\Scripts\python.exe`).
