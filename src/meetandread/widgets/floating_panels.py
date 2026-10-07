@@ -4660,7 +4660,7 @@ class FloatingSettingsPanel(QWidget):
                 background-color: #1e1d1e;
                 border: 1px solid rgba(255, 255, 255, 30);
                 border-radius: 8px;
-                padding: 4px 28px 4px 8px;
+                padding: 4px 8px;
                 font-size: 12px;
                 min-width: 90px;
                 min-height: 24px;
@@ -4668,39 +4668,7 @@ class FloatingSettingsPanel(QWidget):
             QSpinBox:hover {
                 border-color: #ff5545;
             }
-            QSpinBox::up-button {
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-                width: 20px;
-                border: none;
-                border-left: 1px solid rgba(255, 255, 255, 30);
-                border-top-right-radius: 8px;
-            }
-            QSpinBox::up-button:hover {
-                background-color: rgba(255, 255, 255, 20);
-            }
-            QSpinBox::up-arrow {
-                image: url(%s);
-                width: 12px;
-                height: 12px;
-            }
-            QSpinBox::down-button {
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                width: 20px;
-                border: none;
-                border-left: 1px solid rgba(255, 255, 255, 30);
-                border-bottom-right-radius: 8px;
-            }
-            QSpinBox::down-button:hover {
-                background-color: rgba(255, 255, 255, 20);
-            }
-            QSpinBox::down-arrow {
-                image: url(%s);
-                width: 12px;
-                height: 12px;
-            }
-        """ % (ARROW_UP_SVG, ARROW_DOWN_SVG))
+        """)
         self._log_retention_spin.setCursor(Qt.CursorShape.ArrowCursor)
         self._log_retention_spin.setToolTip(
             "How long normal-run log files are kept before the\n"
