@@ -24,6 +24,7 @@ Covers:
 """
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -285,6 +286,176 @@ class TestMainCrashHandling:
     def test_main_happy_path_returns_0(self, monkeypatch):
         monkeypatch.setattr(wizard, "run_wizard", lambda **k: None)
         assert wizard.main([]) == 0
+
+
+class TestSubmitResolution:
+    """Issue #110: the submit step resolves the run's submission
+    story — the browser opening on the prefilled form writes
+    ``submitted``, so no future offer (reporter recovery or app
+    launch) re-offers a filed report."""
+
+    def _make_review_ready(self, base: Path) -> Path:
+        from meetandread.reporter import write_termination_record
+
+        captures = base / "captures"
+        d = captures / "run-old"
+        d.mkdir(parents=True)
+        (d / "capture_run.claim").write_text(
+            '{"started_at": "2026-09-09T09:00:00"}\n', encoding="utf-8"
+        )
+        write_termination_record(
+            d,
+            outcome=RunOutcome.CRASH,
+            exit_code=1,
+            started_at=datetime(2026, 9, 9, 9, 0, 0),
+            ended_at=datetime(2026, 9, 9, 9, 5, 0),
+            marker_present=False,
+        )
+        return d
+
+    def test_browser_open_writes_submitted_state(self, tmp_path,
+                                                 monkeypatch):
+        import meetandread.diagnostics_bundle as dbundle
+        import meetandread.manual_submission as msub
+        from meetandread.diagnostics_bundle import IdentifierSet
+
+        monkeypatch.setattr(
+            dbundle,
+            "default_identifiers",
+            lambda: IdentifierSet(
+                home_dir="C:\\Users\\Bob", username="Bob",
+                machine_name="BOB-PC",
+            ),
+        )
+        d = self._make_review_ready(tmp_path)
+        opened, copied = [], []
+        monkeypatch.setattr(
+            msub, "open_new_issue_form",
+            lambda url: opened.append(url) or True,
+        )
+        monkeypatch.setattr(
+            msub, "copy_to_clipboard",
+            lambda text: copied.append(text) or True,
+        )
+        inp = ScriptedInput(["y", "y"])  # resume; open the form
+        out = Lines()
+        result = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CLEAN),
+            input_fn=inp,
+            print_fn=out,
+        )
+        assert result is None
+        assert msub.read_submission_state(d) == "submitted"
+        assert len(opened) == 1
+
+    def test_declining_submit_leaves_story_unresolved(self, tmp_path,
+                                                      monkeypatch):
+        import meetandread.diagnostics_bundle as dbundle
+        import meetandread.manual_submission as msub
+        from meetandread.diagnostics_bundle import IdentifierSet
+
+        monkeypatch.setattr(
+            dbundle,
+            "default_identifiers",
+            lambda: IdentifierSet(
+                home_dir="C:\\Users\\Bob", username="Bob",
+                machine_name="BOB-PC",
+            ),
+        )
+        d = self._make_review_ready(tmp_path)
+        opened, copied = [], []
+        monkeypatch.setattr(
+            msub, "open_new_issue_form",
+            lambda url: opened.append(url) or True,
+        )
+        monkeypatch.setattr(
+            msub, "copy_to_clipboard",
+            lambda text: copied.append(text) or True,
+        )
+        inp = ScriptedInput(["y", "n"])  # resume; decline submit
+        out = Lines()
+        result = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CLEAN),
+            input_fn=inp,
+            print_fn=out,
+        )
+        assert result is None
+        # Declining the browser open is NOT a discard: the bundle
+        # stays offerable (the user may file later / from the app's
+        # next-launch offer).
+        assert msub.read_submission_state(d) is None
+        assert opened == []
+
+
+class TestRecoverySkipsResolved:
+    """Issue #110: the reporter's startup recovery never re-offers a
+    run whose submission story is already resolved (submitted or
+    discarded) — the offer loop moves to the next candidate."""
+
+    def _make_resolved(self, base: Path, state=None) -> Path:
+        import meetandread.manual_submission as msub
+        from meetandread.reporter import write_termination_record
+
+        captures = base / "captures"
+        d = captures / "run-resolved"
+        d.mkdir(parents=True)
+        (d / "capture_run.claim").write_text(
+            '{"started_at": "2026-09-09T09:00:00"}\n', encoding="utf-8"
+        )
+        write_termination_record(
+            d,
+            outcome=RunOutcome.CRASH,
+            exit_code=1,
+            started_at=datetime(2026, 9, 9, 9, 0, 0),
+            ended_at=datetime(2026, 9, 9, 9, 5, 0),
+            marker_present=False,
+        )
+        (d / "diagnostics_bundle.txt").write_text(
+            "diagnostics bundle v1\n", encoding="utf-8"
+        )
+        if state is not None:
+            msub.write_submission_state(
+                d,
+                msub.SubmissionState.SUBMITTED
+                if state == "submitted"
+                else msub.SubmissionState.DISCARDED,
+            )
+        return d
+
+    @pytest.mark.parametrize("state", ["submitted", "discarded"])
+    def test_resolved_run_not_re_offered(self, tmp_path, state):
+        self._make_resolved(tmp_path, state)
+        inp = ScriptedInput(
+            [
+                "Fresh description",
+                "",  # finish reproducing
+                "n",  # decline the submit step
+            ]
+        )
+        out = Lines()
+        run = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CLEAN),
+            input_fn=inp,
+            print_fn=out,
+        )
+        assert run is not None  # straight to a fresh run
+        assert "run-resolved" not in out.text()
+
+    def test_unresolved_run_still_offered(self, tmp_path):
+        self._make_resolved(tmp_path)  # no state → unresolved
+        inp = ScriptedInput(["y", "n"])
+        out = Lines()
+        result = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CLEAN),
+            input_fn=inp,
+            print_fn=out,
+        )
+        assert result is None
+        assert "run-resolved" in out.text()
 
 
 class TestReviewStep:

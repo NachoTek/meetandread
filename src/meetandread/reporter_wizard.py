@@ -89,6 +89,21 @@ from meetandread.reporter import (
 # excluded from the app's retention cleanup by living apart.
 DEFAULT_DATA_BASE = Path.home() / ".meetandread-reporter"
 
+
+def resolve_data_base(data_base: Optional[Path] = None) -> Path:
+    """Resolve the reporter's data base: explicit argument, else the
+    ``MAR_REPORTER_DATA_BASE`` env override (packaging #111 / tests),
+    else the default under the user's home. The app's #110
+    resume-on-launch offer resolves the SAME way — the app and the
+    reporter must agree on where capture runs live."""
+    if data_base is not None:
+        return Path(data_base)
+    env_base = os.environ.get("MAR_REPORTER_DATA_BASE")
+    if env_base:
+        return Path(env_base)
+    return DEFAULT_DATA_BASE
+
+
 # How long the single-instance gate waits between re-probes.
 _SINGLE_INSTANCE_POLL_S = 1.0
 
@@ -138,8 +153,19 @@ def offer_recovery(
     record (``resume_capture``, which also reconciles a staged
     description) so the flow can continue to review exactly as if the
     run had been supervised to its end.
+
+    Runs whose submission story is already resolved (#110's
+    ``submission_state.json`` — submitted or discarded) are never
+    re-offered: their capture is done AND their submission is done,
+    so there is nothing left to resume.
     """
-    resumable = find_resumable_captures(data_base)
+    from meetandread.manual_submission import read_submission_state
+
+    resumable = [
+        d
+        for d in find_resumable_captures(data_base)
+        if read_submission_state(d) is None
+    ]
     if not resumable:
         return None
     from meetandread.diagnostics_bundle import AssemblyFailure
@@ -290,12 +316,7 @@ def run_wizard(
     the next reporter startup can always resume from it.
     """
     if data_base is None:
-        # Packaging (#111) and tests steer the reporter's data base
-        # via the environment; default is ~/.meetandread-reporter.
-        env_base = os.environ.get("MAR_REPORTER_DATA_BASE")
-        data_base = (
-            Path(env_base) if env_base else DEFAULT_DATA_BASE
-        )
+        data_base = resolve_data_base()
     data_base = Path(data_base)
     data_base.mkdir(parents=True, exist_ok=True)
 
@@ -520,6 +541,12 @@ def submit_capture(
             f"  {draft.url}"
         )
     else:
+        # The form opened (#110): the run's submission story is
+        # resolved — record it so no future offer (reporter recovery
+        # or the app's next-launch resume) re-offers a filed report.
+        ms.write_submission_state(
+            capture_dir, ms.SubmissionState.SUBMITTED
+        )
         print_fn(
             "\nThe New Issue form is open in your browser.\n"
             "IMPORTANT: GitHub cannot attach files automatically —\n"

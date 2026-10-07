@@ -422,6 +422,133 @@ class TestSubmitStep:
 
 
 # ---------------------------------------------------------------------------
+# Submission state + reporter-death detection (issue #110)
+# ---------------------------------------------------------------------------
+
+
+def _staged_base(tmp_path) -> Path:
+    """A data base whose captures/ tree exists (where the scan looks)."""
+    base = tmp_path / "reporter-data"
+    (base / "captures").mkdir(parents=True)
+    return base
+
+
+def _reviewed_under(base: Path) -> Path:
+    """A reviewed capture directory staged inside a captures base."""
+    captures = base / "captures"
+    return _reviewed(captures)
+
+
+class TestSubmissionState:
+    """The submission-state record: how an offerable bundle's story
+    ended — ``submitted`` or ``discarded`` — so neither the app's
+    startup offer nor the reporter's recovery scan keeps offering a
+    run whose submission is resolved."""
+
+    def test_write_and_read_submitted_roundtrip(self, tmp_path):
+        d = _reviewed(tmp_path)
+        path = msub.write_submission_state(
+            d, msub.SubmissionState.SUBMITTED
+        )
+        assert path.name == msub.SUBMISSION_STATE_FILE_NAME
+        assert msub.read_submission_state(d) == "submitted"
+
+    def test_write_and_read_discarded_roundtrip(self, tmp_path):
+        d = _reviewed(tmp_path)
+        msub.write_submission_state(
+            d, msub.SubmissionState.DISCARDED
+        )
+        assert msub.read_submission_state(d) == "discarded"
+
+    def test_read_returns_none_when_absent(self, tmp_path):
+        d = _reviewed(tmp_path)
+        assert msub.read_submission_state(d) is None
+
+    def test_unreadable_state_record_reads_as_none(self, tmp_path):
+        # A torn state file (the reporter died mid-write) must read as
+        # "unresolved" — the offer stays available, never silently
+        # resolved by corruption.
+        d = _reviewed(tmp_path)
+        (d / msub.SUBMISSION_STATE_FILE_NAME).write_text(
+            "{not json", encoding="utf-8"
+        )
+        assert msub.read_submission_state(d) is None
+
+
+class TestFindUnsubmittedBundles:
+    """The #110 detection seam: capture directories holding an
+    assembled-but-unsubmitted bundle (review wrote the artifact, no
+    submission state yet), newest first."""
+
+    def test_review_ready_dir_with_bundle_is_found(self, tmp_path):
+        base = _staged_base(tmp_path)
+        d = _reviewed_under(base)
+        assert msub.find_unsubmitted_bundles(base) == [d]
+
+    def test_incomplete_dir_with_bundle_is_found(self, tmp_path):
+        # The worst-case reporter death: mid-run, before the
+        # termination record. The bundle exists because a previous
+        # resume reviewed it; the reporter died again before submit.
+        base = _staged_base(tmp_path)
+        d = make_capture(base / "captures",
+                         name="run-bundled-crashed")
+        (d / BUNDLE_FILE_NAME).write_text(
+            "diagnostics bundle v1\n", encoding="utf-8"
+        )
+        assert msub.find_unsubmitted_bundles(base) == [d]
+
+    def test_dir_without_bundle_artifact_is_not_found(self, tmp_path):
+        # A crashed run that never reached review: no artifact, no
+        # offer from the app (reporter startup is that path's
+        # designated recovery).
+        base = _staged_base(tmp_path)
+        make_complete(base / "captures", marker=False,
+                      termination=(RunOutcome.CRASH, 1, False))
+        assert msub.find_unsubmitted_bundles(base) == []
+
+    def test_submitted_dir_is_not_found(self, tmp_path):
+        base = _staged_base(tmp_path)
+        d = _reviewed_under(base)
+        msub.write_submission_state(
+            d, msub.SubmissionState.SUBMITTED
+        )
+        assert msub.find_unsubmitted_bundles(base) == []
+
+    def test_discarded_dir_is_not_found(self, tmp_path):
+        base = _staged_base(tmp_path)
+        d = _reviewed_under(base)
+        msub.write_submission_state(
+            d, msub.SubmissionState.DISCARDED
+        )
+        assert msub.find_unsubmitted_bundles(base) == []
+
+    def test_newest_first(self, tmp_path):
+        base = _staged_base(tmp_path)
+        d1 = _reviewed_under(base)  # run-20260910_100000
+        d2 = make_capture(
+            base / "captures", name="run-20260910_120000"
+        )
+        (d2 / BUNDLE_FILE_NAME).write_text(
+            "diagnostics bundle v1\n", encoding="utf-8"
+        )
+        found = msub.find_unsubmitted_bundles(base)
+        assert found == [d2, d1]
+        assert found[0].name == "run-20260910_120000"
+        assert found[1].name == "run-20260910_100000"
+
+    def test_missing_base_is_empty_scan(self, tmp_path):
+        assert msub.find_unsubmitted_bundles(tmp_path / "none") == []
+
+    def test_skips_stray_entries(self, tmp_path):
+        base = _staged_base(tmp_path)
+        (base / "captures" / "not-a-run").mkdir()
+        (base / "captures" / "stray.txt").write_text(
+            "x", encoding="utf-8"
+        )
+        assert msub.find_unsubmitted_bundles(base) == []
+
+
+# ---------------------------------------------------------------------------
 # Defensive boundary
 # ---------------------------------------------------------------------------
 
