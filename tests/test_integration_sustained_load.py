@@ -35,6 +35,8 @@ from meetandread.audio.session import (
     SourceConfig,
 )
 
+from tests.load_tolerant_budget import assert_load_tolerant_budget
+
 
 # ---------------------------------------------------------------------------
 # Helpers for deterministic audio and load simulation
@@ -232,8 +234,10 @@ def _simulate_sustained_load_iterations(
 # ---------------------------------------------------------------------------
 # Load-tolerant timing budget (issue #149)
 # ---------------------------------------------------------------------------
-
-MAX_SLOWDOWN_VS_REFERENCE = 2.0
+# The budget assert (and the 2.0x constant) now lives in the shared helper
+# (tests/load_tolerant_budget.py), extracted for the #148 waveform CPU
+# redesign so the pattern is written once; this file keeps only the
+# sustained-load reference estimator.
 
 
 def _reference_loop_cost(iterations: int) -> float:
@@ -270,30 +274,6 @@ def _estimate_reference_seconds(total_iterations: int, reps: int = 3) -> float:
         for _ in range(reps)
     )
     return best_per_iteration * total_iterations
-
-
-def assert_load_tolerant_budget(elapsed: float, reference: float, label: str) -> None:
-    """Assert elapsed stays within MAX_SLOWDOWN_VS_REFERENCE of a reference.
-
-    Load-tolerant replacement for absolute wall-clock thresholds on shared,
-    loaded machines (issue #149): assert on the ratio to a reference workload
-    self-calibrated in the same process, not on an absolute seconds bound.
-    A real regression (per-iteration wall-clock wait, added O(n) work in the
-    loop) inflates the ratio; uniform box load does not. Intended as the
-    shared shape for the #148 waveform CPU redesign to adopt.
-    """
-    assert reference > 0.0, (
-        f"{label}: reference workload measured {reference:.6f}s; "
-        "a non-positive reference makes the ratio assertion vacuous"
-    )
-    ratio = elapsed / reference
-    assert ratio <= MAX_SLOWDOWN_VS_REFERENCE, (
-        f"{label} took {elapsed:.1f}s = {ratio:.2f}x the self-calibrated "
-        f"reference workload ({reference:.1f}s), exceeding the "
-        f"{MAX_SLOWDOWN_VS_REFERENCE:.1f}x budget. This indicates real "
-        "per-iteration work beyond the calibrated cost (e.g. an accidental "
-        "wall-clock wait), not box load."
-    )
 
 
 # ---------------------------------------------------------------------------
