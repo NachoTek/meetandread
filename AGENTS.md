@@ -39,8 +39,6 @@ A serial full-suite run takes ~60 min and will hit tool timeouts. Run the full s
 
 A versioned pre-push hook (`.githooks/pre-push`) gates every push on the full suite under the Windows venv. **If a push is blocked by `OSError: PortAudio library not found` or a `windows`-marked test, you are on the wrong interpreter** — switch to `make test-windows` / `.venv/Scripts/python.exe`. Do **not** reach for `--no-verify` to mask it; reserve `--no-verify` for content-free pushes (e.g. branch deletions).
 
-**Known flake:** if the hook blocks on `test_sustained_load_runs_quickly` ALONE (issue #149), retry the push with `$env:PRE_PUSH_DESELECT = "tests/test_integration_sustained_load.py::test_sustained_load_runs_quickly"; rtk git push`. Only for that documented flake — never to mask real failures.
-
 Activate hooks once per clone: `git config core.hooksPath .githooks`.
 
 ### PR merge protocol
