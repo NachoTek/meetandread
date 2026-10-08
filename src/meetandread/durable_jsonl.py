@@ -1,5 +1,9 @@
-"""Shared durable append-only JSONL writer for capture artifacts
-(issues #105/#106, docs/specs/issue-reporting.md).
+"""Shared durable-write home for capture artifacts (issues
+#105/#106/#160, docs/specs/issue-reporting.md): the append-only JSONL
+series writer below, plus the single-object ``write_text_durable`` /
+``write_json_durable`` helpers at the bottom (the extracted
+prompt-flush sequence eight capture-artifact writers used to
+hand-roll).
 
 The durability contract's write side, extracted verbatim from the
 Interaction Trace's ``_TraceWriter`` (PR #123, including its automated
@@ -156,3 +160,57 @@ def open_series_writer(
             "%s_write_refused: reason=file_exists file=%s", kind, path.name
         )
         return None
+
+
+def write_text_durable(
+    path: Path, text: str, *, newline: Optional[str] = None
+) -> Path:
+    """Write *text* as UTF-8 with the capture-artifact prompt-flush
+    discipline: write, flush, fsync, close — the durability half of the
+    open() mode contract (exclusive ``"x"``, truncate ``"w"``) stays
+    the caller's choice, exactly as each site hand-rolled it (#160).
+
+    The write is NOT atomic (no temp-file + replace — parity, not
+    improvement); ``newline`` is forwarded to :func:`open` verbatim
+    (``""`` pins LF; the default ``None`` keeps the text-mode platform
+    newline translation the plain-text sites relied on).
+
+    Raises: whatever :func:`open`, ``write``/``flush``, or
+        ``os.fsync`` raise — OS errors propagate to the caller, the
+        same contract every hand-rolled site had.
+    """
+    with open(path, "w", encoding="utf-8", newline=newline) as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    return path
+
+
+def write_json_durable(
+    path: Path,
+    obj: object,
+    *,
+    mode: str = "w",
+    append_newline: bool = True,
+) -> Path:
+    """Write ONE JSON object as UTF-8 durably: serialize, newline,
+    flush, fsync, close — one shared definition of the sequence eight
+    capture-artifact writers used to copy-paste (#160's parity
+    extraction; byte-identical output, error contract unchanged: OS
+    errors propagate).
+
+    ``json.dump``'s default separators/``ensure_ascii=True`` — the
+    exact bytes every hand-rolled site put on disk (compact one-line
+    JSON + trailing newline). ``mode="x"`` keeps a caller's exclusive
+    creation (one run, one artifact — ADR 0005); the default ``"w"``
+    truncates like the rewrite paths. ``append_newline`` suppresses
+    the trailing newline for the (currently hypothetical) caller that
+    does not want it.
+    """
+    with open(path, mode, encoding="utf-8") as fh:
+        json.dump(obj, fh)
+        if append_newline:
+            fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    return path

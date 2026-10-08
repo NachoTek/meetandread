@@ -81,6 +81,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+from meetandread.durable_jsonl import write_json_durable
 from meetandread.logging_setup import CAPTURE_LOG_PREFIX  # noqa: F401 — re-export: single source of truth
 
 # The launch flag naming the capture directory. The Issue Reporter (#107)
@@ -373,11 +374,7 @@ def write_completion_marker(
         now = datetime.now()
     payload = {"finished_at": now.isoformat(timespec="seconds")}
     marker = capture_dir / COMPLETION_MARKER_NAME
-    with open(marker, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_json_durable(marker, payload)
     return marker
 
 

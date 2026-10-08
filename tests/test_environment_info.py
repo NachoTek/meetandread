@@ -203,7 +203,7 @@ class TestEnvironmentArtifact:
             seen.append(fd)
             return real_fsync(fd)
 
-        with patch("meetandread.environment_info.os.fsync", tracking_fsync):
+        with patch("meetandread.durable_jsonl.os.fsync", tracking_fsync):
             write_environment_info(
                 tmp_path,
                 app_version="0.19.1",
