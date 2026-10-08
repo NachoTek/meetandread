@@ -110,7 +110,11 @@ _Avoid_: Report (ambiguous with the GitHub issue), log file (the bundle contains
 
 **Redaction**:
 The automatic scrubbing of the Diagnostics Bundle before it is shown to the user or submitted: usernames and home-directory paths, email addresses, and machine identifiers are rewritten. Transcript text and Recording titles never enter the bundle at all — excluded at the capture boundary, not by scrubbing the log afterwards. Runs before the review screen — nothing leaves the machine unredacted. Assembly is fail-closed: if assembly or redaction fails, no submittable bundle is produced — raw capture data is never the fallback. Missing details (e.g. a specific Recording file) are requested later through GitHub during triage.
-_Avoid_: Sanitization, anonymization (we do not promise anonymity)
+_Avoid_: Sanitization (only as a synonym for Redaction — the word is also used for Sanitized Diagnostics, a different concept), anonymization (we do not promise anonymity)
+
+**Sanitized Diagnostics**:
+The log-safe shaping of values before they enter logs or diagnostics output: raw payloads (audio samples, secrets, free text) are reduced to counters, statuses, and fixed-vocabulary identities by the `_sanitize_*` helpers in the recording/audio/session layers. A pre-emission concern of regular logging, distinct from Redaction (bundle scrubbing before review/submission). Both blessed words in the diagnostics domain — see the Redaction entry's Avoid note.
+_Avoid_: Raw values in diagnostics, logging payloads directly
 
 **Canary registry (`transcript_canary.jsonl`)**:
 The capture-side registry that PROVES transcript exclusion: during a capture run, every fragment of transcript text and every Recording title the app handles is reduced to hashed word n-grams (SHA-256, truncated — plaintext never touches the file) and appended to the registry in the capture directory. Bundle assembly re-computes the n-grams of every bundle component and fails closed on any intersection: a hit means the capture boundary failed and no submittable artifact is produced.
