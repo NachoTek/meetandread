@@ -334,6 +334,50 @@ class TestCaptureStateScan:
         assert state.state_name == "absent"
         assert state.is_resumable is False
 
+    # The full claim/marker/termination → state-name mapping, pinned
+    # as a table (#161): the collapse of the marker-without-record
+    # no-op branch must leave every observable mapping identical.
+    @pytest.mark.parametrize(
+        "claim,marker,term,outcome,expected",
+        [
+            # No termination record: absent needs BOTH no claim and
+            # no record (a marker alone never implies a run).
+            (False, False, False, None, "absent"),
+            (False, True, False, None, "absent"),
+            # No record, run never finished (bare claim).
+            (True, False, False, None, "incomplete"),
+            # No record, marker present — the reporter died between
+            # marker and record: reads exactly like an incomplete run.
+            (True, True, False, None, "incomplete"),
+            # Record present: done ONLY on a clean-family outcome
+            # AND the marker.
+            (True, True, True, "clean_stop", "done"),
+            (True, True, True, "user_stop", "done"),
+            (False, True, True, "user_stop", "done"),
+            # Any other recorded end is review_ready: crashes...
+            (True, False, True, "crash", "review_ready"),
+            (True, True, True, "crash", "review_ready"),
+            (False, False, True, "crash", "review_ready"),
+            # ...a stop whose record predates the marker...
+            (True, False, True, "clean_stop", "review_ready"),
+            (True, False, True, "user_stop", "review_ready"),
+            # ...and an unparsable/foreign outcome vocabulary.
+            (True, True, True, None, "review_ready"),
+            (True, False, True, None, "review_ready"),
+        ],
+    )
+    def test_state_name_mapping_table(
+        self, tmp_path, claim, marker, term, outcome, expected
+    ):
+        state = reporter.CaptureState(
+            path=tmp_path,
+            claim_present=claim,
+            marker_present=marker,
+            termination_present=term,
+            termination_outcome=outcome,
+        )
+        assert state.state_name == expected
+
 
 class TestRecoveryScan:
     def test_find_resumable_captures_across_states(self, tmp_path):

@@ -143,25 +143,6 @@ class DurableJSONLWriter:
                 pass
 
 
-def open_series_writer(
-    path: Path, kind: str
-) -> Optional[DurableJSONLWriter]:
-    """Open a series writer, translating an existing file to None.
-
-    Convenience seam for install functions: returns the writer, or
-    None when the file already exists (another run's series — the
-    caller refuses the install with its capture-mode startup error
-    instead of writing a single byte into it).
-    """
-    try:
-        return DurableJSONLWriter(path, kind)
-    except FileExistsError:
-        logger.error(
-            "%s_write_refused: reason=file_exists file=%s", kind, path.name
-        )
-        return None
-
-
 def write_text_durable(
     path: Path, text: str, *, newline: Optional[str] = None
 ) -> Path:

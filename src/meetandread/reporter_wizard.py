@@ -453,8 +453,10 @@ def run_wizard(
     print_fn("Stopping the capture run...")
 
     # The graceful stop: signal CTRL_BREAK and give the app time to
-    # wind down and write its completion marker. Blocking by design —
-    # the marker is what separates a user stop from a crash. A stop
+    # wind down and write its completion marker — THE stop signal of
+    # the run (supervision itself never signals; supervise_run only
+    # waits, classifies, and records). Blocking by design — the
+    # marker is what separates a user stop from a crash. A stop
     # signal actually delivered to a LIVE app makes this run's stop
     # user-initiated (refining a clean exit into ``user_stop``); an
     # app that already exited on its own keeps its own outcome.
@@ -464,7 +466,6 @@ def run_wizard(
         proc,
         capture_dir,
         started_at=started_at,
-        stop_signal=_signal_user_stop,
         user_initiated_stop=user_initiated,
     )
 
