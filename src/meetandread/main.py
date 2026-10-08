@@ -11,6 +11,7 @@ import logging
 import signal
 from pathlib import Path
 from typing import List, NamedTuple, Optional
+from PyQt6 import sip
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt
 
@@ -440,6 +441,140 @@ def setup_signal_handlers(app, widget_ref=None):
             pass
 
 
+def _teardown_qt_object_graph(widget: MeetAndReadWidget, app: QApplication) -> None:
+    """Deterministically destroy the Qt object graph while the
+    interpreter is alive (issue #165 — normal-run exit teardown).
+
+    After ``app.exec()`` returns on the normal (no-flag) path, the
+    widget, its parentless floating panels, the tray, and the
+    QApplication itself are still live Python objects. Ending main()
+    with only ``sys.exit`` leaves their destruction to interpreter
+    finalization, which clears module/frame references in an order
+    that can take down the QApplication BEFORE the widgets that
+    still need it — under load that teardown intermittently crashes
+    natively (0xC0000005), the same race class #124 proved on the
+    capture path and #158 on the trace-subprocess test child
+    (PR #164). Capture runs sidestep finalization via the gated
+    ``os._exit``; THIS function gives normal runs the deterministic
+    sibling: the graph is torn down children-first, explicitly,
+    BEFORE sys.exit hands control to finalization.
+
+    Ordering (mirrors the PR #164 test-shim teardown):
+
+    1. ``widget.close()`` — the real closeEvent funnel: saves
+       geometry, dismisses toasts. With a tray wired in it hides to
+       tray and does NOT call controller.shutdown (the SIGBREAK
+       ``_exit_application`` funnel already ran it; it is
+       idempotent, so a second call on any other exit route is
+       still safe).
+    2. The tray icon and its menu are hidden and deleted — they
+       are parentless Qt objects referenced only by the manager,
+       snapshotted BEFORE the widget dies (the widget holds the
+       only strong Python reference to the manager).
+    3. The parentless floating panels are closed through their own
+       closeEvent funnels (the settings panel removes the
+       app-level event filter it installed — leaving a Python-side
+       filter installed at app destruction is exactly the #123
+       0xC0000005 crash class) and reparented onto the widget, so
+       they die inside the widget's deletion — before, never
+       after, the widget they reference.
+    4. ``sip.delete(widget)`` — the widget tree (scene, bridge,
+       timers, panels) dies while the QApplication is fully alive.
+    5. Deferred deletions queued along the way (``deleteLater``)
+       are flushed via ``sendPostedEvents`` while the application
+       still exists to deliver them.
+    6. ``sip.delete(app)`` — the QApplication LAST, the root of the
+       graph: exactly the opposite of the GC/finalization order
+       that crashed.
+
+    Every step is individually best-effort: a failure is logged
+    and the sequence continues. The function must never raise past
+    main()'s exit — but a skipped step is always visible as a
+    ``exit_teardown_*_failed`` record, never silently swallowed.
+    """
+    # -- 1. Close the widget through its real closeEvent funnel ------
+    try:
+        widget.close()
+    except Exception as e:
+        logger.warning(
+            "exit_teardown_close_failed: error_class=%s",
+            type(e).__name__,
+        )
+
+    # -- 2. Tray first: snapshot, hide, delete icon + menu -------------
+    # The manager (and its icon/menu) is referenced only through the
+    # widget — grab it BEFORE the widget dies.
+    tray = getattr(widget, "_tray_manager", None)
+    tray_icon = None
+    tray_menu = None
+    if tray is not None:
+        try:
+            tray_icon = tray.tray_icon
+            tray_menu = tray._menu  # type: ignore[attr-defined]
+            tray.hide()
+        except Exception as e:
+            logger.warning(
+                "exit_teardown_tray_failed: error_class=%s",
+                type(e).__name__,
+            )
+    for qt_obj, what in ((tray_icon, "tray_icon"), (tray_menu, "tray_menu")):
+        if qt_obj is None:
+            continue
+        try:
+            sip.delete(qt_obj)
+        except Exception as e:
+            logger.warning(
+                "exit_teardown_delete_failed: object=%s error_class=%s",
+                what,
+                type(e).__name__,
+            )
+
+    # -- 3. Parentless floating panels: close, then die with widget ----
+    for panel_attr in ("_floating_settings_panel", "_cc_overlay"):
+        panel = getattr(widget, panel_attr, None)
+        if panel is None:
+            continue
+        try:
+            panel.close()
+            panel.setParent(widget)
+        except Exception as e:
+            logger.warning(
+                "exit_teardown_panel_failed: panel=%s error_class=%s",
+                panel_attr,
+                type(e).__name__,
+            )
+
+    # -- 4. Delete the widget tree -------------------------------------
+    try:
+        sip.delete(widget)
+    except Exception as e:
+        logger.warning(
+            "exit_teardown_widget_delete_failed: error_class=%s",
+            type(e).__name__,
+        )
+
+    # -- 5. Flush deferred deletions while the application lives -------
+    try:
+        from PyQt6.QtCore import QEvent
+
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    except Exception as e:
+        logger.warning(
+            "exit_teardown_events_flush_failed: error_class=%s",
+            type(e).__name__,
+        )
+
+    # -- 6. The QApplication LAST ---------------------------------------
+    try:
+        sip.delete(app)
+    except Exception as e:
+        logger.warning(
+            "exit_teardown_app_delete_failed: error_class=%s",
+            type(e).__name__,
+        )
+    logger.info("exit_teardown_complete:")
+
+
 def main(capture_dir: Optional[Path] = None):
     """Application entry point.
 
@@ -862,6 +997,13 @@ def main(capture_dir: Optional[Path] = None):
     # normal interpreter finalization — the pre-#124 behavior. No
     # capture log or marker exists on this path, so the hard exit's
     # safety arguments do not apply; a normal run keeps its normal exit.
+    # Issue #165: the exit is STILL sys.exit (the #124 gate stays
+    # capture-only), but the live Qt object graph no longer survives
+    # into finalization — it is torn down deterministically HERE,
+    # children-first, while the interpreter is alive (see
+    # _teardown_qt_object_graph), so finalization finds no Qt objects
+    # left to destroy in GC order. The 0xC0000005 at normal-run exit
+    # (issue #165, CI run 37730980499) was exactly that race.
     #
     # Both cases fire ONLY on the real app exit path (app.exec()
     # returned) — the early sys.exit refusals above happen before any Qt
@@ -874,6 +1016,12 @@ def main(capture_dir: Optional[Path] = None):
         except OSError:
             pass
         os._exit(exit_code)
+    # The widget reference the signal handlers hold must not outlive
+    # the widget itself: clear it before the graph starts dying so a
+    # signal arriving inside the teardown window falls back to
+    # app.quit() instead of driving a half-deleted widget.
+    _widget_holder[0] = None
+    _teardown_qt_object_graph(widget, app)
     sys.exit(exit_code)
 
 
