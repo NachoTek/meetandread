@@ -19,9 +19,10 @@ Weekly, Monday ~13:00 UTC (after the weekend's nightlies).
 3. **Pyright baseline is 0.** `.venv\Scripts\python.exe -m pyright` from the
    checkout root reports 0 errors (#154 baseline). If >0, the diff that
    reintroduced noise is findable via `git log --oneline -20` + rerun.
-4. **AGENTS.md still matches machine reality.** Spot-check the three claims:
-   gh-token one-liner works, no-WSL lane note present, PRE_PUSH_DESELECT flake
-   nodeid matches the actual #149 test path (#145/#156).
+4. **AGENTS.md still matches machine reality.** Spot-check the claims:
+   gh-token one-liner works, no-WSL lane note present, and any documented
+   flake hatch cites only open issues (the #149 hatch was removed after the
+   #167 fix).
 5. **Docs drift.** `git log --oneline --since="7 days ago" -- AGENTS.md
    Makefile .githooks pyproject.toml` - summarize anything that changed and
    whether AGENTS.md was updated in the same window.

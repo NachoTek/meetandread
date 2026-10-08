@@ -18,7 +18,7 @@ Daily, shortly after the nightly finishes (~04:30 UTC / 00:30 EDT).
 3. If the latest run is `success`: log one line to the report file (below) and stop.
 4. If it failed: pull the failing job log (`gh run view <id> --log-failed`),
    classify each failing test:
-   - Known & filed (grep open issues for the test name, e.g. #149 sustained-load):
+   - Known & filed (grep open issues for the test name):
      add a `+1 occurrence` comment on that issue with the run URL and timestamp.
    - New failure: file an issue (label `bug`, `needs-triage`) titled
      `Flaky test: <nodeid> <one-phrase symptom>`, body: nodeid, run URL,

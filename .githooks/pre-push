@@ -10,7 +10,8 @@
 # while the tests run against the CURRENT checkout being pushed.
 # Override the interpreter:   WIN_PY=/path/to/python.exe
 # Deselect known flakes:      PRE_PUSH_DESELECT="path::test nodeid ..."
-#                             (space-separated, e.g. #149 while it is open)
+#                             (space-separated nodeids of documented open
+#                              flakes, if any)
 # Skip entirely:              git push --no-verify
 
 MAIN_REPO=$(git rev-parse --path-format=absolute --git-common-dir)
