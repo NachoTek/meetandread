@@ -230,6 +230,73 @@ def _simulate_sustained_load_iterations(
 
 
 # ---------------------------------------------------------------------------
+# Load-tolerant timing budget (issue #149)
+# ---------------------------------------------------------------------------
+
+MAX_SLOWDOWN_VS_REFERENCE = 2.0
+
+
+def _reference_loop_cost(iterations: int) -> float:
+    """Measure the simulation's dominant per-iteration primitives in isolation.
+
+    Rebuilds the per-iteration work shared by every healthy simulation loop
+    (deterministic buffer synthesis plus one queue produce/consume cycle) so
+    its wall-clock cost can serve as a same-box reference workload.
+    """
+    q = queue.Queue(maxsize=10)
+    start = time.perf_counter()
+    for i in range(iterations):
+        buffer = _make_deterministic_buffer(seed=42 + i)
+        try:
+            q.put_nowait(buffer)
+            q.get_nowait()
+        except queue.Full:
+            pass
+    return time.perf_counter() - start
+
+
+def _estimate_reference_seconds(total_iterations: int, reps: int = 3) -> float:
+    """Estimate the reference cost of total_iterations loop passes.
+
+    Measures short probe runs (total_iterations / reps each) and scales the
+    best (minimum) per-iteration cost up to total_iterations. The minimum
+    over reps absorbs transient box-load spikes, and because the subject
+    loop is CPU-bound on the same box, background load scales both sides of
+    the ratio roughly equally.
+    """
+    probe_iterations = max(1, total_iterations // reps)
+    best_per_iteration = min(
+        _reference_loop_cost(probe_iterations) / probe_iterations
+        for _ in range(reps)
+    )
+    return best_per_iteration * total_iterations
+
+
+def assert_load_tolerant_budget(elapsed: float, reference: float, label: str) -> None:
+    """Assert elapsed stays within MAX_SLOWDOWN_VS_REFERENCE of a reference.
+
+    Load-tolerant replacement for absolute wall-clock thresholds on shared,
+    loaded machines (issue #149): assert on the ratio to a reference workload
+    self-calibrated in the same process, not on an absolute seconds bound.
+    A real regression (per-iteration wall-clock wait, added O(n) work in the
+    loop) inflates the ratio; uniform box load does not. Intended as the
+    shared shape for the #148 waveform CPU redesign to adopt.
+    """
+    assert reference > 0.0, (
+        f"{label}: reference workload measured {reference:.6f}s; "
+        "a non-positive reference makes the ratio assertion vacuous"
+    )
+    ratio = elapsed / reference
+    assert ratio <= MAX_SLOWDOWN_VS_REFERENCE, (
+        f"{label} took {elapsed:.1f}s = {ratio:.2f}x the self-calibrated "
+        f"reference workload ({reference:.1f}s), exceeding the "
+        f"{MAX_SLOWDOWN_VS_REFERENCE:.1f}x budget. This indicates real "
+        "per-iteration work beyond the calibrated cost (e.g. an accidental "
+        "wall-clock wait), not box load."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test class: SustainedLoadTest
 # ---------------------------------------------------------------------------
 
@@ -637,23 +704,32 @@ def test_sustained_load_no_audio_devices_required(tmp_path: pytest.TempPathFacto
 
 
 def test_sustained_load_runs_quickly(tmp_path: pytest.TempPathFactory):
-    """Verify the sustained load simulation completes quickly.
+    """Verify the sustained load simulation runs in bounded time.
 
-    Confirms the test does not require wall-clock waits for 30 minutes.
+    Confirms the simulation does not require wall-clock waits (no sleeps
+    proportional to simulated duration). Load-tolerant per issue #149: the
+    wall-clock cost is asserted as a ratio against a reference workload
+    self-calibrated in this process, so a loaded shared box (which slows the
+    reference equally) no longer flakes the absolute bound.
     """
-    import time
+    total_iterations = int(30.0 * 500)
+
+    reference_seconds = _estimate_reference_seconds(total_iterations)
 
     test = SustainedLoadTest(tmp_path)  # pyright: ignore[reportArgumentType]  # intentional mock seam
 
-    start = time.time()
+    start = time.perf_counter()
     stats = test.run_sustained_load_simulation(
         simulated_minutes=30.0,
         drop_rate=0.0,
         burst_probability=0.0,
         iterations_per_minute=500,  # Reduced for faster test
     )
-    elapsed = time.time() - start
+    elapsed = time.perf_counter() - start
 
-    # Verify simulation completes in reasonable time (<10 seconds for 30 simulated minutes)
-    assert elapsed < 10.0, f"Simulation took {elapsed:.1f}s, expected <10s"
     assert stats is not None
+    assert_load_tolerant_budget(
+        elapsed,
+        reference_seconds,
+        label="sustained-load simulation (30 simulated minutes)",
+    )
