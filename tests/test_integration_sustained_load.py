@@ -234,11 +234,10 @@ def _simulate_sustained_load_iterations(
 # ---------------------------------------------------------------------------
 # Load-tolerant timing budget (issue #149)
 # ---------------------------------------------------------------------------
-# The budget assert itself now lives in the shared helper
-# (tests/load_tolerant_budget.py) extracted for the #148 waveform CPU
-# redesign; this file keeps only the sustained-load reference estimator.
-
-MAX_SLOWDOWN_VS_REFERENCE = 2.0
+# The budget assert (and the 2.0x constant) now lives in the shared helper
+# (tests/load_tolerant_budget.py), extracted for the #148 waveform CPU
+# redesign so the pattern is written once; this file keeps only the
+# sustained-load reference estimator.
 
 
 def _reference_loop_cost(iterations: int) -> float:

@@ -16,22 +16,8 @@ for exactly this reuse.
 
 from __future__ import annotations
 
-import time
-from typing import Callable
-
 
 MAX_SLOWDOWN_VS_REFERENCE = 2.0
-
-
-def best_of_seconds(workload: Callable[[], float], reps: int = 3) -> float:
-    """Measure ``workload()`` wall-clock seconds, best (minimum) of reps.
-
-    The minimum over several reps absorbs transient box-load spikes: the
-    cheapest observed run approximates the workload's unloaded cost on
-    this box better than any single sample or the mean.
-    """
-    times = [workload() for _ in range(reps)]
-    return min(times)
 
 
 def assert_load_tolerant_budget(
@@ -47,6 +33,11 @@ def assert_load_tolerant_budget(
     reference workload self-calibrated in the same process, not on an
     absolute bound. A real regression (per-iteration wait, added O(n)
     work) inflates the ratio; uniform box load does not.
+
+    Callers measure both lanes themselves (best-of-reps on each side —
+    the minimum over several passes absorbs transient box-load spikes)
+    before asserting; only the ratio gate lives here so the pattern is
+    written once.
     """
     assert reference > 0.0, (
         f"{label}: reference workload measured {reference:.6f}s; "
@@ -60,8 +51,3 @@ def assert_load_tolerant_budget(
         "work beyond the calibrated cost (e.g. an accidental busy-wait), "
         "not box load."
     )
-
-
-def monotonic_timer() -> float:
-    """Return the process-wide monotonic clock (perf_counter)."""
-    return time.perf_counter()

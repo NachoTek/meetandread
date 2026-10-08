@@ -39,7 +39,7 @@ import time
 import tracemalloc
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, NamedTuple, Optional
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -85,7 +85,7 @@ INJECTED_SLOWDOWN_S = 0.001      # artificial per-frame busy-wait for the meta-t
 REFERENCE_TARGET_POINTS = 60     # RecordButtonItem._WAVEFORM_TARGET_POINTS
 REFERENCE_FLAT_AMPLITUDE = 0.005
 REFERENCE_DECAY = 0.90
-REFERENCE_MAX_BUFFER_BYTES = 12 * 16000 * 2  # controller._live_max_buffer_bytes
+REFERENCE_BUFFER_WINDOW_S = 12  # controller rolling-buffer window (seconds)
 
 # ASCII-safe symbols for Windows console compatibility
 _CHECK = "[OK]"
@@ -356,6 +356,7 @@ class FrozenReferenceWaveform:
         self._data: List[float] = [REFERENCE_FLAT_AMPLITUDE] * REFERENCE_TARGET_POINTS
         self._buffer = bytearray()
         self._lock = threading.Lock()
+        self._max_buffer_bytes = REFERENCE_BUFFER_WINDOW_S * SAMPLE_RATE_HZ * 2
 
     def frame(self, chunk: np.ndarray) -> None:
         # -- producer half: float32 -> int16 PCM + rolling-buffer append --
@@ -364,8 +365,8 @@ class FrozenReferenceWaveform:
         pcm_bytes = pcm_int16.tobytes()
         with self._lock:
             self._buffer.extend(pcm_bytes)
-            if len(self._buffer) > REFERENCE_MAX_BUFFER_BYTES:
-                excess = len(self._buffer) - REFERENCE_MAX_BUFFER_BYTES
+            if len(self._buffer) > self._max_buffer_bytes:
+                excess = len(self._buffer) - self._max_buffer_bytes
                 del self._buffer[:excess]
 
         # -- consumer half: snapshot + tail slice + renormalize + copy --
@@ -410,12 +411,18 @@ def _timed_frames(frame: Callable[[np.ndarray], None], chunks: List[np.ndarray])
     return time.perf_counter() - start
 
 
+class LaneTimes(NamedTuple):
+    """Best-of-reps wall-clock seconds for the two measured lanes."""
+    subject_s: float
+    reference_s: float
+
+
 def _measure_frame_lanes(
     subject_frame: Callable[[np.ndarray], None],
     reference: FrozenReferenceWaveform,
     chunks: List[np.ndarray],
     reps: int,
-) -> "tuple[float, float]":
+) -> LaneTimes:
     """Interleave subject/reference passes; return best time of each.
 
     Interleaving minimizes the window in which box load arriving mid-test
@@ -427,26 +434,43 @@ def _measure_frame_lanes(
     for _ in range(reps):
         subject_times.append(_timed_frames(subject_frame, chunks))
         reference_times.append(_timed_frames(reference.frame, chunks))
-    return min(subject_times), min(reference_times)
+    return LaneTimes(min(subject_times), min(reference_times))
 
 
-def _warm_up_lanes(
-    subject_frame: Callable[[np.ndarray], None],
-    reference: FrozenReferenceWaveform,
-    frames: int = WARMUP_FRAMES,
-) -> None:
-    """Drive both lanes to steady state (full 12s rolling buffer)."""
-    warmup_chunks = _synth_chunks(frames, seed=7)
-    for chunk in warmup_chunks:
-        subject_frame(chunk)
-        reference.frame(chunk)
+class _FrameLanes:
+    """Bundled subject/reference pair for one measurement run.
+
+    Data clump fix: the controller, button, reference, and bound subject
+    frame travel together through warmup, measurement, and every test.
+    """
+
+    def __init__(self) -> None:
+        self.controller = RecordingController(enable_transcription=False)
+        self.button = RecordButtonItem(_mock_parent())
+        self.reference = FrozenReferenceWaveform()
+        self.subject_frame = _make_subject_frame(self.controller, self.button)
+
+    def warm_up(self, frames: int = WARMUP_FRAMES) -> None:
+        """Drive both lanes to steady state (full rolling buffer)."""
+        warmup_chunks = _synth_chunks(frames, seed=7)
+        for chunk in warmup_chunks:
+            self.subject_frame(chunk)
+            self.reference.frame(chunk)
+
+
+@pytest.fixture
+def lanes(qapp) -> _FrameLanes:
+    """Warmed-up subject/reference frame lanes for one test."""
+    pair = _FrameLanes()
+    pair.warm_up()
+    return pair
 
 
 # ---------------------------------------------------------------------------
 # CI regression test (load-tolerant, runs in every default lane)
 # ---------------------------------------------------------------------------
 
-def test_waveform_performance_ci_regression(qapp):
+def test_waveform_performance_ci_regression(lanes):
     """Waveform frame pipeline stays within budget of a frozen reference.
 
     Load-tolerant replacement for the quarantined absolute-CPU assert
@@ -456,32 +480,25 @@ def test_waveform_performance_ci_regression(qapp):
     uniform box load scales both lanes roughly equally, a subject-only
     regression does not.
     """
-    controller = RecordingController(enable_transcription=False)
-    button = RecordButtonItem(_mock_parent())
-    reference = FrozenReferenceWaveform()
-    subject_frame = _make_subject_frame(controller, button)
-
-    _warm_up_lanes(subject_frame, reference)
-
     chunks = _synth_chunks(MEASURE_FRAMES, seed=11)
-    subject_s, reference_s = _measure_frame_lanes(
-        subject_frame, reference, chunks, reps=LANE_REPS
+    times = _measure_frame_lanes(
+        lanes.subject_frame, lanes.reference, chunks, reps=LANE_REPS
     )
 
-    per_frame_us = subject_s / MEASURE_FRAMES * 1e6
-    ratio = subject_s / reference_s
+    per_frame_us = times.subject_s / MEASURE_FRAMES * 1e6
+    ratio = times.subject_s / times.reference_s
     print(f"\n{'=' * 50}")
     print("WAVEFORM FRAME PIPELINE (load-tolerant CI regression)")
     print(f"{'=' * 50}")
     print(f"  Frames measured:  {MEASURE_FRAMES} x {LANE_REPS} reps (best of)")
-    print(f"  Subject lane:     {subject_s:.4f}s ({per_frame_us:.1f} us/frame)")
-    print(f"  Reference lane:   {reference_s:.4f}s")
+    print(f"  Subject lane:     {times.subject_s:.4f}s ({per_frame_us:.1f} us/frame)")
+    print(f"  Reference lane:   {times.reference_s:.4f}s")
     print(f"  Ratio:            {ratio:.2f}x (budget: 2.0x)")
     print(f"{'=' * 50}\n")
 
     assert_load_tolerant_budget(
-        subject_s,
-        reference_s,
+        times.subject_s,
+        times.reference_s,
         label="waveform frame pipeline (feed -> snapshot -> render)",
     )
 
@@ -506,22 +523,18 @@ def test_waveform_cpu_regression_is_detected(qapp, monkeypatch):
         RecordButtonItem, "set_waveform_samples", _slowed_set_waveform_samples
     )
 
-    controller = RecordingController(enable_transcription=False)
-    button = RecordButtonItem(_mock_parent())
-    reference = FrozenReferenceWaveform()
-    subject_frame = _make_subject_frame(controller, button)
-
-    _warm_up_lanes(subject_frame, reference)
+    lanes = _FrameLanes()
+    lanes.warm_up()
 
     chunks = _synth_chunks(META_FRAMES, seed=11)
-    subject_s, reference_s = _measure_frame_lanes(
-        subject_frame, reference, chunks, reps=META_LANE_REPS
+    times = _measure_frame_lanes(
+        lanes.subject_frame, lanes.reference, chunks, reps=META_LANE_REPS
     )
 
     with pytest.raises(AssertionError, match="budget"):
         assert_load_tolerant_budget(
-            subject_s,
-            reference_s,
+            times.subject_s,
+            times.reference_s,
             label="waveform frame pipeline with injected render slowdown",
         )
 
@@ -539,7 +552,9 @@ def test_waveform_frame_loop_memory_bounded(qapp):
     button = RecordButtonItem(_mock_parent())
     subject_frame = _make_subject_frame(controller, button)
 
-    _warm_up_lanes(subject_frame, reference=FrozenReferenceWaveform())
+    # Drive the subject lane to steady state (full rolling buffer).
+    for chunk in _synth_chunks(WARMUP_FRAMES, seed=7):
+        subject_frame(chunk)
 
     probe_chunks = _synth_chunks(MEMORY_PROBE_FRAMES, seed=13)
     gc.collect()
