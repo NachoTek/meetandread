@@ -16,6 +16,23 @@ This mirrors the `gh-app` shell function / token script in `~/.config/gh-app/`.
 
 Default five-label vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
 
+### Branch topology
+
+- Resolve `BASE_BRANCH` before starting. Use the campaign/integration branch explicitly named by the parent issue or coordinator; otherwise use the repository default branch (`main` here).
+- Never commit or push directly to `main` or another integration base.
+- Create one branch and one worktree per ticket from current `origin/$BASE_BRANCH`; name the branch `<issue-number>-<slug>`.
+- Open the ticket PR against `BASE_BRANCH`, not automatically against `main`. End the PR body with `Closes #<issue-number>`.
+- A campaign branch is a protected integration base. Child ticket PRs target it; only the final campaign PR targets the default branch and closes the parent epic.
+
+### Review gates and closure
+
+- Run `/code-review` before publication. CI requests `TerminalSausage` when green; do not use legacy review labels or third-party review routes.
+- External CI and human review are event-driven Herdr gates. Never sleep or poll inside an agent session.
+- At a gate, the child returns PR/base/branch/worktree/head receipts and ends its turn. The coordinator records the OpenCode task ID. When Herdr reports the event, verify GitHub ground truth and resume that same child with `task(task_id=...)`.
+- The resumed child normally rebases if needed, merges, closes the issue when GitHub did not, and removes branch/worktree residue. A changed head means a fresh CI/review gate, so stop again instead of polling.
+- The coordinator owns closure: independently verify PR and issue terminal state, refs/worktree absence, clean base, and tracker writeback.
+- `--admin` merges do not work for the bot. Never bypass required checks or review.
+
 ### Domain docs
 
 Single-context layout: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
@@ -40,17 +57,6 @@ A serial full-suite run takes ~60 min and will hit tool timeouts. Run the full s
 A versioned pre-push hook (`.githooks/pre-push`) gates every push on the full suite under the Windows venv. **If a push is blocked by `OSError: PortAudio library not found` or a `windows`-marked test, you are on the wrong interpreter** — switch to `make test-windows` / `.venv/Scripts/python.exe`. Do **not** reach for `--no-verify` to mask it; reserve `--no-verify` for content-free pushes (e.g. branch deletions).
 
 Activate hooks once per clone: `git config core.hooksPath .githooks`.
-
-### PR merge protocol
-
-Branch protection requires 1 approving review (TerminalSausage bot, auto-requested by `review-gate.yml` once CI is green; latency ~15 min–7 h) AND strict up-to-date checks. Proven flow:
-
-1. After approval, check `gh pr view <n> --json mergeStateStatus`.
-2. If BEHIND/BLOCKED: in your worktree `rtk git fetch origin`; `rtk git rebase origin/main`; `rtk git push --force-with-lease` (hook re-runs). Approvals survive force-push.
-3. Poll mergeStateStatus every 60 s (up to 25 min) until CLEAN.
-4. `gh pr merge <n> --squash --delete-branch`. Local branch-delete failure from a worktree is harmless — verify `state=MERGED`.
-
-`--admin` merges do NOT work (bot token lacks admin). Never push directly to main.
 
 ### Pyright
 
