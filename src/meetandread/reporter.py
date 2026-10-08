@@ -161,11 +161,10 @@ class CaptureState:
             # record predates the marker): review/submission still
             # pending on this directory.
             return "review_ready"
-        if self.marker_present:
-            # App exited cleanly but the reporter never wrote its
-            # record (reporter died between marker and record) —
-            # resumable exactly like an incomplete run.
-            return "incomplete"
+        # No termination record yet — with or without a marker: a
+        # marker whose record never arrived (the reporter died between
+        # marker and record) is resumable exactly like a bare-claim
+        # run, so both read "incomplete".
         return "incomplete"
 
     @property
@@ -492,7 +491,6 @@ def supervise_run(
     proc: "subprocess.Popen",
     capture_dir: Path,
     started_at: Optional[datetime] = None,
-    stop_signal=None,
     user_initiated_stop: bool = False,
 ) -> SupervisedRun:
     """Wait for the supervised app process to end; record the end.
@@ -505,17 +503,16 @@ def supervise_run(
     wizard continues to its stop/review steps either way (the crash
     itself is always reportable).
 
-    ``stop_signal`` (optional) is invoked when the user asks the
-    wizard to stop the run — e.g. ``lambda p: p.send_signal(...)``;
-    the default does nothing (the app exits on its own or crashes).
-    ``user_initiated_stop`` records whether THIS run's stop came from
-    the reporter (the wizard's user-stop path), refining a clean exit
-    into ``user_stop`` in the record and :attr:`final_outcome`.
+    The graceful stop is the WIZARD's step, performed before this
+    call (``_graceful_stop``): by the time supervision begins, the
+    stop signal has already been sent exactly once — supervising is
+    purely waiting, classifying, recording. ``user_initiated_stop``
+    records whether THAT stop came from the reporter (the wizard's
+    user-stop path), refining a clean exit into ``user_stop`` in the
+    record and :attr:`final_outcome`.
     """
     if started_at is None:
         started_at = datetime.now()
-    if stop_signal is not None:
-        stop_signal(proc)
     exit_code = proc.wait()
     ended_at = datetime.now()
     marker_present = read_completion_marker(capture_dir) is not None

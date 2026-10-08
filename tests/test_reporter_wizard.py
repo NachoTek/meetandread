@@ -167,6 +167,58 @@ class TestWizardHappyPath:
         assert (run.capture_dir / "description.txt").exists()
 
 
+class TestStopSignalDiscipline:
+    """#161: exactly one stop signal per supervised wizard run.
+
+    ``_graceful_stop`` performs THE graceful stop; ``supervise_run``
+    used to fire a redundant second signal at entry. A live app gets
+    signalled exactly once; an app that already exited on its own gets
+    none (its own outcome stands).
+    """
+
+    @staticmethod
+    def _counting_stop(monkeypatch):
+        calls = []
+        real = wizard._signal_user_stop
+
+        def counting(proc):
+            calls.append(proc)
+            real(proc)
+
+        monkeypatch.setattr(wizard, "_signal_user_stop", counting)
+        return calls
+
+    def test_live_app_signalled_exactly_once(
+        self, tmp_path, monkeypatch
+    ):
+        calls = self._counting_stop(monkeypatch)
+        inp = ScriptedInput(["desc", "", "n"])
+        run = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CLEAN),
+            input_fn=inp,
+            print_fn=Lines(),
+        )
+        assert run is not None
+        assert run.final_outcome() == RunOutcome.USER_STOP
+        assert len(calls) == 1
+
+    def test_already_exited_app_never_signalled(
+        self, tmp_path, monkeypatch
+    ):
+        calls = self._counting_stop(monkeypatch)
+        inp = ScriptedInput(["desc", "", "n"])
+        run = wizard.run_wizard(
+            data_base=tmp_path,
+            app_command=_stub_command(STUB_APP_CRASH),
+            input_fn=inp,
+            print_fn=Lines(),
+        )
+        assert run is not None
+        assert run.outcome == RunOutcome.CRASH
+        assert calls == []
+
+
 class TestWizardRecovery:
     def _make_incomplete(self, base: Path) -> Path:
         captures = base / "captures"
