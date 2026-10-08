@@ -48,10 +48,11 @@ capture run writes it.
 """
 
 import json
-import os
 import platform
 from pathlib import Path
 from typing import Callable, Optional, Tuple
+
+from meetandread.durable_jsonl import write_json_durable
 
 # Filename of the environment info inside the capture dir. The bundle
 # assembler consumes this name; treat it as stable contract.
@@ -112,11 +113,7 @@ def write_environment_info(
         "hardware_class": str(hardware_class),
     }
     path = Path(capture_dir) / ENVIRONMENT_FILE_NAME
-    with open(path, "x", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_json_durable(path, payload, mode="x")
     return path
 
 
@@ -166,11 +163,7 @@ def refine_environment_info(
         "hardware_class": str(facts["hardware_class"]),
     }
     path = Path(capture_dir) / ENVIRONMENT_FILE_NAME
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_json_durable(path, payload)
     return path
 
 

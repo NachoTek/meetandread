@@ -48,7 +48,6 @@ Testing Decisions §3; ADR 0001).
 """
 
 import json
-import os
 import subprocess
 import sys
 import urllib.parse
@@ -65,6 +64,7 @@ from meetandread.diagnostics_bundle import (
     default_identifiers,
     redact_text,
 )
+from meetandread.durable_jsonl import write_json_durable
 from meetandread.reporter import (
     CAPTURES_DIRNAME,
     read_description,
@@ -249,11 +249,7 @@ def write_submission_state(
         "resolved_at": datetime.now().isoformat(timespec="seconds"),
     }
     path = Path(capture_dir) / SUBMISSION_STATE_FILE_NAME
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_json_durable(path, payload)
     return path
 
 

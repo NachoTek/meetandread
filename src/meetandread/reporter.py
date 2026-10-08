@@ -16,8 +16,9 @@ This module is stdlib-only BY DESIGN: importing it must never pull the
 audio stack, the Qt widget tree, or any native backend — the reporter
 must run even when the app's subsystems are the thing that is broken.
 The structural test (fresh-interpreter import graph) enforces this. It
-imports ONLY from sibling stdlib-only modules: ``capture_mode`` (the
-#104 contract readers) — and nothing else from the app.
+imports ONLY from sibling stdlib-only modules: ``capture_mode``
+(the #104 contract readers) and ``durable_jsonl`` (the shared
+durable-write helpers, #160) — and nothing else from the app.
 
 ## What this core owns
 
@@ -88,6 +89,10 @@ from meetandread.capture_mode import (
     ISSUE_CAPTURE_FLAG,
     read_claim,
     read_completion_marker,
+)
+from meetandread.durable_jsonl import (
+    write_json_durable,
+    write_text_durable,
 )
 
 # Directory (under the reporter's data base) holding all capture runs.
@@ -227,11 +232,7 @@ def write_termination_record(
         "marker_present": bool(marker_present),
     }
     path = Path(capture_dir) / TERMINATION_FILE_NAME
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_json_durable(path, payload)
     return path
 
 
@@ -265,12 +266,7 @@ def write_description(capture_dir: Path, text: str) -> Path:
     discipline so a reporter crash never loses it.
     """
     path = Path(capture_dir) / DESCRIPTION_FILE_NAME
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(text)
-        if not text.endswith("\n"):
-            fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_text_durable(path, text if text.endswith("\n") else text + "\n")
     return path
 
 
@@ -597,12 +593,7 @@ def resume_capture(capture_dir: Path, data_base: Path) -> dict:
         "ended_at": None,  # unwitnessed end: never fabricate a time
         "marker_present": marker_present,
     }
-    path = d / TERMINATION_FILE_NAME
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-        fh.write("\n")
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_json_durable(d / TERMINATION_FILE_NAME, payload)
 
     # Reconcile a staged description (reporter died before the run-end
     # copy): the capture directory is the one place the later

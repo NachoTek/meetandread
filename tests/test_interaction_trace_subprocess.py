@@ -527,6 +527,28 @@ widget._toggle_settings_panel()
 widget._toggle_settings_panel()
 app.processEvents()
 print("MAR_NORMAL_DRIVE_COMPLETE", flush=True)
+
+# Deterministic teardown (issue #158): exit through the production
+# funnel and destroy the Qt object graph while the interpreter is
+# fully alive. Falling off the script end leaves ``app``/``widget``
+# as live __main__ globals; interpreter finalization then clears
+# them in insertion order — the QApplication dies FIRST and the
+# widget tree is destroyed against a dead QApplication in GC order,
+# which intermittently crashes natively (0xC0000005, the documented
+# #124 finalization race; see main.py's hard-exit rationale). The
+# capture-run children avoid it via main()'s ordered teardown +
+# os._exit gate; the normal-run production path avoids it via
+# main()'s frame unwind (widget dies before app). This child must
+# order its own teardown the same way: widget.close() runs the real
+# closeEvent funnel (controller.shutdown included), then the tree
+# is deleted children-first and the QApplication LAST — never by
+# finalization.
+widget.close()
+from PyQt6 import sip
+if widget._cc_overlay is not None:
+    sip.delete(widget._cc_overlay)
+sip.delete(widget)
+sip.delete(app)
 """
         stdout_file = tmp_path / "app-stdout.txt"
         result = subprocess.run(

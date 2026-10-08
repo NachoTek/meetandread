@@ -56,7 +56,8 @@ would leave the machine. Nothing unredacted is ever displayed.
 Stdlib-only BY DESIGN (the reporter program's constraint, ADR 0003):
 imports ONLY sibling stdlib-only modules (``capture_mode``,
 ``interaction_trace``, ``resource_snapshots``, ``environment_info``,
-``transcript_canary``, ``reporter``). The pure assembly edge is
+``transcript_canary``, ``reporter``, ``durable_jsonl``). The pure
+assembly edge is
 fast-lane testable against fixture capture directories with zero
 subprocesses (spec, Testing Decisions; ADR 0001).
 """
@@ -74,6 +75,7 @@ from meetandread.capture_mode import (
     read_appendable_records,
     read_completion_marker,
 )
+from meetandread.durable_jsonl import write_text_durable
 from meetandread.environment_info import read_environment_info
 from meetandread.interaction_trace import read_trace_events
 from meetandread.reporter import read_description, read_termination_record
@@ -507,10 +509,7 @@ def create_reviewable_bundle(
     # newline="" pins LF: the artifact on disk is byte-identical to
     # the redacted text shown at review (#109 attaches exactly those
     # bytes; text-mode CRLF translation would diverge them).
-    with open(path, "w", encoding="utf-8", newline="") as fh:
-        fh.write(result.text)
-        fh.flush()
-        os.fsync(fh.fileno())
+    write_text_durable(path, result.text, newline="")
     return AssembledBundle(
         text=result.text,
         path=path,
