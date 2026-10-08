@@ -504,8 +504,9 @@ def supervise_run(
     itself is always reportable).
 
     The graceful stop is the WIZARD's step, performed before this
-    call (``_graceful_stop``): by the time supervision begins, the
-    stop signal has already been sent exactly once — supervising is
+    call (the wizard's graceful-stop loop signals and re-signals
+    while the app winds down): supervision itself never signals —
+    by the time it begins, stopping is done and this function is
     purely waiting, classifying, recording. ``user_initiated_stop``
     records whether THAT stop came from the reporter (the wizard's
     user-stop path), refining a clean exit into ``user_stop`` in the

@@ -454,12 +454,12 @@ def run_wizard(
 
     # The graceful stop: signal CTRL_BREAK and give the app time to
     # wind down and write its completion marker — THE stop signal of
-    # the run (supervise_run only waits; it never signals). Blocking
-    # by design — the marker is what separates a user stop from a
-    # crash. A stop signal actually delivered to a LIVE app makes
-    # this run's stop user-initiated (refining a clean exit into
-    # ``user_stop``); an app that already exited on its own keeps its
-    # own outcome.
+    # the run (supervision itself never signals; supervise_run only
+    # waits, classifies, and records). Blocking by design — the
+    # marker is what separates a user stop from a crash. A stop
+    # signal actually delivered to a LIVE app makes this run's stop
+    # user-initiated (refining a clean exit into ``user_stop``); an
+    # app that already exited on its own keeps its own outcome.
     user_initiated = _graceful_stop(proc)
 
     run = supervise_run(
